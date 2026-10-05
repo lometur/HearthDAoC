@@ -1,0 +1,12 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <!-- Linux CLI for the Windows launcher's "+ Lv.1 / + Lv.50" bot buttons. Program.cs holds the
+       launcher's bot-creation functions copied verbatim from MainForm.cs; the name generator is linked. -->
+  <PropertyGroup>
+    <OutputType>Exe</OutputType><TargetFramework>net10.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings><Nullable>enable</Nullable><AssemblyName>offline-bots</AssemblyName>
+  </PropertyGroup>
+  <ItemGroup><PackageReference Include="System.Data.SQLite.Core" Version="1.0.119" /></ItemGroup>
+  <ItemGroup>
+    <Compile Include="../../../source/tools/OfflineDaoc.Launcher/BotCharacterGenerator.cs" Link="BotCharacterGenerator.cs" />
+  </ItemGroup>
+</Project>
