@@ -1,0 +1,69 @@
+#!/usr/bin/env bash
+# Play OfflineDAoC on the central server @SERVER@ (edition @EDITION@) through Proton.
+# Add this file to Steam as a non-Steam game WITHOUT forcing a compatibility tool;
+# any launch options must end with %command%.
+set -euo pipefail
+
+HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+CL="$HERE/client"
+SERVER="${OFFLINEDAOC_SERVER:-@SERVER@}"
+CREDS="$HERE/account.txt"
+
+if [[ ! -f "$CREDS" ]]; then
+    if command -v zenity >/dev/null; then
+        form="$(zenity --forms --title="OfflineDAoC login" \
+            --text="Server: $SERVER\nUse a password you use nowhere else." \
+            --add-entry="Account (letters and digits)" --add-password="Password" --separator=$'\n')" || exit 1
+        acct="$(sed -n 1p <<<"$form")"; pass="$(sed -n 2p <<<"$form")"
+    else
+        read -rp "Account (letters and digits): " acct
+        read -rsp "Password (use one you use nowhere else): " pass; echo
+    fi
+    [[ "$acct" =~ ^[A-Za-z0-9]+$ ]] || { echo "Account names may only contain letters and digits." >&2; exit 1; }
+    [[ -n "$pass" && ! "$pass" =~ [[:space:]] ]] || { echo "The password must be non-empty with no spaces." >&2; exit 1; }
+    (umask 077 && printf 'Account: %s\nPassword: %s\n' "$acct" "$pass" > "$CREDS")
+fi
+ACCT="$(sed -n 's/^Account:[[:space:]]*//p' "$CREDS" | tr -d '\r')"
+PASS="$(sed -n 's/^Password:[[:space:]]*//p' "$CREDS" | tr -d '\r')"
+
+STEAM_ROOT="$(readlink -f "$HOME/.steam/steam")"
+PROTON_DIR="${DAOC_PROTON:-$STEAM_ROOT/steamapps/common/Proton - Experimental}"
+[[ -x "$PROTON_DIR/proton" ]] || { echo "Proton not found at $PROTON_DIR (install Proton Experimental in Steam, or set DAOC_PROTON)." >&2; exit 1; }
+tool_appid="$(sed -n 's/.*"require_tool_appid"[[:space:]]*"\([0-9]*\)".*/\1/p' "$PROTON_DIR/toolmanifest.vdf")"
+runtime_dir="$(sed -n 's/.*"installdir"[[:space:]]*"\(.*\)".*/\1/p' "$STEAM_ROOT/steamapps/appmanifest_$tool_appid.acf" 2>/dev/null)"
+RUNTIME="$STEAM_ROOT/steamapps/common/$runtime_dir"
+[[ -n "$runtime_dir" && -x "$RUNTIME/_v2-entry-point" ]] || {
+    echo "Steam Linux Runtime (app $tool_appid) needed by $(basename "$PROTON_DIR") is not installed; install it from Steam." >&2; exit 1; }
+
+unset WINEPREFIX WINEDLLOVERRIDES
+export STEAM_COMPAT_DATA_PATH="$HERE/proton"
+export STEAM_COMPAT_CLIENT_INSTALL_PATH="$STEAM_ROOT"
+export STEAM_COMPAT_TOOL_PATHS="$PROTON_DIR:$RUNTIME"
+# Keep Steam's ids when launched from Steam; Proton's steam.exe needs SteamGameId set to keep
+# waiting on the game after connect.exe exits.
+export SteamAppId="${SteamAppId:-0}" SteamGameId="${SteamGameId:-0}"
+export PROTON_USE_XALIA="${PROTON_USE_XALIA:-0}"
+mkdir -p "$STEAM_COMPAT_DATA_PATH"
+
+run_proton() { "$RUNTIME/_v2-entry-point" --verb=waitforexitandrun -- "$PROTON_DIR/proton" waitforexitandrun "$@"; }
+
+PFX="$STEAM_COMPAT_DATA_PATH/pfx"
+if [[ ! -f "$PFX/user.reg" ]]; then
+    echo "Creating the Proton prefix (first run only)..."
+    run_proton cmd.exe /c exit || true
+fi
+# The client drops the last character of paths.dat's final line (no trailing newline), so
+# "settings=OfflineDAoC034" means the profile folder "OfflineDAoC03".
+profile_name="$(sed -n 's/^settings=//p' "$CL/paths.dat" | tr -d '\r')"
+profile_name="${profile_name%?}"
+PROFILE="$PFX/drive_c/users/steamuser/AppData/Roaming/Electronic Arts/Dark Age of Camelot/$profile_name"
+if [[ ! -f "$PROFILE/user.dat" ]]; then
+    mkdir -p "$PROFILE"
+    printf '[main]\r\nfullscreen_windowed=1\r\n' > "$PROFILE/user.dat"
+fi
+
+cd "$CL"
+# Proton doesn't search the working directory for the exe: pass a Linux path for connect.exe and
+# the game DLL as a Windows path (Z: is /).
+exec "$RUNTIME/_v2-entry-point" --verb=waitforexitandrun -- "$PROTON_DIR/proton" waitforexitandrun \
+    "$CL/connect.exe" "Z:${CL//\//\\}\\game.dll" "$SERVER" "$ACCT" "$PASS"
