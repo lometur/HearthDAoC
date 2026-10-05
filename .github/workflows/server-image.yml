@@ -1,0 +1,61 @@
+name: server-image
+
+on:
+  push:
+    branches: [main]
+    tags: ["v*-fork.*"]
+  pull_request:
+
+permissions:
+  contents: read
+  packages: write
+
+jobs:
+  test-build-publish:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: "10.0.x"
+
+      - name: Install test tools
+        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends sqlite3 bubblewrap
+
+      - name: Fetch a clean classic world for tests (database only)
+        run: python3 deploy/bin/init_world.py --lock deploy/upstream.lock --data "$RUNNER_TEMP/world" --edition classic --skip-navmesh
+
+      - name: Build Linux CLIs
+        run: tools/linux/build.sh "$RUNNER_TEMP/tools"
+
+      - name: Unit tests
+        env:
+          ODC_TEST_WORLD: ${{ runner.temp }}/world/world/opendaoc.sqlite3.db
+          ODC_TOOLS: ${{ runner.temp }}/tools
+        run: |
+          python3 -m unittest discover -s tools/linux/tests -t tools/linux -v
+          python3 -m unittest discover -s deploy/tests -t deploy -v
+          python3 -m unittest discover -s client/tests -t client -v
+
+      - name: CLI integration tests
+        env:
+          ODC_TEST_WORLD: ${{ runner.temp }}/world/world/opendaoc.sqlite3.db
+        run: tools/linux/tests/test_cli_tools.sh "$RUNNER_TEMP/tools"
+
+      - name: Build image
+        run: docker build -f deploy/Dockerfile -t offlinedaoc:ci .
+
+      - name: Smoke test
+        run: deploy/tests/smoke.sh offlinedaoc:ci
+
+      - name: Compose and odc integration test
+        run: deploy/tests/odc_integration.sh offlinedaoc:ci
+
+      - name: Publish image (tags only)
+        if: startsWith(github.ref, 'refs/tags/')
+        run: |
+          echo "${{ secrets.GITHUB_TOKEN }}" | docker login ghcr.io -u "${{ github.actor }}" --password-stdin
+          img="ghcr.io/${{ github.repository_owner }}/offlinedaoc:${{ github.ref_name }}"
+          docker tag offlinedaoc:ci "$img"
+          docker push "$img"
