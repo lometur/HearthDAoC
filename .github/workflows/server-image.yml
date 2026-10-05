@@ -59,3 +59,29 @@ jobs:
           img="ghcr.io/${{ github.repository_owner }}/offlinedaoc:${{ github.ref_name }}"
           docker tag offlinedaoc:ci "$img"
           docker push "$img"
+  release-assets:
+    needs: test-build-publish
+    if: startsWith(github.ref, 'refs/tags/')
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build bundles (no EA files)
+        run: |
+          tag="${GITHUB_REF_NAME}"
+          mkdir -p dist/deploy "dist/client/offlinedaoc-client-$tag/windows"
+          cp deploy/compose.yml deploy/.env.example deploy/odc deploy/HANDOFF.md deploy/upstream.lock dist/deploy/
+          sed -i "s/^OFFLINEDAOC_TAG=.*/OFFLINEDAOC_TAG=$tag/" dist/deploy/.env.example
+          tar czf "dist/offlinedaoc-deploy-$tag.tar.gz" -C dist/deploy .
+          c="dist/client/offlinedaoc-client-$tag"
+          cp client/README.md client/linux/setup.sh client/linux/play.sh.in tools/linux/odaoc_fetch.py deploy/upstream.lock "$c/"
+          cp client/windows/connect-central.bat "$c/windows/"
+          (cd dist/client && zip -qr "../offlinedaoc-client-$tag.zip" "offlinedaoc-client-$tag")
+      - name: Create release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh release create "$GITHUB_REF_NAME" dist/offlinedaoc-deploy-*.tar.gz dist/offlinedaoc-client-*.zip \
+            --title "$GITHUB_REF_NAME" \
+            --notes "Unofficial fork of shadowofze/OfflineDAoC. Image: ghcr.io/lometur/offlinedaoc:$GITHUB_REF_NAME. Deploy: see HANDOFF.md in the deploy bundle. Players: see README.md in the client bundle."
