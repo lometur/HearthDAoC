@@ -1,0 +1,5 @@
+# Re-include fork files that the upstream root .gitignore excludes (**/bin/ and **/.env.*).
+!bin/
+!.env.example
+# The real deployment settings stay local.
+.env
