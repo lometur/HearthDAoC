@@ -52,7 +52,14 @@ echo "ok - stopped-only commands work when stopped"
 sed -i 's/^HEARTHDAOC_EDITION=classic/HEARTHDAOC_EDITION=b/' "$W/.env"
 if out="$(hdc up 2>&1)"; then fail "hdc up did not report the refused start"; fi
 grep -qi "edition" <<<"$out" || fail "hdc up does not explain the refusal: $out"
-[[ "$(docker inspect -f '{{.State.ExitCode}}' hearthdaoc-it-server)" == 3 ]] || fail "edition change not refused"
+# Docker resets ExitCode whenever the restart policy starts the container again: catch a restart window.
+refused=""
+for _ in $(seq 1 60); do
+    read -r restarting code <<<"$(docker inspect -f '{{.State.Restarting}} {{.State.ExitCode}}' hearthdaoc-it-server)"
+    if [[ "$restarting" == true && "$code" == 3 ]]; then refused=1; break; fi
+    sleep 0.5
+done
+[[ -n "$refused" ]] || fail "edition change not refused (exit code 3)"
 grep -qi "edition" <<<"$(hdc status)" || fail "hdc status does not explain the refusal"
 hdc stop >/dev/null 2>&1 || true
 sed -i 's/^HEARTHDAOC_EDITION=b/HEARTHDAOC_EDITION=classic/' "$W/.env"
