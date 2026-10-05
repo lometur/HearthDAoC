@@ -20,6 +20,25 @@ from odaoc_fetch import FetchError, Release, sha256_file  # noqa: E402
 EXIT_DOWNLOAD = 2
 EXIT_EDITION = 3
 EXIT_VERSION = 4
+EXIT_NOT_WRITABLE = 64
+
+
+def not_writable_hint(data):
+    """None when this user can write the data folder and the world in it, else the fix to print."""
+    try:
+        os.makedirs(data, exist_ok=True)
+    except OSError:
+        pass
+    paths = [data] + [os.path.join(data, d) for d in ("world", "navmesh", "logs", "state", "backups")]
+    paths.append(world_paths(data)["db"])
+    bad = [p for p in paths if os.path.exists(p) and not os.access(p, os.W_OK)]
+    if not bad and os.access(data, os.W_OK):
+        return None
+    uid, gid = os.getuid(), os.getgid()
+    return (f"ERROR: {', '.join(bad) or data} is not writable by uid {uid}:{gid}. Give the volume to that user:\n"
+            f"  docker run --rm --user 0 -v <volume, e.g. hearthdaoc-data>:/data --entrypoint sh <image> "
+            f"-c 'touch /data/.owner && chown -R {uid}:{gid} /data'\n"
+            "(The touch matters: Docker gives an empty volume back to the image's owner on every mount.)")
 
 
 def world_paths(data):
@@ -103,6 +122,10 @@ def main(argv=None):
     ap.add_argument("--skip-navmesh", action="store_true")
     ap.add_argument("--seed-navmesh", help="folder of already-downloaded zoneNNN.nav files to verify and reuse")
     a = ap.parse_args(argv)
+    hint = not_writable_hint(a.data)
+    if hint:
+        print(hint, file=sys.stderr)
+        return EXIT_NOT_WRITABLE
     try:
         return init(Release.from_lock_file(a.lock), a.data, a.edition, a.skip_navmesh, a.seed_navmesh)
     except FetchError as e:

@@ -100,6 +100,20 @@ class InitWorldTests(unittest.TestCase):
             self.assertEqual(os.path.getmtime(db), db_mtime)  # the finished database was not downloaded again
             self.assertTrue(self.meta()["navmesh"])
 
+    def test_unwritable_data_folder_is_refused_with_the_fix(self):
+        os.makedirs(self.data)
+        os.chmod(self.data, 0o555)
+        try:
+            import io, contextlib
+            err = io.StringIO()
+            with contextlib.redirect_stderr(err):
+                rc = init_world.main(["--lock", "/nonexistent.lock", "--data", self.data, "--edition", "classic"])
+        finally:
+            os.chmod(self.data, 0o755)
+        self.assertEqual(rc, init_world.EXIT_NOT_WRITABLE)
+        self.assertIn("chown", err.getvalue())
+        self.assertIn("touch", err.getvalue())  # an empty volume is re-owned by Docker unless it holds a file
+
     def test_skip_navmesh_then_complete_later(self):
         with fx.RangeServer(self.dir) as srv:
             init_world.init(self.release(srv), self.data, "b", skip_navmesh=True, log=QUIET)

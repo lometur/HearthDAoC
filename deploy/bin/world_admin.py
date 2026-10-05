@@ -22,6 +22,8 @@ import spawns  # noqa: E402
 from odaoc_fetch import FetchError, Release  # noqa: E402
 
 CLEAN_WORLD = "upgrade-clean-world.db"
+# Upstream's importer clears these (meaningless single-player); a shared server keeps them.
+CARRY_TABLES = ("Ban", "SinglePermission")
 
 
 class AdminError(Exception):
@@ -86,17 +88,37 @@ def status(data):
 
 
 def restore(data, name):
+    """Replace the world database with a backup (or an archived world). Returns where the previous
+    database went: a pre-restore backup, or the damaged file moved aside when it could not be read."""
+    _meta(data)  # without world.json the next start would build a clean world over the restore
     src = name if os.path.isabs(name) else os.path.join(backup.backups_dir(data), name)
     if not os.path.isfile(src):
         raise AdminError(f"backup not found: {src}")
     if not _integrity_ok(src):
         raise AdminError("that backup failed its integrity check; nothing was changed")
-    pre = backup.create(data, label="pre-restore")
     db = init_world.world_paths(data)["db"]
+    os.makedirs(os.path.dirname(db), exist_ok=True)
+    tmp = db + ".restore"
+    # Copy through SQLite so a WAL-mode source (an archived world) brings its last writes along.
+    s, d = sqlite3.connect(f"file:{src}?mode=ro", uri=True), sqlite3.connect(tmp)
+    try:
+        s.backup(d)
+        d.execute("PRAGMA journal_mode=DELETE")
+    finally:
+        d.close()
+        s.close()
+    previous = None
+    if os.path.isfile(db) and _integrity_ok(db):
+        previous = backup.create(data, label="pre-restore")
+    elif os.path.exists(db):  # damaged: keep it aside instead of deleting it
+        previous = f"{db}.damaged-{_ts()}"
+        os.replace(db, previous)
+        for suffix in ("-wal", "-shm"):
+            if os.path.exists(db + suffix):
+                os.replace(db + suffix, previous + suffix)
     _remove_sidecars(db)
-    shutil.copyfile(src, db + ".restore")
-    os.replace(db + ".restore", db)
-    return pre
+    os.replace(tmp, db)
+    return previous
 
 
 def _archive_world(data, label):
@@ -108,15 +130,53 @@ def _archive_world(data, label):
     return dest
 
 
+def _unarchive_world(data, archive):
+    """Put an archived world back in place, discarding whatever partial world replaced it."""
+    p = init_world.world_paths(data)
+    shutil.rmtree(os.path.dirname(p["db"]), ignore_errors=True)
+    if os.path.exists(p["meta"]):
+        os.remove(p["meta"])
+    shutil.move(os.path.join(archive, "world"), os.path.dirname(p["db"]))
+    shutil.move(os.path.join(archive, "world.json"), p["meta"])
+    os.rmdir(archive)
+
+
 def new_world(release, data, edition, skip_navmesh=False, log=print):
     _meta(data)
-    archive = _archive_world(data, "world")  # moved intact, so this also works when the old world is damaged
-    rc = init_world.init(release, data, edition, skip_navmesh=skip_navmesh, log=log)
-    if rc != 0:
-        raise AdminError(f"creating the new world failed (code {rc}); the old world is in {archive}")
+    archive = _archive_world(data, "world")
+    try:
+        rc = init_world.init(release, data, edition, skip_navmesh=skip_navmesh, log=log)
+        problem = None if rc == 0 else f"code {rc}"
+    except FetchError as e:
+        problem = str(e)
+    if problem:
+        _unarchive_world(data, archive)
+        raise AdminError(f"creating the new world failed ({problem}). Your previous world is back in place; "
+                         "nothing changed. Try again when the download works.")
     spawns.reapply(data, log)  # keep the owner's restored leveling spawns (odc spawns)
     log(f"New '{edition}' world created; the old one is archived in {archive}.")
     return archive
+
+
+def _carry_admin_state(conn, old_db):
+    """Copy bans and single-command permissions from the old world; list server settings that differ."""
+    conn.execute("ATTACH DATABASE ? AS old", (old_db,))
+    try:
+        carried = {}
+        with conn:
+            for table in CARRY_TABLES:
+                main_cols = {r[1] for r in conn.execute(f'PRAGMA main.table_info("{table}")')}
+                old_cols = [r[1] for r in conn.execute(f'PRAGMA old.table_info("{table}")')]
+                cols = ",".join(f'"{c}"' for c in old_cols if c in main_cols)
+                if cols:
+                    carried[table] = conn.execute(f'INSERT OR IGNORE INTO main."{table}" ({cols}) '
+                                                  f'SELECT {cols} FROM old."{table}"').rowcount
+        changed = conn.execute(
+            "SELECT o.Key, o.Value, n.Value FROM old.ServerProperty o JOIN main.ServerProperty n "
+            "ON lower(n.Key) = lower(o.Key) WHERE o.Value IS NOT n.Value ORDER BY o.Key").fetchall()
+    finally:
+        conn.execute("DETACH DATABASE old")
+    return carried, changed
 
 
 def fetch_clean(release, data, log=print):
@@ -174,6 +234,7 @@ def upgrade_world(release, data, importer_cmd, clean_world=None, same_version_ok
     try:
         with c:  # the importer resets every account to plvl 1; restore GM/admin rights
             c.executemany("UPDATE Account SET PrivLevel=? WHERE Name=?", [(v, k) for k, v in plvls.items()])
+        carried, changed = _carry_admin_state(c, old_db)
         counts_new = {t: c.execute(f"SELECT count(*) FROM {t}").fetchone()[0] for t in counts_old}
         ok = c.execute("PRAGMA integrity_check").fetchone()[0] == "ok"
     finally:
@@ -181,6 +242,11 @@ def upgrade_world(release, data, importer_cmd, clean_world=None, same_version_ok
     if not ok or counts_new != counts_old:
         raise AdminError(f"verification failed (before {counts_old}, after {counts_new}); the current world is unchanged")
     archive = _archive_world(data, "world-pre-upgrade")
+    report = os.path.join(archive, "upgrade-report.txt")
+    with open(report, "w", encoding="utf-8") as f:
+        f.write(f"Upgrade to upstream {release.version}\nCarried over: {carried}\n\n")
+        f.write("Server settings that differ from the new world (not carried; re-apply any you changed on purpose):\n")
+        f.writelines(f"  {k}: yours={old!r} new={new!r}\n" for k, old, new in changed)
     os.makedirs(os.path.dirname(db))
     shutil.move(new_db, db)
     init_world.write_meta(init_world.world_paths(data)["meta"],
@@ -188,6 +254,8 @@ def upgrade_world(release, data, importer_cmd, clean_world=None, same_version_ok
                                upgraded_utc=datetime.datetime.now(datetime.timezone.utc).isoformat(timespec="seconds")))
     shutil.rmtree(stage, ignore_errors=True)
     spawns.reapply(data, log)  # the clean world has upstream's spawn list; restore the owner's choice again
+    if changed:
+        log(f"{len(changed)} server setting(s) differ from the new world's values and were not carried over; see {report}.")
     log(f"Upgraded to upstream {release.version}: {counts_new}. Previous world archived in {archive}. "
         "Navmeshes are re-verified on the next start.")
     return archive

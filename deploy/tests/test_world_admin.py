@@ -81,6 +81,41 @@ class WorldAdminTests(unittest.TestCase):
             self.assertEqual(c.execute("SELECT v FROM t").fetchone()[0], "original")
         self.assertEqual(len([f for f in os.listdir(os.path.join(self.data, "backups")) if f.endswith("-pre-restore.db")]), 1)
 
+    def test_restore_recovers_a_damaged_live_world(self):
+        db = self.make_sqlite_world()
+        saved = backup.create(self.data)
+        with open(db, "wb") as f:
+            f.write(b"damaged")
+        kept = world_admin.restore(self.data, os.path.basename(saved))
+        with sqlite3.connect(db) as c:
+            self.assertEqual(c.execute("SELECT v FROM t").fetchone()[0], "original")
+        with open(kept, "rb") as f:
+            self.assertEqual(f.read(), b"damaged")  # the damaged file is kept, not deleted
+
+    def test_restore_recovers_a_missing_live_world(self):
+        db = self.make_sqlite_world()
+        saved = backup.create(self.data)
+        os.remove(db)
+        world_admin.restore(self.data, os.path.basename(saved))
+        with sqlite3.connect(db) as c:
+            self.assertEqual(c.execute("SELECT v FROM t").fetchone()[0], "original")
+
+    def test_restore_from_a_wal_mode_world_keeps_its_last_writes(self):
+        self.make_sqlite_world()
+        src = os.path.join(self.data, "archive", "world-old", "world", "opendaoc.sqlite3.db")
+        os.makedirs(os.path.dirname(src))
+        writer = sqlite3.connect(src)
+        writer.execute("PRAGMA journal_mode=WAL")
+        writer.execute("CREATE TABLE t (v TEXT)")
+        writer.execute("INSERT INTO t VALUES ('archived last session')")
+        writer.commit()  # still only in the -wal while this connection stays open
+        try:
+            world_admin.restore(self.data, src)
+        finally:
+            writer.close()
+        with sqlite3.connect(init_world.world_paths(self.data)["db"]) as c:
+            self.assertEqual(c.execute("SELECT v FROM t").fetchone()[0], "archived last session")
+
     def test_restore_rejects_a_corrupt_backup(self):
         self.make_sqlite_world()
         os.makedirs(os.path.join(self.data, "backups"), exist_ok=True)
@@ -101,6 +136,23 @@ class WorldAdminTests(unittest.TestCase):
         with open(init_world.world_paths(self.data)["meta"], encoding="utf-8") as f:
             self.assertEqual(json.load(f)["edition"], "b")
         self.assertTrue(os.path.isfile(os.path.join(archive, "world", "opendaoc.sqlite3.db")))
+
+    def test_new_world_failure_puts_the_old_world_back(self):
+        lock, files = fx.build(self.dir)
+        with fx.RangeServer(self.dir) as srv:
+            init_world.init(Release(srv.lock(lock), retries=1, backoff=0), self.data, "classic", skip_navmesh=True, log=QUIET)
+            db = init_world.world_paths(self.data)["db"]
+            with open(db, "rb") as f:
+                before = f.read()
+            srv.fail = lambda path, rng: True
+            with self.assertRaisesRegex(world_admin.AdminError, "back in place"):
+                world_admin.new_world(Release(srv.lock(lock), retries=1, backoff=0), self.data, "b",
+                                      skip_navmesh=True, log=QUIET)
+        with open(db, "rb") as f:
+            self.assertEqual(f.read(), before)
+        with open(init_world.world_paths(self.data)["meta"], encoding="utf-8") as f:
+            self.assertEqual(json.load(f)["edition"], "classic")
+        self.assertEqual(os.listdir(os.path.join(self.data, "archive")), [])
 
     def test_status(self):
         db = self.make_sqlite_world()
@@ -148,6 +200,30 @@ class WorldAdminTests(unittest.TestCase):
         world_admin.upgrade_world(FakeRelease("0.34b", TEST_WORLD), self.data,
                                   importer_cmd(self.data), same_version_ok=True, log=QUIET)
         self.assertEqual(spawns.status(self.data)["restored"], n)
+
+    @unittest.skipUnless(TEST_WORLD and TOOLS, "needs ODC_TEST_WORLD (clean classic world) and ODC_TOOLS (built CLIs)")
+    def test_upgrade_world_keeps_bans_and_permissions_and_reports_changed_settings(self):
+        db = init_world.world_paths(self.data)["db"]
+        os.makedirs(os.path.dirname(db))
+        shutil.copyfile(TEST_WORLD, db)
+        init_world.write_meta(init_world.world_paths(self.data)["meta"],
+                              {"version": "0.34b", "edition": "classic", "navmesh": False, "created_utc": "x"})
+        conn = accounts.connect(db)
+        accounts.create(conn, "Griefer1", "pw")
+        with conn:
+            conn.execute("INSERT INTO Ban (Author, Type, Account, Reason, Ban_ID) VALUES ('admin', 'A', 'Griefer1', 'test', 'ban-1')")
+            conn.execute("INSERT INTO SinglePermission (PlayerID, Command, SinglePermission_ID) VALUES ('Griefer1', '&summon', 'perm-1')")
+            conn.execute("UPDATE ServerProperty SET Value='Welcome to the hearth' WHERE Key='motd'")
+        conn.close()
+        archive = world_admin.upgrade_world(FakeRelease("0.34b", TEST_WORLD), self.data,
+                                            importer_cmd(self.data), same_version_ok=True, log=QUIET)
+        with sqlite3.connect(db) as c:
+            self.assertEqual(c.execute("SELECT count(*) FROM Ban WHERE Ban_ID='ban-1'").fetchone()[0], 1)
+            self.assertEqual(c.execute("SELECT count(*) FROM SinglePermission WHERE SinglePermission_ID='perm-1'").fetchone()[0], 1)
+        with open(os.path.join(archive, "upgrade-report.txt"), encoding="utf-8") as f:
+            report = f.read()
+        self.assertIn("motd", report)
+        self.assertIn("Welcome to the hearth", report)
 
     def test_upgrade_world_refuses_same_version_by_default(self):
         self.make_sqlite_world(version="0.34b")

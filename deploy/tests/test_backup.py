@@ -49,6 +49,15 @@ class BackupTests(unittest.TestCase):
         self.assertEqual(kept, sorted(made[-3:]))
         self.assertTrue(os.path.exists(pre))
 
+    def test_other_labels_are_pruned_to_their_own_limit(self):
+        make_world(self.data).close()
+        made = [backup.create(self.data, label="pre-bots") for _ in range(5)]
+        daily = backup.create(self.data, keep=7)
+        backup.rotate(self.data, 7)
+        kept = sorted(glob.glob(os.path.join(self.data, "backups", "*-pre-bots.db")))
+        self.assertEqual(kept, sorted(made[-backup.KEEP_OTHER:]))
+        self.assertTrue(os.path.exists(daily))
+
     def test_failed_backup_keeps_old_backups(self):
         make_world(self.data).close()
         old = [backup.create(self.data, keep=7) for _ in range(2)]

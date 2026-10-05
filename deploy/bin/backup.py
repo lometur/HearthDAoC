@@ -10,6 +10,9 @@ import sys
 import time
 
 
+KEEP_OTHER = 3  # per label: pre-bots, pre-restore, pre-upgrade, ...
+
+
 def db_path(data):
     return os.path.join(data, "world", "opendaoc.sqlite3.db")
 
@@ -47,15 +50,29 @@ def create(data, keep=None, label="backup"):
         for leftover in (tmp, tmp + "-wal", tmp + "-shm"):
             if os.path.exists(leftover):
                 os.remove(leftover)
-    if keep:
-        rotate(data, keep)
+    rotate(data, keep)
     return dest
 
 
-def rotate(data, keep):
-    files = sorted(glob.glob(os.path.join(backups_dir(data), "world-*-backup.db")))
-    for old in files[:-keep] if keep > 0 else []:
+def _label(path):
+    # world-YYYYmmdd-HHMMSS-ffffff-<label>.db
+    parts = os.path.basename(path)[:-len(".db")].split("-", 4)
+    return parts[4] if len(parts) == 5 else ""
+
+
+def rotate(data, keep=None):
+    """Keep the newest `keep` daily backups and the newest KEEP_OTHER of every other label."""
+    files = sorted(glob.glob(os.path.join(backups_dir(data), "world-*.db")))
+    daily = [f for f in files if _label(f) == "backup"]
+    for old in (daily[:-keep] if keep and keep > 0 else []):
         os.remove(old)
+    by_label = {}
+    for f in files:
+        if _label(f) != "backup":
+            by_label.setdefault(_label(f), []).append(f)
+    for paths in by_label.values():
+        for old in paths[:-KEEP_OTHER]:
+            os.remove(old)
 
 
 def seconds_until_due(data, interval, now=None):
