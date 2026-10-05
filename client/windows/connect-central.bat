@@ -1,8 +1,10 @@
 @echo off
-setlocal EnableExtensions
+setlocal EnableExtensions DisableDelayedExpansion
 rem Connect this OfflineDAoC client to the central server.
 rem Put this file in your official OfflineDAoC install's runtime\client-opendaoc\app folder
 rem (next to connect.exe). Settings are saved in central-server.cfg next to this file.
+rem Every value is used inside double quotes, where cmd takes & | < > ^ literally, and delayed
+rem expansion stays off so ! passes through too. Values must not contain double quotes or %.
 cd /d "%~dp0"
 if not exist connect.exe (
     echo connect.exe was not found. Put this file in runtime\client-opendaoc\app of your OfflineDAoC install.
@@ -11,16 +13,17 @@ if not exist connect.exe (
 )
 set "CFG=%~dp0central-server.cfg"
 if exist "%CFG%" goto load
-set /p "SERVER=Server address (host:port, ask the server owner): "
-set /p "ACCOUNT=Account name (letters and digits): "
-set /p "PASSWORD=Password (use one you use nowhere else, no spaces): "
-> "%CFG%" echo SERVER=%SERVER%
->> "%CFG%" echo ACCOUNT=%ACCOUNT%
->> "%CFG%" echo PASSWORD=%PASSWORD%
+rem Each prompt is skipped when the value is already set in the environment (scripted installs).
+if not defined SERVER set /p "SERVER=Server address (host:port, ask the server owner): "
+if not defined ACCOUNT set /p "ACCOUNT=Account name (letters and digits): "
+if not defined PASSWORD set /p "PASSWORD=Password (use one you use nowhere else; no spaces, double quotes or %%): "
+> "%CFG%" echo "SERVER=%SERVER%"
+>> "%CFG%" echo "ACCOUNT=%ACCOUNT%"
+>> "%CFG%" echo "PASSWORD=%PASSWORD%"
 :load
-for /f "usebackq tokens=1,* delims==" %%A in ("%CFG%") do set "%%A=%%B"
+for /f "usebackq delims=" %%L in ("%CFG%") do set %%L
 if defined DRYRUN (
-    echo connect.exe game.dll %SERVER% %ACCOUNT% %PASSWORD%
+    echo connect.exe game.dll "%SERVER%" "%ACCOUNT%" "%PASSWORD%"
     exit /b 0
 )
-start "" connect.exe game.dll %SERVER% %ACCOUNT% %PASSWORD%
+start "" connect.exe game.dll "%SERVER%" "%ACCOUNT%" "%PASSWORD%"
