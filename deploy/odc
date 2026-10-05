@@ -4,7 +4,8 @@
 set -euo pipefail
 here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 [[ -f "$here/.env" ]] || { echo "Missing $here/.env (copy .env.example to .env and edit it)." >&2; exit 1; }
-set -a; source "$here/.env"; set +a
+# Not exported: compose reads .env itself, and exported values would override edits odc makes to .env.
+source "$here/.env"
 
 PROJECT="${OFFLINEDAOC_PROJECT:-offlinedaoc}"
 CONTAINER="${OFFLINEDAOC_CONTAINER:-offlinedaoc-server}"
@@ -21,6 +22,17 @@ ensure_volume() { docker volume inspect "$VOLUME" >/dev/null 2>&1 || docker volu
     --label com.docker.compose.project="$PROJECT" --label com.docker.compose.volume=data "$VOLUME" >/dev/null; }
 image() { compose config --images | head -1; }
 running() { [[ "$(docker inspect -f '{{.State.Running}}' "$CONTAINER" 2>/dev/null)" == true ]]; }
+# Prints why the server is not starting (crash loop or a stopped container after a refusal), else returns 1.
+refusal() {
+    local state restarting count running code health why
+    state="$(docker inspect -f '{{.State.Restarting}} {{.RestartCount}} {{.State.Running}} {{.State.ExitCode}} {{if .State.Health}}{{.State.Health.Status}}{{end}}' "$CONTAINER" 2>/dev/null)" || return 1
+    read -r restarting count running code health <<<"$state"
+    [[ "$health" == healthy ]] && return 1
+    [[ "$restarting" == true || "$count" -gt 0 || ( "$running" == false && "$code" -ne 0 ) ]] || return 1
+    why="$(docker logs --tail 300 "$CONTAINER" 2>&1 | grep '^ERROR' | tail -1 || true)"
+    echo "Server: not starting (automatic restarts: $count) - ${why:-exit code $code, see ./odc logs}"
+    echo "Fix the cause, then ./odc up again. ./odc stop ends the retries."
+}
 need_stopped() { if running; then echo "The server is running. Stop it first: ./odc stop" >&2; exit 1; fi; }
 # Throwaway container on the world volume with no network: the upstream import engine and the
 # bot-goals tool look for game servers on local ports, and host ports (OpenDAoC) must not count.
@@ -51,12 +63,22 @@ EOF
 
 cmd="${1:-help}"; shift || true
 case "$cmd" in
-    up|start) compose up -d ;;
+    up|start)
+        compose up -d
+        for _ in $(seq 1 10); do
+            sleep 2
+            if refusal >&2; then exit 1; fi
+            [[ "$(docker inspect -f '{{if .State.Health}}{{.State.Health.Status}}{{end}}' "$CONTAINER")" == healthy ]] && break
+        done
+        echo "Started. ./odc status shows progress (the first start downloads the world)." ;;
     stop) compose stop ;;
     down) compose down ;;
     logs) compose logs -f --tail=200 server ;;
     status)
-        if running; then
+        if refusal; then
+            offline --entrypoint python3 "$(image)" "${ADMIN[@]:1}" status || true
+            exit 0
+        elif running; then
             echo "Server: running ($(docker inspect -f '{{if .State.Health}}{{.State.Health.Status}}{{else}}no health check{{end}}' "$CONTAINER"))"
         else
             echo "Server: stopped"

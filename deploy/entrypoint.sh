@@ -14,13 +14,7 @@ EDITION="${OFFLINEDAOC_EDITION:-classic}"
 LISTEN_IP="${OFFLINEDAOC_LISTEN_IP:-0.0.0.0}"
 PORT="${OFFLINEDAOC_PORT:-10301}"
 
-if ! touch "$DATA/.write-test" 2>/dev/null; then
-    echo "ERROR: $DATA is not writable by uid $(id -u):$(id -g). Give the volume to that user, e.g.:" >&2
-    echo "  docker run --rm --user 0 -v offlinedaoc-data:/data --entrypoint chown <image> -R $(id -u):$(id -g) /data" >&2
-    exit 64
-fi
-rm -f "$DATA/.write-test"
-
+# init_world.py checks that /data is writable first and prints the exact fix (exit 64).
 init_args=(--lock "$LOCK" --data "$DATA" --edition "$EDITION")
 [[ -n "${OFFLINEDAOC_SKIP_NAVMESH:-}" ]] && init_args+=(--skip-navmesh)
 python3 "$BIN/init_world.py" "${init_args[@]}"
@@ -34,9 +28,25 @@ link() {  # link <path in /app/server> <target in /data>
 }
 link "$SRV/navmesh" "$DATA/navmesh"
 link "$SRV/logs" "$DATA/logs"
-# .NET treats a dangling link as an existing file, so link only to files that exist.
-touch "$DATA/state/realm-event-records.sqlite3"   # an empty file is a valid empty SQLite database
-link "$SRV/realm-event-records.sqlite3" "$DATA/state/realm-event-records.sqlite3"
+# .NET treats a dangling link as an existing file, so link only to files that exist. The server
+# creates its realm-event ledger itself (with its tables); keep_ledger moves it into /data on exit.
+LEDGER=realm-event-records.sqlite3
+if [[ -f "$DATA/state/$LEDGER" && ! -s "$DATA/state/$LEDGER" ]]; then
+    rm -f "$DATA/state/$LEDGER"   # empty file left by an earlier image: it broke the ledger
+fi
+if [[ -f "$DATA/state/$LEDGER" ]]; then
+    link "$SRV/$LEDGER" "$DATA/state/$LEDGER"
+else
+    rm -f "$SRV/$LEDGER"
+fi
+keep_ledger() {
+    if [[ -f "$SRV/$LEDGER" && ! -L "$SRV/$LEDGER" ]]; then
+        mv -f "$SRV/$LEDGER" "$DATA/state/$LEDGER"
+        for suffix in -wal -journal; do
+            if [[ -e "$SRV/$LEDGER$suffix" ]]; then mv -f "$SRV/$LEDGER$suffix" "$DATA/state/$LEDGER$suffix"; fi
+        done
+    fi
+}
 if [[ -f "$DATA/bot-goals.json" ]]; then
     link "$SRV/bot-goals.json" "$DATA/bot-goals.json"
 else
@@ -97,6 +107,7 @@ while kill -0 "$server_pid" 2>/dev/null; do
     if wait "$server_pid"; then rc=0; else rc=$?; fi
 done
 kill "$backup_pid" "$watch_pid" 2>/dev/null || true
+keep_ledger
 if [[ -e "$failed" ]]; then
     echo "ERROR: The server failed to start; the error is above and in /data/logs/server.log." >&2
     exit 70

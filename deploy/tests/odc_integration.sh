@@ -9,6 +9,7 @@ cat > "$W/.env" <<EOF
 OFFLINEDAOC_IMAGE=${IMAGE%%:*}
 OFFLINEDAOC_TAG=${IMAGE##*:}
 OFFLINEDAOC_EDITION=classic
+OFFLINEDAOC_AUTO_ACCOUNTS=True
 OFFLINEDAOC_PORT=10392
 OFFLINEDAOC_UDP_PORT=10492
 OFFLINEDAOC_PROJECT=offlinedaoc-it
@@ -29,6 +30,7 @@ echo "ok - up and healthy"
 [[ "$(docker inspect -f '{{.HostConfig.Memory}}' offlinedaoc-it-server)" == 4294967296 ]] || fail "memory limit not applied"
 docker inspect -f '{{.HostConfig.CapDrop}}' offlinedaoc-it-server | grep -q ALL || fail "capabilities not dropped"
 [[ "$(docker inspect -f '{{.HostConfig.NetworkMode}}' offlinedaoc-it-server)" == host ]] || fail "not host networking"
+[[ -n "$(docker inspect -f '{{index .HostConfig.LogConfig.Config "max-size"}}' offlinedaoc-it-server)" ]] || fail "docker logs not rotated"
 echo "ok - isolation settings applied"
 odc status | grep -q "edition .* classic" || fail "status"
 odc account create Tester1 pw1 >/dev/null || fail "account create"
@@ -41,15 +43,17 @@ if odc restore x.db 2>/dev/null; then fail "restore allowed while running"; fi
 if odc spawns restore 2>/dev/null; then fail "spawns restore allowed while running"; fi
 echo "ok - stopped-only commands refuse while running"
 odc stop >/dev/null
-docker logs offlinedaoc-it-server 2>&1 | grep -q "| DOL.GS.GameServer | Stopped" || fail "no clean save"
+docker logs offlinedaoc-it-server > "$W/stop.log" 2>&1; grep -q "| DOL.GS.GameServer | Stopped" "$W/stop.log" || fail "no clean save"
 odc bot-goals set 50 10 30 60 | grep -q "Saved" || fail "bot-goals set while stopped"
 odc account plvl Tester1 3 | grep -q "plvl 3" || fail "plvl while stopped"
 latest="$(odc backups | awk '/-backup.db/ {print $NF}' | tail -1)"
 odc restore "$latest" | grep -q "Restored" || fail "restore"
 echo "ok - stopped-only commands work when stopped"
 sed -i 's/^OFFLINEDAOC_EDITION=classic/OFFLINEDAOC_EDITION=b/' "$W/.env"
-odc up >/dev/null 2>&1 || true; sleep 6
+if out="$(odc up 2>&1)"; then fail "odc up did not report the refused start"; fi
+grep -qi "edition" <<<"$out" || fail "odc up does not explain the refusal: $out"
 [[ "$(docker inspect -f '{{.State.ExitCode}}' offlinedaoc-it-server)" == 3 ]] || fail "edition change not refused"
+grep -qi "edition" <<<"$(odc status)" || fail "odc status does not explain the refusal"
 odc stop >/dev/null 2>&1 || true
 sed -i 's/^OFFLINEDAOC_EDITION=b/OFFLINEDAOC_EDITION=classic/' "$W/.env"
 echo "ok - edition change refused through compose"

@@ -23,6 +23,11 @@ services:
     volumes:
       - data:/data
     restart: unless-stopped
+    logging:  # the server logs a lot; keep Docker's copy bounded on a shared host (full logs are in the volume)
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "5"
     stop_grace_period: 120s
     mem_limit: ${OFFLINEDAOC_MEM_LIMIT:-10g}
     cpus: ${OFFLINEDAOC_CPUS:-4}

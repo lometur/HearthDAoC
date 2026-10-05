@@ -41,14 +41,16 @@ COPY deploy/bin /app/bin
 COPY deploy/entrypoint.sh /app/entrypoint.sh
 COPY deploy/upstream.lock /app/upstream.lock
 # /app/server must be writable by whichever OFFLINEDAOC_UID runs it (script compilation, dashboards, links).
+# /data is world-writable so a fresh volume works for any OFFLINEDAOC_UID (Docker copies this mode into it).
 RUN mkdir -p /data \
- && chown 1000:1000 /data \
+ && chown 1000:1000 /data && chmod 0777 /data \
  && chmod -R a+rwX /app/server \
  && chmod +x /app/entrypoint.sh /app/bin/*.sh /app/bin/*.py /app/tools/accounts/accounts.py
 ENV DOTNET_SYSTEM_GLOBALIZATION_INVARIANT=0 \
     DOTNET_CLI_TELEMETRY_OPTOUT=1 \
     DOTNET_CLI_HOME=/tmp \
     XDG_CONFIG_HOME=/tmp/xdg \
+    PYTHONUNBUFFERED=1 \
     OFFLINEDAOC_EDITION=classic
 USER 1000:1000
 VOLUME /data
