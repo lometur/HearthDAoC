@@ -13,6 +13,7 @@ CLI:
 """
 import argparse
 import hashlib
+import http.client
 import json
 import os
 import struct
@@ -90,8 +91,8 @@ class Release:
                 if status == 206 and len(data) == want:
                     return data
                 last = f"HTTP {status}, {len(data)} of {want} bytes"
-            except (urllib.error.URLError, OSError) as e:
-                last = str(e)
+            except (urllib.error.URLError, OSError, http.client.HTTPException) as e:  # incl. IncompleteRead
+                last = f"{type(e).__name__}: {e}"
             if attempt + 1 < self.retries:
                 time.sleep(self.backoff * (2 ** attempt))
         raise FetchError(f"range request failed for part {part + 1} bytes {start}-{end_incl}: {last}")

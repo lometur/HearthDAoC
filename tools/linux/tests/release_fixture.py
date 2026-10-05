@@ -78,12 +78,14 @@ def build(directory, files=None, part_size=4096, tamper=None, extra_names=()):
 
 class RangeServer:
     """Serves directory/parts with HTTP Range support. Set .fail to a callable
-    (path, range_header) -> bool to make matching requests fail with 503."""
+    (path, range_header) -> bool to make matching requests fail with 503, or .truncate to one
+    that makes them send only half of the promised bytes and close the connection."""
 
     def __init__(self, directory):
         self.directory = os.path.join(directory, "parts")
         self.requests = []
         self.fail = None
+        self.truncate = None
         outer = self
 
         class Handler(http.server.BaseHTTPRequestHandler):
@@ -104,6 +106,10 @@ class RangeServer:
                 self.send_response(206)
                 self.send_header("Content-Length", str(len(data)))
                 self.end_headers()
+                if outer.truncate and outer.truncate(self.path, rng):
+                    self.wfile.write(data[:len(data) // 2])
+                    self.close_connection = True
+                    return
                 self.wfile.write(data)
 
             def log_message(self, *args):

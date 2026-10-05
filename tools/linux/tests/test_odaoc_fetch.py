@@ -79,6 +79,29 @@ class FetchTests(unittest.TestCase):
             self.assertFalse(os.path.exists(dest))
             self.assertFalse(os.path.exists(dest + ".part"))
 
+    def test_truncated_transfer_is_retried_then_reported(self):
+        lock, _ = fx.build(self.dir)
+        with fx.RangeServer(self.dir) as srv:
+            rel = self.release(srv, lock, retries=2)
+            rel.manifest()
+            srv.truncate = lambda path, rng: True
+            dest = os.path.join(self.dir, "out", "world.db")
+            with self.assertRaisesRegex(FetchError, "range request failed"):
+                rel.extract("runtime/data/opendaoc.sqlite3.db", dest)
+            self.assertFalse(os.path.exists(dest + ".part"))
+
+    def test_one_truncated_transfer_is_retried(self):
+        lock, files = fx.build(self.dir)
+        with fx.RangeServer(self.dir) as srv:
+            rel = self.release(srv, lock, retries=2)
+            rel.manifest()
+            seen = []
+            srv.truncate = lambda path, rng: (seen.append(rng), len(seen) == 1)[1]
+            dest = os.path.join(self.dir, "out", "world.db")
+            self.assertEqual(rel.extract("runtime/data/opendaoc.sqlite3.db", dest), "ok")
+            with open(dest, "rb") as f:
+                self.assertEqual(f.read(), files["runtime/data/opendaoc.sqlite3.db"])
+
     def test_unsafe_archive_path_is_refused(self):
         lock, _ = fx.build(self.dir, extra_names=[fx.ROOT + "../evil.txt"])
         with fx.RangeServer(self.dir) as srv:
