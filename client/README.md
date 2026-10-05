@@ -16,7 +16,8 @@ password appears on the game's command line.
 You need Steam with **Proton Experimental**, plus `python3` and `rsync`, and a 1.127 client folder
 from the free [OpenDAoC installer](https://www.opendaoc.com/docs/client/) (it is only read).
 
-1. Download and unpack `hearthdaoc-client-<version>.zip` from the fork's releases.
+1. Download `hearthdaoc-client-<version>.zip` from [HearthDAoC releases](https://github.com/lometur/HearthDAoC/releases) and unpack it;
+   it creates a `hearthdaoc-client-<version>` folder that holds `setup.sh`. Run the next command in that folder.
 2. Run:
    `./setup.sh --server 192.168.1.64:10301 --edition classic --base-client "/path/to/your/1.127 client"`
    This builds a separate client in `~/Games/HearthDAoC` and downloads about 45 MB of

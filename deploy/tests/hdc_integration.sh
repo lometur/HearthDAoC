@@ -72,4 +72,11 @@ docker exec hearthdaoc-it-server grep -q "<AutoAccountCreation>False</AutoAccoun
 echo "ok - auto-accounts off recreates the server with the new setting"
 hdc spawns status | grep -qE "^restored +[1-9]" || fail "restored spawns missing after restart"
 echo "ok - the server starts healthy with the restored spawns"
+# A crash: kill the game server inside the container (docker kill would count as a manual stop).
+docker exec hearthdaoc-it-server sh -c 'for p in /proc/[0-9]*; do grep -qa "CoreServer[.]dll" "$p/cmdline" 2>/dev/null && kill -9 "${p#/proc/}"; done; true'
+for _ in $(seq 1 30); do [[ "$(docker inspect -f '{{.RestartCount}}' hearthdaoc-it-server)" -gt 0 ]] && break; sleep 1; done
+healthy || fail "not healthy after an automatic restart"
+hdc stop >/dev/null
+grep -q "^Server: stopped" <<<"$(hdc status)" || fail "a stopped server is reported as not starting after an earlier crash"
+echo "ok - status is right for a server stopped after an earlier crash"
 echo "HDC INTEGRATION OK"

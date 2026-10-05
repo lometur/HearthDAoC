@@ -70,8 +70,9 @@ Then ask the owner to connect from their PC (`~/Games/HearthDAoC/play.sh` after 
 ## 6. Day-to-day
 
 `./hdc help` lists everything: status, logs, add-bots, accounts, bot goals, backups, restore,
-new-world, upgrade-world, auto-accounts, spawns. Backups run daily into the volume (keep 7), and the
-automatic safety copies before add-bots, restore and upgrade keep their newest 3 each.
+new-world, upgrade-world, auto-accounts, spawns. Backups run daily into the volume (keep 7). The copies
+taken before add-bots keep their newest 3; the copies taken before restore and upgrade are kept until
+you remove them (`./hdc backups` lists them; they are in /data/backups).
 Before remote players join: `./hdc auto-accounts off` and create their accounts with
 `./hdc account create <name> <password>`.
 

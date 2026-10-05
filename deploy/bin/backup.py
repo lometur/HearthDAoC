@@ -10,7 +10,9 @@ import sys
 import time
 
 
-KEEP_OTHER = 3  # per label: pre-bots, pre-restore, pre-upgrade, ...
+# Frequent automatic copies are pruned per label. Copies taken before restore, upgrade and new-world are
+# kept: each may be the only copy of the world as it was.
+PRUNED_LABELS = {"pre-bots": 3}
 
 
 def db_path(data):
@@ -61,17 +63,13 @@ def _label(path):
 
 
 def rotate(data, keep=None):
-    """Keep the newest `keep` daily backups and the newest KEEP_OTHER of every other label."""
+    """Keep the newest `keep` daily backups and the newest PRUNED_LABELS[label] of those labels."""
     files = sorted(glob.glob(os.path.join(backups_dir(data), "world-*.db")))
     daily = [f for f in files if _label(f) == "backup"]
     for old in (daily[:-keep] if keep and keep > 0 else []):
         os.remove(old)
-    by_label = {}
-    for f in files:
-        if _label(f) != "backup":
-            by_label.setdefault(_label(f), []).append(f)
-    for paths in by_label.values():
-        for old in paths[:-KEEP_OTHER]:
+    for label, limit in PRUNED_LABELS.items():
+        for old in [f for f in files if _label(f) == label][:-limit]:
             os.remove(old)
 
 

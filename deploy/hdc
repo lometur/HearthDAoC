@@ -28,7 +28,12 @@ refusal() {
     state="$(docker inspect -f '{{.State.Restarting}} {{.RestartCount}} {{.State.Running}} {{.State.ExitCode}} {{if .State.Health}}{{.State.Health.Status}}{{end}}' "$CONTAINER" 2>/dev/null)" || return 1
     read -r restarting count running code health <<<"$state"
     [[ "$health" == healthy ]] && return 1
-    [[ "$restarting" == true || "$count" -gt 0 || ( "$running" == false && "$code" -ne 0 ) ]] || return 1
+    if [[ "$running" == false && "$restarting" == false ]]; then
+        # Stopped: only the entrypoint's refusal codes count (not hdc stop, even after an earlier crash).
+        [[ " 2 3 4 64 65 70 " == *" $code "* ]] || return 1
+    elif [[ "$restarting" != true && "$count" -eq 0 ]]; then
+        return 1  # starting normally (boot, first download)
+    fi
     why="$(docker logs --tail 300 "$CONTAINER" 2>&1 | grep '^ERROR' | tail -1 || true)"
     echo "Server: not starting (automatic restarts: $count) - ${why:-exit code $code, see ./hdc logs}"
     echo "Fix the cause, then ./hdc up again. ./hdc stop ends the retries."

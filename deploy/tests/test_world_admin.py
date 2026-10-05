@@ -154,6 +154,46 @@ class WorldAdminTests(unittest.TestCase):
             self.assertEqual(json.load(f)["edition"], "classic")
         self.assertEqual(os.listdir(os.path.join(self.data, "archive")), [])
 
+    def _new_world_interrupted_by(self, exc):
+        lock, files = fx.build(self.dir)
+        with fx.RangeServer(self.dir) as srv:
+            init_world.init(Release(srv.lock(lock), retries=1, backoff=0), self.data, "classic", skip_navmesh=True, log=QUIET)
+
+        class Interrupted(FakeRelease):
+            def extract(self, rel, dest):
+                os.makedirs(os.path.dirname(dest), exist_ok=True)
+                with open(dest + ".part", "wb") as f:
+                    f.write(b"partial")
+                raise exc
+        db = init_world.world_paths(self.data)["db"]
+        with open(db, "rb") as f:
+            before = f.read()
+        return Interrupted("test", "/nonexistent"), db, before
+
+    def test_new_world_interrupted_by_ctrl_c_puts_the_old_world_back(self):
+        rel, db, before = self._new_world_interrupted_by(KeyboardInterrupt())
+        with self.assertRaises(KeyboardInterrupt):
+            world_admin.new_world(rel, self.data, "b", skip_navmesh=True, log=QUIET)
+        with open(db, "rb") as f:
+            self.assertEqual(f.read(), before)
+        self.assertEqual(os.listdir(os.path.join(self.data, "archive")), [])
+
+    def test_new_world_disk_full_puts_the_old_world_back(self):
+        rel, db, before = self._new_world_interrupted_by(OSError(28, "No space left on device"))
+        with self.assertRaisesRegex(world_admin.AdminError, "back in place"):
+            world_admin.new_world(rel, self.data, "b", skip_navmesh=True, log=QUIET)
+        with open(db, "rb") as f:
+            self.assertEqual(f.read(), before)
+
+    def test_restore_command_reports_success_when_the_live_world_was_missing(self):
+        db = self.make_sqlite_world()
+        saved = backup.create(self.data)
+        os.remove(db)
+        r = subprocess.run([sys.executable, os.path.join(REPO, "deploy", "bin", "world_admin.py"), "--data", self.data,
+                            "--lock", "/nonexistent.lock", "restore", os.path.basename(saved)], capture_output=True, text=True)
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertIn("Restored", r.stdout)
+
     def test_status(self):
         db = self.make_sqlite_world()
         st = world_admin.status(self.data)

@@ -146,13 +146,16 @@ def new_world(release, data, edition, skip_navmesh=False, log=print):
     archive = _archive_world(data, "world")
     try:
         rc = init_world.init(release, data, edition, skip_navmesh=skip_navmesh, log=log)
-        problem = None if rc == 0 else f"code {rc}"
-    except FetchError as e:
-        problem = str(e)
-    if problem:
+    except BaseException as e:  # download error, full disk, Ctrl-C: never leave the old world in the archive
         _unarchive_world(data, archive)
-        raise AdminError(f"creating the new world failed ({problem}). Your previous world is back in place; "
-                         "nothing changed. Try again when the download works.")
+        if isinstance(e, Exception):
+            raise AdminError(f"creating the new world failed ({e}). Your previous world is back in place; "
+                             "nothing changed.") from e
+        raise
+    if rc != 0:
+        _unarchive_world(data, archive)
+        raise AdminError(f"creating the new world failed (code {rc}). Your previous world is back in place; "
+                         "nothing changed.")
     spawns.reapply(data, log)  # keep the owner's restored leveling spawns (hdc spawns)
     log(f"New '{edition}' world created; the old one is archived in {archive}.")
     return archive
@@ -283,7 +286,10 @@ def main(argv=None):
             for k, v in status(a.data).items():
                 print(f"{k:24} {v}")
         elif a.cmd == "restore":
-            print(f"Restored {a.name}. The previous database was saved as {os.path.basename(restore(a.data, a.name))}.")
+            previous = restore(a.data, a.name)
+            kept = f"The previous database was saved as {os.path.basename(previous)}." if previous \
+                else "There was no previous world database."
+            print(f"Restored {a.name}. {kept}")
         elif a.cmd == "new-world":
             new_world(Release.from_lock_file(a.lock), a.data, a.edition, a.skip_navmesh)
         elif a.cmd == "fetch-clean":
