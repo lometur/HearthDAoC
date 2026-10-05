@@ -1,0 +1,129 @@
+#!/usr/bin/env bash
+# odc: manage the OfflineDAoC central server deployment. Run it from the folder holding
+# compose.yml and .env. See HANDOFF.md for setup.
+set -euo pipefail
+here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+[[ -f "$here/.env" ]] || { echo "Missing $here/.env (copy .env.example to .env and edit it)." >&2; exit 1; }
+set -a; source "$here/.env"; set +a
+
+PROJECT="${OFFLINEDAOC_PROJECT:-offlinedaoc}"
+CONTAINER="${OFFLINEDAOC_CONTAINER:-offlinedaoc-server}"
+VOLUME="${OFFLINEDAOC_VOLUME:-offlinedaoc-data}"
+UIDGID="${OFFLINEDAOC_UID:-1000}:${OFFLINEDAOC_GID:-1000}"
+PORT="${OFFLINEDAOC_PORT:-10301}"
+KEEP="${OFFLINEDAOC_BACKUP_KEEP:-7}"
+DB=/data/world/opendaoc.sqlite3.db
+ADMIN=(python3 /app/bin/world_admin.py --data /data --lock /app/upstream.lock)
+
+compose() { docker compose -p "$PROJECT" -f "$here/compose.yml" --env-file "$here/.env" "$@"; }
+# Create the volume with compose's labels when odc needs it before the first "up", so compose adopts it.
+ensure_volume() { docker volume inspect "$VOLUME" >/dev/null 2>&1 || docker volume create \
+    --label com.docker.compose.project="$PROJECT" --label com.docker.compose.volume=data "$VOLUME" >/dev/null; }
+image() { compose config --images | head -1; }
+running() { [[ "$(docker inspect -f '{{.State.Running}}' "$CONTAINER" 2>/dev/null)" == true ]]; }
+need_stopped() { if running; then echo "The server is running. Stop it first: ./odc stop" >&2; exit 1; fi; }
+# Throwaway container on the world volume with no network: the upstream import engine and the
+# bot-goals tool look for game servers on local ports, and host ports (OpenDAoC) must not count.
+offline() { ensure_volume; docker run --rm -i --network none --user "$UIDGID" --cap-drop ALL \
+              --security-opt no-new-privileges:true -v "$VOLUME":/data "$@"; }
+# tool PROGRAM ARGS...: run inside the live server, or in a throwaway container when stopped.
+tool() { if running; then docker exec -i "$CONTAINER" "$@"; else offline --entrypoint "$1" "$(image)" "${@:2}"; fi; }
+
+usage() {
+    cat <<'EOF'
+odc - OfflineDAoC central server
+
+  up | stop | down | logs        start, stop (saves first), remove containers (volume kept), follow logs
+  status                         server state, world, accounts, players, bots, latest backup
+  init [--seed-navmesh DIR]      create the world now (optionally reuse verified navmesh files from DIR)
+  add-bots <alb|mid|hib> <1|10|100> <1|50>
+  account create <name> <password> [--plvl 1-3] | list | plvl <name> <1-3>
+  bot-goals show | set <1-19|20-49|50> <solo> <group> <rvr> | reset | import <file>   (changes need the server stopped)
+  backup | backups               take a backup now | list backups
+  restore <backup file name>     (server stopped)
+  new-world [--edition classic|b]   archive the current world and start a fresh one (server stopped)
+  upgrade-world [--same-version]    move progress into the clean world of this image's upstream version (server stopped)
+  auto-accounts on|off           allow or stop account creation at first login (recreates the server)
+EOF
+}
+
+cmd="${1:-help}"; shift || true
+case "$cmd" in
+    up|start) compose up -d ;;
+    stop) compose stop ;;
+    down) compose down ;;
+    logs) compose logs -f --tail=200 server ;;
+    status)
+        if running; then
+            echo "Server: running ($(docker inspect -f '{{if .State.Health}}{{.State.Health.Status}}{{else}}no health check{{end}}' "$CONTAINER"))"
+        else
+            echo "Server: stopped"
+        fi
+        tool "${ADMIN[@]}" status ;;
+    init)
+        need_stopped
+        args=(); mounts=()
+        if [[ "${1:-}" == --seed-navmesh ]]; then
+            mounts=(-v "$(realpath "${2:?folder}")":/seed:ro); args=(--seed-navmesh /seed)
+        fi
+        ensure_volume
+        docker run --rm --network host --user "$UIDGID" -v "$VOLUME":/data "${mounts[@]}" --entrypoint python3 "$(image)" \
+            /app/bin/init_world.py --lock /app/upstream.lock --data /data --edition "${OFFLINEDAOC_EDITION:-classic}" "${args[@]}" ;;
+    add-bots)
+        running || { echo "Start the server first (./odc up); new bots log in while it runs." >&2; exit 1; }
+        docker exec -i "$CONTAINER" /app/bin/add-bots.sh "$@" ;;
+    account)
+        if [[ "${1:-}" == plvl ]] && ! running; then
+            tool python3 /app/tools/accounts/accounts.py --db "$DB" "$@" --server-stopped
+        else
+            tool python3 /app/tools/accounts/accounts.py --db "$DB" "$@"
+        fi ;;
+    bot-goals)
+        sub="${1:-show}"
+        if [[ "$sub" == show ]]; then
+            tool dotnet /app/tools/bot-goals/bot-goals.dll --port "$PORT" /data show
+        else
+            need_stopped
+            if [[ "$sub" == import ]]; then
+                f="$(realpath "${2:?file}")"
+                offline -v "$f":/import/bot-goals.json:ro --entrypoint dotnet "$(image)" \
+                    /app/tools/bot-goals/bot-goals.dll --port "$PORT" /data import /import/bot-goals.json
+            else
+                offline --entrypoint dotnet "$(image)" /app/tools/bot-goals/bot-goals.dll --port "$PORT" /data "$@"
+            fi
+        fi ;;
+    backup) tool python3 /app/bin/backup.py --data /data create --keep "$KEEP" ;;
+    backups) tool python3 /app/bin/backup.py --data /data list ;;
+    restore) need_stopped; offline --entrypoint python3 "$(image)" "${ADMIN[@]:1}" restore "${1:?backup file name (see ./odc backups)}" ;;
+    new-world)
+        need_stopped
+        edition="${OFFLINEDAOC_EDITION:-classic}"
+        [[ "${1:-}" == --edition ]] && edition="${2:?classic or b}"
+        ensure_volume
+        docker run --rm --network host --user "$UIDGID" -v "$VOLUME":/data --entrypoint python3 "$(image)" \
+            "${ADMIN[@]:1}" new-world --edition "$edition"
+        if [[ "$edition" != "${OFFLINEDAOC_EDITION:-classic}" ]]; then
+            sed -i "s/^OFFLINEDAOC_EDITION=.*/OFFLINEDAOC_EDITION=$edition/" "$here/.env"
+            echo "Updated OFFLINEDAOC_EDITION=$edition in .env."
+        fi ;;
+    upgrade-world)
+        need_stopped
+        # Download with the network, then import in a container without one: upstream's import engine
+        # refuses while anything listens on port 10300, and the host's OpenDAoC server must not count.
+        ensure_volume
+        docker run --rm --network host --user "$UIDGID" -v "$VOLUME":/data --entrypoint python3 "$(image)" \
+            "${ADMIN[@]:1}" fetch-clean
+        offline --entrypoint python3 "$(image)" "${ADMIN[@]:1}" upgrade-world --clean-world /data/upgrade-clean-world.db \
+            --importer "dotnet /app/tools/progress-import/progress-import.dll" "$@" ;;
+    auto-accounts)
+        case "${1:-}" in on) v=True ;; off) v=False ;; *) echo "usage: odc auto-accounts on|off" >&2; exit 2 ;; esac
+        if grep -q '^OFFLINEDAOC_AUTO_ACCOUNTS=' "$here/.env"; then
+            sed -i "s/^OFFLINEDAOC_AUTO_ACCOUNTS=.*/OFFLINEDAOC_AUTO_ACCOUNTS=$v/" "$here/.env"
+        else
+            echo "OFFLINEDAOC_AUTO_ACCOUNTS=$v" >> "$here/.env"
+        fi
+        compose up -d --force-recreate
+        echo "Account creation at first login is now $1." ;;
+    help|-h|--help) usage ;;
+    *) usage >&2; exit 2 ;;
+esac
