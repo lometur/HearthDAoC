@@ -1,8 +1,10 @@
+import datetime
 import glob
 import os
 import sqlite3
 import sys
 import tempfile
+import time
 import unittest
 
 HERE = os.path.dirname(os.path.abspath(__file__))
@@ -60,6 +62,32 @@ class BackupTests(unittest.TestCase):
             backup.create(self.data, keep=1)
         self.assertTrue(all(os.path.exists(p) for p in old))
         self.assertEqual(glob.glob(os.path.join(self.data, "backups", "*.part")), [])
+
+    def test_backup_of_a_wal_database_leaves_only_the_backup_file(self):
+        live = make_world(self.data)  # WAL mode, like the server's database
+        path = backup.create(self.data)
+        live.close()
+        self.assertEqual(os.listdir(os.path.join(self.data, "backups")), [os.path.basename(path)])
+        with sqlite3.connect(path) as c:
+            self.assertEqual(c.execute("PRAGMA journal_mode").fetchone()[0], "delete")
+
+    def test_backup_names_use_utc_whatever_the_timezone(self):
+        # One-off admin containers run without TZ; names must sort the same as the server's.
+        make_world(self.data).close()
+        old_tz = os.environ.get("TZ")
+        os.environ["TZ"] = "America/Chicago"
+        time.tzset()
+        try:
+            name = os.path.basename(backup.create(self.data))
+        finally:
+            if old_tz is None:
+                os.environ.pop("TZ")
+            else:
+                os.environ["TZ"] = old_tz
+            time.tzset()
+        stamp = datetime.datetime.strptime(name[len("world-"):len("world-") + 15], "%Y%m%d-%H%M%S")
+        now_utc = datetime.datetime.now(datetime.timezone.utc).replace(tzinfo=None)
+        self.assertLess(abs((now_utc - stamp).total_seconds()), 120)
 
     def test_daily_backup_is_due_only_when_the_newest_is_old(self):
         # Restarting the container must not add a backup each time (rotation would drop older days).

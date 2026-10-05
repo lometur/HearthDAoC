@@ -20,7 +20,8 @@ def backups_dir(data):
 
 def create(data, keep=None, label="backup"):
     os.makedirs(backups_dir(data), exist_ok=True)
-    stamp = datetime.datetime.now().strftime("%Y%m%d-%H%M%S-%f")
+    # UTC, so names sort chronologically whichever container (with or without TZ) made them.
+    stamp = datetime.datetime.now(datetime.timezone.utc).strftime("%Y%m%d-%H%M%S-%f")
     dest = os.path.join(backups_dir(data), f"world-{stamp}-{label}.db")
     tmp = dest + ".part"
     try:
@@ -29,6 +30,8 @@ def create(data, keep=None, label="backup"):
             dst = sqlite3.connect(tmp)
             try:
                 src.backup(dst)
+                # The copy inherits the server's WAL mode; make it a standalone file with no -wal/-shm.
+                dst.execute("PRAGMA journal_mode=DELETE")
             finally:
                 dst.close()
         finally:
@@ -41,8 +44,9 @@ def create(data, keep=None, label="backup"):
             chk.close()
         os.replace(tmp, dest)
     finally:
-        if os.path.exists(tmp):
-            os.remove(tmp)
+        for leftover in (tmp, tmp + "-wal", tmp + "-shm"):
+            if os.path.exists(leftover):
+                os.remove(leftover)
     if keep:
         rotate(data, keep)
     return dest
