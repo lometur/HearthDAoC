@@ -24,7 +24,7 @@ import urllib.error
 import urllib.request
 import zlib
 
-USER_AGENT = "offlinedaoc-fork-fetch/1"
+USER_AGENT = "hearthdaoc-fork-fetch/1"
 
 
 class FetchError(Exception):

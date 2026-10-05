@@ -1,24 +1,24 @@
-# OfflineDAoC central server (lometur fork). Manage with ./odc; settings live in .env.
-name: offlinedaoc
+# HearthDAoC server (unofficial fork of shadowofze/OfflineDAoC). Manage with ./hdc; settings live in .env.
+name: hearthdaoc
 
 services:
   server:
-    image: ${OFFLINEDAOC_IMAGE:-ghcr.io/lometur/offlinedaoc}:${OFFLINEDAOC_TAG:?set OFFLINEDAOC_TAG in .env}
-    container_name: ${OFFLINEDAOC_CONTAINER:-offlinedaoc-server}
+    image: ${HEARTHDAOC_IMAGE:-ghcr.io/lometur/hearthdaoc}:${HEARTHDAOC_TAG:?set HEARTHDAOC_TAG in .env}
+    container_name: ${HEARTHDAOC_CONTAINER:-hearthdaoc-server}
     # Host networking so the server tells clients its real address for the UDP channel
     # (inside a bridge network it would be an unreachable 172.x address). Own ports, see .env.
     network_mode: host
     init: true
-    user: "${OFFLINEDAOC_UID:-1000}:${OFFLINEDAOC_GID:-1000}"
+    user: "${HEARTHDAOC_UID:-1000}:${HEARTHDAOC_GID:-1000}"
     environment:
-      OFFLINEDAOC_EDITION: ${OFFLINEDAOC_EDITION:-classic}
-      OFFLINEDAOC_LISTEN_IP: ${OFFLINEDAOC_LISTEN_IP:-0.0.0.0}
-      OFFLINEDAOC_PORT: ${OFFLINEDAOC_PORT:-10301}
-      OFFLINEDAOC_UDP_PORT: ${OFFLINEDAOC_UDP_PORT:-10401}
-      OFFLINEDAOC_AUTO_ACCOUNTS: ${OFFLINEDAOC_AUTO_ACCOUNTS:-True}
-      OFFLINEDAOC_SERVER_NAME: ${OFFLINEDAOC_SERVER_NAME:-OfflineDAoC (lometur fork)}
-      OFFLINEDAOC_BACKUP_KEEP: ${OFFLINEDAOC_BACKUP_KEEP:-7}
-      OFFLINEDAOC_SKIP_NAVMESH: ${OFFLINEDAOC_SKIP_NAVMESH:-}
+      HEARTHDAOC_EDITION: ${HEARTHDAOC_EDITION:-classic}
+      HEARTHDAOC_LISTEN_IP: ${HEARTHDAOC_LISTEN_IP:-0.0.0.0}
+      HEARTHDAOC_PORT: ${HEARTHDAOC_PORT:-10301}
+      HEARTHDAOC_UDP_PORT: ${HEARTHDAOC_UDP_PORT:-10401}
+      HEARTHDAOC_AUTO_ACCOUNTS: ${HEARTHDAOC_AUTO_ACCOUNTS:-True}
+      HEARTHDAOC_SERVER_NAME: ${HEARTHDAOC_SERVER_NAME:-HearthDAoC}
+      HEARTHDAOC_BACKUP_KEEP: ${HEARTHDAOC_BACKUP_KEEP:-7}
+      HEARTHDAOC_SKIP_NAVMESH: ${HEARTHDAOC_SKIP_NAVMESH:-}
       TZ: ${TZ:-UTC}
     volumes:
       - data:/data
@@ -29,11 +29,11 @@ services:
         max-size: "10m"
         max-file: "5"
     stop_grace_period: 120s
-    mem_limit: ${OFFLINEDAOC_MEM_LIMIT:-10g}
-    cpus: ${OFFLINEDAOC_CPUS:-4}
+    mem_limit: ${HEARTHDAOC_MEM_LIMIT:-10g}
+    cpus: ${HEARTHDAOC_CPUS:-4}
     cap_drop: [ALL]
     security_opt: ["no-new-privileges:true"]
 
 volumes:
   data:
-    name: ${OFFLINEDAOC_VOLUME:-offlinedaoc-data}
+    name: ${HEARTHDAOC_VOLUME:-hearthdaoc-data}

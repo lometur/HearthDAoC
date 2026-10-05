@@ -10,13 +10,13 @@ DATA=/data
 SRV=/app/server
 BIN=/app/bin
 LOCK=/app/upstream.lock
-EDITION="${OFFLINEDAOC_EDITION:-classic}"
-LISTEN_IP="${OFFLINEDAOC_LISTEN_IP:-0.0.0.0}"
-PORT="${OFFLINEDAOC_PORT:-10301}"
+EDITION="${HEARTHDAOC_EDITION:-classic}"
+LISTEN_IP="${HEARTHDAOC_LISTEN_IP:-0.0.0.0}"
+PORT="${HEARTHDAOC_PORT:-10301}"
 
 # init_world.py checks that /data is writable first and prints the exact fix (exit 64).
 init_args=(--lock "$LOCK" --data "$DATA" --edition "$EDITION")
-[[ -n "${OFFLINEDAOC_SKIP_NAVMESH:-}" ]] && init_args+=(--skip-navmesh)
+[[ -n "${HEARTHDAOC_SKIP_NAVMESH:-}" ]] && init_args+=(--skip-navmesh)
 python3 "$BIN/init_world.py" "${init_args[@]}"
 
 python3 "$BIN/gen_config.py" --data "$DATA" --out "$SRV/config/serverconfig.xml"
@@ -63,21 +63,21 @@ except OSError:
     sys.exit(1)
 EOF
 then
-    echo "ERROR: TCP port $PORT is already in use on this host. Choose another OFFLINEDAOC_PORT in .env (OpenDAoC uses 10300)." >&2
+    echo "ERROR: TCP port $PORT is already in use on this host. Choose another HEARTHDAOC_PORT in .env (OpenDAoC uses 10300)." >&2
     exit 65
 fi
 
-python3 "$BIN/backup.py" --data "$DATA" loop --keep "${OFFLINEDAOC_BACKUP_KEEP:-7}" &
+python3 "$BIN/backup.py" --data "$DATA" loop --keep "${HEARTHDAOC_BACKUP_KEEP:-7}" &
 backup_pid=$!
 
-fifo=/tmp/offlinedaoc-console
+fifo=/tmp/hearthdaoc-console
 rm -f "$fifo"
 mkfifo "$fifo"
 exec 3<>"$fifo"   # keep a writer open: the server's console loop busy-spins if stdin reaches EOF
 
 # After "Failed to start the server" the process keeps running without listening; stop it and
-# exit with code 70 instead, so the failure shows in docker ps / odc status rather than hanging.
-failed=/tmp/offlinedaoc-start-failed
+# exit with code 70 instead, so the failure shows in docker ps / hdc status rather than hanging.
+failed=/tmp/hearthdaoc-start-failed
 rm -f "$failed"
 touch "$DATA/logs/server.log"
 # (grep reads tail through process substitution: in a pipeline under pipefail, tail's SIGPIPE

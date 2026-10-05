@@ -3,7 +3,7 @@ name: server-image
 on:
   push:
     branches: [main]
-    tags: ["v*-fork.*"]
+    tags: ["v*-hearth.*"]
   pull_request:
 
 permissions:
@@ -31,8 +31,8 @@ jobs:
 
       - name: Unit tests
         env:
-          ODC_TEST_WORLD: ${{ runner.temp }}/world/world/opendaoc.sqlite3.db
-          ODC_TOOLS: ${{ runner.temp }}/tools
+          HDC_TEST_WORLD: ${{ runner.temp }}/world/world/opendaoc.sqlite3.db
+          HDC_TOOLS: ${{ runner.temp }}/tools
         run: |
           python3 -m unittest discover -s tools/linux/tests -t tools/linux -v
           python3 -m unittest discover -s deploy/tests -t deploy -v
@@ -40,24 +40,24 @@ jobs:
 
       - name: CLI integration tests
         env:
-          ODC_TEST_WORLD: ${{ runner.temp }}/world/world/opendaoc.sqlite3.db
+          HDC_TEST_WORLD: ${{ runner.temp }}/world/world/opendaoc.sqlite3.db
         run: tools/linux/tests/test_cli_tools.sh "$RUNNER_TEMP/tools"
 
       - name: Build image
-        run: docker build -f deploy/Dockerfile -t offlinedaoc:ci .
+        run: docker build -f deploy/Dockerfile -t hearthdaoc:ci .
 
       - name: Smoke test
-        run: deploy/tests/smoke.sh offlinedaoc:ci
+        run: deploy/tests/smoke.sh hearthdaoc:ci
 
-      - name: Compose and odc integration test
-        run: deploy/tests/odc_integration.sh offlinedaoc:ci
+      - name: Compose and hdc integration test
+        run: deploy/tests/hdc_integration.sh hearthdaoc:ci
 
       - name: Publish image (tags only)
         if: startsWith(github.ref, 'refs/tags/')
         run: |
           echo "${{ secrets.GITHUB_TOKEN }}" | docker login ghcr.io -u "${{ github.actor }}" --password-stdin
-          img="ghcr.io/${{ github.repository_owner }}/offlinedaoc:${{ github.ref_name }}"
-          docker tag offlinedaoc:ci "$img"
+          img="ghcr.io/${{ github.repository_owner }}/hearthdaoc:${{ github.ref_name }}"
+          docker tag hearthdaoc:ci "$img"
           docker push "$img"
   release-assets:
     needs: test-build-publish
@@ -70,18 +70,18 @@ jobs:
       - name: Build bundles (no EA files)
         run: |
           tag="${GITHUB_REF_NAME}"
-          mkdir -p dist/deploy "dist/client/offlinedaoc-client-$tag/windows"
-          cp deploy/compose.yml deploy/.env.example deploy/odc deploy/HANDOFF.md deploy/upstream.lock dist/deploy/
-          sed -i "s/^OFFLINEDAOC_TAG=.*/OFFLINEDAOC_TAG=$tag/" dist/deploy/.env.example
-          tar czf "dist/offlinedaoc-deploy-$tag.tar.gz" -C dist/deploy .
-          c="dist/client/offlinedaoc-client-$tag"
+          mkdir -p dist/deploy "dist/client/hearthdaoc-client-$tag/windows"
+          cp deploy/compose.yml deploy/.env.example deploy/hdc deploy/HANDOFF.md deploy/upstream.lock dist/deploy/
+          sed -i "s/^HEARTHDAOC_TAG=.*/HEARTHDAOC_TAG=$tag/" dist/deploy/.env.example
+          tar czf "dist/hearthdaoc-deploy-$tag.tar.gz" -C dist/deploy .
+          c="dist/client/hearthdaoc-client-$tag"
           cp client/README.md client/linux/setup.sh client/linux/play.sh.in tools/linux/odaoc_fetch.py deploy/upstream.lock "$c/"
-          cp client/windows/connect-central.bat "$c/windows/"
-          (cd dist/client && zip -qr "../offlinedaoc-client-$tag.zip" "offlinedaoc-client-$tag")
+          cp client/windows/connect-hearthdaoc.bat "$c/windows/"
+          (cd dist/client && zip -qr "../hearthdaoc-client-$tag.zip" "hearthdaoc-client-$tag")
       - name: Create release
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          gh release create "$GITHUB_REF_NAME" dist/offlinedaoc-deploy-*.tar.gz dist/offlinedaoc-client-*.zip \
+          gh release create "$GITHUB_REF_NAME" dist/hearthdaoc-deploy-*.tar.gz dist/hearthdaoc-client-*.zip \
             --title "$GITHUB_REF_NAME" \
-            --notes "Unofficial fork of shadowofze/OfflineDAoC. Image: ghcr.io/lometur/offlinedaoc:$GITHUB_REF_NAME. Deploy: see HANDOFF.md in the deploy bundle. Players: see README.md in the client bundle."
+            --notes "HearthDAoC, an unofficial fork of shadowofze/OfflineDAoC (upstream $(python3 -c 'import json;print(json.load(open("deploy/upstream.lock"))["version"])')). Image: ghcr.io/lometur/hearthdaoc:$GITHUB_REF_NAME. Deploy: see HANDOFF.md in the deploy bundle. Players: see README.md in the client bundle."

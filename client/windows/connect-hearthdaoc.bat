@@ -1,8 +1,8 @@
 @echo off
 setlocal EnableExtensions DisableDelayedExpansion
-rem Connect this OfflineDAoC client to the central server.
+rem Connect your OfflineDAoC client to a HearthDAoC server.
 rem Put this file in your official OfflineDAoC install's runtime\client-opendaoc\app folder
-rem (next to connect.exe). Settings are saved in central-server.cfg next to this file.
+rem (next to connect.exe). Settings are saved in hearthdaoc.cfg next to this file.
 rem Every value is used inside double quotes, where cmd takes & | < > ^ literally, and delayed
 rem expansion stays off so ! passes through too. Values must not contain double quotes or %.
 cd /d "%~dp0"
@@ -11,7 +11,7 @@ if not exist connect.exe (
     pause
     exit /b 1
 )
-set "CFG=%~dp0central-server.cfg"
+set "CFG=%~dp0hearthdaoc.cfg"
 if exist "%CFG%" goto load
 rem Each prompt is skipped when the value is already set in the environment (scripted installs).
 if not defined SERVER set /p "SERVER=Server address (host:port, ask the server owner): "

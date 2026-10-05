@@ -59,7 +59,7 @@ class InitWorldTests(unittest.TestCase):
             messages = []
             rc = init_world.init(self.release(srv), self.data, "b", log=messages.append)
         self.assertEqual(rc, init_world.EXIT_EDITION)
-        self.assertIn("odc new-world", " ".join(messages))
+        self.assertIn("hdc new-world", " ".join(messages))
         self.assertEqual(self.meta()["edition"], "classic")
 
     def test_version_mismatch_refuses(self):
@@ -71,7 +71,7 @@ class InitWorldTests(unittest.TestCase):
             messages = []
             rc = init_world.init(self.release(srv), self.data, "b", log=messages.append)
         self.assertEqual(rc, init_world.EXIT_VERSION)
-        self.assertIn("odc upgrade-world", " ".join(messages))
+        self.assertIn("hdc upgrade-world", " ".join(messages))
 
     def test_interrupted_navmesh_download_resumes(self):
         with fx.RangeServer(self.dir) as srv:

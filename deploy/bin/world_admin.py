@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """World lifecycle for the central server: status, restore a backup, start a new world, and upgrade
 to a new upstream version with upstream's progress importer. Everything except status and fetch-clean
-expects the server to be stopped (deploy/odc enforces that) and keeps the previous world first: restore
+expects the server to be stopped (deploy/hdc enforces that) and keeps the previous world first: restore
 takes a backup, new-world and upgrade-world move the whole old world into /data/archive."""
 import argparse
 import datetime
@@ -37,7 +37,7 @@ def _ts():
 def _meta(data):
     path = init_world.world_paths(data)["meta"]
     if not os.path.isfile(path):
-        raise AdminError("there is no world yet; start the server once (odc up) to create it")
+        raise AdminError("there is no world yet; start the server once (hdc up) to create it")
     with open(path, encoding="utf-8") as f:
         return json.load(f)
 
@@ -153,7 +153,7 @@ def new_world(release, data, edition, skip_navmesh=False, log=print):
         _unarchive_world(data, archive)
         raise AdminError(f"creating the new world failed ({problem}). Your previous world is back in place; "
                          "nothing changed. Try again when the download works.")
-    spawns.reapply(data, log)  # keep the owner's restored leveling spawns (odc spawns)
+    spawns.reapply(data, log)  # keep the owner's restored leveling spawns (hdc spawns)
     log(f"New '{edition}' world created; the old one is archived in {archive}.")
     return archive
 

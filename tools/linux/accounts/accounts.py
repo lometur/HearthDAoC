@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Manage OfflineDAoC accounts in the world database: create, list, set privilege level.
+"""Manage HearthDAoC (OfflineDAoC) accounts in the world database: create, list, set privilege level.
 
 Uses the server's own password hashing ("##" + MD5 of the UTF-16 big-endian characters, each byte
 as hex without zero padding; LoginRequestHandler.CryptPassword), so accounts made here work exactly
@@ -85,7 +85,7 @@ def set_plvl(conn, name, plvl, server_stopped=False):
 
 
 def main(argv=None):
-    ap = argparse.ArgumentParser(description="Manage OfflineDAoC accounts.")
+    ap = argparse.ArgumentParser(description="Manage HearthDAoC accounts.")
     ap.add_argument("--db", required=True)
     sub = ap.add_subparsers(dest="cmd", required=True)
     c = sub.add_parser("create")

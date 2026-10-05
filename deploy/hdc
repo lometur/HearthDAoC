@@ -1,26 +1,26 @@
 #!/usr/bin/env bash
-# odc: manage the OfflineDAoC central server deployment. Run it from the folder holding
+# hdc: manage the HearthDAoC server deployment. Run it from the folder holding
 # compose.yml and .env. See HANDOFF.md for setup.
 set -euo pipefail
 here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 [[ -f "$here/.env" ]] || { echo "Missing $here/.env (copy .env.example to .env and edit it)." >&2; exit 1; }
-# Not exported: compose reads .env itself, and exported values would override edits odc makes to .env.
+# Not exported: compose reads .env itself, and exported values would override edits hdc makes to .env.
 source "$here/.env"
 
-PROJECT="${OFFLINEDAOC_PROJECT:-offlinedaoc}"
-CONTAINER="${OFFLINEDAOC_CONTAINER:-offlinedaoc-server}"
-VOLUME="${OFFLINEDAOC_VOLUME:-offlinedaoc-data}"
-UIDGID="${OFFLINEDAOC_UID:-1000}:${OFFLINEDAOC_GID:-1000}"
-PORT="${OFFLINEDAOC_PORT:-10301}"
-KEEP="${OFFLINEDAOC_BACKUP_KEEP:-7}"
+PROJECT="${HEARTHDAOC_PROJECT:-hearthdaoc}"
+CONTAINER="${HEARTHDAOC_CONTAINER:-hearthdaoc-server}"
+VOLUME="${HEARTHDAOC_VOLUME:-hearthdaoc-data}"
+UIDGID="${HEARTHDAOC_UID:-1000}:${HEARTHDAOC_GID:-1000}"
+PORT="${HEARTHDAOC_PORT:-10301}"
+KEEP="${HEARTHDAOC_BACKUP_KEEP:-7}"
 DB=/data/world/opendaoc.sqlite3.db
 ADMIN=(python3 /app/bin/world_admin.py --data /data --lock /app/upstream.lock)
 
 compose() { docker compose -p "$PROJECT" -f "$here/compose.yml" --env-file "$here/.env" "$@"; }
-# Create the volume with compose's labels when odc needs it before the first "up", so compose adopts it.
+# Create the volume with compose's labels when hdc needs it before the first "up", so compose adopts it.
 ensure_volume() { docker volume inspect "$VOLUME" >/dev/null 2>&1 || docker volume create \
     --label com.docker.compose.project="$PROJECT" --label com.docker.compose.volume=data "$VOLUME" >/dev/null; }
-image() { compose config --images | head -1; }
+image() { echo "${HEARTHDAOC_IMAGE:-ghcr.io/lometur/hearthdaoc}:${HEARTHDAOC_TAG:?set HEARTHDAOC_TAG in .env}"; }
 running() { [[ "$(docker inspect -f '{{.State.Running}}' "$CONTAINER" 2>/dev/null)" == true ]]; }
 # Prints why the server is not starting (crash loop or a stopped container after a refusal), else returns 1.
 refusal() {
@@ -30,10 +30,10 @@ refusal() {
     [[ "$health" == healthy ]] && return 1
     [[ "$restarting" == true || "$count" -gt 0 || ( "$running" == false && "$code" -ne 0 ) ]] || return 1
     why="$(docker logs --tail 300 "$CONTAINER" 2>&1 | grep '^ERROR' | tail -1 || true)"
-    echo "Server: not starting (automatic restarts: $count) - ${why:-exit code $code, see ./odc logs}"
-    echo "Fix the cause, then ./odc up again. ./odc stop ends the retries."
+    echo "Server: not starting (automatic restarts: $count) - ${why:-exit code $code, see ./hdc logs}"
+    echo "Fix the cause, then ./hdc up again. ./hdc stop ends the retries."
 }
-need_stopped() { if running; then echo "The server is running. Stop it first: ./odc stop" >&2; exit 1; fi; }
+need_stopped() { if running; then echo "The server is running. Stop it first: ./hdc stop" >&2; exit 1; fi; }
 # Throwaway container on the world volume with no network: the upstream import engine and the
 # bot-goals tool look for game servers on local ports, and host ports (OpenDAoC) must not count.
 offline() { ensure_volume; docker run --rm -i --network none --user "$UIDGID" --cap-drop ALL \
@@ -43,7 +43,7 @@ tool() { if running; then docker exec -i "$CONTAINER" "$@"; else offline --entry
 
 usage() {
     cat <<'EOF'
-odc - OfflineDAoC central server
+hdc - HearthDAoC server
 
   up | stop | down | logs        start, stop (saves first), remove containers (volume kept), follow logs
   status                         server state, world, accounts, players, bots, latest backup
@@ -70,7 +70,7 @@ case "$cmd" in
             if refusal >&2; then exit 1; fi
             [[ "$(docker inspect -f '{{if .State.Health}}{{.State.Health.Status}}{{end}}' "$CONTAINER")" == healthy ]] && break
         done
-        echo "Started. ./odc status shows progress (the first start downloads the world)." ;;
+        echo "Started. ./hdc status shows progress (the first start downloads the world)." ;;
     stop) compose stop ;;
     down) compose down ;;
     logs) compose logs -f --tail=200 server ;;
@@ -92,9 +92,9 @@ case "$cmd" in
         fi
         ensure_volume
         docker run --rm --network host --user "$UIDGID" -v "$VOLUME":/data "${mounts[@]}" --entrypoint python3 "$(image)" \
-            /app/bin/init_world.py --lock /app/upstream.lock --data /data --edition "${OFFLINEDAOC_EDITION:-classic}" "${args[@]}" ;;
+            /app/bin/init_world.py --lock /app/upstream.lock --data /data --edition "${HEARTHDAOC_EDITION:-classic}" "${args[@]}" ;;
     add-bots)
-        running || { echo "Start the server first (./odc up); new bots log in while it runs." >&2; exit 1; }
+        running || { echo "Start the server first (./hdc up); new bots log in while it runs." >&2; exit 1; }
         docker exec -i "$CONTAINER" /app/bin/add-bots.sh "$@" ;;
     account)
         if [[ "${1:-}" == plvl ]] && ! running; then
@@ -118,17 +118,17 @@ case "$cmd" in
         fi ;;
     backup) tool python3 /app/bin/backup.py --data /data create --keep "$KEEP" ;;
     backups) tool python3 /app/bin/backup.py --data /data list ;;
-    restore) need_stopped; offline --entrypoint python3 "$(image)" "${ADMIN[@]:1}" restore "${1:?backup file name (see ./odc backups)}" ;;
+    restore) need_stopped; offline --entrypoint python3 "$(image)" "${ADMIN[@]:1}" restore "${1:?backup file name (see ./hdc backups)}" ;;
     new-world)
         need_stopped
-        edition="${OFFLINEDAOC_EDITION:-classic}"
+        edition="${HEARTHDAOC_EDITION:-classic}"
         [[ "${1:-}" == --edition ]] && edition="${2:?classic or b}"
         ensure_volume
         docker run --rm --network host --user "$UIDGID" -v "$VOLUME":/data --entrypoint python3 "$(image)" \
             "${ADMIN[@]:1}" new-world --edition "$edition"
-        if [[ "$edition" != "${OFFLINEDAOC_EDITION:-classic}" ]]; then
-            sed -i "s/^OFFLINEDAOC_EDITION=.*/OFFLINEDAOC_EDITION=$edition/" "$here/.env"
-            echo "Updated OFFLINEDAOC_EDITION=$edition in .env."
+        if [[ "$edition" != "${HEARTHDAOC_EDITION:-classic}" ]]; then
+            sed -i "s/^HEARTHDAOC_EDITION=.*/HEARTHDAOC_EDITION=$edition/" "$here/.env"
+            echo "Updated HEARTHDAOC_EDITION=$edition in .env."
         fi ;;
     upgrade-world)
         need_stopped
@@ -140,11 +140,11 @@ case "$cmd" in
         offline --entrypoint python3 "$(image)" "${ADMIN[@]:1}" upgrade-world --clean-world /data/upgrade-clean-world.db \
             --importer "dotnet /app/tools/progress-import/progress-import.dll" "$@" ;;
     auto-accounts)
-        case "${1:-}" in on) v=True ;; off) v=False ;; *) echo "usage: odc auto-accounts on|off" >&2; exit 2 ;; esac
-        if grep -q '^OFFLINEDAOC_AUTO_ACCOUNTS=' "$here/.env"; then
-            sed -i "s/^OFFLINEDAOC_AUTO_ACCOUNTS=.*/OFFLINEDAOC_AUTO_ACCOUNTS=$v/" "$here/.env"
+        case "${1:-}" in on) v=True ;; off) v=False ;; *) echo "usage: hdc auto-accounts on|off" >&2; exit 2 ;; esac
+        if grep -q '^HEARTHDAOC_AUTO_ACCOUNTS=' "$here/.env"; then
+            sed -i "s/^HEARTHDAOC_AUTO_ACCOUNTS=.*/HEARTHDAOC_AUTO_ACCOUNTS=$v/" "$here/.env"
         else
-            echo "OFFLINEDAOC_AUTO_ACCOUNTS=$v" >> "$here/.env"
+            echo "HEARTHDAOC_AUTO_ACCOUNTS=$v" >> "$here/.env"
         fi
         compose up -d --force-recreate
         echo "Account creation at first login is now $1." ;;

@@ -13,7 +13,7 @@ sys.path.insert(0, BIN)
 
 import spawns  # noqa: E402
 
-TEST_WORLD = os.environ.get("ODC_TEST_WORLD")
+TEST_WORLD = os.environ.get("HDC_TEST_WORLD")
 
 
 def mob_ids(db):
@@ -38,7 +38,7 @@ class SpawnsErrorTests(unittest.TestCase):
                     spawns.restore(data, bad)
 
 
-@unittest.skipUnless(TEST_WORLD, "needs ODC_TEST_WORLD (a clean classic world database)")
+@unittest.skipUnless(TEST_WORLD, "needs HDC_TEST_WORLD (a clean classic world database)")
 class SpawnsWorldTests(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()

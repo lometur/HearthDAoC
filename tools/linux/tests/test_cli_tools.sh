@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
 # Integration tests for the Linux CLIs. Usage: test_cli_tools.sh <tools-out-dir>
-# Needs ODC_TEST_WORLD = path to a clean classic world database (opendaoc.sqlite3.db).
+# Needs HDC_TEST_WORLD = path to a clean classic world database (opendaoc.sqlite3.db).
 set -euo pipefail
 OUT="${1:?usage: $0 <tools-out-dir>}"
-: "${ODC_TEST_WORLD:?set ODC_TEST_WORLD to a clean classic world database}"
+: "${HDC_TEST_WORLD:?set HDC_TEST_WORLD to a clean classic world database}"
 export DOTNET_SYSTEM_GLOBALIZATION_INVARIANT=0
 T="$(mktemp -d)"; trap 'rm -rf "$T"' EXIT
 pass=0; fail() { echo "FAIL: $*" >&2; exit 1; }; ok() { pass=$((pass + 1)); echo "ok - $*"; }
@@ -21,7 +21,7 @@ importer() {
 }
 
 # offline-bots
-mkdir -p "$T/w"; cp "$ODC_TEST_WORLD" "$T/w/opendaoc.sqlite3.db"
+mkdir -p "$T/w"; cp "$HDC_TEST_WORLD" "$T/w/opendaoc.sqlite3.db"
 dotnet "$OUT/offline-bots/offline-bots.dll" add "$T/w/opendaoc.sqlite3.db" 2 1x1 >/dev/null
 [[ "$(q "$T/w/opendaoc.sqlite3.db" 'SELECT count(*) FROM offline_world_bots')" == 1 ]] || fail "offline-bots did not add a bot"
 [[ "$(q "$T/w/opendaoc.sqlite3.db" "SELECT Value FROM offline_population_settings WHERE Key='ActiveTarget'")" == 1 ]] || fail "population target not updated"
@@ -49,7 +49,7 @@ ok "bot-goals refuses to save while the server port is listening"
 mkdir -p "$T/old/runtime/data" "$T/new/runtime/data"
 cp "$T/w/opendaoc.sqlite3.db" "$T/old/runtime/data/opendaoc.sqlite3.db"
 sqlite3 "$T/old/runtime/data/opendaoc.sqlite3.db" "INSERT INTO Account (Name, Password, CreationDate, PrivLevel, Account_ID) VALUES ('tester', '##00', '2026-10-05 10:00:00.000000', 1, 'acc-1')"
-cp "$ODC_TEST_WORLD" "$T/new/runtime/data/opendaoc.sqlite3.db"
+cp "$HDC_TEST_WORLD" "$T/new/runtime/data/opendaoc.sqlite3.db"
 importer --import "$T/old" "$T/new" --replace-progress "$T/report.txt" || { cat "$T/report.txt"; fail "import failed"; }
 [[ "$(q "$T/new/runtime/data/opendaoc.sqlite3.db" 'SELECT count(*) FROM offline_world_bots')" == 2 ]] || fail "bots not imported"
 [[ "$(q "$T/new/runtime/data/opendaoc.sqlite3.db" "SELECT count(*) FROM Account WHERE Name='tester'")" == 1 ]] || fail "account not imported"

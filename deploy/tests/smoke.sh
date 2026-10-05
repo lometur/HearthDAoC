@@ -2,15 +2,15 @@
 # Container smoke test (world database only, test ports). Usage: smoke.sh <image>
 set -euo pipefail
 IMAGE="${1:?usage: $0 <image>}"
-NAME="offlinedaoc-smoke-$$"; VOL="offlinedaoc-smoke-$$"; PORT="${SMOKE_PORT:-10391}"; UDP="${SMOKE_UDP:-10491}"
+NAME="hearthdaoc-smoke-$$"; VOL="hearthdaoc-smoke-$$"; PORT="${SMOKE_PORT:-10391}"; UDP="${SMOKE_UDP:-10491}"
 T="$(mktemp -d)"
 cleanup() { docker rm -f "$NAME" >/dev/null 2>&1 || true; docker volume rm -f "$VOL" "$VOL-ro" "$VOL-uid" >/dev/null 2>&1 || true; rm -rf "$T"; }
 trap cleanup EXIT
 fail() { echo "FAIL: $*" >&2; docker logs "$NAME" > "$T/fail.log" 2>&1 || true; tail -40 "$T/fail.log" >&2; exit 1; }
 # Read logs into a file first: piping docker logs into grep -q under pipefail can fail on SIGPIPE.
 logs_have() { docker logs "$NAME" > "$T/logs" 2>&1 || true; grep -q -- "$1" "$T/logs"; }
-run() { docker run -d --name "$NAME" --network host -v "$VOL":/data -e OFFLINEDAOC_EDITION="${1:-classic}" \
-            -e OFFLINEDAOC_PORT="$PORT" -e OFFLINEDAOC_UDP_PORT="$UDP" -e OFFLINEDAOC_SKIP_NAVMESH=1 "$IMAGE" >/dev/null; }
+run() { docker run -d --name "$NAME" --network host -v "$VOL":/data -e HEARTHDAOC_EDITION="${1:-classic}" \
+            -e HEARTHDAOC_PORT="$PORT" -e HEARTHDAOC_UDP_PORT="$UDP" -e HEARTHDAOC_SKIP_NAVMESH=1 "$IMAGE" >/dev/null; }
 wait_listen() {
     for _ in $(seq 1 300); do
         logs_have "Server is now listening for incoming connections on 0.0.0.0:$PORT" && return 0
@@ -59,7 +59,7 @@ docker run --rm -v "$VOL":/data --entrypoint rm "$IMAGE" -f /data/bot-goals.json
 
 run b; sleep 5
 [[ "$(docker inspect -f '{{.State.ExitCode}}' "$NAME")" == 3 ]] || fail "edition change not refused"
-logs_have "odc new-world" || fail "edition message missing"
+logs_have "hdc new-world" || fail "edition message missing"
 echo "ok - changing the edition of an existing world is refused"
 docker rm -f "$NAME" >/dev/null
 
@@ -73,13 +73,13 @@ docker rm -f "$NAME" >/dev/null
 docker volume create "$VOL-ro" >/dev/null
 # Non-empty on purpose: Docker gives an empty volume the image's /data ownership again on every mount.
 docker run --rm -v "$VOL-ro":/data --user 0 --entrypoint sh "$IMAGE" -c 'touch /data/.root-owned && chown -R 0:0 /data && chmod 755 /data'
-docker run -d --name "$NAME" --network host -v "$VOL-ro":/data -e OFFLINEDAOC_PORT="$PORT" -e OFFLINEDAOC_SKIP_NAVMESH=1 "$IMAGE" >/dev/null; sleep 3
+docker run -d --name "$NAME" --network host -v "$VOL-ro":/data -e HEARTHDAOC_PORT="$PORT" -e HEARTHDAOC_SKIP_NAVMESH=1 "$IMAGE" >/dev/null; sleep 3
 [[ "$(docker inspect -f '{{.State.ExitCode}}' "$NAME")" == 64 ]] || fail "unwritable volume not detected"
 logs_have "chown" && logs_have "touch /data/.owner" || fail "chown hint missing or incomplete"
 echo "ok - an unwritable volume is refused with the chown fix"
 docker rm -f "$NAME" >/dev/null
-docker run -d --name "$NAME" --network host --user 1234:1234 -v "$VOL-uid":/data -e OFFLINEDAOC_PORT="$PORT" \
-    -e OFFLINEDAOC_UDP_PORT="$UDP" -e OFFLINEDAOC_SKIP_NAVMESH=1 "$IMAGE" >/dev/null
+docker run -d --name "$NAME" --network host --user 1234:1234 -v "$VOL-uid":/data -e HEARTHDAOC_PORT="$PORT" \
+    -e HEARTHDAOC_UDP_PORT="$UDP" -e HEARTHDAOC_SKIP_NAVMESH=1 "$IMAGE" >/dev/null
 wait_listen || fail "a non-default uid cannot use a fresh volume"
 echo "ok - a non-default uid works on a fresh volume"
 echo "SMOKE OK"

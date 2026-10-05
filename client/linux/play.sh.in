@@ -1,27 +1,27 @@
 #!/usr/bin/env bash
-# Play OfflineDAoC on the central server @SERVER@ (edition @EDITION@) through Proton.
+# Play on the HearthDAoC server @SERVER@ (edition @EDITION@) through Proton.
 # Add this file to Steam as a non-Steam game WITHOUT forcing a compatibility tool;
 # any launch options must end with %command%.
 set -euo pipefail
 
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 CL="$HERE/client"
-SERVER="${OFFLINEDAOC_SERVER:-@SERVER@}"
+SERVER="${HEARTHDAOC_SERVER:-@SERVER@}"
 CREDS="$HERE/account.txt"
 
 # Errors go to the terminal, and to a dialog when started from Steam (no terminal to read them).
 die() {
     echo "play.sh: $*" >&2
     if [[ ! -t 2 && -n "${DISPLAY:-}${WAYLAND_DISPLAY:-}" ]]; then
-        if command -v zenity >/dev/null; then zenity --error --title="OfflineDAoC" --text="$*" 2>/dev/null || true
-        elif command -v notify-send >/dev/null; then notify-send "OfflineDAoC" "$*" || true; fi
+        if command -v zenity >/dev/null; then zenity --error --title="HearthDAoC" --text="$*" 2>/dev/null || true
+        elif command -v notify-send >/dev/null; then notify-send "HearthDAoC" "$*" || true; fi
     fi
     exit 1
 }
 
 if [[ ! -f "$CREDS" ]]; then
     if command -v zenity >/dev/null && [[ -n "${DISPLAY:-}${WAYLAND_DISPLAY:-}" ]]; then
-        form="$(zenity --forms --title="OfflineDAoC login" \
+        form="$(zenity --forms --title="HearthDAoC login" \
             --text="Server: $SERVER\nUse a password you use nowhere else." \
             --add-entry="Account (letters and digits)" --add-password="Password" --separator=$'\n')" || die "Login cancelled."
         acct="$(sed -n 1p <<<"$form")"; pass="$(sed -n 2p <<<"$form")"

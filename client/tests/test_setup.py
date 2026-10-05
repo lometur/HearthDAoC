@@ -52,7 +52,7 @@ class SetupTests(unittest.TestCase):
         self.assertTrue(os.stat(play).st_mode & stat.S_IXUSR)
         with open(play, encoding="utf-8") as f:
             text = f.read()
-        self.assertIn('SERVER="${OFFLINEDAOC_SERVER:-192.168.1.64:10301}"', text)
+        self.assertIn('SERVER="${HEARTHDAOC_SERVER:-192.168.1.64:10301}"', text)
         self.assertNotIn("@SERVER@", text)
         self.assertEqual(subprocess.run(["bash", "-n", play]).returncode, 0)
 

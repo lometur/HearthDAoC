@@ -1,6 +1,6 @@
 # syntax=docker/dockerfile:1
-# OfflineDAoC central server (lometur fork). Build from the repository root:
-#   docker build -f deploy/Dockerfile -t offlinedaoc:dev .
+# HearthDAoC server (unofficial fork of shadowofze/OfflineDAoC). Build from the repository root:
+#   docker build -f deploy/Dockerfile -t hearthdaoc:dev .
 
 FROM mcr.microsoft.com/dotnet/sdk:10.0 AS build
 RUN apt-get update \
@@ -40,8 +40,8 @@ COPY tools/linux/odaoc_fetch.py /app/bin/odaoc_fetch.py
 COPY deploy/bin /app/bin
 COPY deploy/entrypoint.sh /app/entrypoint.sh
 COPY deploy/upstream.lock /app/upstream.lock
-# /app/server must be writable by whichever OFFLINEDAOC_UID runs it (script compilation, dashboards, links).
-# /data is world-writable so a fresh volume works for any OFFLINEDAOC_UID (Docker copies this mode into it).
+# /app/server must be writable by whichever HEARTHDAOC_UID runs it (script compilation, dashboards, links).
+# /data is world-writable so a fresh volume works for any HEARTHDAOC_UID (Docker copies this mode into it).
 RUN mkdir -p /data \
  && chown 1000:1000 /data && chmod 0777 /data \
  && chmod -R a+rwX /app/server \
@@ -51,7 +51,7 @@ ENV DOTNET_SYSTEM_GLOBALIZATION_INVARIANT=0 \
     DOTNET_CLI_HOME=/tmp \
     XDG_CONFIG_HOME=/tmp/xdg \
     PYTHONUNBUFFERED=1 \
-    OFFLINEDAOC_EDITION=classic
+    HEARTHDAOC_EDITION=classic
 USER 1000:1000
 VOLUME /data
 HEALTHCHECK --interval=30s --timeout=5s --start-period=10m --retries=3 CMD ["/app/bin/healthcheck.sh"]

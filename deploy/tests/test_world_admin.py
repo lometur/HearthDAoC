@@ -21,8 +21,8 @@ import world_admin  # noqa: E402
 from odaoc_fetch import Release  # noqa: E402
 
 QUIET = lambda *a, **k: None  # noqa: E731
-TEST_WORLD = os.environ.get("ODC_TEST_WORLD")
-TOOLS = os.environ.get("ODC_TOOLS")
+TEST_WORLD = os.environ.get("HDC_TEST_WORLD")
+TOOLS = os.environ.get("HDC_TOOLS")
 
 
 class FakeRelease:
@@ -160,7 +160,7 @@ class WorldAdminTests(unittest.TestCase):
         self.assertEqual((st["edition"], st["version"]), ("classic", "test"))
         self.assertIn("latest_backup", st)
 
-    @unittest.skipUnless(TEST_WORLD and TOOLS, "needs ODC_TEST_WORLD (clean classic world) and ODC_TOOLS (built CLIs)")
+    @unittest.skipUnless(TEST_WORLD and TOOLS, "needs HDC_TEST_WORLD (clean classic world) and HDC_TOOLS (built CLIs)")
     def test_upgrade_world_keeps_accounts_passwords_and_privilege(self):
         db = init_world.world_paths(self.data)["db"]
         os.makedirs(os.path.dirname(db))
@@ -182,14 +182,14 @@ class WorldAdminTests(unittest.TestCase):
         self.assertEqual(plvl, {"Admin1": 3, "Player2": 1})  # admin rights restored after the importer reset them
         self.assertTrue(os.path.isfile(os.path.join(archive, "world", "opendaoc.sqlite3.db")))
 
-    @unittest.skipUnless(TEST_WORLD, "needs ODC_TEST_WORLD (a clean classic world)")
+    @unittest.skipUnless(TEST_WORLD, "needs HDC_TEST_WORLD (a clean classic world)")
     def test_new_world_reapplies_restored_spawns(self):
         init_world.init(FakeRelease("test", TEST_WORLD), self.data, "classic", skip_navmesh=True, log=QUIET)
         n = spawns.restore(self.data, 20)
         world_admin.new_world(FakeRelease("test", TEST_WORLD), self.data, "classic", skip_navmesh=True, log=QUIET)
         self.assertEqual(spawns.status(self.data)["restored"], n)
 
-    @unittest.skipUnless(TEST_WORLD and TOOLS, "needs ODC_TEST_WORLD (clean classic world) and ODC_TOOLS (built CLIs)")
+    @unittest.skipUnless(TEST_WORLD and TOOLS, "needs HDC_TEST_WORLD (clean classic world) and HDC_TOOLS (built CLIs)")
     def test_upgrade_world_reapplies_restored_spawns(self):
         db = init_world.world_paths(self.data)["db"]
         os.makedirs(os.path.dirname(db))
@@ -201,7 +201,7 @@ class WorldAdminTests(unittest.TestCase):
                                   importer_cmd(self.data), same_version_ok=True, log=QUIET)
         self.assertEqual(spawns.status(self.data)["restored"], n)
 
-    @unittest.skipUnless(TEST_WORLD and TOOLS, "needs ODC_TEST_WORLD (clean classic world) and ODC_TOOLS (built CLIs)")
+    @unittest.skipUnless(TEST_WORLD and TOOLS, "needs HDC_TEST_WORLD (clean classic world) and HDC_TOOLS (built CLIs)")
     def test_upgrade_world_keeps_bans_and_permissions_and_reports_changed_settings(self):
         db = init_world.world_paths(self.data)["db"]
         os.makedirs(os.path.dirname(db))

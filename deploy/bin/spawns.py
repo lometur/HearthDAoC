@@ -40,7 +40,7 @@ def _settings(data):
 
 def _connect(data):
     if not os.path.isfile(_db(data)):
-        raise SpawnsError("there is no world yet; start the server once (odc up) or run odc init")
+        raise SpawnsError("there is no world yet; start the server once (hdc up) or run hdc init")
     conn = sqlite3.connect(_db(data), timeout=30)
     conn.isolation_level = None  # explicit transactions below
     return conn

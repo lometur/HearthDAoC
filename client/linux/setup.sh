@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Set up an OfflineDAoC client for the central server (Linux, Steam/Proton).
+# Set up a HearthDAoC client: OfflineDAoC's client files for a HearthDAoC server (Linux, Steam/Proton).
 set -euo pipefail
 
 usage() {
@@ -9,12 +9,12 @@ usage: setup.sh --server HOST:PORT --edition classic|b --base-client DIR [--dest
   --server       the central server, e.g. 192.168.1.64:10301 (ask the server owner)
   --edition      classic or b; must match the server (ask the server owner)
   --base-client  your 1.127 client folder (e.g. from the OpenDAoC installer); only read
-  --dest         where to create the OfflineDAoC client (default ~/Games/OfflineDAoC-Central)
+  --dest         where to create the OfflineDAoC client (default ~/Games/HearthDAoC)
 EOF
 }
 
 here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-SERVER="" EDITION="" BASE="" DEST="$HOME/Games/OfflineDAoC-Central" LOCK=""
+SERVER="" EDITION="" BASE="" DEST="$HOME/Games/HearthDAoC" LOCK=""
 while [[ $# -gt 0 ]]; do
     case "$1" in
         --server) SERVER="${2:-}"; shift 2 ;;

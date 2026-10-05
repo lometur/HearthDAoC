@@ -3,7 +3,7 @@
 
 First start: download the edition's clean world database and the navmeshes (all verified), then
 write /data/world.json LAST, so an interrupted first start simply resumes on the next start.
-Later starts: refuse if OFFLINEDAOC_EDITION or the image's upstream version differs from the world's.
+Later starts: refuse if HEARTHDAOC_EDITION or the image's upstream version differs from the world's.
 """
 import argparse
 import datetime
@@ -83,13 +83,13 @@ def init(release, data, edition, skip_navmesh=False, seed_navmesh=None, log=prin
         with open(p["meta"], encoding="utf-8") as f:
             meta = json.load(f)
         if meta["edition"] != edition:
-            log(f"ERROR: this world was created as edition '{meta['edition']}', but OFFLINEDAOC_EDITION is "
-                f"'{edition}'. Set OFFLINEDAOC_EDITION={meta['edition']} in .env, or start a new world on purpose "
-                f"with: odc new-world --edition {edition}")
+            log(f"ERROR: this world was created as edition '{meta['edition']}', but HEARTHDAOC_EDITION is "
+                f"'{edition}'. Set HEARTHDAOC_EDITION={meta['edition']} in .env, or start a new world on purpose "
+                f"with: hdc new-world --edition {edition}")
             return EXIT_EDITION
         if meta["version"] != release.version:
             log(f"ERROR: this world is from upstream {meta['version']}, but this image is for {release.version}. "
-                "Deploy the matching image, or run: odc upgrade-world (it backs up first).")
+                "Deploy the matching image, or run: hdc upgrade-world (it backs up first).")
             return EXIT_VERSION
         if not skip_navmesh and not meta.get("navmesh"):
             ensure_navmesh(release, p["navmesh"], seed_navmesh, log)
@@ -115,7 +115,7 @@ def init(release, data, edition, skip_navmesh=False, seed_navmesh=None, log=prin
 
 
 def main(argv=None):
-    ap = argparse.ArgumentParser(description="Create or check the OfflineDAoC world in a data folder.")
+    ap = argparse.ArgumentParser(description="Create or check the HearthDAoC world in a data folder.")
     ap.add_argument("--lock", required=True)
     ap.add_argument("--data", required=True)
     ap.add_argument("--edition", required=True, choices=["classic", "b"])
