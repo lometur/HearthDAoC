@@ -16,6 +16,7 @@ import accounts  # noqa: E402
 import backup  # noqa: E402
 import init_world  # noqa: E402
 import release_fixture as fx  # noqa: E402
+import spawns  # noqa: E402
 import world_admin  # noqa: E402
 from odaoc_fetch import Release  # noqa: E402
 
@@ -128,6 +129,25 @@ class WorldAdminTests(unittest.TestCase):
         self.assertEqual(after, before)  # every account kept, passwords unchanged
         self.assertEqual(plvl, {"Admin1": 3, "Player2": 1})  # admin rights restored after the importer reset them
         self.assertTrue(os.path.isfile(os.path.join(archive, "world", "opendaoc.sqlite3.db")))
+
+    @unittest.skipUnless(TEST_WORLD, "needs ODC_TEST_WORLD (a clean classic world)")
+    def test_new_world_reapplies_restored_spawns(self):
+        init_world.init(FakeRelease("test", TEST_WORLD), self.data, "classic", skip_navmesh=True, log=QUIET)
+        n = spawns.restore(self.data, 20)
+        world_admin.new_world(FakeRelease("test", TEST_WORLD), self.data, "classic", skip_navmesh=True, log=QUIET)
+        self.assertEqual(spawns.status(self.data)["restored"], n)
+
+    @unittest.skipUnless(TEST_WORLD and TOOLS, "needs ODC_TEST_WORLD (clean classic world) and ODC_TOOLS (built CLIs)")
+    def test_upgrade_world_reapplies_restored_spawns(self):
+        db = init_world.world_paths(self.data)["db"]
+        os.makedirs(os.path.dirname(db))
+        shutil.copyfile(TEST_WORLD, db)
+        init_world.write_meta(init_world.world_paths(self.data)["meta"],
+                              {"version": "0.34b", "edition": "classic", "navmesh": False, "created_utc": "x"})
+        n = spawns.restore(self.data, 20)
+        world_admin.upgrade_world(FakeRelease("0.34b", TEST_WORLD), self.data,
+                                  importer_cmd(self.data), same_version_ok=True, log=QUIET)
+        self.assertEqual(spawns.status(self.data)["restored"], n)
 
     def test_upgrade_world_refuses_same_version_by_default(self):
         self.make_sqlite_world(version="0.34b")

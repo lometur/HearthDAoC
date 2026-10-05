@@ -38,6 +38,7 @@ odc backup | grep -q "/data/backups/world-" || fail "backup"
 echo "ok - status, accounts, add-bots and backup while running"
 if odc bot-goals set 50 10 30 60 2>/dev/null; then fail "bot-goals write allowed while running"; fi
 if odc restore x.db 2>/dev/null; then fail "restore allowed while running"; fi
+if odc spawns restore 2>/dev/null; then fail "spawns restore allowed while running"; fi
 echo "ok - stopped-only commands refuse while running"
 odc stop >/dev/null
 docker logs offlinedaoc-it-server 2>&1 | grep -q "| DOL.GS.GameServer | Stopped" || fail "no clean save"
@@ -52,7 +53,12 @@ odc up >/dev/null 2>&1 || true; sleep 6
 odc stop >/dev/null 2>&1 || true
 sed -i 's/^OFFLINEDAOC_EDITION=b/OFFLINEDAOC_EDITION=classic/' "$W/.env"
 echo "ok - edition change refused through compose"
+odc spawns restore --max-level 20 | grep -q "Restored" || fail "spawns restore while stopped"
+odc spawns status | grep -qE "^enabled +True" || fail "spawns status after restore"
+echo "ok - spawns restore works when stopped"
 odc auto-accounts off >/dev/null; healthy || fail "not healthy after auto-accounts off"
 docker exec offlinedaoc-it-server grep -q "<AutoAccountCreation>False</AutoAccountCreation>" /app/server/config/serverconfig.xml || fail "auto-accounts not off"
 echo "ok - auto-accounts off recreates the server with the new setting"
+odc spawns status | grep -qE "^restored +[1-9]" || fail "restored spawns missing after restart"
+echo "ok - the server starts healthy with the restored spawns"
 echo "ODC INTEGRATION OK"

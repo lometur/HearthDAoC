@@ -44,6 +44,8 @@ odc - OfflineDAoC central server
   new-world [--edition classic|b]   archive the current world and start a fresh one (server stopped)
   upgrade-world [--same-version]    move progress into the clean world of this image's upstream version (server stopped)
   auto-accounts on|off           allow or stop account creation at first login (recreates the server)
+  spawns restore [--max-level N] | undo | status
+                                 bring back the leveling monsters upstream archived (default levels 1-20; server stopped)
 EOF
 }
 
@@ -124,6 +126,13 @@ case "$cmd" in
         fi
         compose up -d --force-recreate
         echo "Account creation at first login is now $1." ;;
+    spawns)
+        if [[ "${1:-status}" == status ]]; then
+            tool python3 /app/bin/spawns.py --data /data status
+        else
+            need_stopped
+            offline --entrypoint python3 "$(image)" /app/bin/spawns.py --data /data "$@"
+        fi ;;
     help|-h|--help) usage ;;
     *) usage >&2; exit 2 ;;
 esac

@@ -36,6 +36,10 @@ says otherwise. Then pull: `docker compose -p offlinedaoc -f compose.yml --env-f
   world database, ~30 MB). Afterwards `rm -rf ~/offlinedaoc/seed-navmesh`.
 - **Download:** `./odc init` (about 600 MB from GitHub, verified, resumable).
 
+Then bring back the leveling monsters upstream archived (the owner chose levels 1-20, OpenDAoC's
+density; takes a few seconds and is re-applied automatically by new-world and upgrade-world):
+`./odc spawns restore --max-level 20` and check `./odc spawns status` (expect `restored` about 12,600).
+
 ## 4. Start and firewall
 
 ```bash
@@ -59,7 +63,7 @@ Then ask the owner to connect from their PC (`~/Games/OfflineDAoC-Central/play.s
 ## 6. Day-to-day
 
 `./odc help` lists everything: status, logs, add-bots, accounts, bot goals, backups, restore,
-new-world, upgrade-world, auto-accounts. Backups run daily into the volume (keep 7).
+new-world, upgrade-world, auto-accounts, spawns. Backups run daily into the volume (keep 7).
 Before remote players join: `./odc auto-accounts off` and create their accounts with
 `./odc account create <name> <password>`.
 

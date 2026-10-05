@@ -18,6 +18,7 @@ sys.path[:0] = [HERE, os.path.join(HERE, "..", "..", "tools", "linux")]
 
 import backup  # noqa: E402
 import init_world  # noqa: E402
+import spawns  # noqa: E402
 from odaoc_fetch import FetchError, Release  # noqa: E402
 
 CLEAN_WORLD = "upgrade-clean-world.db"
@@ -113,6 +114,7 @@ def new_world(release, data, edition, skip_navmesh=False, log=print):
     rc = init_world.init(release, data, edition, skip_navmesh=skip_navmesh, log=log)
     if rc != 0:
         raise AdminError(f"creating the new world failed (code {rc}); the old world is in {archive}")
+    spawns.reapply(data, log)  # keep the owner's restored leveling spawns (odc spawns)
     log(f"New '{edition}' world created; the old one is archived in {archive}.")
     return archive
 
@@ -185,6 +187,7 @@ def upgrade_world(release, data, importer_cmd, clean_world=None, same_version_ok
                           dict(meta, version=release.version, navmesh=False,
                                upgraded_utc=datetime.datetime.now(datetime.timezone.utc).isoformat(timespec="seconds")))
     shutil.rmtree(stage, ignore_errors=True)
+    spawns.reapply(data, log)  # the clean world has upstream's spawn list; restore the owner's choice again
     log(f"Upgraded to upstream {release.version}: {counts_new}. Previous world archived in {archive}. "
         "Navmeshes are re-verified on the next start.")
     return archive

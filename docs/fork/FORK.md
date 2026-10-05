@@ -12,6 +12,7 @@ so upstream updates merge cleanly.
 | Container deployment | `deploy/`, `.dockerignore`, `.github/workflows/server-image.yml` | none |
 | Linux admin CLIs | `tools/linux/` (link upstream sources; see each project file) | none |
 | Player setup | `client/` | none |
+| Leveling spawns (owner's choice) | `deploy/bin/spawns.py`, `odc spawns` | none: restores rows upstream's setup archived in `offline_classic165_removed_mobs` |
 | Design docs | `docs/fork/` | none |
 
 Server code under `source/server` is unchanged in sub-project 1. Later sub-projects list every
