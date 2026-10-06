@@ -35,6 +35,9 @@ docker exec "$NAME" grep -q "<Port>$PORT</Port>" /app/server/config/serverconfig
 docker exec "$NAME" grep -q "<EnableUPnP>False</EnableUPnP>" /app/server/config/serverconfig.xml || fail "UPnP not off"
 docker exec "$NAME" test -f /app/server/config/logconfig.xml || fail "logconfig.xml missing"
 echo "ok - generated config and release config files present"
+[[ "$(docker exec "$NAME" sqlite3 /data/world/opendaoc.sqlite3.db 'SELECT group_concat(DISTINCT Port) FROM Regions')" == "$UDP" ]] \
+    || fail "world regions do not tell clients UDP port $UDP"
+echo "ok - world regions tell clients the server's UDP port"
 docker exec "$NAME" python3 /app/tools/accounts/accounts.py --db "$db" create smoketest Sm0keTest >/dev/null || fail "account create"
 docker stop -t 120 "$NAME" >/dev/null
 logs_have "| DOL.GS.GameServer | Stopped" || fail "no clean save on docker stop"

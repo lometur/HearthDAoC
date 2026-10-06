@@ -62,6 +62,7 @@ machine uses another firewall, describe it to the owner rather than changing it.
 sleep 90 && ./hdc status                       # running (healthy), edition classic, navmesh True
 docker exec hearthdaoc-server grep -c "Loading NavMesh successful" /data/logs/server.log   # 99
 docker exec hearthdaoc-server grep "Server is now listening" /data/logs/server.log | tail -1   # 0.0.0.0:10301
+docker exec hearthdaoc-server sqlite3 /data/world/opendaoc.sqlite3.db "SELECT DISTINCT Port FROM Regions"   # 10401
 docker ps --format '{{.Names}} {{.Status}}' | grep -i opendaoc   # OpenDAoC still up, unchanged
 ```
 Then ask the owner to connect from their PC (`~/Games/HearthDAoC/play.sh` after running
