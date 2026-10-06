@@ -102,8 +102,8 @@ def listing(folder):
 @unittest.skipUnless(RUBY, "needs ruby to read the workflow's YAML")
 class ClientPatchWorkflowTests(unittest.TestCase):
     """The client patch tests get the real classic client files, nasm, upstream's MPK tool and pwsh. The
-    fetched EA files stay outside the checkout and are never published. The release job builds the MPK
-    tool for the client bundle's splash.mpk, and its notes credit the splash art."""
+    fetched EA files stay outside the checkout and are never published. The release job needs no .NET: the
+    client bundle carries the committed splash.mpk. Its notes credit the splash art."""
 
     @classmethod
     def setUpClass(cls):
@@ -179,12 +179,13 @@ class ClientPatchWorkflowTests(unittest.TestCase):
         i_rebuild, rebuild = self.step(TEST_JOB, "client/patches/build.py")
         self.assertGreater(i_rebuild, i_tests)
         script = rebuild["run"]
-        # The splash entry needs a built splash.mpk, so the rebuild packs one with the MPK tool.
-        for part in ('client/patches/branding/build_splash_mpk.py --mpk-tool "$HDC_MPK_TOOL"',
-                     '--client "$HDC_CLIENT_FILES"', '--world-db "$HDC_TEST_WORLD"', "--server-src source/server",
-                     "--splash-mpk", 'diff -u client/patches/classic-creation.json "$RUNNER_TEMP/'):
+        # The splash entry pins the committed splash.mpk's SHA-256; a rebuilt one would have another.
+        for part in ('--client "$HDC_CLIENT_FILES"', '--world-db "$HDC_TEST_WORLD"', "--server-src source/server",
+                     "--splash-mpk client/patches/splash.mpk", 'diff -u client/patches/classic-creation.json "$RUNNER_TEMP/'):
             self.assertIn(part, script)
-        for name in ("HDC_CLIENT_FILES", "HDC_TEST_WORLD", "HDC_MPK_TOOL"):
+        self.assertNotIn("build_splash_mpk", script)
+        self.assertEqual(sorted(rebuild["env"]), ["HDC_CLIENT_FILES", "HDC_TEST_WORLD"])
+        for name in ("HDC_CLIENT_FILES", "HDC_TEST_WORLD"):
             self.assertEqual(rebuild["env"][name], tests["env"][name], name)
 
     def test_nothing_fetched_is_published(self):
@@ -200,12 +201,15 @@ class ClientPatchWorkflowTests(unittest.TestCase):
         self.assertEqual(assets.replace("\\\n", " ").split(),
                          ['"$TAG"', '"dist/hearthdaoc-deploy-$TAG.tar.gz"', '"dist/hearthdaoc-client-$TAG.zip"'])
 
-    def test_the_release_job_builds_the_mpk_tool_for_the_client_bundle(self):
-        i_mpk, _ = self.step(RELEASE_JOB, f"dotnet build {MPK_PROJECT} -c Release")
-        i_bundles, bundles = self.step(RELEASE_JOB, "deploy/build_bundles.sh")
-        self.assertLess(self.uses(RELEASE_JOB, "actions/setup-dotnet@v4"), i_mpk)
-        self.assertLess(i_mpk, i_bundles)
-        self.assertEqual(bundles["env"]["HDC_MPK_TOOL"], MPK_TOOL)
+    def test_the_release_job_needs_no_dotnet(self):
+        # build_bundles.sh copies the committed splash.mpk: checkout, bundles, release, as before the client patches.
+        steps = self.steps(RELEASE_JOB)
+        self.assertEqual([s.get("uses") or s["name"] for s in steps],
+                         ["actions/checkout@v4", "Build bundles (no EA files)", "Create release (and its tag on this commit)"])
+        _, bundles = self.step(RELEASE_JOB, "deploy/build_bundles.sh")
+        self.assertEqual((bundles["run"], bundles.get("env")), ('deploy/build_bundles.sh "$TAG" dist', None))
+        for s in steps:
+            self.assertNotIn("dotnet", s.get("run", ""))
 
     def test_the_release_notes_credit_offlinedaocs_splash_art(self):
         # In the --notes string, which gh puts before the notes it generates from the merged PRs.

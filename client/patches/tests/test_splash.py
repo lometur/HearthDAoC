@@ -1,6 +1,8 @@
 """Splash tests: the MPK reader, the splash entry and its checks, the TGA and PNG helpers, the
-MPK build (only when HDC_MPK_TOOL points to OfflineDaoc.Mpk.dll) and the re-lettered splash.png.
+MPK build (only when HDC_MPK_TOOL points to OfflineDaoc.Mpk.dll), the re-lettered splash.png and
+the committed splash.mpk built from it.
 """
+import hashlib
 import os
 import shutil
 import struct
@@ -84,9 +86,11 @@ class SplashEntryTests(unittest.TestCase):
 
     def test_entry(self):
         entry = splash_entry.splash_entry(self.client, self.built)
+        with open(self.built, "rb") as f:
+            built = hashlib.sha256(f.read()).hexdigest()
         self.assertEqual(entry, {"path": "pregame/splash.mpk",
                                  "before": splash_entry.STOCK_SPLASH_SHA256,
-                                 "after": "source",
+                                 "after": built,
                                  "ops": [{"op": "file", "source": "splash.mpk"}]})
         self.assertEqual(list(entry), ["path", "before", "after", "ops"])
 
@@ -278,6 +282,7 @@ class MpkToolTests(unittest.TestCase):
 import reletter_splash  # noqa: E402
 
 SPLASH_PNG = os.path.join(PATCHES, "branding", "splash.png")
+COMMITTED_SPLASH = os.path.join(PATCHES, "splash.mpk")
 
 
 def rgb(rgba):
@@ -316,6 +321,22 @@ class SplashPngTests(unittest.TestCase):
         self.assertRegex(reletter_splash.FONT_URL, r"^https://raw\.githubusercontent\.com/"
                          r"google/fonts/[0-9a-f]{40}/ofl/cinzel/")
         self.assertRegex(reletter_splash.FONT_SHA256, r"^[0-9a-f]{64}$")
+
+
+class CommittedSplashTests(unittest.TestCase):
+    """client/patches/splash.mpk is built once from splash.png and committed: a rebuild carries new
+    timestamps, so the patch set could not pin its SHA-256. A splash.png change without a new splash.mpk
+    fails here."""
+
+    def test_the_client_can_load_it(self):
+        splash_entry.check_splash_mpk(COMMITTED_SPLASH)
+
+    def test_it_holds_splash_png(self):
+        tga = build_splash_mpk.tga_bytes(*build_splash_mpk.read_png(SPLASH_PNG))
+        entries = mpk.read_mpk(COMMITTED_SPLASH)[1]
+        self.assertEqual(len(entries), 8)
+        for name, data in entries:
+            self.assertTrue(data == tga, name)
 
 
 # --- The splash entry in the generator: build.py --splash-mpk (real client files) ---

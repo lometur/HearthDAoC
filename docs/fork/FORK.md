@@ -55,10 +55,23 @@ splash) and the Linux applier (`apply_patches.py`, `patchset.py`).
 
 The splash is OfflineDAoC's artwork (upstream keeps it as
 `source/tools/OfflineDaoc.Launcher/Assets/offline-daoc-client-splash.mpk`), re-lettered "HEARTH DAoC" in Cinzel
-(SIL Open Font License) by `branding/reletter_splash.py`. Credit for the art goes to OfflineDAoC. The bundles get
-`splash.mpk` packed from `branding/splash.png` by upstream's MPK tool (`source/tools/OfflineDaoc.Mpk`, .NET), so
-`deploy/build_bundles.sh` needs `HDC_MPK_TOOL` (or `--deploy-only` for the deploy bundle alone). A change to that
-tool makes a release (`deploy/release_tag.py`), like a change to the files the bundles carry.
+(SIL Open Font License) by `branding/reletter_splash.py`. Credit for the art goes to OfflineDAoC.
+`client/patches/splash.mpk` is committed, and the patch set pins its SHA-256 as the splash entry's `after`. It is
+not built at release time: an MPK packed again by upstream's MPK tool carries new timestamps, so a new hash, and
+a client patched by one release would then be unknown to the next release's appliers. `deploy/build_bundles.sh`
+copies the committed file into the client bundle and builds nothing when its hash isn't the pinned one, so
+releases need no .NET.
+
+**Changing the splash.** Re-letter `branding/splash.png` (`branding/reletter_splash.py`), build `splash.mpk`
+from it with `branding/build_splash_mpk.py` (needs upstream's MPK tool, `source/tools/OfflineDaoc.Mpk`, and the
+.NET 10 SDK), rebuild `classic-creation.json` (below), and commit `splash.png`, `splash.mpk` and the JSON
+together. CI checks that they agree: `client/patches/tests/test_splash.py` fails when `splash.mpk` doesn't
+hold `splash.png`, and the rebuild check fails when the JSON doesn't pin `splash.mpk`.
+
+```bash
+dotnet build source/tools/OfflineDaoc.Mpk/OfflineDaoc.Mpk.csproj -c Release
+python3 client/patches/branding/build_splash_mpk.py --mpk-tool source/tools/OfflineDaoc.Mpk/bin/Release/net10.0/OfflineDaoc.Mpk.dll
+```
 
 The base-class list is generated for the shipped classic world's `disabled_classes`, with Disciple enabled as
 `deploy/bin/world_fixes.py` does. On a server that disables more classes, a base class whose full classes are
@@ -69,12 +82,11 @@ world's database (`--world-db`) fixes it.
 change to anything above, to the server's class files or to `deploy/upstream.lock`. CI rebuilds it on every run
 from the pinned release's files and fails ("Client patch set matches a rebuild") when the committed file
 differs. A change to the generator alone (`build.py`, `pe.py`, `classdata.py`, `src/`,
-`branding/reletter_splash.py`) makes no release; the rebuilt `classic-creation.json` or `branding/splash.png`
-does. You need nasm (`sudo apt install nasm`) and the .NET 10 SDK. From the repository root:
+`branding/reletter_splash.py`) or to upstream's MPK tool makes no release; the rebuilt `classic-creation.json`,
+`branding/splash.png` or `splash.mpk` does. You need nasm (`sudo apt install nasm`); the rebuild uses the
+committed `splash.mpk`. From the repository root:
 
 ```bash
-dotnet build source/tools/OfflineDaoc.Mpk/OfflineDaoc.Mpk.csproj -c Release
-python3 client/patches/branding/build_splash_mpk.py --mpk-tool source/tools/OfflineDaoc.Mpk/bin/Release/net10.0/OfflineDaoc.Mpk.dll
 c="$(mktemp -d)"  # EA files from the pinned release, verified; never commit or share them
 python3 tools/linux/odaoc_fetch.py --lock deploy/upstream.lock extract editions/0.34-no-custom-class/runtime/client-opendaoc/app/game.dll "$c/game.dll"
 python3 tools/linux/odaoc_fetch.py --lock deploy/upstream.lock extract runtime/client-opendaoc/app/pregame/character_customize_stats.xml "$c/pregame/character_customize_stats.xml"
@@ -88,10 +100,10 @@ rm -rf "$c"
 
 The archive paths are the lock's `editions.classic` and `client_prefix` (the world database is about 90 MB).
 The tests skip the real-file cases without `HDC_CLIENT_FILES` and `HDC_TEST_WORLD`, the MPK cases without
-`HDC_MPK_TOOL` (the `OfflineDaoc.Mpk.dll` above) and the PowerShell cases without `pwsh` (or `HDC_PWSH`). CI
-sets all of them; `ClientPatchWorkflowTests` in `deploy/tests/test_workflows.py` (needs ruby) keep the workflow
-that way. `setup.sh` run from a checkout applies `client/patches/` and needs the git-ignored
-`client/patches/splash.mpk` built above.
+`HDC_MPK_TOOL` (the `OfflineDaoc.Mpk.dll` built for the splash above) and the PowerShell cases without `pwsh`
+(or `HDC_PWSH`). CI sets all of them; `ClientPatchWorkflowTests` in `deploy/tests/test_workflows.py` (needs
+ruby) keep the workflow that way. `setup.sh` run from a checkout applies `client/patches/` with the committed
+`splash.mpk`.
 
 If the pinned release's classic `game.dll` changes, `build.py` refuses it until the patch sites in `build.py`,
 `classdata.py` and `src/baseclass.asm` are found again in the new file. Until then CI fails and players with

@@ -9,8 +9,10 @@ for the MPK tool. The packed archive is read back and checked before it is writt
     python3 client/patches/branding/build_splash_mpk.py \\
         --mpk-tool source/tools/OfflineDaoc.Mpk/bin/Release/net10.0/OfflineDaoc.Mpk.dll
 
-The output (default client/patches/splash.mpk) is a build product: never commit it. MPK
-entries carry a timestamp, so two builds differ; the patch set's "after": "source" allows it.
+The output (default client/patches/splash.mpk) is committed, and the patch set pins its
+SHA-256. MPK entries carry a timestamp, so two builds differ: build it only when splash.png
+changes, then rebuild classic-creation.json and commit splash.png, splash.mpk and the JSON
+together.
 """
 import argparse
 import os

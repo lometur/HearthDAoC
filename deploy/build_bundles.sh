@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
 # Build a release's two bundles (no EA files): the deploy bundle and the player (client) bundle.
-# Usage: HDC_MPK_TOOL=<OfflineDaoc.Mpk.dll> deploy/build_bundles.sh <tag> <output dir> [--deploy-only]
-#   (run from the repository root; used by CI and tests). HDC_MPK_TOOL is upstream's MPK tool (it needs
-#   dotnet); it packs the client bundle's splash.mpk from client/patches/branding/splash.png.
-#   --deploy-only builds only the deploy bundle, without the MPK tool (deploy/tests/hdc_integration.sh).
+# Usage: deploy/build_bundles.sh <tag> <output dir> [--deploy-only]
+#   (run from the repository root; used by CI and tests). The client bundle carries the committed
+#   client/patches/splash.mpk, only when it has the SHA-256 client/patches/classic-creation.json pins.
+#   --deploy-only builds only the deploy bundle (deploy/tests/hdc_integration.sh).
 set -euo pipefail
 tag="${1:?release tag}"
 case "${3:-}" in
@@ -11,19 +11,27 @@ case "${3:-}" in
     --deploy-only) client=no ;;
     *) echo "usage: deploy/build_bundles.sh <tag> <output dir> [--deploy-only]" >&2; exit 2 ;;
 esac
-if [[ $client == yes && ! -f "${HDC_MPK_TOOL:-}" ]]; then
-    echo "build_bundles.sh: set HDC_MPK_TOOL to upstream's OfflineDaoc.Mpk.dll (it packs the client's splash.mpk):" >&2
-    echo "  dotnet build source/tools/OfflineDaoc.Mpk/OfflineDaoc.Mpk.csproj -c Release" >&2
-    echo "  HDC_MPK_TOOL=source/tools/OfflineDaoc.Mpk/bin/Release/net10.0/OfflineDaoc.Mpk.dll deploy/build_bundles.sh $tag ${2:-dist}" >&2
-    exit 2
+root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+if [[ $client == yes ]]; then  # the client's loading splash first: if it isn't the pinned one, nothing is written
+    python3 -c '
+import hashlib, json, os, sys
+os.chdir(sys.argv[1])
+splash, patchset = "client/patches/splash.mpk", "client/patches/classic-creation.json"
+with open(patchset, encoding="utf-8") as f:
+    pinned = [entry["after"] for entry in json.load(f)["files"] if entry["path"] == "pregame/splash.mpk"]
+try:
+    with open(splash, "rb") as f:
+        actual = hashlib.sha256(f.read()).hexdigest()
+except OSError as e:
+    sys.exit(f"build_bundles.sh: cannot read {splash}: {e.strerror}")
+if pinned != [actual]:
+    pins = " and ".join(pinned) or "no splash.mpk"
+    sys.exit(f"build_bundles.sh: {splash} has SHA-256 {actual}, but {patchset} pins {pins}: "
+             "commit splash.png, splash.mpk and the rebuilt patch set together (docs/fork/FORK.md, Client patches)")
+' "$root"
 fi
 mkdir -p "${2:?output directory}"; out="$(cd "$2" && pwd)"  # absolute: the zip step runs from another folder
-root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 work="$(mktemp -d)"; trap 'rm -rf "$work"' EXIT
-if [[ $client == yes ]]; then  # the client's loading splash first: if it can't be built, nothing is written
-    python3 -B "$root/client/patches/branding/build_splash_mpk.py" --mpk-tool "$(realpath "$HDC_MPK_TOOL")" \
-        --out "$work/splash.mpk" >/dev/null
-fi
 mkdir -p "$work/deploy"
 cp "$root"/deploy/{compose.yml,.env.example,hdc,HANDOFF.md,upstream.lock} "$work/deploy/"
 sed -i "s/^HEARTHDAOC_TAG=.*/HEARTHDAOC_TAG=$tag/" "$work/deploy/.env.example"  # hdc update reads the tag here
@@ -35,8 +43,8 @@ mkdir -p "$c/patches" "$c/windows/patches"
 cp "$root"/client/README.md "$root"/client/linux/setup.sh "$root"/client/linux/play.sh.in \
    "$root"/tools/linux/odaoc_fetch.py "$root"/deploy/upstream.lock "$c/"
 # Client patches (classic character creation, splash): our patch data, the appliers and our splash.mpk.
-cp "$root"/client/patches/{classic-creation.json,apply_patches.py,patchset.py} "$work/splash.mpk" "$c/patches/"
+cp "$root"/client/patches/{classic-creation.json,apply_patches.py,patchset.py,splash.mpk} "$c/patches/"
 cp "$root"/client/windows/{connect-hearthdaoc.bat,patch-client.bat,patch-client.ps1} "$c/windows/"
-cp "$root"/client/patches/classic-creation.json "$work/splash.mpk" "$c/windows/patches/"
+cp "$root"/client/patches/{classic-creation.json,splash.mpk} "$c/windows/patches/"
 (cd "$work/client" && zip -qr "$out/hearthdaoc-client-$tag.zip" "hearthdaoc-client-$tag")
 echo "Built $out/hearthdaoc-deploy-$tag.tar.gz and $out/hearthdaoc-client-$tag.zip"

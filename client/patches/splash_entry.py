@@ -1,9 +1,10 @@
 """The splash entry of the classic-creation patch set, and the checks on our splash.mpk.
 
 pregame/splash.mpk holds the 8 loading images. The patch set replaces the whole file with
-the bundled splash.mpk ("file" op, "after": "source"), which the bundle step builds from
-branding/splash.png with branding/build_splash_mpk.py. Only that build is ever bundled:
-OfflineDAoC's own splash.mpk stays on the player's machine.
+the bundled splash.mpk ("file" op) and pins its SHA-256 as "after". That splash.mpk is built
+once from branding/splash.png with branding/build_splash_mpk.py and committed: a rebuild
+carries new timestamps, so a new hash, and a client patched by one release would be unknown to
+the next. Only our splash.mpk is ever bundled: OfflineDAoC's own stays on the player's machine.
 """
 import os
 import struct
@@ -12,7 +13,7 @@ from mpk import read_mpk
 from patchset import sha256_file
 
 SPLASH_PATH = "pregame/splash.mpk"  # in the client folder
-SPLASH_SOURCE = "splash.mpk"  # in the bundle folder (client/patches/splash.mpk when built locally)
+SPLASH_SOURCE = "splash.mpk"  # in the bundle folder (client/patches/splash.mpk in the repository)
 SPLASH_NAME = "splash.mpk"  # the archive's internal name; the client binds the archive by it
 SPLASH_ENTRIES = [f"splash{i}.tga" for i in range(1, 9)]
 STOCK_SPLASH_SHA256 = "f24460d2b064b86527b1800940d6d80c26b67ca3531d91b87c3b7a4d38455a9e"
@@ -56,5 +57,5 @@ def splash_entry(client_dir, splash_mpk_path):
     if before != STOCK_SPLASH_SHA256:
         raise SplashError(f"{SPLASH_PATH} in {client_dir} isn't OfflineDAoC 0.34's splash "
                           f"(SHA-256 {before})")
-    return {"path": SPLASH_PATH, "before": before, "after": "source",
+    return {"path": SPLASH_PATH, "before": before, "after": sha256_file(splash_mpk_path),
             "ops": [{"op": "file", "source": SPLASH_SOURCE}]}

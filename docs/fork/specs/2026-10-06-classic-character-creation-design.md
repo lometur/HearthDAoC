@@ -110,6 +110,7 @@ Everything sub-project 2 adds to the client lives in `client/patches/`.
 | `build.py` | Generator. Reads the server's class files (`EligibleRaces`, base mapping), the edition's clean-world `disabled_classes` (fetched through `odaoc_fetch.py`, verified), `src/`, and the real `game.dll` and pregame files (fetched the same way). Builds the cave with nasm and writes `classic-creation.json`. Running it twice gives identical output. |
 | `branding/splash.png` | Re-lettered splash (our work, crediting OfflineDAoC's art). |
 | `branding/reletter_splash.py` | Re-lettering script (Pillow) from OfflineDAoC's splash, with the font's URL and SHA-256. The font is Cinzel, SIL Open Font License. |
+| `splash.mpk` | Our splash archive, built once from `splash.png` with `branding/build_splash_mpk.py` and upstream's `OfflineDaoc.Mpk` tool, and committed. |
 | `apply_patches.py` | Linux applier. |
 | `../windows/patch-client.ps1`, `../windows/patch-client.bat` | Windows applier, and a double-clickable launcher that runs it with `-ExecutionPolicy Bypass`. |
 
@@ -117,7 +118,7 @@ Everything sub-project 2 adds to the client lives in `client/patches/`.
 - `replace`: offset, original hex, new hex.
 - `append`: hex added at the end of the file. Used for the new section's raw data; the header changes are `replace` operations.
 - `text-replace`: an exact string replaced once.
-- `file`: a whole file copied from the bundle. Used for `splash.mpk`, which is built in the bundle step from `splash.png` with upstream's `OfflineDaoc.Mpk` tool. Its expected result is "equals the bundled file".
+- `file`: a whole file copied from the bundle. Used for the committed `splash.mpk`. Its expected result is that file's SHA-256, pinned like every other "after" hash. (The format also accepts "equals the bundled file", but a `splash.mpk` rebuilt for each release would carry new timestamps, so a new hash, and a client patched by one release would be unknown to the next.)
 
 **Applier rules** (identical in Python and PowerShell):
 1. **Already patched:** if a target's hash equals its "after" hash, skip it.
@@ -132,7 +133,7 @@ Everything sub-project 2 adds to the client lives in `client/patches/`.
 **Delivery.**
 - **Linux:** `setup.sh` runs `apply_patches.py` after fetching and verifying the client files. Re-running `setup.sh`, or `apply_patches.py --client ~/Games/HearthDAoC/client`, patches an existing client.
 - **Windows:** the client bundle's `windows/` folder carries `patch-client.bat` and `patch-client.ps1`. The player puts them next to `connect-hearthdaoc.bat` and runs them once, and again after anything restores the original files.
-- **Bundles:** the client bundle adds `patches/` (the patch set, `apply_patches.py`, `splash.mpk`). `deploy/build_bundles.sh` builds it, so CI's release job needs .NET for the MPK tool.
+- **Bundles:** the client bundle adds `patches/` (the patch set, `apply_patches.py`, `splash.mpk`). `deploy/build_bundles.sh` copies the committed `splash.mpk` and builds nothing when its SHA-256 isn't the one the patch set pins. It doesn't build `splash.mpk`: a rebuilt MPK carries new timestamps, so its hash cannot be pinned. CI's release job needs no .NET; the MPK tool is used only when the splash changes, before the commit.
 
 ## 5. Testing
 
