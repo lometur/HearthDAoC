@@ -37,6 +37,24 @@ class GenConfigTests(unittest.TestCase):
         self.assertEqual((cfg["Port"], cfg["UdpPort"], cfg["AutoAccountCreation"]), ("10311", "10411", "False"))
         self.assertEqual((cfg["IP"], cfg["RegionIP"], cfg["UdpIP"]), ("192.168.1.64",) * 3)
 
+    def test_autosave_defaults_to_five_minutes(self):
+        cfg = parse(gen_config.render(gen_config.settings({}), "/data"))
+        self.assertEqual((cfg["DBAutosave"], cfg["DBAutosaveInterval"]), ("True", "5"))
+
+    def test_autosave_minutes_can_be_set(self):
+        s = gen_config.settings({"HEARTHDAOC_AUTOSAVE_MINUTES": "15"})
+        self.assertEqual(parse(gen_config.render(s, "/data"))["DBAutosaveInterval"], "15")
+
+    def test_invalid_autosave_and_backup_keep_are_refused(self):
+        for key, bad in [("HEARTHDAOC_AUTOSAVE_MINUTES", "0"), ("HEARTHDAOC_AUTOSAVE_MINUTES", "61"),
+                         ("HEARTHDAOC_AUTOSAVE_MINUTES", "5m"), ("HEARTHDAOC_BACKUP_KEEP", "seven"),
+                         ("HEARTHDAOC_BACKUP_KEEP", "0"), ("HEARTHDAOC_BACKUP_KEEP", "-3")]:
+            with self.subTest(key=key, value=bad), self.assertRaisesRegex(gen_config.ConfigError, key):
+                gen_config.settings({key: bad})
+
+    def test_backup_keep_accepts_a_whole_number(self):
+        self.assertEqual(gen_config.settings({"HEARTHDAOC_BACKUP_KEEP": "14"})["HEARTHDAOC_BACKUP_KEEP"], "14")
+
     def test_server_name_is_xml_escaped(self):
         cfg = parse(gen_config.render(gen_config.settings({"HEARTHDAOC_SERVER_NAME": "Bob & <Friends>"}), "/data"))
         self.assertEqual(cfg["ServerName"], "Bob & <Friends>")
