@@ -43,6 +43,11 @@ grep -q "Command - '&tele' .* required plvl:2" "$T/server.log" || fail "/tele is
 grep -q "Command - '&tc' .* required plvl:2" "$T/server.log" || fail "/tc is not GM-only"
 grep -q "Command - '&spawn' .* required plvl:1" "$T/server.log" || fail "/spawn should stay open to players"
 echo "ok - single-player teleports are GM-only, companions stay open"
+[[ "$(docker exec "$NAME" sqlite3 /data/world/opendaoc.sqlite3.db "SELECT Value FROM ServerProperty WHERE \`Key\`='disabled_classes'")" == "33;34;39;58-62" ]] \
+    || fail "Disciple (20) is still disabled"
+[[ "$(docker exec "$NAME" sqlite3 /data/world/opendaoc.sqlite3.db "SELECT COUNT(*) FROM StartupLocation WHERE ClassID=20 AND RaceID=4")" == 1 ]] \
+    || fail "Saracen Disciples have no starting location"
+echo "ok - Disciple enabled and Saracen Disciples have a starting location"
 docker exec "$NAME" python3 /app/tools/accounts/accounts.py --db "$db" create smoketest Sm0keTest >/dev/null || fail "account create"
 docker stop -t 120 "$NAME" >/dev/null
 logs_have "| DOL.GS.GameServer | Stopped" || fail "no clean save on docker stop"
