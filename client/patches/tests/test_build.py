@@ -14,7 +14,7 @@ import patchset  # noqa: E402
 import pe  # noqa: E402
 
 REPO = os.path.dirname(os.path.dirname(PATCHES))
-SERVER_SRC = os.path.join(REPO, "source", "server", "GameServer")
+SERVER_SRC = os.path.join(REPO, "source", "server")
 CLIENT = os.environ.get("HDC_CLIENT_FILES")
 WORLD_DB = os.environ.get("HDC_TEST_WORLD")
 NEEDS_FILES = ("set HDC_CLIENT_FILES to an OfflineDAoC 0.34 classic client folder and "
@@ -92,10 +92,14 @@ class RealBuildTests(unittest.TestCase):
             out = patchset.transform(self.read(entry["path"]), entry["ops"], PATCHES)
             self.assertEqual(sha256(out), entry["after"], entry["path"])
 
-    def test_game_dll_changes_only_the_checksum_and_the_stat_flow(self):
+    def test_game_dll_ops_are_the_headers_the_stat_flow_the_hook_and_the_cave(self):
         ops = self.patchset["files"][0]["ops"]
-        self.assertEqual([(op["op"], op["offset"]) for op in ops],
-                         [("replace", 0x1B0), ("replace", 0x19A853), ("replace", 0x19C0B2), ("replace", 0x19C574)])
+        # NumberOfSections, SizeOfCode, SizeOfImage + CheckSum, the .hdcc section header, P2, P1, P3, the hook
+        self.assertEqual([(op["op"], op.get("offset")) for op in ops],
+                         [("replace", 0x15E), ("replace", 0x175), ("replace", 0x1A9), ("replace", 0x390),
+                          ("replace", 0x19A853), ("replace", 0x19C0B2), ("replace", 0x19C574),
+                          ("replace", 0x1B0052), ("append", None)])
+        self.assertEqual(len(ops[-1]["data"]), 2 * 0x1000)
         patched = patchset.transform(self.read("game.dll"), ops, PATCHES)
         offset = pe.PE(patched).header_offsets["checksum"]
         self.assertEqual(struct.unpack_from("<I", patched, offset)[0], pe.checksum(patched, offset))
