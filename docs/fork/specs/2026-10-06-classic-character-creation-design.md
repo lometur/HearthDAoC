@@ -1,8 +1,8 @@
 # Sub-project 2: classic character creation (design)
 
-Status: draft for the owner's review. Date: 2026-10-06. Fork: `lometur/HearthDAoC`.
+Status: approved by the owner. Date: 2026-10-06. Fork: `lometur/HearthDAoC`.
 Issues: #39 (classic stat points), #55 (base classes at creation), #54 (splash rebrand).
-Branch: `sub2-classic-creation`. Release: through the automatic release PR after the sub-project PR is merged.
+Branch: `sub2-classic-creation`. Release: merging the sub-project PR publishes the next release (PR #70: merging is releasing).
 
 ## 1. Goal
 
@@ -182,7 +182,7 @@ Everything sub-project 2 adds to the client lives in `client/patches/`.
 
 - `docs/fork/FORK.md` gets a "Client patches" table: what is patched, where, why, and how to regenerate. The upstream-sync steps gain "rebuild the patch set".
 - `client/README.md`: what the classic creation screen does, and the Windows patch step.
-- The changelog entry comes from the commit messages, through the release PR.
+- The release notes are generated from the merged PRs (`--generate-notes`); the release's `--notes` text credits the splash art.
 - Credit for the splash artwork goes to OfflineDAoC, in `client/README.md`, `FORK.md` and the release notes.
 
 ## 8. Sequence
