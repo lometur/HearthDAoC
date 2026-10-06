@@ -2,6 +2,10 @@
 
 Releases of the fork (newest first). Upstream's own changes are in CHANGELOG.md.
 
+## v0.34b-hearth.6 (2026-10-06)
+
+- fix(deploy): server waits for database locks instead of crashing
+
 ## v0.34b-hearth.5 (2026-10-06)
 
 - ci(release): bring skipped release PRs back after a release is published
