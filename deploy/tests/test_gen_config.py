@@ -37,6 +37,13 @@ class GenConfigTests(unittest.TestCase):
         self.assertEqual((cfg["Port"], cfg["UdpPort"], cfg["AutoAccountCreation"]), ("10311", "10411", "False"))
         self.assertEqual((cfg["IP"], cfg["RegionIP"], cfg["UdpIP"]), ("192.168.1.64",) * 3)
 
+    def test_database_waits_for_locks_instead_of_failing(self):
+        # System.Data.SQLite turns off SQLite's own busy handler unless BusyTimeout is set, and then gives up
+        # a new connection after 3 quick retries; a GC closing the last pooled connection briefly locks the
+        # database, which crashed a start-up service (DailyQuestService) with "database is locked".
+        cfg = parse(gen_config.render(gen_config.settings({}), "/data"))
+        self.assertIn("BusyTimeout=10000;", cfg["DBConnectionString"])
+
     def test_autosave_defaults_to_five_minutes(self):
         cfg = parse(gen_config.render(gen_config.settings({}), "/data"))
         self.assertEqual((cfg["DBAutosave"], cfg["DBAutosaveInterval"]), ("True", "5"))
