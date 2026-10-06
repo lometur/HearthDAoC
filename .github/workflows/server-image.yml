@@ -13,12 +13,25 @@ permissions:
 jobs:
   test-build-publish:
     runs-on: ubuntu-24.04
+    outputs:
+      release: ${{ steps.rel.outputs.tag }}
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0  # tags, to know whether the docs name an unpublished release
 
-      - name: Release docs name this tag (tags only)
-        if: startsWith(github.ref, 'refs/tags/')
-        run: python3 deploy/release_tag.py check "$GITHUB_REF_NAME"
+      # A release is published for a pushed tag, or on main when a merged release PR names a new tag
+      # (deploy/release_tag.py; .github/workflows/release-pr.yml opens those PRs). Checked first so a
+      # mismatch fails before the long build.
+      - name: Release to publish
+        id: rel
+        run: |
+          tag=""
+          if [[ "$GITHUB_REF" == refs/tags/* ]]; then tag="$GITHUB_REF_NAME"
+          elif [[ "$GITHUB_EVENT_NAME" == push && "$GITHUB_REF" == refs/heads/main ]]; then tag="$(python3 deploy/release_tag.py pending)"
+          fi
+          if [[ -n "$tag" ]]; then python3 deploy/release_tag.py check "$tag"; fi
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
 
       - uses: actions/setup-dotnet@v4
         with:
@@ -64,36 +77,37 @@ jobs:
       - name: Compose and hdc integration test
         run: deploy/tests/hdc_integration.sh hearthdaoc:ci
 
-      - name: Publish image (tags only)
-        if: startsWith(github.ref, 'refs/tags/')
+      - name: Publish image (releases only)
+        if: steps.rel.outputs.tag != ''
+        env:
+          TAG: ${{ steps.rel.outputs.tag }}
         run: |
           echo "${{ secrets.GITHUB_TOKEN }}" | docker login ghcr.io -u "${{ github.actor }}" --password-stdin
-          img="ghcr.io/${{ github.repository_owner }}/hearthdaoc:${{ github.ref_name }}"
+          img="ghcr.io/${{ github.repository_owner }}/hearthdaoc:$TAG"
           docker tag hearthdaoc:ci "$img"
           docker push "$img"
   release-assets:
     needs: test-build-publish
-    if: startsWith(github.ref, 'refs/tags/')
+    if: needs.test-build-publish.outputs.release != ''
     runs-on: ubuntu-24.04
     permissions:
       contents: write
+    env:
+      TAG: ${{ needs.test-build-publish.outputs.release }}
     steps:
       - uses: actions/checkout@v4
       - name: Build bundles (no EA files)
-        run: |
-          tag="${GITHUB_REF_NAME}"
-          mkdir -p dist/deploy "dist/client/hearthdaoc-client-$tag/windows"
-          cp deploy/compose.yml deploy/.env.example deploy/hdc deploy/HANDOFF.md deploy/upstream.lock dist/deploy/
-          sed -i "s/^HEARTHDAOC_TAG=.*/HEARTHDAOC_TAG=$tag/" dist/deploy/.env.example
-          tar czf "dist/hearthdaoc-deploy-$tag.tar.gz" -C dist/deploy .
-          c="dist/client/hearthdaoc-client-$tag"
-          cp client/README.md client/linux/setup.sh client/linux/play.sh.in tools/linux/odaoc_fetch.py deploy/upstream.lock "$c/"
-          cp client/windows/connect-hearthdaoc.bat "$c/windows/"
-          (cd dist/client && zip -qr "../hearthdaoc-client-$tag.zip" "hearthdaoc-client-$tag")
-      - name: Create release
+        run: deploy/build_bundles.sh "$TAG" dist
+      - name: Create release (and its tag on this commit)
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          gh release create "$GITHUB_REF_NAME" dist/hearthdaoc-deploy-*.tar.gz dist/hearthdaoc-client-*.zip \
-            --title "$GITHUB_REF_NAME" \
-            --notes "HearthDAoC, an unofficial fork of shadowofze/OfflineDAoC (upstream $(python3 -c 'import json;print(json.load(open("deploy/upstream.lock"))["version"])')). Image: ghcr.io/lometur/hearthdaoc:$GITHUB_REF_NAME. Deploy: see HANDOFF.md in the deploy bundle. Players: see README.md in the client bundle."
+          upstream="$(python3 -c 'import json;print(json.load(open("deploy/upstream.lock"))["version"])')"
+          {
+            python3 deploy/release_tag.py notes "$TAG"
+            echo
+            echo "HearthDAoC, an unofficial fork of shadowofze/OfflineDAoC (upstream $upstream). Image: ghcr.io/lometur/hearthdaoc:$TAG."
+            echo "Server: \`./hdc update $TAG\` (or HANDOFF.md in the deploy bundle). Players: README.md in the client bundle."
+          } > notes.md
+          gh release create "$TAG" dist/hearthdaoc-deploy-*.tar.gz dist/hearthdaoc-client-*.zip \
+            --target "$GITHUB_SHA" --title "$TAG" --notes-file notes.md

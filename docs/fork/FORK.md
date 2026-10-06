@@ -38,12 +38,22 @@ listed here, so upstream syncs can account for it:
 
 ## Releases
 
-1. Open a release PR that runs `deploy/release_tag.py bump v<upstream-version>-hearth.<n>`. It sets
-   `HEARTHDAOC_TAG` in `deploy/.env.example` and the install step in `deploy/HANDOFF.md` to the new tag,
-   so anyone copying them from the repository gets the new release.
-2. After it is merged, push the tag from `main`. CI first runs `release_tag.py check`, which refuses to
-   publish when those files name another release or the tag's upstream version isn't the one in
-   `deploy/upstream.lock`.
+Releases are automatic, but only happen when you merge a release PR:
+
+1. After each merge to `main`, `.github/workflows/release-pr.yml` checks whether files that end up in the
+   image or the bundles changed since the last release (`deploy/release_tag.py plan`). If so, it opens or
+   updates one PR, "Release v<upstream-version>-hearth.<n>": it bumps `HEARTHDAOC_TAG` in
+   `deploy/.env.example` and the install step in `deploy/HANDOFF.md`, and adds the release's entry to
+   `docs/fork/CHANGELOG.md` from the commit messages. Docs-only merges make no release.
+2. Merging that PR is the release: the build on `main` runs every test, sees the docs naming a tag that
+   isn't published yet (`release_tag.py pending`), checks it, then publishes the image, creates the tag
+   and the GitHub release with both bundles. A failing test publishes nothing.
+3. On the server: `./hdc update`.
+
+A new upstream version in `deploy/upstream.lock` restarts the numbering at `-hearth.1`. Pushing a tag by
+hand still works (CI checks the docs name it). PRs opened by the workflow get no CI run of their own
+(a GitHub rule); the build on `main` after the merge is the check. The workflow needs the repository
+setting "Allow GitHub Actions to create and approve pull requests".
 
 Tags `v0.34b-hearth.N` publish `ghcr.io/lometur/hearthdaoc:v0.34b-hearth.N` and attach two assets:
 `hearthdaoc-deploy-<tag>.tar.gz` (compose file, `.env.example`, `hdc`, handoff) and

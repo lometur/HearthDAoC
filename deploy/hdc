@@ -62,7 +62,83 @@ hdc - HearthDAoC server
   auto-accounts on|off           allow or stop account creation at first login (recreates the server)
   spawns restore [--max-level N] | undo | status
                                  bring back the leveling monsters upstream archived (default levels 1-20; server stopped)
+  update [TAG] | update --check  back up, install a release (latest by default) and restart; --check only reports
 EOF
+}
+
+RELEASES="${HEARTHDAOC_RELEASES_URL:-https://github.com/lometur/HearthDAoC/releases}"
+latest_release() {  # GitHub redirects .../releases/latest to .../releases/tag/<tag>
+    curl -fsSI "$RELEASES/latest" | tr -d '\r' | sed -n 's|^[Ll]ocation: .*/tag/\([^/]*\)$|\1|p' | tail -1
+}
+lock_version() { sed -n 's/.*"version": *"\([^"]*\)".*/\1/p' "$1" | head -1; }
+
+# update [TAG] [--bundle FILE] [--check]: back up, install a release's deploy bundle, keep .env values
+# (adding new settings with their defaults), pull and restart. Stops before starting when the release
+# is for another upstream version (then: ./hdc upgrade-world). --bundle uses a local bundle (tests).
+update() {
+    local tag="" bundle="" check="" arg
+    for arg in "$@"; do
+        case "$arg" in
+            --check) check=1 ;;
+            --bundle) bundle=next ;;
+            *) if [[ "$bundle" == next ]]; then bundle="$arg"; else tag="$arg"; fi ;;
+        esac
+    done
+    if [[ -n "$check" ]]; then
+        tag="$(latest_release)"; [[ -n "$tag" ]] || { echo "Could not reach $RELEASES." >&2; exit 1; }
+        echo "Running ${HEARTHDAOC_TAG}; latest release: $tag."
+        if [[ "$tag" != "$HEARTHDAOC_TAG" ]]; then echo "Update with: ./hdc update $tag"; fi
+        return 0
+    fi
+    local work; work="$(mktemp -d "$here/.update.XXXXXX")"
+    trap "rm -rf '$work'" EXIT  # expanded now: $work is local and gone when the script exits
+    if [[ -n "$bundle" ]]; then
+        cp "$bundle" "$work/bundle.tgz"
+    else
+        tag="${tag:-$(latest_release)}"; [[ -n "$tag" ]] || { echo "Could not find the latest release at $RELEASES." >&2; exit 1; }
+        if [[ "$tag" == "$HEARTHDAOC_TAG" ]]; then echo "Already on $tag."; return 0; fi
+        echo "Downloading $tag..."
+        curl -fsSL -o "$work/bundle.tgz" "$RELEASES/download/$tag/hearthdaoc-deploy-$tag.tar.gz" \
+            || { echo "No deploy bundle for $tag at $RELEASES." >&2; exit 1; }
+    fi
+    mkdir "$work/new" && tar xzf "$work/bundle.tgz" -C "$work/new"
+    local f
+    for f in compose.yml .env.example hdc HANDOFF.md upstream.lock; do
+        [[ -f "$work/new/$f" ]] || { echo "The bundle has no $f; nothing changed." >&2; exit 1; }
+    done
+    tag="$(sed -n 's/^HEARTHDAOC_TAG=//p' "$work/new/.env.example" | tr -d '"')"
+
+    echo "Backing up the world first..."
+    tool python3 /app/bin/backup.py --data /data create --label pre-update
+    compose stop >/dev/null 2>&1 || true
+
+    cp "$work/new/compose.yml" "$work/new/HANDOFF.md" "$work/new/upstream.lock" "$work/new/.env.example" "$here/"
+    local line key added=""
+    while IFS= read -r line; do
+        [[ "$line" =~ ^([A-Z0-9_]+)= ]] || continue
+        key="${BASH_REMATCH[1]}"
+        if ! grep -q "^$key=" "$here/.env"; then
+            [[ -n "$added" ]] || printf '\n# Added by hdc update %s (defaults from .env.example)\n' "$tag" >> "$here/.env"
+            echo "$line" >> "$here/.env"; added+=" $key"
+        fi
+    done < "$work/new/.env.example"
+    sed -i "s/^HEARTHDAOC_TAG=.*/HEARTHDAOC_TAG=$tag/" "$here/.env"
+    chmod +x "$work/new/hdc" && mv -f "$work/new/hdc" "$here/hdc"  # mv: this running script keeps its old copy
+    [[ -z "$added" ]] || echo "New settings added to .env with their defaults:$added"
+    source "$here/.env"
+
+    compose pull --ignore-pull-failures >/dev/null 2>&1 || true
+    docker image inspect "$(image)" >/dev/null 2>&1 || { echo "Could not get the image $(image)." >&2; exit 1; }
+    local world_version new_version
+    new_version="$(lock_version "$here/upstream.lock")"
+    world_version="$(offline --entrypoint cat "$(image)" /data/world.json 2>/dev/null | sed -n 's/.*"version": *"\([^"]*\)".*/\1/p' | head -1)"
+    if [[ -n "$world_version" && "$world_version" != "$new_version" ]]; then
+        echo "Installed $tag, which is for upstream $new_version; the world is from upstream $world_version." >&2
+        echo "The server was not started. Run: ./hdc upgrade-world   then: ./hdc up" >&2
+        exit 3
+    fi
+    "$here/hdc" up
+    echo "Updated to $tag."
 }
 
 cmd="${1:-help}"; shift || true
@@ -159,6 +235,7 @@ case "$cmd" in
             need_stopped
             offline --entrypoint python3 "$(image)" /app/bin/spawns.py --data /data "$@"
         fi ;;
+    update) update "$@" ;;
     help|-h|--help) usage ;;
     *) usage >&2; exit 2 ;;
 esac
