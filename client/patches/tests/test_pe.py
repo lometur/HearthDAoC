@@ -202,3 +202,31 @@ class RealGameDllTests(unittest.TestCase):
         self.assertEqual(p.offset(0x59C0B2), 0x19C0B2)
         stored = struct.unpack_from("<I", data, p.header_offsets["checksum"])[0]
         self.assertEqual(pe.checksum(data, p.header_offsets["checksum"]), stored)
+
+
+@unittest.skipUnless(CLIENT, NEEDS_CLIENT)
+class RealPatchSiteTests(unittest.TestCase):
+    def read(self, path):
+        with open(os.path.join(CLIENT, *path.split("/")), "rb") as f:
+            return f.read()
+
+    def test_stat_flow_bytes_match_the_real_game_dll(self):
+        from build import STAT_FLOW
+        data = self.read("game.dll")
+        p = pe.PE(data)
+        for va, before, after in STAT_FLOW:
+            start = p.offset(va)
+            self.assertEqual(data[start:start + len(before) // 2].hex(), before, hex(va))
+
+    def test_the_optimize_button_occurs_once_and_the_edited_xml_parses(self):
+        from xml.etree import ElementTree
+        from build import XML_EDITS, edit_text
+        path = "pregame/character_customize_stats.xml"
+        data = self.read(path)
+        [(find, replace)] = XML_EDITS[path]
+        self.assertEqual(data.decode("latin-1").count(find), 1)
+        root = ElementTree.fromstring(edit_text(data, XML_EDITS[path]))
+        control_ids = [e.text for e in root.iter("ControlId")]
+        self.assertIn("1020", control_ids)
+        self.assertNotIn("1021", control_ids)
+        self.assertNotIn("Optimize", [e.text for e in root.iter("Label")])

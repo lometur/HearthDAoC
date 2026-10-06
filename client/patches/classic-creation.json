@@ -1,0 +1,50 @@
+{
+ "format": 1,
+ "name": "classic-creation",
+ "client": "OfflineDAoC 0.34 classic",
+ "files": [
+  {
+   "path": "game.dll",
+   "before": "67dcf68a37b95a93946a943b99d5e19b4a03e08cd6469275e25c7b909de21e99",
+   "after": "cef4cbead156825613f84a5a5fd1b26efc33a2e575a9b337c7d3a87a01c9cb63",
+   "ops": [
+    {
+     "op": "replace",
+     "offset": 432,
+     "from": "1312",
+     "to": "7abe"
+    },
+    {
+     "op": "replace",
+     "offset": 1681491,
+     "from": "0f859302000080bb28fa0000000f8478020000833dc8bb4502007437",
+     "to": "75f6833dc8bb450200751180bb28fa0000000f8473020000eb399090"
+    },
+    {
+     "op": "replace",
+     "offset": 1687730,
+     "from": "8b465c",
+     "to": "eb6890"
+    },
+    {
+     "op": "replace",
+     "offset": 1688948,
+     "from": "01",
+     "to": "00"
+    }
+   ]
+  },
+  {
+   "path": "pregame/character_customize_stats.xml",
+   "before": "08e6f7c3b4fdb546b203abd8a952c84b60105b5e8b189fb33277a40be0902364",
+   "after": "1d6be73e3e21f00791e36b0379b1ac19372cbd5665b05aed47c19bf99230624a",
+   "ops": [
+    {
+     "op": "text-replace",
+     "find": "\t\t<ButtonDef>\r\n\t\t\t<TemplateName>button_small</TemplateName>\r\n\t\t\t<ControlId>1021</ControlId>\r\n\t\t\t<Label>Optimize</Label>\r\n\t\t\t<Alignment>\r\n\t\t\t\t<TopLeft>true</TopLeft>\r\n\t\t\t</Alignment>\r\n\t\t\t<Position>\r\n\t\t\t\t<X>364</X>\r\n\t\t\t\t<Y>224</Y>\r\n\t\t\t</Position>\r\n\t\t\t<LabelAlignment>\r\n\t\t\t\t<CenterVertically>true</CenterVertically>\r\n\t\t\t\t<CenterHorizontally>true</CenterHorizontally>\r\n\t\t\t</LabelAlignment>\r\n\t\t</ButtonDef>\r\n",
+     "replace": ""
+    }
+   ]
+  }
+ ]
+}
