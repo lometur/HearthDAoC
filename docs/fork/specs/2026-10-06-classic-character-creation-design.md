@@ -13,7 +13,7 @@ Character creation should feel like classic Dark Age of Camelot:
 - The loading splash says **Hearth DAoC**.
 
 ### Non-goals
-- Any server change. The server already accepts base classes, promotes at level 5 and enforces the classic 30-point rules.
+- Any server change. The server already accepts base classes, promotes at level 5 and enforces the classic 30-point rules. Prerequisite: the Disciple fix (#63, PR #64), so a client sending class 20 isn't refused.
 - The 0.34b ("b", Sluaghbinder) edition. Its `game.dll` differs, and the applier refuses it with a clear message.
 - Translations. The new texts are English only.
 - Changing existing characters.
@@ -42,6 +42,7 @@ Character creation should feel like classic Dark Age of Camelot:
 | Albion | Acolyte (16) | Cleric, Friar | Briton, Avalonian, Highlander | PIE, CON, DEX |
 | Albion | Rogue (17) | Infiltrator, Minstrel, Scout | Briton, Highlander, Saracen, Inconnu | DEX, QUI, STR |
 | Albion | Mage (18) | Cabalist, Sorcerer | Briton, Avalonian, Saracen, Inconnu | INT, DEX, QUI |
+| Albion | Disciple (20) | Necromancer | Briton, Saracen, Inconnu | INT, DEX, QUI |
 | Midgard | Viking (35) | Berserker, Savage, Skald, Thane, Warrior | Norseman, Troll, Dwarf, Kobold, Valkyn | STR, CON, DEX |
 | Midgard | Mystic (36) | Bonedancer, Runemaster, Spiritmaster | Norseman, Troll, Dwarf, Kobold, Valkyn | PIE, DEX, QUI |
 | Midgard | Seer (37) | Healer, Shaman | Norseman, Troll, Dwarf, Kobold | PIE, CON, DEX |
@@ -54,7 +55,7 @@ Character creation should feel like classic Dark Age of Camelot:
 
 **How the table is derived.** The generator derives this table; it isn't typed by hand.
 - **Base classes** are the server's starting base classes that aren't in the world's `disabled_classes` and that lead to at least one enabled full class.
-- In the shipped classic world, `disabled_classes` is `20;33;34;39;58-62`. That removes Disciple (so no Necromancer path), plus Heretic, Valkyrie, Bainshee, Vampiir, Warlock and the Maulers. This matches 1.65 Classic + Shrouded Isles.
+- In the shipped classic world, `disabled_classes` is `20;33;34;39;58-62`. Disciple (20) is an upstream slip: Necromancer is a Shrouded Isles class (December 2002), and the setup tool's own label says it allows Classic and Shrouded Isles classes. HearthDAoC's `world_fixes.py` removes 20 at every start (#63, PR #64), which also adds the missing Saracen Disciple starting location. The rest disables Heretic, Valkyrie, Bainshee, Vampiir, Warlock and the Maulers, which matches 1.65 Classic + Shrouded Isles.
 - **Races** for a base class are the union of its enabled full classes' `EligibleRaces`, limited to the 15 classic and Shrouded Isles races.
 - **Highlighted stats** are the client's primary-stat highlights. With auto-assign gone they only colour the stats; they assign nothing.
 
@@ -70,7 +71,7 @@ Character creation should feel like classic Dark Age of Camelot:
 - Existing characters.
 - Unpatched clients, which still show the live screen. The server turns their final class into a base class through `start_as_base_class`.
 
-**Sample description** (all 14 drafts are in the generator's data file and reviewed in the PR):
+**Sample description** (all 15 drafts are in the generator's data file and reviewed in the PR):
 > Fighter. Albion's soldiers, trained in heavy armour and every kind of weapon. At level 5 your trainer makes you an Armsman, Mercenary, Paladin or Reaver.
 
 ## 3. Client changes (`game.dll`, classic 0.34, SHA-256 `67dcf68a…`)
