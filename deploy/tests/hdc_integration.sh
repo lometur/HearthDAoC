@@ -87,7 +87,7 @@ echo "ok - status is right for a server stopped after an earlier crash"
 # hdc update: a release bundle built like CI builds it, for a tag that exists as a local image.
 make_bundle() {  # make_bundle <tag> <upstream version>: build, then add a new setting and markers
     docker tag "$IMAGE" "${IMAGE%%:*}:$1"
-    "$HERE/../build_bundles.sh" "$1" "$W/b-$1" >/dev/null
+    "$HERE/../build_bundles.sh" "$1" "$W/b-$1" --deploy-only >/dev/null
     mkdir "$W/b-$1/x" && tar xzf "$W/b-$1/hearthdaoc-deploy-$1.tar.gz" -C "$W/b-$1/x"
     echo "HEARTHDAOC_IT_NEW_SETTING=hello" >> "$W/b-$1/x/.env.example"
     echo "# bundle $1" >> "$W/b-$1/x/compose.yml"
