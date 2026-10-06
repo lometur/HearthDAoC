@@ -69,7 +69,7 @@ def _is_sha256(value):
 
 
 def _check_op(op, where):
-    if not isinstance(op, dict) or op.get("op") not in OPS:
+    if not isinstance(op, dict) or not isinstance(op.get("op"), str) or op["op"] not in OPS:
         raise PatchError(f"{where}: unknown operation")
     kind = op["op"]
     for key in OPS[kind]:

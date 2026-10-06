@@ -65,6 +65,7 @@ INVALID = {
     "no operations": (_file(0, ops=[]), "game.dll: no operations"),
     "unknown op": (_op(0, op="delete"), "game.dll op 1: unknown operation"),
     "op name in capitals": (_op(0, op="REPLACE"), "game.dll op 1: unknown operation"),
+    "op not text": (_op(0, op=[]), "game.dll op 1: unknown operation"),
     "missing field": (lambda d: d["files"][0]["ops"][0].pop("from"), "game.dll op 1: replace needs 'from'"),
     "negative offset": (_op(0, offset=-1), OFFSET_RULE),
     "offset as text": (_op(0, offset="16"), OFFSET_RULE),
