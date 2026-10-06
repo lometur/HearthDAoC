@@ -20,6 +20,8 @@ init_args=(--lock "$LOCK" --data "$DATA" --edition "$EDITION")
 python3 "$BIN/init_world.py" "${init_args[@]}"
 
 python3 "$BIN/gen_config.py" --data "$DATA" --out "$SRV/config/serverconfig.xml"
+# Clients get their UDP port from the world's Regions table, which upstream ships as 10400.
+python3 "$BIN/region_ports.py" --db "$DATA/world/opendaoc.sqlite3.db" --port "${HEARTHDAOC_UDP_PORT:-10401}"
 
 mkdir -p "$DATA/logs" "$DATA/state" "$DATA/backups" "$DATA/navmesh"
 link() {  # link <path in /app/server> <target in /data>
