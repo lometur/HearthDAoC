@@ -33,10 +33,17 @@ listed here, so upstream syncs can account for it:
    sizes and hashes, manifest SHA-256, edition paths) from the new release's `download-manifest.json`
    and `PACKAGE MANIFEST.sha256`.
 3. Push; CI builds and smoke-tests the image.
-4. Tag `v<upstream-version>-hearth.<n>` to publish the image and release assets.
+4. Release it (see Releases below) as `v<upstream-version>-hearth.<n>`.
 5. On the server, back up, then follow `deploy/HANDOFF.md` → "Upgrading".
 
 ## Releases
+
+1. Open a release PR that runs `deploy/release_tag.py bump v<upstream-version>-hearth.<n>`. It sets
+   `HEARTHDAOC_TAG` in `deploy/.env.example` and the install step in `deploy/HANDOFF.md` to the new tag,
+   so anyone copying them from the repository gets the new release.
+2. After it is merged, push the tag from `main`. CI first runs `release_tag.py check`, which refuses to
+   publish when those files name another release or the tag's upstream version isn't the one in
+   `deploy/upstream.lock`.
 
 Tags `v0.34b-hearth.N` publish `ghcr.io/lometur/hearthdaoc:v0.34b-hearth.N` and attach two assets:
 `hearthdaoc-deploy-<tag>.tar.gz` (compose file, `.env.example`, `hdc`, handoff) and

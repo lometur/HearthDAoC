@@ -21,8 +21,8 @@ If less than 10 GB of RAM is available, lower `HEARTHDAOC_MEM_LIMIT` in step 2 a
 
 ```bash
 mkdir -p ~/hearthdaoc && cd ~/hearthdaoc
-curl -fLO https://github.com/lometur/HearthDAoC/releases/download/v0.34b-hearth.1/hearthdaoc-deploy-v0.34b-hearth.1.tar.gz
-tar xzf hearthdaoc-deploy-v0.34b-hearth.1.tar.gz
+curl -fLO https://github.com/lometur/HearthDAoC/releases/download/v0.34b-hearth.3/hearthdaoc-deploy-v0.34b-hearth.3.tar.gz
+tar xzf hearthdaoc-deploy-v0.34b-hearth.3.tar.gz
 cp .env.example .env
 ```
 Edit `.env`: set `TZ` to the owner's timezone; keep `HEARTHDAOC_EDITION=classic` unless the owner
