@@ -540,6 +540,12 @@ namespace DOL.GS.ServerProperties
 		public static string DISABLED_COMMANDS;
 
 		/// <summary>
+		/// Overrides the privilege level a command needs, split by ; (HearthDAoC)
+		/// </summary>
+		[ServerProperty("server", "command_plvl_overrides", "Privilege level a command needs, overriding its default, separated by semi-colon, example /tele=2;/tc=2 (1 player, 2 GM, 3 admin)", "")]
+		public static string COMMAND_PLVL_OVERRIDES;
+
+		/// <summary>
 		/// Disable Appeal System
 		/// </summary>
 		[ServerProperty("server", "disable_appeal_system", "Disable the /Appeal System", false)]

@@ -10,6 +10,7 @@ HEARTHDAOC_IMAGE=${IMAGE%%:*}
 HEARTHDAOC_TAG=${IMAGE##*:}
 HEARTHDAOC_EDITION=classic
 HEARTHDAOC_AUTO_ACCOUNTS=True
+HEARTHDAOC_AUTOSAVE_MINUTES=7
 HEARTHDAOC_PORT=10392
 HEARTHDAOC_UDP_PORT=10492
 HEARTHDAOC_PROJECT=hearthdaoc-it
@@ -32,11 +33,14 @@ docker inspect -f '{{.HostConfig.CapDrop}}' hearthdaoc-it-server | grep -q ALL |
 [[ "$(docker inspect -f '{{.HostConfig.NetworkMode}}' hearthdaoc-it-server)" == host ]] || fail "not host networking"
 [[ -n "$(docker inspect -f '{{index .HostConfig.LogConfig.Config "max-size"}}' hearthdaoc-it-server)" ]] || fail "docker logs not rotated"
 echo "ok - isolation settings applied"
+docker exec hearthdaoc-it-server grep -q "<DBAutosaveInterval>7</DBAutosaveInterval>" /app/server/config/serverconfig.xml \
+    || fail "HEARTHDAOC_AUTOSAVE_MINUTES from .env did not reach the server config"
+echo "ok - autosave interval comes from .env"
 hdc status | grep -q "edition .* classic" || fail "status"
 hdc account create Tester1 pw1 >/dev/null || fail "account create"
 hdc account list | grep -q Tester1 || fail "account list"
 hdc add-bots hib 1 1 | grep -q . || fail "add-bots"
-hdc backup | grep -q "/data/backups/world-" || fail "backup"
+hdc backup | grep -q "/data/backups/world-.*-manual.db" || fail "hdc backup should make a 'manual' backup (not counted in the daily ones)"
 echo "ok - status, accounts, add-bots and backup while running"
 if hdc bot-goals set 50 10 30 60 2>/dev/null; then fail "bot-goals write allowed while running"; fi
 if hdc restore x.db 2>/dev/null; then fail "restore allowed while running"; fi
@@ -46,7 +50,7 @@ hdc stop >/dev/null
 docker logs hearthdaoc-it-server > "$W/stop.log" 2>&1; grep -q "| DOL.GS.GameServer | Stopped" "$W/stop.log" || fail "no clean save"
 hdc bot-goals set 50 10 30 60 | grep -q "Saved" || fail "bot-goals set while stopped"
 hdc account plvl Tester1 3 | grep -q "plvl 3" || fail "plvl while stopped"
-latest="$(hdc backups | awk '/-backup.db/ {print $NF}' | tail -1)"
+latest="$(hdc backups | awk '/-manual.db/ {print $NF}' | tail -1)"
 hdc restore "$latest" | grep -q "Restored" || fail "restore"
 echo "ok - stopped-only commands work when stopped"
 sed -i 's/^HEARTHDAOC_EDITION=classic/HEARTHDAOC_EDITION=b/' "$W/.env"

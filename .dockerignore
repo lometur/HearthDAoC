@@ -15,3 +15,4 @@ deploy/tests
 tools/linux/tests
 **/__pycache__
 **/*.pyc
+source/server/build

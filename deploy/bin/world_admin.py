@@ -87,15 +87,35 @@ def status(data):
     return st
 
 
-def restore(data, name):
+def world_edition(db):
+    """'classic' or 'b' from a world database's own settings, or None when it cannot tell."""
+    try:
+        c = sqlite3.connect(f"file:{db}?mode=ro", uri=True)
+        try:
+            row = c.execute("SELECT Value FROM ServerProperty WHERE `Key`='enable_sluaghbinder'").fetchone()
+        finally:
+            c.close()
+    except sqlite3.Error:
+        return None
+    if row is None:
+        return None
+    return "classic" if str(row[0]).strip().lower() == "false" else "b"
+
+
+def restore(data, name, force=False):
     """Replace the world database with a backup (or an archived world). Returns where the previous
     database went: a pre-restore backup, or the damaged file moved aside when it could not be read."""
-    _meta(data)  # without world.json the next start would build a clean world over the restore
+    meta = _meta(data)  # without world.json the next start would build a clean world over the restore
     src = name if os.path.isabs(name) else os.path.join(backup.backups_dir(data), name)
     if not os.path.isfile(src):
         raise AdminError(f"backup not found: {src}")
     if not _integrity_ok(src):
         raise AdminError("that backup failed its integrity check; nothing was changed")
+    edition = world_edition(src)
+    if edition and edition != meta["edition"] and not force:
+        raise AdminError(f"that backup is an edition '{edition}' world, but this world is '{meta['edition']}'. "
+                         "Nothing was changed. Restore it anyway with --force (then set HEARTHDAOC_EDITION "
+                         f"to {edition} in .env), or pick a backup of this world.")
     db = init_world.world_paths(data)["db"]
     os.makedirs(os.path.dirname(db), exist_ok=True)
     tmp = db + ".restore"
@@ -125,6 +145,7 @@ def _archive_world(data, label):
     p = init_world.world_paths(data)
     dest = os.path.join(data, "archive", f"{label}-{_ts()}")
     os.makedirs(dest)
+    init_world.write_swap_marker(data, dest)  # lets the next start put it back if we are killed mid-swap
     shutil.move(os.path.dirname(p["db"]), os.path.join(dest, "world"))
     shutil.move(p["meta"], os.path.join(dest, "world.json"))
     return dest
@@ -139,13 +160,19 @@ def _unarchive_world(data, archive):
     shutil.move(os.path.join(archive, "world"), os.path.dirname(p["db"]))
     shutil.move(os.path.join(archive, "world.json"), p["meta"])
     os.rmdir(archive)
+    _clear_swap_marker(data)
+
+
+def _clear_swap_marker(data):
+    if os.path.exists(init_world.swap_marker(data)):
+        os.remove(init_world.swap_marker(data))
 
 
 def new_world(release, data, edition, skip_navmesh=False, log=print):
     _meta(data)
     archive = _archive_world(data, "world")
     try:
-        rc = init_world.init(release, data, edition, skip_navmesh=skip_navmesh, log=log)
+        rc = init_world.init(release, data, edition, skip_navmesh=skip_navmesh, log=log, recover=False)
     except BaseException as e:  # download error, full disk, Ctrl-C: never leave the old world in the archive
         _unarchive_world(data, archive)
         if isinstance(e, Exception):
@@ -156,6 +183,7 @@ def new_world(release, data, edition, skip_navmesh=False, log=print):
         _unarchive_world(data, archive)
         raise AdminError(f"creating the new world failed (code {rc}). Your previous world is back in place; "
                          "nothing changed.")
+    _clear_swap_marker(data)
     spawns.reapply(data, log)  # keep the owner's restored leveling spawns (hdc spawns)
     log(f"New '{edition}' world created; the old one is archived in {archive}.")
     return archive
@@ -244,17 +272,27 @@ def upgrade_world(release, data, importer_cmd, clean_world=None, same_version_ok
         c.close()
     if not ok or counts_new != counts_old:
         raise AdminError(f"verification failed (before {counts_old}, after {counts_new}); the current world is unchanged")
-    archive = _archive_world(data, "world-pre-upgrade")
-    report = os.path.join(archive, "upgrade-report.txt")
-    with open(report, "w", encoding="utf-8") as f:
+    staged_report = os.path.join(stage, "upgrade-report.txt")  # written before the swap, moved after it
+    with open(staged_report, "w", encoding="utf-8") as f:
         f.write(f"Upgrade to upstream {release.version}\nCarried over: {carried}\n\n")
         f.write("Server settings that differ from the new world (not carried; re-apply any you changed on purpose):\n")
         f.writelines(f"  {k}: yours={old!r} new={new!r}\n" for k, old, new in changed)
-    os.makedirs(os.path.dirname(db))
-    shutil.move(new_db, db)
-    init_world.write_meta(init_world.world_paths(data)["meta"],
-                          dict(meta, version=release.version, navmesh=False,
-                               upgraded_utc=datetime.datetime.now(datetime.timezone.utc).isoformat(timespec="seconds")))
+    archive = _archive_world(data, "world-pre-upgrade")
+    try:
+        os.makedirs(os.path.dirname(db))
+        shutil.move(new_db, db)
+        init_world.write_meta(init_world.world_paths(data)["meta"],
+                              dict(meta, version=release.version, navmesh=False,
+                                   upgraded_utc=datetime.datetime.now(datetime.timezone.utc).isoformat(timespec="seconds")))
+    except BaseException as e:  # full disk, Ctrl-C: never leave the server without a world
+        _unarchive_world(data, archive)
+        if isinstance(e, Exception):
+            raise AdminError(f"installing the upgraded world failed ({e}). Your previous world is back in place; "
+                             "nothing changed.") from e
+        raise
+    _clear_swap_marker(data)
+    report = os.path.join(archive, "upgrade-report.txt")
+    shutil.move(staged_report, report)
     shutil.rmtree(stage, ignore_errors=True)
     spawns.reapply(data, log)  # the clean world has upstream's spawn list; restore the owner's choice again
     if changed:
@@ -272,6 +310,7 @@ def main(argv=None):
     sub.add_parser("status")
     r = sub.add_parser("restore")
     r.add_argument("name", help="file name in /data/backups, or an absolute path")
+    r.add_argument("--force", action="store_true", help="restore even if the backup is from another edition")
     n = sub.add_parser("new-world")
     n.add_argument("--edition", required=True, choices=["classic", "b"])
     n.add_argument("--skip-navmesh", action="store_true")
@@ -286,7 +325,7 @@ def main(argv=None):
             for k, v in status(a.data).items():
                 print(f"{k:24} {v}")
         elif a.cmd == "restore":
-            previous = restore(a.data, a.name)
+            previous = restore(a.data, a.name, a.force)
             kept = f"The previous database was saved as {os.path.basename(previous)}." if previous \
                 else "There was no previous world database."
             print(f"Restored {a.name}. {kept}")

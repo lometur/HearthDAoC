@@ -74,6 +74,9 @@ Then ask the owner to connect from their PC (`~/Games/HearthDAoC/play.sh` after 
 new-world, upgrade-world, auto-accounts, spawns. Backups run daily into the volume (keep 7). The copies
 taken before add-bots keep their newest 3; the copies taken before restore and upgrade are kept until
 you remove them (`./hdc backups` lists them; they are in /data/backups).
+Settings live in `.env` (see `.env.example`), e.g. `HEARTHDAOC_AUTOSAVE_MINUTES` (default 5) and
+`HEARTHDAOC_GM_ONLY_COMMANDS` (default `/tele;/tc`: single-player teleports need GM rights); after
+editing `.env`, `./hdc up` recreates the server with them.
 Before remote players join: `./hdc auto-accounts off` and create their accounts with
 `./hdc account create <name> <password>`.
 

@@ -164,6 +164,28 @@ namespace DOL.GS
         /// Searches the script assembly for all command handlers
         /// </summary>
         /// <returns>True if succeeded</returns>
+        /// <summary>
+        /// The privilege level a command needs: its own level, unless the command_plvl_overrides
+        /// property ("/tele=2;/tc=2") names it. Malformed entries are ignored. (HearthDAoC)
+        /// </summary>
+        public static uint CommandPrivLevel(string cmd, uint defaultLevel, string overrides)
+        {
+            if (string.IsNullOrWhiteSpace(overrides))
+                return defaultLevel;
+
+            string name = cmd.Replace('&', '/');
+
+            foreach (string entry in overrides.Split(';'))
+            {
+                string[] pair = entry.Split('=');
+
+                if (pair.Length == 2 && pair[0].Trim().Equals(name, StringComparison.OrdinalIgnoreCase) && uint.TryParse(pair[1].Trim(), out uint level))
+                    return level;
+            }
+
+            return defaultLevel;
+        }
+
         public static bool LoadCommands(bool quiet = false)
         {
             m_gameCommands.Clear();
@@ -213,13 +235,15 @@ namespace DOL.GS
 
                                 continue;
                             }
+                            uint level = CommandPrivLevel(attrib.Cmd, attrib.Level, ServerProperties.Properties.COMMAND_PLVL_OVERRIDES);
+
                             if (log.IsDebugEnabled && quiet == false)
-                                log.Debug("ScriptMgr: Command - '" + attrib.Cmd + "' - (" + attrib.Description + ") required plvl:" + attrib.Level);
+                                log.Debug("ScriptMgr: Command - '" + attrib.Cmd + "' - (" + attrib.Description + ") required plvl:" + level);
 
                             var cmd = new GameCommand();
                             cmd.Usage = attrib.Usage;
                             cmd.m_cmd = attrib.Cmd;
-                            cmd.m_lvl = attrib.Level;
+                            cmd.m_lvl = level;
                             cmd.m_desc = attrib.Description;
                             cmd.m_cmdHandler = (ICommandHandler) Activator.CreateInstance(type);
                             m_gameCommands.Add(attrib.Cmd, cmd);

@@ -38,6 +38,11 @@ echo "ok - generated config and release config files present"
 [[ "$(docker exec "$NAME" sqlite3 /data/world/opendaoc.sqlite3.db 'SELECT group_concat(DISTINCT Port) FROM Regions')" == "$UDP" ]] \
     || fail "world regions do not tell clients UDP port $UDP"
 echo "ok - world regions tell clients the server's UDP port"
+docker exec "$NAME" cat /data/logs/server.log > "$T/server.log"
+grep -q "Command - '&tele' .* required plvl:2" "$T/server.log" || fail "/tele is not GM-only"
+grep -q "Command - '&tc' .* required plvl:2" "$T/server.log" || fail "/tc is not GM-only"
+grep -q "Command - '&spawn' .* required plvl:1" "$T/server.log" || fail "/spawn should stay open to players"
+echo "ok - single-player teleports are GM-only, companions stay open"
 docker exec "$NAME" python3 /app/tools/accounts/accounts.py --db "$db" create smoketest Sm0keTest >/dev/null || fail "account create"
 docker stop -t 120 "$NAME" >/dev/null
 logs_have "| DOL.GS.GameServer | Stopped" || fail "no clean save on docker stop"

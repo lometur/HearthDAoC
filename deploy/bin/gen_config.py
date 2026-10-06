@@ -13,6 +13,8 @@ DEFAULTS = {
     "HEARTHDAOC_UDP_PORT": "10401",
     "HEARTHDAOC_AUTO_ACCOUNTS": "True",
     "HEARTHDAOC_SERVER_NAME": "HearthDAoC",
+    "HEARTHDAOC_AUTOSAVE_MINUTES": "5",
+    "HEARTHDAOC_BACKUP_KEEP": "7",
 }
 
 
@@ -35,7 +37,17 @@ def settings(env):
     s["HEARTHDAOC_AUTO_ACCOUNTS"] = "True" if auto == "true" else "False"
     if not s["HEARTHDAOC_SERVER_NAME"].strip():
         raise ConfigError("HEARTHDAOC_SERVER_NAME must not be empty")
+    whole_number(s, "HEARTHDAOC_AUTOSAVE_MINUTES", 1, 60, "minutes")
+    # Checked here so a bad value stops the start instead of silently ending the daily backups.
+    whole_number(s, "HEARTHDAOC_BACKUP_KEEP", 1, 365, "backups")
     return s
+
+
+def whole_number(s, key, low, high, unit):
+    value = s[key].strip()
+    if not value.isdigit() or not low <= int(value) <= high:
+        raise ConfigError(f"{key} must be a whole number of {unit} from {low} to {high}, got {s[key]!r}")
+    s[key] = str(int(value))
 
 
 def render(s, data):
@@ -68,7 +80,7 @@ def render(s, data):
         <DBType>SQLITE</DBType>
         <DBConnectionString>Data Source={db};Version=3;Pooling=True;Journal Mode=WAL;Synchronous=Normal;Foreign Keys=True;Default Timeout=60</DBConnectionString>
         <DBAutosave>True</DBAutosave>
-        <DBAutosaveInterval>10</DBAutosaveInterval>
+        <DBAutosaveInterval>{s['HEARTHDAOC_AUTOSAVE_MINUTES']}</DBAutosaveInterval>
         <MetricsEnabled>false</MetricsEnabled>
         <MetricsInterval>60s</MetricsInterval>
         <OtlpEndpoint>http://127.0.0.1:4317</OtlpEndpoint>

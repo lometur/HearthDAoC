@@ -6,6 +6,7 @@ import subprocess
 import sys
 import tempfile
 import unittest
+from unittest import mock
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 REPO = os.path.abspath(os.path.join(HERE, "..", ".."))
@@ -115,6 +116,40 @@ class WorldAdminTests(unittest.TestCase):
             writer.close()
         with sqlite3.connect(init_world.world_paths(self.data)["db"]) as c:
             self.assertEqual(c.execute("SELECT v FROM t").fetchone()[0], "archived last session")
+
+    def _backup_with_edition(self, sluaghbinder):
+        path = os.path.join(backup.backups_dir(self.data), "world-20990101-000000-000000-manual.db")
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        with sqlite3.connect(path) as c:
+            c.execute("CREATE TABLE t (v TEXT)")
+            c.execute("INSERT INTO t VALUES ('from backup')")
+            c.execute("CREATE TABLE ServerProperty (`Key` TEXT, Value TEXT)")
+            c.execute("INSERT INTO ServerProperty VALUES ('enable_sluaghbinder', ?)", (sluaghbinder,))
+        return os.path.basename(path)
+
+    def test_restore_refuses_a_backup_from_another_edition(self):
+        db = self.make_sqlite_world(edition="classic")
+        name = self._backup_with_edition("True")  # an edition "b" world
+        with self.assertRaisesRegex(world_admin.AdminError, "edition 'b'.*--force"):
+            world_admin.restore(self.data, name)
+        with sqlite3.connect(db) as c:
+            self.assertEqual(c.execute("SELECT v FROM t").fetchone()[0], "original")
+
+    def test_restore_with_force_accepts_another_edition(self):
+        db = self.make_sqlite_world(edition="classic")
+        world_admin.restore(self.data, self._backup_with_edition("True"), force=True)
+        with sqlite3.connect(db) as c:
+            self.assertEqual(c.execute("SELECT v FROM t").fetchone()[0], "from backup")
+
+    def test_restore_of_the_same_edition_needs_no_force(self):
+        db = self.make_sqlite_world(edition="classic")
+        world_admin.restore(self.data, self._backup_with_edition("False"))
+        with sqlite3.connect(db) as c:
+            self.assertEqual(c.execute("SELECT v FROM t").fetchone()[0], "from backup")
+
+    @unittest.skipUnless(TEST_WORLD, "needs HDC_TEST_WORLD (a clean classic world)")
+    def test_edition_is_read_from_a_real_world(self):
+        self.assertEqual(world_admin.world_edition(TEST_WORLD), "classic")
 
     def test_restore_rejects_a_corrupt_backup(self):
         self.make_sqlite_world()
@@ -264,6 +299,25 @@ class WorldAdminTests(unittest.TestCase):
             report = f.read()
         self.assertIn("motd", report)
         self.assertIn("Welcome to the hearth", report)
+
+    @unittest.skipUnless(TEST_WORLD and TOOLS, "needs HDC_TEST_WORLD (clean classic world) and HDC_TOOLS (built CLIs)")
+    def test_upgrade_failure_during_the_swap_puts_the_old_world_back(self):
+        db = init_world.world_paths(self.data)["db"]
+        os.makedirs(os.path.dirname(db))
+        shutil.copyfile(TEST_WORLD, db)
+        meta = {"version": "0.34b", "edition": "classic", "navmesh": False, "created_utc": "x"}
+        init_world.write_meta(init_world.world_paths(self.data)["meta"], meta)
+        before = backup.sha256(db) if hasattr(backup, "sha256") else open(db, "rb").read()
+        with mock.patch.object(world_admin.init_world, "write_meta", side_effect=OSError(28, "No space left on device")):
+            with self.assertRaisesRegex(world_admin.AdminError, "back in place"):
+                world_admin.upgrade_world(FakeRelease("0.34b", TEST_WORLD), self.data,
+                                          importer_cmd(self.data), same_version_ok=True, log=QUIET)
+        after = backup.sha256(db) if hasattr(backup, "sha256") else open(db, "rb").read()
+        self.assertEqual(after, before)
+        with open(init_world.world_paths(self.data)["meta"], encoding="utf-8") as f:
+            self.assertEqual(json.load(f), meta)
+        self.assertEqual(os.listdir(os.path.join(self.data, "archive")), [])
+        self.assertFalse(os.path.exists(init_world.swap_marker(self.data)))
 
     def test_upgrade_world_refuses_same_version_by_default(self):
         self.make_sqlite_world(version="0.34b")
