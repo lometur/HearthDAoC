@@ -8,7 +8,8 @@ root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 work="$(mktemp -d)"; trap 'rm -rf "$work"' EXIT
 mkdir -p "$work/deploy" "$work/client/hearthdaoc-client-$tag/windows"
 cp "$root"/deploy/{compose.yml,.env.example,hdc,HANDOFF.md,upstream.lock} "$work/deploy/"
-sed -i "s/^HEARTHDAOC_TAG=.*/HEARTHDAOC_TAG=$tag/" "$work/deploy/.env.example"
+sed -i "s/^HEARTHDAOC_TAG=.*/HEARTHDAOC_TAG=$tag/" "$work/deploy/.env.example"  # hdc update reads the tag here
+grep -qxF "HEARTHDAOC_TAG=$tag" "$work/deploy/.env.example" || { echo "deploy/.env.example has no HEARTHDAOC_TAG= line" >&2; exit 1; }
 tar czf "$out/hearthdaoc-deploy-$tag.tar.gz" -C "$work/deploy" .
 c="$work/client/hearthdaoc-client-$tag"
 cp "$root"/client/README.md "$root"/client/linux/setup.sh "$root"/client/linux/play.sh.in \
