@@ -77,6 +77,8 @@ INVALID = {
     "empty find": (_op(1, find=""), f"{XML_OP}: 'find' is empty"),
     "find not text": (_op(1, find=5), f"{XML_OP}: 'find' must be text"),
     "text outside Latin-1": (_op(1, replace="\u2014"), f"{XML_OP}: 'replace' has characters outside Latin-1"),
+    "text that case-folds into Latin-1": (_op(1, replace="\u0178"),
+                                          f"{XML_OP}: 'replace' has characters outside Latin-1"),
     "unsafe bundled source": (_op(2, source="../splash.mpk"), "unsafe path: '../splash.mpk'"),
     "source without a file op": (_file(0, after="source"),
                                  "game.dll: \"after\": \"source\" needs exactly one file operation"),

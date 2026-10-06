@@ -159,7 +159,7 @@ function Assert-Op($Op, [string]$Where) {
         foreach ($key in @('find', 'replace')) {
             $text = Get-Field $Op $key
             if (-not ($text -is [string])) { throw (New-PatchError ("{0}: '{1}' must be text" -f $Where, $key)) }
-            if ($text -match '[^\x00-\xFF]') {
+            if ($text -cmatch '[^\x00-\xFF]') {
                 throw (New-PatchError ("{0}: '{1}' has characters outside Latin-1" -f $Where, $key))
             }
         }
