@@ -46,6 +46,39 @@ class InitWorldTests(unittest.TestCase):
         meta = self.meta()
         self.assertEqual((meta["version"], meta["edition"], meta["navmesh"]), ("test", "classic", True))
 
+    def test_interrupted_world_swap_is_rolled_back_at_next_start(self):
+        # Simulate a machine that died during upgrade-world/new-world: the old world sits in the archive,
+        # a marker names it, a half-installed database is in place and there is no world.json.
+        with fx.RangeServer(self.dir) as srv:
+            init_world.init(self.release(srv), self.data, "classic", skip_navmesh=True, log=QUIET)
+            p = init_world.world_paths(self.data)
+            old_db = self.read(p["db"])
+            archive = os.path.join(self.data, "archive", "world-pre-upgrade-x")
+            os.makedirs(archive)
+            os.rename(os.path.dirname(p["db"]), os.path.join(archive, "world"))
+            os.rename(p["meta"], os.path.join(archive, "world.json"))
+            os.makedirs(os.path.dirname(p["db"]))
+            with open(p["db"], "wb") as f:
+                f.write(b"half-installed")
+            init_world.write_swap_marker(self.data, archive)
+            logged = []
+            self.assertEqual(init_world.init(self.release(srv), self.data, "classic", skip_navmesh=True,
+                                             log=logged.append), 0)
+        self.assertEqual(self.read(p["db"]), old_db)
+        self.assertTrue(os.path.isfile(p["meta"]))
+        self.assertFalse(os.path.exists(init_world.swap_marker(self.data)))
+        self.assertTrue(any("put back" in line for line in logged), logged)
+
+    def test_finished_world_swap_only_clears_the_marker(self):
+        with fx.RangeServer(self.dir) as srv:
+            init_world.init(self.release(srv), self.data, "classic", skip_navmesh=True, log=QUIET)
+            p = init_world.world_paths(self.data)
+            before = self.read(p["db"])
+            init_world.write_swap_marker(self.data, os.path.join(self.data, "archive", "gone"))
+            self.assertEqual(init_world.init(self.release(srv), self.data, "classic", skip_navmesh=True, log=QUIET), 0)
+        self.assertEqual(self.read(p["db"]), before)
+        self.assertFalse(os.path.exists(init_world.swap_marker(self.data)))
+
     def test_second_start_downloads_nothing(self):
         with fx.RangeServer(self.dir) as srv:
             init_world.init(self.release(srv), self.data, "b", log=QUIET)

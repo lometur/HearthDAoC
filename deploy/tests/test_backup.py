@@ -58,6 +58,15 @@ class BackupTests(unittest.TestCase):
         self.assertEqual(sorted(glob.glob(os.path.join(self.data, "backups", "*-pre-bots.db"))), sorted(bots[-3:]))
         self.assertTrue(all(os.path.exists(p) for p in restores + upgrades))  # each may be the only copy of a world
 
+    def test_manual_backups_never_push_daily_ones_out(self):
+        make_world(self.data).close()
+        daily = [backup.create(self.data, keep=2) for _ in range(2)]
+        manual = [backup.create(self.data, label="manual") for _ in range(5)]
+        backup.create(self.data, keep=2)  # the next daily backup rotates dailies only
+        self.assertTrue(all(os.path.exists(p) for p in manual))
+        self.assertEqual(len(glob.glob(os.path.join(self.data, "backups", "*-backup.db"))), 2)
+        self.assertFalse(os.path.exists(daily[0]))
+
     def test_failed_backup_keeps_old_backups(self):
         make_world(self.data).close()
         old = [backup.create(self.data, keep=7) for _ in range(2)]

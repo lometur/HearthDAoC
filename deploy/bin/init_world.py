@@ -41,6 +41,38 @@ def not_writable_hint(data):
             "(The touch matters: Docker gives an empty volume back to the image's owner on every mount.)")
 
 
+def swap_marker(data):
+    return os.path.join(data, "world-swap.json")
+
+
+def write_swap_marker(data, archive):
+    """Written before upgrade-world/new-world move the current world into `archive`."""
+    with open(swap_marker(data) + ".tmp", "w", encoding="utf-8") as f:
+        json.dump({"archive": archive}, f)
+    os.replace(swap_marker(data) + ".tmp", swap_marker(data))
+
+
+def recover_interrupted_swap(data, log=print):
+    """If a world swap was interrupted (marker present, no world.json), put the archived world back."""
+    marker = swap_marker(data)
+    if not os.path.isfile(marker):
+        return False
+    p = world_paths(data)
+    with open(marker, encoding="utf-8") as f:
+        archive = json.load(f)["archive"]
+    if os.path.isfile(p["meta"]) or not os.path.isfile(os.path.join(archive, "world.json")):
+        os.remove(marker)  # the swap finished (or there is nothing to put back)
+        return False
+    shutil.rmtree(os.path.dirname(p["db"]), ignore_errors=True)
+    shutil.move(os.path.join(archive, "world"), os.path.dirname(p["db"]))
+    shutil.move(os.path.join(archive, "world.json"), p["meta"])
+    os.rmdir(archive)
+    os.remove(marker)
+    log("WARNING: an upgrade-world or new-world was interrupted; the previous world was put back. "
+        "Run the command again if you still want it.")
+    return True
+
+
 def world_paths(data):
     return {
         "meta": os.path.join(data, "world.json"),
@@ -77,7 +109,9 @@ def ensure_navmesh(release, navmesh_dir, seed=None, log=print):
     return len(files), fetched
 
 
-def init(release, data, edition, skip_navmesh=False, seed_navmesh=None, log=print):
+def init(release, data, edition, skip_navmesh=False, seed_navmesh=None, log=print, recover=True):
+    if recover:  # at server start; new-world turns it off because it is the swap in progress
+        recover_interrupted_swap(data, log)
     p = world_paths(data)
     if os.path.isfile(p["meta"]):
         with open(p["meta"], encoding="utf-8") as f:

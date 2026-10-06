@@ -12,7 +12,6 @@ CONTAINER="${HEARTHDAOC_CONTAINER:-hearthdaoc-server}"
 VOLUME="${HEARTHDAOC_VOLUME:-hearthdaoc-data}"
 UIDGID="${HEARTHDAOC_UID:-1000}:${HEARTHDAOC_GID:-1000}"
 PORT="${HEARTHDAOC_PORT:-10301}"
-KEEP="${HEARTHDAOC_BACKUP_KEEP:-7}"
 DB=/data/world/opendaoc.sqlite3.db
 ADMIN=(python3 /app/bin/world_admin.py --data /data --lock /app/upstream.lock)
 
@@ -56,8 +55,8 @@ hdc - HearthDAoC server
   add-bots <alb|mid|hib> <1|10|100> <1|50>
   account create <name> <password> [--plvl 1-3] | list | plvl <name> <1-3>
   bot-goals show | set <1-19|20-49|50> <solo> <group> <rvr> | reset | import <file>   (changes need the server stopped)
-  backup | backups               take a backup now | list backups
-  restore <backup file name>     (server stopped)
+  backup | backups               take a manual backup now (kept until you delete it) | list backups
+  restore <backup file name> [--force]   (server stopped; --force allows another edition)
   new-world [--edition classic|b]   archive the current world and start a fresh one (server stopped)
   upgrade-world [--same-version]    move progress into the clean world of this image's upstream version (server stopped)
   auto-accounts on|off           allow or stop account creation at first login (recreates the server)
@@ -121,9 +120,9 @@ case "$cmd" in
                 offline --entrypoint dotnet "$(image)" /app/tools/bot-goals/bot-goals.dll --port "$PORT" /data "$@"
             fi
         fi ;;
-    backup) tool python3 /app/bin/backup.py --data /data create --keep "$KEEP" ;;
+    backup) tool python3 /app/bin/backup.py --data /data create --label manual ;;  # kept until you delete it
     backups) tool python3 /app/bin/backup.py --data /data list ;;
-    restore) need_stopped; offline --entrypoint python3 "$(image)" "${ADMIN[@]:1}" restore "${1:?backup file name (see ./hdc backups)}" ;;
+    restore) need_stopped; offline --entrypoint python3 "$(image)" "${ADMIN[@]:1}" restore "${1:?backup file name (see ./hdc backups)}" "${@:2}" ;;
     new-world)
         need_stopped
         edition="${HEARTHDAOC_EDITION:-classic}"
