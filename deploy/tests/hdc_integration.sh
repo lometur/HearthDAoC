@@ -21,7 +21,7 @@ HEARTHDAOC_MEM_LIMIT=4g
 HEARTHDAOC_CPUS=2
 EOF
 hdc() { "$W/hdc" "$@"; }
-cleanup() { hdc down >/dev/null 2>&1 || true; docker volume rm -f hearthdaoc-it-data >/dev/null 2>&1 || true; rm -rf "$W"; }
+cleanup() { hdc down >/dev/null 2>&1 || true; docker volume rm -f hearthdaoc-it-data >/dev/null 2>&1 || true; docker rmi "${IMAGE%%:*}:it-update" "${IMAGE%%:*}:it-update2" >/dev/null 2>&1 || true; rm -rf "$W"; }
 trap cleanup EXIT
 fail() { echo "FAIL: $*" >&2; docker logs hearthdaoc-it-server 2>&1 | tail -30 >&2 || true; exit 1; }
 healthy() { for _ in $(seq 1 150); do [[ "$(docker inspect -f '{{.State.Health.Status}}' hearthdaoc-it-server 2>/dev/null)" == healthy ]] && return 0; sleep 2; done; return 1; }
@@ -83,4 +83,44 @@ healthy || fail "not healthy after an automatic restart"
 hdc stop >/dev/null
 grep -q "^Server: stopped" <<<"$(hdc status)" || fail "a stopped server is reported as not starting after an earlier crash"
 echo "ok - status is right for a server stopped after an earlier crash"
+
+# hdc update: a release bundle built like CI builds it, for a tag that exists as a local image.
+make_bundle() {  # make_bundle <tag> <upstream version>: build, then add a new setting and markers
+    docker tag "$IMAGE" "${IMAGE%%:*}:$1"
+    "$HERE/../build_bundles.sh" "$1" "$W/b-$1" >/dev/null
+    mkdir "$W/b-$1/x" && tar xzf "$W/b-$1/hearthdaoc-deploy-$1.tar.gz" -C "$W/b-$1/x"
+    echo "HEARTHDAOC_IT_NEW_SETTING=hello" >> "$W/b-$1/x/.env.example"
+    echo "# bundle $1" >> "$W/b-$1/x/compose.yml"
+    sed -i "s/\"version\": *\"[^\"]*\"/\"version\": \"$2\"/" "$W/b-$1/x/upstream.lock"
+    tar czf "$W/b-$1/hearthdaoc-deploy-$1.tar.gz" -C "$W/b-$1/x" .
+    echo "$W/b-$1/hearthdaoc-deploy-$1.tar.gz"
+}
+upstream="$(python3 -c 'import json,sys;print(json.load(open(sys.argv[1]))["version"])' "$HERE/../upstream.lock")"
+hdc up >/dev/null; healthy || fail "not healthy before update"
+out="$(hdc update --bundle "$(make_bundle it-update "$upstream")")" || fail "hdc update failed: $out"
+grep -q "^HEARTHDAOC_TAG=it-update$" "$W/.env" || fail "update did not set the tag"
+grep -q "^HEARTHDAOC_IT_NEW_SETTING=hello$" "$W/.env" || fail "update did not add the new setting"
+grep -q "^HEARTHDAOC_PORT=10392$" "$W/.env" || fail "update lost the owner's settings"
+grep -q "# bundle it-update" "$W/compose.yml" || fail "update did not install the new compose.yml"
+hdc backups | grep -q -- "-pre-update.db" || fail "update made no backup first"
+healthy || fail "not healthy after update"
+[[ "$(docker inspect -f '{{.Config.Image}}' hearthdaoc-it-server)" == "${IMAGE%%:*}:it-update" ]] || fail "server not running the new image"
+echo "ok - hdc update backs up, installs the release, keeps settings and restarts"
+if out="$(hdc update --bundle "$(make_bundle it-update2 9.99z)" 2>&1)"; then fail "update across upstream versions should stop"; fi
+grep -q "upgrade-world" <<<"$out" || fail "no upgrade-world instruction: $out"
+if docker inspect -f '{{.State.Running}}' hearthdaoc-it-server 2>/dev/null | grep -q true; then fail "server started on a world from another upstream version"; fi
+echo "ok - hdc update stops before starting a release for another upstream version"
+python3 - "$W" <<'PY' &
+import http.server, sys, os
+class H(http.server.BaseHTTPRequestHandler):
+    def do_HEAD(self):
+        self.send_response(302); self.send_header("Location", "https://example.invalid/releases/tag/v0.34b-hearth.99"); self.end_headers()
+    do_GET = do_HEAD
+    def log_message(self, *a): pass
+s = http.server.HTTPServer(("127.0.0.1", 0), H); open(os.path.join(sys.argv[1], "port"), "w").write(str(s.server_port)); s.serve_forever()
+PY
+srv=$!; for _ in $(seq 1 20); do [[ -s "$W/port" ]] && break; sleep 0.2; done
+out="$(HEARTHDAOC_RELEASES_URL="http://127.0.0.1:$(cat "$W/port")" hdc update --check)"; kill "$srv"
+grep -q "v0.34b-hearth.99" <<<"$out" && grep -q "./hdc update v0.34b-hearth.99" <<<"$out" || fail "update --check: $out"
+echo "ok - hdc update --check reports a newer release"
 echo "HDC INTEGRATION OK"

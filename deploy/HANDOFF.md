@@ -88,6 +88,17 @@ To remove everything: `./hdc down && docker volume rm hearthdaoc-data` (deletes 
 ## Upgrading to a new fork release
 
 ```bash
+cd ~/hearthdaoc
+./hdc update --check   # is there a newer release?
+./hdc update           # back up, install the latest release, keep .env values, restart
+```
+`./hdc update <tag>` installs a specific release. New settings are added to `.env` with their defaults
+(it lists them). If the release is for another upstream version, it stops before starting: then run
+`./hdc upgrade-world` (it backs up, moves all progress into the new clean world, keeps bans and
+permissions, and lists server settings to re-check in its report), then `./hdc up`.
+
+Without `./hdc update` (a deployment older than it), do it by hand:
+```bash
 cd ~/hearthdaoc && ./hdc backup && ./hdc stop
 mkdir -p new && cd new
 curl -fLO https://github.com/lometur/HearthDAoC/releases/download/<new tag>/hearthdaoc-deploy-<new tag>.tar.gz
@@ -97,6 +108,3 @@ sed -i 's/^HEARTHDAOC_TAG=.*/HEARTHDAOC_TAG=<new tag>/' .env
 docker compose -p hearthdaoc -f compose.yml --env-file .env pull
 ./hdc up
 ```
-If `./hdc up` reports that the world is from another upstream version, run `./hdc stop`,
-`./hdc upgrade-world` (it backs up, moves all progress into the new clean world, keeps bans and
-permissions, and lists server settings to re-check in its report), then `./hdc up`. Remove `new/`.
