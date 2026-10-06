@@ -6,6 +6,13 @@ name: release-pr
 on:
   push:
     branches: [main]
+  # Also after every build on main: a merge that lands while a release is still publishing is skipped as
+  # "pending", and this brings it back once the release exists.
+  workflow_run:
+    workflows: [server-image]
+    types: [completed]
+    branches: [main]
+  workflow_dispatch:
 
 permissions:
   contents: write
@@ -21,6 +28,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
+          ref: main
           fetch-depth: 0
 
       - name: Plan
