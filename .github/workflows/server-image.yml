@@ -1,10 +1,20 @@
 name: server-image
 
+# Every PR: the full suite. Every push to main (a merge, or Run workflow on main): the full suite, and when
+# files that ship changed since the last release, the same run publishes the next v<upstream>-hearth.<n>
+# (deploy/release_tag.py next): image, tag and GitHub release with both bundles, all from this commit. A run
+# for a commit older than a release publishes nothing, so re-running an old run cannot ship older code.
 on:
   push:
     branches: [main]
-    tags: ["v*-hearth.*"]
   pull_request:
+    paths-ignore: ["docs/**", "*.md"]
+  workflow_dispatch:  # on main: retry a release; on a branch: test only
+
+# Runs on main wait for each other, so releases are made one at a time; a newer push to a PR cancels its run.
+concurrency:
+  group: server-image-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 permissions:
   contents: read
@@ -18,19 +28,20 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
-          fetch-depth: 0  # tags, to know whether the docs name an unpublished release
+          fetch-depth: 0  # history and tags, to find what changed since the last release
 
-      # A release is published for a pushed tag, or on main when a merged release PR names a new tag
-      # (deploy/release_tag.py; .github/workflows/release-pr.yml opens those PRs). Checked first so a
-      # mismatch fails before the long build.
+      # Checked first so a problem fails before the long build. Set the repository variable HOLD_RELEASES to
+      # keep main building without publishing.
       - name: Release to publish
         id: rel
+        env:
+          HOLD: ${{ vars.HOLD_RELEASES }}
         run: |
           tag=""
-          if [[ "$GITHUB_REF" == refs/tags/* ]]; then tag="$GITHUB_REF_NAME"
-          elif [[ "$GITHUB_EVENT_NAME" == push && "$GITHUB_REF" == refs/heads/main ]]; then tag="$(python3 deploy/release_tag.py pending)"
+          if [[ "$GITHUB_REF" == refs/heads/main ]]; then
+            tag="$(python3 deploy/release_tag.py next)"
+            if [[ -n "$tag" && -n "$HOLD" ]]; then echo "::notice::$tag is due, but HOLD_RELEASES is set."; tag=""; fi
           fi
-          if [[ -n "$tag" ]]; then python3 deploy/release_tag.py check "$tag"; fi
           echo "tag=$tag" >> "$GITHUB_OUTPUT"
 
       - uses: actions/setup-dotnet@v4
@@ -103,11 +114,7 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           upstream="$(python3 -c 'import json;print(json.load(open("deploy/upstream.lock"))["version"])')"
-          {
-            python3 deploy/release_tag.py notes "$TAG"
-            echo
-            echo "HearthDAoC, an unofficial fork of shadowofze/OfflineDAoC (upstream $upstream). Image: ghcr.io/lometur/hearthdaoc:$TAG."
-            echo "Server: \`./hdc update $TAG\` (or HANDOFF.md in the deploy bundle). Players: README.md in the client bundle."
-          } > notes.md
-          gh release create "$TAG" dist/hearthdaoc-deploy-*.tar.gz dist/hearthdaoc-client-*.zip \
-            --target "$GITHUB_SHA" --title "$TAG" --notes-file notes.md
+          gh release create "$TAG" "dist/hearthdaoc-deploy-$TAG.tar.gz" "dist/hearthdaoc-client-$TAG.zip" \
+            --target "$GITHUB_SHA" --title "$TAG" --latest --generate-notes \
+            --notes "HearthDAoC, an unofficial fork of shadowofze/OfflineDAoC (upstream $upstream). Image: ghcr.io/lometur/hearthdaoc:$TAG.
+          Server: \`./hdc update\` (or HANDOFF.md in the deploy bundle). Players: README.md in the client bundle."
