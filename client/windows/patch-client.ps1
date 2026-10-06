@@ -5,9 +5,9 @@
 .DESCRIPTION
     patch-client.ps1 [-Client DIR] [-PatchSet FILE] [-Bundle DIR] [-Restore | -Check]
 
-    Players double-click patch-client.bat, which runs this script. Put both files and the
-    patches folder next to connect-hearthdaoc.bat, in runtime\client-opendaoc\app of the
-    OfflineDAoC install.
+    connect-hearthdaoc.bat runs this script before every start of the game; players can also
+    double-click patch-client.bat, which runs it too. Put both files and the patches folder next
+    to connect-hearthdaoc.bat, in runtime\client-opendaoc\app of the OfflineDAoC install.
 
     -Client    the client folder, the one with game.dll (default: this script's folder)
     -PatchSet  the patch set (default: patches\classic-creation.json next to this script)

@@ -22,6 +22,8 @@ UNKNOWN_DLL = ("Not patched: game.dll is not the file this HearthDAoC release su
                "0.34b edition or a newer upstream client). The client still works with the standard "
                "creation screen.\n")
 WARNING = "Warning: the client was set up without HearthDAoC's patches (see the message above).\n"
+# What setup.sh installs in <dest>/patches, for play.sh to apply at every launch: exactly these.
+PATCH_FILES = ["apply_patches.py", "classic-creation.json", "patchset.py", "splash.mpk"]
 
 
 def sha(data):
@@ -31,6 +33,14 @@ def sha(data):
 def read(path):
     with open(path, "rb") as f:
         return f.read()
+
+
+def installed_patches(test, dest, source):
+    """Check that <dest>/patches holds exactly PATCH_FILES, each a copy of the one in source."""
+    installed = os.path.join(dest, "patches")
+    test.assertEqual(sorted(os.listdir(installed)), PATCH_FILES)
+    for name in PATCH_FILES:
+        test.assertEqual(read(os.path.join(installed, name)), read(os.path.join(source, name)), name)
 
 
 def make_base(directory, files):
@@ -96,6 +106,7 @@ class SetupTests(unittest.TestCase):
         self.assertIn(WARNING, r.stderr)
         self.assertEqual(read(os.path.join(dest, "client", "game.dll")), self.files[RELEASE_DLL])
         self.assertEqual([n for n in os.listdir(os.path.join(dest, "client")) if n.endswith(".hearthdaoc-orig")], [])
+        installed_patches(self, dest, os.path.join(REPO, "client", "patches"))  # for play.sh, even when refused
 
     def test_rejects_bad_arguments(self):
         with fx.RangeServer(self.dir) as srv:
@@ -112,7 +123,7 @@ class SetupTests(unittest.TestCase):
 
 
 class BundlePatchTests(unittest.TestCase):
-    """setup.sh from an unpacked client bundle runs patches/apply_patches.py on the new client."""
+    """setup.sh from an unpacked client bundle installs its patches folder as <dest>/patches and applies it."""
 
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
@@ -197,14 +208,50 @@ class BundlePatchTests(unittest.TestCase):
         self.assertFalse(os.path.exists(os.path.join(client, "game.dll.hearthdaoc-orig")))
         self.assertTrue(os.path.isfile(os.path.join(dest, "play.sh")))
 
+    def test_setup_installs_the_patch_files_next_to_play_sh(self):
+        dest, r = self.setup_sh()
+        self.assertEqual(r.returncode, 0, r.stderr + r.stdout)
+        installed_patches(self, dest, self.patches)  # nothing else: no __pycache__ either
+
+    def test_running_setup_again_refreshes_the_installed_patch_files(self):
+        dest, r = self.setup_sh()
+        self.assertEqual(r.returncode, 0, r.stderr + r.stdout)
+        installed = os.path.join(dest, "patches")
+        with open(os.path.join(installed, "old-patch-set.json"), "w", encoding="utf-8") as f:
+            f.write("{}")  # left by an older release
+        with open(os.path.join(installed, "patchset.py"), "a", encoding="utf-8") as f:
+            f.write("\nraise SystemExit('an older patchset.py')\n")
+        dest, r = self.setup_sh()
+        self.assertEqual(r.returncode, 0, r.stderr + r.stdout)
+        self.assertNotIn("Warning", r.stderr)
+        installed_patches(self, dest, self.patches)
+        self.assertEqual(read(os.path.join(dest, "client", "game.dll")), self.dll_patched)
+
     def test_a_failed_patch_fails_setup(self):
-        os.remove(os.path.join(self.patches, "splash.mpk"))  # the patch set can't be applied
+        # An invalid patch set (exit 2). The message names the installed copy: setup.sh applies
+        # <dest>/patches, the files play.sh applies at every launch, not the bundle's.
+        with open(os.path.join(self.patches, "classic-creation.json"), "w", encoding="utf-8") as f:
+            json.dump({"format": 2}, f)
         dest, r = self.setup_sh()
         self.assertEqual(r.returncode, 1, r.stderr + r.stdout)
-        self.assertIn("Error: bundled file missing: " + os.path.join(self.patches, "splash.mpk"), r.stderr)
+        installed = os.path.join(dest, "patches", "classic-creation.json")
+        self.assertIn(f"Error: invalid patch set: {installed}: not a format 1 patch set", r.stderr)
         self.assertIn("Patching the client failed (apply_patches.py exit 2, see the message above).", r.stderr)
         self.assertEqual(read(os.path.join(dest, "client", "game.dll")), self.dll)
         self.assertFalse(os.path.exists(os.path.join(dest, "play.sh")))
+
+    def test_a_bundle_missing_a_patch_file_is_refused_before_anything_is_copied(self):
+        aside = os.path.join(self.dir, "aside")
+        for name in PATCH_FILES:
+            with self.subTest(name=name):
+                os.replace(os.path.join(self.patches, name), aside)
+                try:
+                    dest, r = self.setup_sh()
+                finally:
+                    os.replace(aside, os.path.join(self.patches, name))
+                self.assertEqual(r.returncode, 1, r.stderr + r.stdout)
+                self.assertIn(f"Missing patches/{name} next to setup.sh; download the full client bundle.", r.stderr)
+                self.assertFalse(os.path.exists(dest))
 
     def test_a_bundle_without_patches_is_refused_before_anything_is_copied(self):
         shutil.rmtree(self.patches)
