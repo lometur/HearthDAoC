@@ -1,9 +1,16 @@
+import json
 import os
 import re
+import shutil
+import subprocess
+import sys
+import tempfile
 import unittest
 
 ROOT = os.path.abspath(os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", ".."))
 WORKFLOWS = os.path.join(ROOT, ".github", "workflows")
+sys.path.insert(0, os.path.join(ROOT, "tools", "linux", "tests"))
+import release_fixture as fx  # noqa: E402
 
 
 def read(name):
@@ -67,6 +74,144 @@ class MergeIsReleaseTests(unittest.TestCase):
     def test_only_the_release_job_can_write_contents(self):
         self.assertEqual(self.text.count("contents: write"), 1)
         self.assertIn("contents: write", job(self.text, "release-assets"))
+
+
+# ClientPatchWorkflowTests read the workflow as data: ruby's YAML to JSON, since Python's standard library
+# has no YAML reader. GitHub's Ubuntu runners have ruby; without it these tests are skipped.
+RUBY = shutil.which("ruby")
+YAML_TO_JSON = "require 'yaml'; require 'json'; puts JSON.generate(YAML.safe_load(File.read(ARGV[0])))"
+PATCH_SET = os.path.join(ROOT, "client", "patches", "classic-creation.json")
+TEST_JOB, RELEASE_JOB = "test-build-publish", "release-assets"
+MPK_PROJECT = "source/tools/OfflineDaoc.Mpk/OfflineDaoc.Mpk.csproj"
+MPK_TOOL = "source/tools/OfflineDaoc.Mpk/bin/Release/net10.0/OfflineDaoc.Mpk.dll"
+PATCH_TESTS = "python3 -m unittest discover -s client/patches/tests -t client/patches -v"
+APP = "runtime/client-opendaoc/app/"
+
+
+def read_bytes(path):
+    with open(path, "rb") as f:
+        return f.read()
+
+
+def listing(folder):
+    """Every file below folder, as sorted relative paths with forward slashes."""
+    return sorted(os.path.relpath(os.path.join(d, n), folder).replace(os.sep, "/")
+                  for d, _, names in os.walk(folder) for n in names)
+
+
+@unittest.skipUnless(RUBY, "needs ruby to read the workflow's YAML")
+class ClientPatchWorkflowTests(unittest.TestCase):
+    """The client patch tests get the real classic client files, nasm, upstream's MPK tool and pwsh. The
+    fetched EA files stay outside the checkout and are never published. The release job builds the MPK
+    tool for the client bundle's splash.mpk, and its notes credit the splash art."""
+
+    @classmethod
+    def setUpClass(cls):
+        run = subprocess.run([RUBY, "-e", YAML_TO_JSON, os.path.join(WORKFLOWS, "server-image.yml")],
+                             capture_output=True, text=True, check=True)
+        cls.jobs = json.loads(run.stdout)["jobs"]
+        with open(PATCH_SET, encoding="utf-8") as f:
+            cls.patched = sorted(entry["path"] for entry in json.load(f)["files"])
+
+    def steps(self, job):
+        return self.jobs[job]["steps"]
+
+    def step(self, job, text):
+        """(index, step) of the one step of `job` whose run script contains `text`."""
+        found = [(i, s) for i, s in enumerate(self.steps(job)) if text in s.get("run", "")]
+        self.assertEqual(len(found), 1, f"{job}: steps that run {text!r}")
+        return found[0]
+
+    def uses(self, job, action):
+        """Index of the step of `job` that uses `action`."""
+        return [s.get("uses") for s in self.steps(job)].index(action)
+
+    def test_the_fetch_step_gets_exactly_the_patched_files_into_runner_temp(self):
+        # Run the step's script the way GitHub does (bash -e, from the checkout) against a small
+        # fake release that holds the patched files at the real release's paths.
+        _, fetch = self.step(TEST_JOB, "odaoc_fetch.py")
+        _, tests = self.step(TEST_JOB, PATCH_TESTS)
+        with tempfile.TemporaryDirectory() as tmp:
+            files = dict(fx.DEFAULT_FILES)
+            for path in self.patched:
+                if path != "game.dll":
+                    files[APP + path] = path.encode() * 40
+            lock, files = fx.build(tmp, files)
+            checkout, runner_temp = os.path.join(tmp, "checkout"), os.path.join(tmp, "runner-temp")
+            os.makedirs(os.path.join(checkout, "deploy"))
+            os.makedirs(os.path.join(checkout, "tools", "linux"))
+            os.makedirs(runner_temp)
+            shutil.copy(os.path.join(ROOT, "tools", "linux", "odaoc_fetch.py"),
+                        os.path.join(checkout, "tools", "linux"))
+            with fx.RangeServer(tmp) as srv:
+                with open(os.path.join(checkout, "deploy", "upstream.lock"), "w") as f:
+                    json.dump(srv.lock(lock), f)
+                run = subprocess.run(["bash", "-e", "-c", fetch["run"]], cwd=checkout, capture_output=True,
+                                     text=True, env=dict(os.environ, RUNNER_TEMP=runner_temp))
+            self.assertEqual(run.returncode, 0, run.stderr)
+            client = tests["env"]["HDC_CLIENT_FILES"].replace("${{ runner.temp }}", runner_temp)
+            # game.dll comes from the classic edition, the other files from the release's client folder.
+            expected = {path: files[lock["editions"]["classic"]["game_dll"] if path == "game.dll" else APP + path]
+                        for path in self.patched}
+            self.assertEqual({path: read_bytes(os.path.join(client, path)) for path in listing(client)}, expected)
+            self.assertEqual(listing(runner_temp),
+                             [os.path.relpath(client, runner_temp) + "/" + path for path in self.patched])
+            # Nothing lands in the checkout, so nothing fetched can reach the image's build context.
+            self.assertEqual(listing(checkout), ["deploy/upstream.lock", "tools/linux/odaoc_fetch.py"])
+
+    def test_the_client_patch_tests_get_nasm_the_mpk_tool_pwsh_and_the_world(self):
+        i_apt, apt = self.step(TEST_JOB, "apt-get install")
+        i_mpk, _ = self.step(TEST_JOB, f"dotnet build {MPK_PROJECT} -c Release")
+        i_fetch, _ = self.step(TEST_JOB, "odaoc_fetch.py")
+        i_world, _ = self.step(TEST_JOB, "init_world.py")
+        i_tests, tests = self.step(TEST_JOB, PATCH_TESTS)
+        self.assertIn("nasm", apt["run"].split())
+        self.assertLess(self.uses(TEST_JOB, "actions/setup-dotnet@v4"), i_mpk)
+        self.assertLess(max(i_apt, i_mpk, i_fetch, i_world), i_tests)
+        env = tests["env"]
+        self.assertEqual(env["HDC_MPK_TOOL"], "${{ github.workspace }}/" + MPK_TOOL)
+        self.assertEqual(env["HDC_TEST_WORLD"], "${{ runner.temp }}/world/world/opendaoc.sqlite3.db")
+        # Named, not looked up: without pwsh the PowerShell cases fail instead of being skipped.
+        self.assertEqual(env["HDC_PWSH"], "pwsh")
+
+    def test_a_rebuild_of_the_patch_set_is_compared_with_the_committed_one(self):
+        i_tests, tests = self.step(TEST_JOB, PATCH_TESTS)
+        i_rebuild, rebuild = self.step(TEST_JOB, "client/patches/build.py")
+        self.assertGreater(i_rebuild, i_tests)
+        script = rebuild["run"]
+        # The splash entry needs a built splash.mpk, so the rebuild packs one with the MPK tool.
+        for part in ('client/patches/branding/build_splash_mpk.py --mpk-tool "$HDC_MPK_TOOL"',
+                     '--client "$HDC_CLIENT_FILES"', '--world-db "$HDC_TEST_WORLD"', "--server-src source/server",
+                     "--splash-mpk", 'diff -u client/patches/classic-creation.json "$RUNNER_TEMP/'):
+            self.assertIn(part, script)
+        for name in ("HDC_CLIENT_FILES", "HDC_TEST_WORLD", "HDC_MPK_TOOL"):
+            self.assertEqual(rebuild["env"][name], tests["env"][name], name)
+
+    def test_nothing_fetched_is_published(self):
+        for name, job_steps in self.jobs.items():
+            for s in job_steps["steps"]:
+                self.assertNotIn("upload-artifact", s.get("uses", ""), name)
+        for s in self.steps(RELEASE_JOB):
+            self.assertNotIn("odaoc_fetch", s.get("run", ""))
+            self.assertNotIn("init_world", s.get("run", ""))
+        # The release gets the two bundles and nothing else.
+        _, create = self.step(RELEASE_JOB, "gh release create")
+        assets = create["run"].split("gh release create", 1)[1].split("--target", 1)[0]
+        self.assertEqual(assets.replace("\\\n", " ").split(),
+                         ['"$TAG"', '"dist/hearthdaoc-deploy-$TAG.tar.gz"', '"dist/hearthdaoc-client-$TAG.zip"'])
+
+    def test_the_release_job_builds_the_mpk_tool_for_the_client_bundle(self):
+        i_mpk, _ = self.step(RELEASE_JOB, f"dotnet build {MPK_PROJECT} -c Release")
+        i_bundles, bundles = self.step(RELEASE_JOB, "deploy/build_bundles.sh")
+        self.assertLess(self.uses(RELEASE_JOB, "actions/setup-dotnet@v4"), i_mpk)
+        self.assertLess(i_mpk, i_bundles)
+        self.assertEqual(bundles["env"]["HDC_MPK_TOOL"], MPK_TOOL)
+
+    def test_the_release_notes_credit_offlinedaocs_splash_art(self):
+        # In the --notes string, which gh puts before the notes it generates from the merged PRs.
+        _, create = self.step(RELEASE_JOB, "gh release create")
+        notes = create["run"].split('--notes "', 1)[1].split('"', 1)[0]
+        self.assertIn("The client's loading splash is OfflineDAoC's art", notes)
 
 
 if __name__ == "__main__":
