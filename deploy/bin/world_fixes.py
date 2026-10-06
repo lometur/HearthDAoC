@@ -7,8 +7,10 @@
    then converts it), but a client that sends the base class is refused. Remove 20 from the list.
 2. Saracen Disciples have no starting location (only Briton and Inconnu do), so a Saracen Necromancer
    has nowhere to enter the world. Add one, at the Inconnu Disciples' spot in the Shrouded Isles.
+3. The welcome messages players see (motd, starting_msg) name Offline DAoC and describe a world to play
+   alone. Replace upstream's texts with HearthDAoC's.
 
-Both only apply when needed and leave anything the owner set themselves alone.
+All of them only apply when needed and leave anything the owner set themselves alone.
 """
 import argparse
 import datetime
@@ -17,6 +19,18 @@ import sqlite3
 import sys
 
 DISCIPLE, SARACEN, INCONNU = 20, 4, 13
+
+# Upstream's texts (its ServerProperties.cs defaults, as stored in its worlds), and what replaces them.
+UPSTREAM_WELCOME = {
+    "motd": "Welcome back to Offline DAoC. Adventure alone or alongside autonomous player bots across the three realms.",
+    "starting_msg": "Welcome to Offline DAoC, a private Classic and Shrouded Isles world built to play alone or with "
+                    "player bot companions.",
+}
+HEARTHDAOC_WELCOME = {
+    "motd": "Welcome back to HearthDAoC. Adventure with your friends and autonomous player bots across the three realms.",
+    "starting_msg": "Welcome to HearthDAoC, a private Classic and Shrouded Isles world to share with your friends, "
+                    "with player bot companions at your side.",
+}
 
 
 def without_classes(value, ids):
@@ -63,6 +77,14 @@ def apply(db):
                              "ClientRegionID, LastTimeRowUpdated) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                              (*inconnu[:6], inconnu[6], SARACEN, DISCIPLE, inconnu[7], _now()))
                 changes.append("Saracen Disciples get a starting location (with the Inconnu Disciples, region %d)" % inconnu[4])
+            renamed = []
+            for key, text in UPSTREAM_WELCOME.items():
+                cur = conn.execute("UPDATE ServerProperty SET Value=?, LastTimeRowUpdated=? WHERE `Key`=? AND Value=?",
+                                   (HEARTHDAOC_WELCOME[key], _now(), key, text))
+                if cur.rowcount:
+                    renamed.append(key)
+            if renamed:
+                changes.append("Welcome messages now name HearthDAoC (%s)" % ", ".join(renamed))
     finally:
         conn.close()
     return changes
