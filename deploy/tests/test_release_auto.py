@@ -61,6 +61,13 @@ class ChangelogTests(unittest.TestCase):
         self.assertNotIn("Merge pull request", entry)
         self.assertNotIn("chore(release)", entry)
 
+    def test_only_the_bots_release_commits_are_skipped(self):
+        entry = rt.changelog_entry("v0.34b-hearth.4", "x", [
+            "chore(release): docs name the current release; CI refuses stale ones",
+            "chore(release): v0.34b-hearth.3"])
+        self.assertIn("- chore(release): docs name the current release; CI refuses stale ones", entry)
+        self.assertNotIn("chore(release): v0.34b", entry)
+
     def test_prepend_keeps_older_entries_and_replaces_a_pending_one(self):
         with tempfile.TemporaryDirectory() as d:
             path = os.path.join(d, "CHANGELOG.md")

@@ -106,7 +106,8 @@ def pending_release(docs_tag, tags):
 
 
 def changelog_entry(tag, date, subjects):
-    lines = [s for s in subjects if not s.startswith(("Merge pull request", "Merge branch", "chore(release)"))]
+    lines = [s for s in subjects if not s.startswith(("Merge pull request", "Merge branch"))
+             and not re.match(r"chore\(release\): v\d", s)]  # the release PRs' own commits
     return f"## {tag} ({date})\n\n" + "".join(f"- {s}\n" for s in lines or ["Maintenance release."])
 
 
