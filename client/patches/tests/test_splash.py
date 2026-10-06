@@ -316,3 +316,52 @@ class SplashPngTests(unittest.TestCase):
         self.assertRegex(reletter_splash.FONT_URL, r"^https://raw\.githubusercontent\.com/"
                          r"google/fonts/[0-9a-f]{40}/ofl/cinzel/")
         self.assertRegex(reletter_splash.FONT_SHA256, r"^[0-9a-f]{64}$")
+
+
+# --- The splash entry in the generator: build.py --splash-mpk (real client files) ---
+
+import json  # noqa: E402
+import subprocess  # noqa: E402
+
+import build  # noqa: E402
+
+CLIENT = os.environ.get("HDC_CLIENT_FILES")
+WORLD_DB = os.environ.get("HDC_TEST_WORLD")
+SERVER_SRC = os.path.join(REPO, "source", "server")
+
+
+@unittest.skipUnless(CLIENT and WORLD_DB, "set HDC_CLIENT_FILES to an OfflineDAoC 0.34 classic "
+                     "client folder and HDC_TEST_WORLD to a clean classic world database")
+class BuildSplashTests(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        cls.tmp = tempfile.TemporaryDirectory()
+        cls.built = os.path.join(cls.tmp.name, "splash.mpk")
+        write_mpk(cls.built, "splash.mpk", [(name, BLACK_TGA) for name in NAMES])
+        cls.without = build.build_patchset(CLIENT, WORLD_DB, SERVER_SRC)
+
+    @classmethod
+    def tearDownClass(cls):
+        cls.tmp.cleanup()
+
+    def test_the_splash_entry_comes_last(self):
+        patchset = build.build_patchset(CLIENT, WORLD_DB, SERVER_SRC, self.built)
+        self.assertEqual(patchset["files"][:-1], self.without["files"])
+        self.assertEqual(patchset["files"][-1], splash_entry.splash_entry(CLIENT, self.built))
+
+    def test_cli_flag(self):
+        out = os.path.join(self.tmp.name, "classic-creation.json")
+        subprocess.run([sys.executable, os.path.join(PATCHES, "build.py"), "--client", CLIENT,
+                        "--world-db", WORLD_DB, "--server-src", SERVER_SRC,
+                        "--splash-mpk", self.built, "--out", out], check=True, capture_output=True)
+        with open(out, encoding="ascii") as f:
+            written = json.load(f)
+        paths = [entry["path"] for entry in self.without["files"]]
+        self.assertEqual([entry["path"] for entry in written["files"]],
+                         paths + ["pregame/splash.mpk"])
+
+    def test_a_bad_splash_mpk_is_refused(self):
+        bad = os.path.join(self.tmp.name, "bad.mpk")
+        write_mpk(bad, "splash.mpk", [(name, BLACK_TGA) for name in NAMES[:7]])
+        with self.assertRaises(splash_entry.SplashError):
+            build.build_patchset(CLIENT, WORLD_DB, SERVER_SRC, bad)

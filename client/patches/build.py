@@ -8,7 +8,7 @@ Needs nasm (apt install nasm) for the cave, src/baseclass.asm.
 
   python3 client/patches/build.py --client ~/Games/HearthDAoC/client \\
       --world-db clean-classic-0.34.db --server-src source/server \\
-      --out client/patches/classic-creation.json
+      --splash-mpk client/patches/splash.mpk --out client/patches/classic-creation.json
 """
 import argparse
 import hashlib
@@ -23,6 +23,7 @@ import tempfile
 
 import classdata
 import pe
+from splash_entry import splash_entry
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 FORMAT = 1
@@ -193,10 +194,9 @@ def file_entry(path: str, before: bytes, after: bytes, ops: list[dict]) -> dict:
 def build_patchset(client_dir: str, world_db: str, server_src: str, splash_mpk: str | None = None) -> dict:
     """The classic-creation patch set for the client files in `client_dir`. The base classes come
     from `server_src` (the folder holding GameServer/, in this repo source/server) and the world's
-    disabled_classes in `world_db`. `splash_mpk` is the slot for the splash entry; this version
-    only accepts None."""
-    if splash_mpk is not None:
-        raise ValueError("this build.py cannot add the splash entry yet")
+    disabled_classes in `world_db`.
+    `splash_mpk`, when given, is the built splash.mpk (branding/build_splash_mpk.py): it is
+    checked, and pregame/splash.mpk gets a "file" entry, last, that installs it."""
     original = read_client_file(client_dir, GAME_DLL)
     check_game_dll(original)
     classes = classdata.base_classes(server_src, classdata.read_disabled_classes(world_db))
@@ -207,6 +207,8 @@ def build_patchset(client_dir: str, world_db: str, server_src: str, splash_mpk: 
         data = read_client_file(client_dir, path)
         ops = [{"op": "text-replace", "find": find, "replace": replace} for find, replace in edits]
         files.append(file_entry(path, data, edit_text(data, edits), ops))
+    if splash_mpk is not None:
+        files.append(splash_entry(client_dir, splash_mpk))
     return {"format": FORMAT, "name": NAME, "client": CLIENT, "files": files}
 
 
@@ -219,10 +221,12 @@ def main(argv=None) -> int:
     parser.add_argument("--client", required=True, help="OfflineDAoC 0.34 classic client folder (read only)")
     parser.add_argument("--world-db", required=True, help="the classic edition's clean world database (read only)")
     parser.add_argument("--server-src", required=True, help="the server sources holding GameServer/, source/server")
+    parser.add_argument("--splash-mpk", help="the built splash.mpk (branding/build_splash_mpk.py); "
+                        "adds the pregame/splash.mpk entry")
     parser.add_argument("--out", required=True, help="the patch set to write")
     args = parser.parse_args(argv)
     try:
-        patchset = build_patchset(args.client, args.world_db, args.server_src)
+        patchset = build_patchset(args.client, args.world_db, args.server_src, args.splash_mpk)
     except (OSError, ValueError, sqlite3.Error) as e:
         print(f"build.py: {e}", file=sys.stderr)
         return 1

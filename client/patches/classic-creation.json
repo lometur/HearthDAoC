@@ -73,6 +73,17 @@
      "replace": ""
     }
    ]
+  },
+  {
+   "path": "pregame/splash.mpk",
+   "before": "f24460d2b064b86527b1800940d6d80c26b67ca3531d91b87c3b7a4d38455a9e",
+   "after": "source",
+   "ops": [
+    {
+     "op": "file",
+     "source": "splash.mpk"
+    }
+   ]
   }
  ]
 }
