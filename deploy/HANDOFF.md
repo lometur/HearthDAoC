@@ -21,8 +21,10 @@ If less than 10 GB of RAM is available, lower `HEARTHDAOC_MEM_LIMIT` in step 2 a
 
 ```bash
 mkdir -p ~/hearthdaoc && cd ~/hearthdaoc
-curl -fLO https://github.com/lometur/HearthDAoC/releases/download/v0.34b-hearth.5/hearthdaoc-deploy-v0.34b-hearth.5.tar.gz
-tar xzf hearthdaoc-deploy-v0.34b-hearth.5.tar.gz
+tag="$(curl -fsSI https://github.com/lometur/HearthDAoC/releases/latest | tr -d '\r' | sed -n 's|^[Ll]ocation: .*/tag/||p')"
+echo "Latest release: $tag"   # report it to the owner; empty means GitHub was not reachable
+curl -fLO "https://github.com/lometur/HearthDAoC/releases/download/$tag/hearthdaoc-deploy-$tag.tar.gz"
+tar xzf "hearthdaoc-deploy-$tag.tar.gz"
 cp .env.example .env
 ```
 Edit `.env`: set `TZ` to the owner's timezone; keep `HEARTHDAOC_EDITION=classic` unless the owner

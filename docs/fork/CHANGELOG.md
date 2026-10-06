@@ -1,6 +1,11 @@
 # HearthDAoC changelog
 
-Releases of the fork (newest first). Upstream's own changes are in CHANGELOG.md.
+Releases of the fork up to v0.34b-hearth.6 (newest first). Later releases list their changes on the
+[releases page](https://github.com/lometur/HearthDAoC/releases). Upstream's own changes are in CHANGELOG.md.
+
+## v0.34b-hearth.6 (2026-10-06)
+
+- fix(deploy): server waits for database locks instead of crashing
 
 ## v0.34b-hearth.5 (2026-10-06)
 

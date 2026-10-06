@@ -32,81 +32,35 @@ class NextTagTests(unittest.TestCase):
 class ReleaseWorthyTests(unittest.TestCase):
     def test_code_and_deploy_files_need_a_release(self):
         for path in ("source/server/GameServer/x.cs", "deploy/hdc", "deploy/bin/backup.py", "deploy/Dockerfile",
-                     "deploy/upstream.lock", "deploy/.env.example", "client/linux/setup.sh", "tools/linux/odaoc_fetch.py"):
+                     "deploy/upstream.lock", "deploy/.env.example", "deploy/HANDOFF.md", "client/README.md",
+                     "client/linux/setup.sh", "tools/linux/odaoc_fetch.py", ".dockerignore",
+                     "source/tools/OfflineDaoc.Launcher/BotCharacterGenerator.cs",
+                     "source/tools/OfflineDaoc.ProgressImport/Program.cs"):
             with self.subTest(path=path):
                 self.assertTrue(rt.release_worthy([path]))
 
-    def test_docs_and_tests_alone_do_not(self):
-        self.assertFalse(rt.release_worthy(["docs/fork/FORK.md", "README.md", "deploy/tests/test_x.py",
-                                            "client/tests/test_play.py", "tools/linux/tests/t.py",
-                                            "source/server/Tests/UnitTests/UT_X.cs", ".github/README.md"]))
+    def test_docs_tests_and_unshipped_sources_alone_do_not(self):
+        for path in ("docs/fork/FORK.md", "README.md", ".github/README.md", ".github/workflows/server-image.yml",
+                     "deploy/tests/test_x.py", "client/tests/test_play.py", "client/patches/tests/test_patchset.py",
+                     "tools/linux/tests/t.py", "source/server/Tests/UnitTests/UT_X.cs", "deploy/release_tag.py",
+                     "source/server/CLAUDE.md", "source/server/docs/reports/x.md", "source/reference/daocportal/x",
+                     "source/development-tools/OpenDAoC-Core/x.cs", "source/tools/OfflineDaoc.Launcher/MainForm.cs"):
+            with self.subTest(path=path):
+                self.assertFalse(rt.release_worthy([path]))
 
 
-class PendingTests(unittest.TestCase):
-    def test_docs_naming_an_unpublished_tag_mean_a_release_is_pending(self):
-        self.assertEqual(rt.pending_release("v0.34b-hearth.4", ["v0.34b-hearth.3"]), "v0.34b-hearth.4")
-
-    def test_published_tag_is_not_pending(self):
-        self.assertIsNone(rt.pending_release("v0.34b-hearth.3", ["v0.34b-hearth.3"]))
-
-
-class ChangelogTests(unittest.TestCase):
-    def test_entry_lists_changes_and_skips_merges(self):
-        entry = rt.changelog_entry("v0.34b-hearth.4", "2026-10-06", [
-            "fix(deploy): safer restore (#11)", "Merge pull request #56 from lometur/x", "feat: GM-only teleports",
-            "chore(release): v0.34b-hearth.4"])
-        self.assertIn("## v0.34b-hearth.4 (2026-10-06)", entry)
-        self.assertIn("- fix(deploy): safer restore (#11)", entry)
-        self.assertIn("- feat: GM-only teleports", entry)
-        self.assertNotIn("Merge pull request", entry)
-        self.assertNotIn("chore(release)", entry)
-
-    def test_only_the_bots_release_commits_are_skipped(self):
-        entry = rt.changelog_entry("v0.34b-hearth.4", "x", [
-            "chore(release): docs name the current release; CI refuses stale ones",
-            "chore(release): v0.34b-hearth.3"])
-        self.assertIn("- chore(release): docs name the current release; CI refuses stale ones", entry)
-        self.assertNotIn("chore(release): v0.34b", entry)
-
-    def test_prepend_keeps_older_entries_and_replaces_a_pending_one(self):
-        with tempfile.TemporaryDirectory() as d:
-            path = os.path.join(d, "CHANGELOG.md")
-            rt.prepend_changelog(path, "## v0.34b-hearth.4 (x)\n\n- a\n")
-            rt.prepend_changelog(path, "## v0.34b-hearth.5 (y)\n\n- b\n")
-            rt.prepend_changelog(path, "## v0.34b-hearth.5 (z)\n\n- b\n- c\n")  # release PR updated
-            text = open(path).read()
-        self.assertEqual(text.count("## v0.34b-hearth.5"), 1)
-        self.assertIn("- c", text)
-        self.assertLess(text.index("hearth.5"), text.index("hearth.4"))
-
-
-class NotesTests(unittest.TestCase):
-    def test_notes_are_the_changelog_entry_for_the_tag(self):
-        with tempfile.TemporaryDirectory() as d:
-            path = os.path.join(d, "CHANGELOG.md")
-            rt.prepend_changelog(path, "## v0.34b-hearth.4 (x)\n\n- a\n")
-            rt.prepend_changelog(path, "## v0.34b-hearth.5 (y)\n\n- b\n- c\n")
-            self.assertEqual(rt.notes(path, "v0.34b-hearth.5"), "- b\n- c")
-            self.assertEqual(rt.notes(path, "v0.34b-hearth.4"), "- a")
-            self.assertEqual(rt.notes(path, "v0.34b-hearth.9"), "")
-
-
-class GitPlanTests(unittest.TestCase):
-    """plan/prepare against a throwaway git repository."""
+class NextReleaseTests(unittest.TestCase):
+    """next_release against a throwaway git repository: the tag a main build publishes, or ''."""
 
     def setUp(self):
         import subprocess
         self.sp = subprocess
         self.tmp = tempfile.TemporaryDirectory()
         self.root = self.tmp.name
-        os.makedirs(os.path.join(self.root, "deploy"))
-        os.makedirs(os.path.join(self.root, "docs", "fork"))
         self.git("init", "-q", "-b", "main")
         self.git("config", "user.email", "t@example.com")
         self.git("config", "user.name", "t")
-        with open(os.path.join(self.root, "deploy", "upstream.lock"), "w") as f:
-            json.dump({"version": "0.34b"}, f)
-        self.docs("v0.34b-hearth.3")
+        self.lock("0.34b")
         self.commit("feat: first", "deploy/hdc")
         self.git("tag", "v0.34b-hearth.3")
 
@@ -116,11 +70,10 @@ class GitPlanTests(unittest.TestCase):
     def git(self, *args):
         return self.sp.run(["git", "-C", self.root, *args], check=True, capture_output=True, text=True).stdout
 
-    def docs(self, tag):
-        with open(os.path.join(self.root, "deploy", ".env.example"), "w") as f:
-            f.write(f"HEARTHDAOC_TAG={tag}\n")
-        with open(os.path.join(self.root, "deploy", "HANDOFF.md"), "w") as f:
-            f.write(f"curl -fLO https://example/{tag}/hearthdaoc-deploy-{tag}.tar.gz\n")
+    def lock(self, version):
+        os.makedirs(os.path.join(self.root, "deploy"), exist_ok=True)
+        with open(os.path.join(self.root, "deploy", "upstream.lock"), "w") as f:
+            json.dump({"version": version}, f)
 
     def commit(self, subject, path):
         full = os.path.join(self.root, path)
@@ -130,39 +83,60 @@ class GitPlanTests(unittest.TestCase):
         self.git("add", "-A")
         self.git("commit", "-q", "-m", subject)
 
-    def test_docs_only_merge_needs_no_release(self):
+    def test_nothing_new_since_the_last_release(self):
+        self.assertEqual(rt.next_release(self.root), "")
+
+    def test_docs_tests_and_ci_alone_make_no_release(self):
         self.commit("docs: typo", "docs/fork/FORK.md")
-        self.assertEqual(rt.plan(self.root), ("none", ""))
+        self.commit("test: more", "deploy/tests/test_x.py")
+        self.commit("ci: tweak", ".github/workflows/server-image.yml")
+        self.commit("chore: release tooling", "deploy/release_tag.py")
+        self.assertEqual(rt.next_release(self.root), "")
 
-    def test_code_merge_asks_for_the_next_release(self):
+    def test_shipped_change_gets_the_next_number(self):
         self.commit("fix(deploy): something", "deploy/bin/backup.py")
-        self.assertEqual(rt.plan(self.root), ("release-pr", "v0.34b-hearth.4"))
+        self.assertEqual(rt.next_release(self.root), "v0.34b-hearth.4")
 
-    def test_merged_release_pr_is_pending_until_tagged(self):
+    def test_released_once_tagged(self):
         self.commit("fix: a", "deploy/hdc")
-        rt.prepare(self.root, "v0.34b-hearth.4")
-        self.git("add", "-A")
-        self.git("commit", "-q", "-m", "chore(release): v0.34b-hearth.4")
-        self.assertEqual(rt.plan(self.root), ("pending", "v0.34b-hearth.4"))
         self.git("tag", "v0.34b-hearth.4")
-        self.assertEqual(rt.plan(self.root), ("none", ""))
+        self.assertEqual(rt.next_release(self.root), "")
 
-    def test_prepare_bumps_docs_and_writes_the_changelog(self):
-        self.commit("fix(deploy): restore checks the edition", "deploy/bin/world_admin.py")
-        self.commit("docs: notes", "docs/fork/FORK.md")
-        rt.prepare(self.root, "v0.34b-hearth.4")
-        self.assertEqual(rt.check(self.root, "v0.34b-hearth.4"), [])
-        text = open(os.path.join(self.root, rt.CHANGELOG)).read()
-        self.assertIn("## v0.34b-hearth.4", text)
-        self.assertIn("- fix(deploy): restore checks the edition", text)
-        self.assertNotIn("feat: first", text)  # before the last release
+    def test_moving_a_shipped_file_into_tests_is_a_change(self):
+        self.commit("feat: helper", "deploy/bin/helper.py")
+        self.git("tag", "v0.34b-hearth.4")
+        os.makedirs(os.path.join(self.root, "deploy", "tests"))
+        self.git("mv", "deploy/bin/helper.py", "deploy/tests/helper.py")
+        self.git("commit", "-q", "-m", "test: move the helper")
+        self.assertEqual(rt.next_release(self.root), "v0.34b-hearth.5")
+
+    def test_an_older_commit_than_a_release_publishes_nothing(self):
+        # A re-run of an old run on main must not publish older code as the newest release.
+        self.commit("fix: a", "deploy/hdc")
+        old = self.git("rev-parse", "HEAD").strip()
+        self.commit("fix: b", "deploy/hdc")
+        self.git("tag", "v0.34b-hearth.4")
+        self.git("checkout", "-q", old)
+        self.assertEqual(rt.next_release(self.root), "")
 
     def test_new_upstream_version_starts_at_one(self):
-        with open(os.path.join(self.root, "deploy", "upstream.lock"), "w") as f:
-            json.dump({"version": "0.35b"}, f)
+        self.lock("0.35b")
         self.git("add", "-A")
         self.git("commit", "-q", "-m", "chore: sync upstream 0.35b")
-        self.assertEqual(rt.plan(self.root), ("release-pr", "v0.35b-hearth.1"))
+        self.assertEqual(rt.next_release(self.root), "v0.35b-hearth.1")
+
+    def test_first_release_without_any_tag(self):
+        self.git("tag", "-d", "v0.34b-hearth.3")
+        self.assertEqual(rt.next_release(self.root), "v0.34b-hearth.1")
+
+    def test_cli_prints_the_tag_or_an_empty_line(self):
+        run = lambda: self.sp.run([sys.executable, os.path.join(HERE, "..", "release_tag.py"), "--root", self.root, "next"],  # noqa: E731
+                                  capture_output=True, text=True)
+        r = run()
+        self.assertEqual((r.returncode, r.stdout), (0, "\n"))
+        self.commit("fix: b", "client/linux/setup.sh")
+        r = run()
+        self.assertEqual((r.returncode, r.stdout), (0, "v0.34b-hearth.4\n"))
 
 
 if __name__ == "__main__":

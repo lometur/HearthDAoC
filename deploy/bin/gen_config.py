@@ -54,6 +54,9 @@ def render(s, data):
     ip = s["HEARTHDAOC_LISTEN_IP"]
     db = escape(os.path.join(data, "world", "opendaoc.sqlite3.db"))
     name = escape(s["HEARTHDAOC_SERVER_NAME"])
+    # BusyTimeout (ms) turns on SQLite's own busy handler. Without it System.Data.SQLite gives up a new
+    # connection after 3 quick retries, and the brief lock taken when the last pooled connection closes
+    # (e.g. after a GC) crashed start-up with "database is locked".
     return f"""<?xml version="1.0" encoding="utf-8"?>
 <!-- Generated at container start by /app/bin/gen_config.py. Change deploy/.env instead of this file. -->
 <root>
@@ -78,7 +81,7 @@ def render(s, data):
         <GMActionLoggerName>gmactions</GMActionLoggerName>
         <InvalidNamesFile>./config/invalidnames.txt</InvalidNamesFile>
         <DBType>SQLITE</DBType>
-        <DBConnectionString>Data Source={db};Version=3;Pooling=True;Journal Mode=WAL;Synchronous=Normal;Foreign Keys=True;Default Timeout=60</DBConnectionString>
+        <DBConnectionString>Data Source={db};Version=3;Pooling=True;Journal Mode=WAL;Synchronous=Normal;Foreign Keys=True;BusyTimeout=10000;Default Timeout=60</DBConnectionString>
         <DBAutosave>True</DBAutosave>
         <DBAutosaveInterval>{s['HEARTHDAOC_AUTOSAVE_MINUTES']}</DBAutosaveInterval>
         <MetricsEnabled>false</MetricsEnabled>
