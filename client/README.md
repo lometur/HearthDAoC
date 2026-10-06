@@ -116,6 +116,10 @@ Then the game starts and connects to the server.
   `runtime\client-opendaoc\app` again, replacing the old files. Your `hearthdaoc.cfg` stays. The next
   start of `connect-hearthdaoc.bat` applies the new release's patches.
 
+If you went back to the standard creation screen (below), updating turns classic creation on again:
+on Linux, repeat the two commands below after `setup.sh`; on Windows, copy only
+`connect-hearthdaoc.bat` from the new `windows` folder.
+
 ## Going back to the standard creation screen
 
 Put the original files back, then remove the patches so that the game stops applying them at each
@@ -125,9 +129,11 @@ launch.
   `python3 ~/Games/HearthDAoC/patches/apply_patches.py --client ~/Games/HearthDAoC/client --restore`
   and then `rm -r ~/Games/HearthDAoC/patches`. To get classic creation back, run `setup.sh` again.
 - **Windows:** open a Command Prompt in `runtime\client-opendaoc\app` (in File Explorer, type `cmd`
-  in that folder's address bar and press Enter), run `patch-client.bat -Restore`, and then delete
-  `patch-client.ps1` and the `patches` folder from that folder. To get classic creation back, copy
-  them from the bundle's `windows` folder again.
+  in that folder's address bar and press Enter) and run `patch-client.bat -Restore`. If your
+  OfflineDAoC is under `C:\Program Files`, open the Command Prompt as administrator instead (Start,
+  type `cmd`, choose **Run as administrator**, then `cd /d "<your app folder>"`). Only when it printed
+  `Restored:` for each file, delete `patch-client.ps1` and the `patches` folder from that folder. To
+  get classic creation back, copy them from the bundle's `windows` folder again.
 
 The restore puts an original back only over the patched file. If a file has changed since it was
 patched (for example a newer client was installed), it says so and restores nothing.
@@ -144,7 +150,8 @@ client, keeps the standard creation screen and plays normally.
 Windows doesn't let you change files in your OfflineDAoC folder, for example because it is under
 `C:\Program Files`. Right-click `patch-client.bat` and choose **Run as administrator**, once. Later
 starts only check the patched files, which needs no administrator. If the warning comes back after
-something put the original files back, do it again.
+something put the original files back, do it again. Simpler in the long run: install OfflineDAoC in a
+folder you own, such as `C:\Games\OfflineDAoC`, where nothing needs administrator.
 
 **Linux: a warning that the client patches could not be applied.** Run `~/Games/HearthDAoC/play.sh`
 in a terminal to see the message. Running `setup.sh` again from the bundle installs the patches

@@ -30,6 +30,7 @@ rem screen. Any other failure warns, then the game starts anyway. cmd /d /c runs
 rem batch file named powershell (the tests' stand-in) returns here too, and keeps a ^ in the
 rem folder name as it is, which call would double.
 if not exist "%~dp0patch-client.ps1" goto connect
+if not exist "%~dp0patches\classic-creation.json" goto connect
 if defined DRYRUN echo powershell -NoProfile -ExecutionPolicy Bypass -File "%~dp0patch-client.ps1"
 cmd /d /c powershell -NoProfile -ExecutionPolicy Bypass -File "%~dp0patch-client.ps1"
 set "RC=%ERRORLEVEL%"

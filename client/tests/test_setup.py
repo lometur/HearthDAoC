@@ -257,7 +257,7 @@ class BundlePatchTests(unittest.TestCase):
         shutil.rmtree(self.patches)
         dest, r = self.setup_sh()
         self.assertEqual(r.returncode, 1)
-        self.assertIn("Missing patches/apply_patches.py next to setup.sh; download the full client bundle.", r.stderr)
+        self.assertEqual(r.stderr.count("Missing patches/apply_patches.py next to setup.sh; download the full client bundle."), 1)
         self.assertFalse(os.path.exists(dest))
 
 

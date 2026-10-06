@@ -41,7 +41,8 @@ FETCH="$(find_file odaoc_fetch.py tools/linux/odaoc_fetch.py)"
 TEMPLATE="$(find_file play.sh.in client/linux/play.sh.in)"
 # The client patches (client/patches): installed in $DEST/patches, where play.sh applies them at every launch.
 PATCH_FILES=(apply_patches.py patchset.py classic-creation.json splash.mpk)
-PATCH_SRC="$(dirname "$(find_file patches/apply_patches.py client/patches/apply_patches.py)")"
+PATCHER="$(find_file patches/apply_patches.py client/patches/apply_patches.py)"  # its own line: set -e sees a failure
+PATCH_SRC="$(dirname "$PATCHER")"
 for f in "${PATCH_FILES[@]}"; do
     [[ -f "$PATCH_SRC/$f" ]] || { echo "Missing patches/$f next to setup.sh; download the full client bundle." >&2; exit 1; }
 done

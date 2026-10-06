@@ -33,7 +33,7 @@ echo "ok - passwords with & | < > ^ ! ) survive saving, loading and the command 
 save_settings() { printf '"SERVER=192.168.1.64:10301"\r\n"ACCOUNT=Tester1"\r\n"PASSWORD=pw1"\r\n' > "$T/app/hearthdaoc.cfg"; }
 setup_patch() {
     setup; save_settings
-    : > "$T/app/patch-client.ps1"
+    : > "$T/app/patch-client.ps1"; mkdir -p "$T/app/patches"; : > "$T/app/patches/classic-creation.json"
     printf '@echo off\r\necho stand-in powershell %%*\r\nexit /b %%FAKE_PS_EXIT%%\r\n' > "$T/app/powershell.cmd"
 }
 run_bat() {  # run_bat <stand-in exit code> [folder]: the .bat's output; a key for its pause comes on stdin
@@ -78,4 +78,11 @@ rm "$T/app/patch-client.ps1"
 out="$(run_bat 1)"
 [[ -n "$(line_of "$CONNECT_LINE" "$out")" ]] || fail "without patch-client.ps1: no connect line: got: $out"
 ! grep -qi 'powershell' <<<"$out" || fail "without patch-client.ps1: a patch step ran: got: $out"
-echo "ok - without patch-client.ps1 there is no patch step"
+
+# Without the patch set (a player who deleted the patches folder to opt out), there is no patch step either.
+setup_patch
+rm -r "$T/app/patches"
+out="$(run_bat 1)"
+[[ -n "$(line_of "$CONNECT_LINE" "$out")" ]] || fail "without the patches folder: no connect line: got: $out"
+! grep -qi 'powershell' <<<"$out" || fail "without the patches folder: a patch step ran: got: $out"
+echo "ok - without patch-client.ps1, or without the patches folder, there is no patch step"
