@@ -41,7 +41,10 @@ jobs:
       - name: Server unit tests for the fork's server changes
         env:
           DOTNET_SYSTEM_GLOBALIZATION_INVARIANT: "0"
-        run: dotnet test source/server/Tests/Tests.csproj --nologo --filter "FullyQualifiedName~UT_CommandPrivLevelOverrides"
+        run: |
+          # The server build copies config/serverconfig.xml; use the same loopback placeholder as the image build.
+          cp deploy/serverconfig.build.xml source/server/CoreServer/config/serverconfig.xml
+          dotnet test source/server/Tests/Tests.csproj --nologo --filter "FullyQualifiedName~UT_CommandPrivLevelOverrides"
 
       - name: CLI integration tests
         env:
