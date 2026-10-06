@@ -24,6 +24,8 @@ python3 "$BIN/gen_config.py" --data "$DATA" --out "$SRV/config/serverconfig.xml"
 python3 "$BIN/region_ports.py" --db "$DATA/world/opendaoc.sqlite3.db" --port "${HEARTHDAOC_UDP_PORT:-10401}"
 # Single-player shortcuts that need GM rights on a shared server (command_plvl_overrides).
 python3 "$BIN/server_properties.py" --db "$DATA/world/opendaoc.sqlite3.db" --gm-only-commands "${HEARTHDAOC_GM_ONLY_COMMANDS-/tele;/tc}"
+# Fixes to upstream's classic world data (Disciple enabled, Saracen Disciple start); see world_fixes.py.
+python3 "$BIN/world_fixes.py" --db "$DATA/world/opendaoc.sqlite3.db"
 
 mkdir -p "$DATA/logs" "$DATA/state" "$DATA/backups" "$DATA/navmesh"
 link() {  # link <path in /app/server> <target in /data>
