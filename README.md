@@ -1,3 +1,8 @@
+> [!IMPORTANT]
+> **This is HearthDAoC (`lometur/HearthDAoC`), an unofficial fork of [shadowofze/OfflineDAoC](https://github.com/shadowofze/OfflineDAoC).**
+> It is **not** the original OfflineDAoC project. For the official game, releases and support, go to
+> [shadowofze/OfflineDAoC](https://github.com/shadowofze/OfflineDAoC). Fork details: [docs/fork/FORK.md](docs/fork/FORK.md).
+
 # Offline DAoC — single-player Dark Age of Camelot with bots
 
 Offline DAoC is a local, single-player Dark Age of Camelot (Classic + Shrouded Isles, 1.65 rules)

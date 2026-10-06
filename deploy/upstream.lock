@@ -1,0 +1,29 @@
+{
+  "upstream_repo": "shadowofze/OfflineDAoC",
+  "version": "0.34b",
+  "tag": "v0.34b",
+  "commit": "169c9b79066d8818f3ddb0ba8b49551801a3319e",
+  "root_folder": "OfflineDAoC-v0.34b/",
+  "parts": [
+    {"url": "https://github.com/shadowofze/OfflineDAoC/releases/download/v0.34b/OfflineDAoC-v0.34b.zip.001", "size": 1900000000, "sha256": "5d1b8321ac7be484814ec28cea0f2d93c5658bf3dbbfa19e013e15fba9174f31"},
+    {"url": "https://github.com/shadowofze/OfflineDAoC/releases/download/v0.34b/OfflineDAoC-v0.34b.zip.002", "size": 1900000000, "sha256": "449946e57d41080f8745fbf6a60d2575d89cfd9ee22116871ce00d8d703dffc5"},
+    {"url": "https://github.com/shadowofze/OfflineDAoC/releases/download/v0.34b/OfflineDAoC-v0.34b.zip.003", "size": 1267511073, "sha256": "71429d76e3c19b45d60f2f87a81228b87aeec5fa04f483f6d1e515b7e8db1698"}
+  ],
+  "archive_sha256": "2589196f2d6d7207f38389d7b4f5591bd61e2d9acf5f9662a02e54f17f211a7a",
+  "manifest_path": "PACKAGE MANIFEST.sha256",
+  "manifest_sha256": "af2b2efa21af82a2625b72aacd45edbf9cdf4c591cfdb11901c38650e1f01611",
+  "client_prefix": "runtime/client-opendaoc/app/",
+  "navmesh_prefix": "runtime/server/navmesh/",
+  "config_prefix": "runtime/server/config/",
+  "config_files": ["logconfig.xml", "invalidnames.txt", "MailConfig.xml"],
+  "editions": {
+    "b": {
+      "world_db": "runtime/data/opendaoc.sqlite3.db",
+      "game_dll": "runtime/client-opendaoc/app/game.dll"
+    },
+    "classic": {
+      "world_db": "editions/0.34-no-custom-class/runtime/data/opendaoc.sqlite3.db",
+      "game_dll": "editions/0.34-no-custom-class/runtime/client-opendaoc/app/game.dll"
+    }
+  }
+}

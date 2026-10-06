@@ -1,0 +1,17 @@
+.git
+source/**/bin
+source/**/obj
+tools/**/bin
+tools/**/obj
+source/server/Release
+source/server/Debug
+source/development-tools
+source/reference
+older-versions
+package-files
+docs
+client
+deploy/tests
+tools/linux/tests
+**/__pycache__
+**/*.pyc

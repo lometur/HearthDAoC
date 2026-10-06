@@ -1,0 +1,16 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Build-time placeholder only (the build requires a serverconfig.xml to exist).
+     The container generates the real file at start with deploy/bin/gen_config.py. -->
+<root>
+    <Server>
+        <Port>10301</Port>
+        <IP>127.0.0.1</IP>
+        <RegionIP>127.0.0.1</RegionIP>
+        <RegionPort>10401</RegionPort>
+        <UdpIP>127.0.0.1</UdpIP>
+        <UdpPort>10401</UdpPort>
+        <EnableUPnP>False</EnableUPnP>
+        <DetectRegionIP>False</DetectRegionIP>
+        <DBType>SQLITE</DBType>
+    </Server>
+</root>

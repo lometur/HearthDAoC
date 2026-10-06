@@ -1,0 +1,39 @@
+# HearthDAoC server (unofficial fork of shadowofze/OfflineDAoC). Manage with ./hdc; settings live in .env.
+name: hearthdaoc
+
+services:
+  server:
+    image: ${HEARTHDAOC_IMAGE:-ghcr.io/lometur/hearthdaoc}:${HEARTHDAOC_TAG:?set HEARTHDAOC_TAG in .env}
+    container_name: ${HEARTHDAOC_CONTAINER:-hearthdaoc-server}
+    # Host networking so the server tells clients its real address for the UDP channel
+    # (inside a bridge network it would be an unreachable 172.x address). Own ports, see .env.
+    network_mode: host
+    init: true
+    user: "${HEARTHDAOC_UID:-1000}:${HEARTHDAOC_GID:-1000}"
+    environment:
+      HEARTHDAOC_EDITION: ${HEARTHDAOC_EDITION:-classic}
+      HEARTHDAOC_LISTEN_IP: ${HEARTHDAOC_LISTEN_IP:-0.0.0.0}
+      HEARTHDAOC_PORT: ${HEARTHDAOC_PORT:-10301}
+      HEARTHDAOC_UDP_PORT: ${HEARTHDAOC_UDP_PORT:-10401}
+      HEARTHDAOC_AUTO_ACCOUNTS: ${HEARTHDAOC_AUTO_ACCOUNTS:-True}
+      HEARTHDAOC_SERVER_NAME: ${HEARTHDAOC_SERVER_NAME:-HearthDAoC}
+      HEARTHDAOC_BACKUP_KEEP: ${HEARTHDAOC_BACKUP_KEEP:-7}
+      HEARTHDAOC_SKIP_NAVMESH: ${HEARTHDAOC_SKIP_NAVMESH:-}
+      TZ: ${TZ:-UTC}
+    volumes:
+      - data:/data
+    restart: unless-stopped
+    logging:  # the server logs a lot; keep Docker's copy bounded on a shared host (full logs are in the volume)
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "5"
+    stop_grace_period: 120s
+    mem_limit: ${HEARTHDAOC_MEM_LIMIT:-10g}
+    cpus: ${HEARTHDAOC_CPUS:-4}
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+
+volumes:
+  data:
+    name: ${HEARTHDAOC_VOLUME:-hearthdaoc-data}
