@@ -32,12 +32,23 @@ listed here, so upstream syncs can account for it:
 The patch set `client/patches/classic-creation.json` gives the OfflineDAoC 0.34 classic client a classic
 character creation screen and the HearthDAoC loading splash (sub-project 2, see
 [its spec](specs/2026-10-06-classic-character-creation-design.md)). It holds only SHA-256 hashes, byte and text edits
-and our own code, never an EA file. On Linux `setup.sh` applies it (`client/patches/apply_patches.py`); on
-Windows players run `patch-client.bat` (`client/windows/patch-client.ps1`, same rules). Both refuse any other
-client file, such as the b edition's `game.dll`, and then change nothing. Both keep each original as
-`<file>.hearthdaoc-orig` and put it back with `--restore` / `-Restore`, but only over the patched file: when a
-file has changed since it was patched (for example a newer upstream client), the restore says so and changes
-nothing.
+and our own code, never an EA file. The launchers apply it at every launch, just before the game starts, so
+files that something put back (a repair, OfflineDAoC's own launcher) are patched again:
+
+- Linux: `setup.sh` installs the bundle's `patches/` (`apply_patches.py`, `patchset.py`, `classic-creation.json`,
+  `splash.mpk`) as `<dest>/patches`, a fresh copy on every run, and applies it from there. `play.sh` runs
+  `<dest>/patches/apply_patches.py` before every launch.
+- Windows: `connect-hearthdaoc.bat` runs `patch-client.ps1` (`client/windows/`, same rules as the Linux
+  applier) from its own folder before every start of `connect.exe`. `patch-client.bat` runs it by hand, for
+  example `-Restore`, or once as administrator when the install is under Program Files.
+
+An already patched client is only read. Exit 3 (a client file the patch set doesn't know) starts the game with
+the standard creation screen; any other failure warns and still starts it. Without the installed patches
+(`<dest>/patches`, or `patch-client.ps1` next to the .bat) the launchers don't patch: that is how a player opts
+out, after a restore. Both appliers refuse any other client file, such as the b edition's `game.dll`, and then
+change nothing. Both keep each original as `<file>.hearthdaoc-orig` and put it back with `--restore` /
+`-Restore`, but only over the patched file: when a file has changed since it was patched (for example a newer
+upstream client), the restore says so and changes nothing.
 
 | What is patched | Where | Why |
 |---|---|---|
@@ -102,12 +113,20 @@ The archive paths are the lock's `editions.classic` and `client_prefix` (the wor
 The tests skip the real-file cases without `HDC_CLIENT_FILES` and `HDC_TEST_WORLD`, the MPK cases without
 `HDC_MPK_TOOL` (the `OfflineDaoc.Mpk.dll` built for the splash above) and the PowerShell cases without `pwsh`
 (or `HDC_PWSH`). CI sets all of them; `ClientPatchWorkflowTests` in `deploy/tests/test_workflows.py` (needs
-ruby) keep the workflow that way. `setup.sh` run from a checkout applies `client/patches/` with the committed
-`splash.mpk`.
+ruby) keep the workflow that way. `setup.sh` run from a checkout installs `client/patches/` (with the committed
+`splash.mpk`) as `<dest>/patches` and applies it from there.
 
 If the pinned release's classic `game.dll` changes, `build.py` refuses it until the patch sites in `build.py`,
 `classdata.py` and `src/baseclass.asm` are found again in the new file. Until then CI fails and players with
 the new client keep the standard creation screen.
+
+**Changing the `game.dll` patch later.** Players' clients stay patched by the release they had, and the
+launchers apply the new release's patch set at the next launch. A `game.dll` patched by an older patch set is
+neither "before" nor "after" for the new one, so both appliers would refuse it (exit 3, nothing changed: the
+player keeps the old patch and is told the client isn't supported), and a restore would refuse it as changed
+since it was patched. The same holds for any patched file whose "after" changes. Such a change must also teach
+both appliers to upgrade: recognise the older patched file, put its verified backup back, then apply the new
+set.
 
 ## Syncing with upstream
 

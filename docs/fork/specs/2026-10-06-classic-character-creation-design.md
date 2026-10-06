@@ -130,9 +130,10 @@ Everything sub-project 2 adds to the client lives in `client/patches/`.
 4. **`--restore` / `-Restore`:** put back every `.hearthdaoc-orig`, after verifying each backup's hash.
 5. **Scope:** only paths inside the client folder, from a fixed list. Nothing outside it is touched.
 
-**Delivery.**
-- **Linux:** `setup.sh` runs `apply_patches.py` after fetching and verifying the client files. Re-running `setup.sh`, or `apply_patches.py --client ~/Games/HearthDAoC/client`, patches an existing client.
-- **Windows:** the client bundle's `windows/` folder carries `patch-client.bat` and `patch-client.ps1`. The player puts them next to `connect-hearthdaoc.bat` and runs them once, and again after anything restores the original files.
+**Delivery.** The launchers patch at every launch (owner, 2026-10-06), so files that anything put back are patched again.
+- **Linux:** `setup.sh` installs the bundle's `patches/` (`apply_patches.py`, `patchset.py`, `classic-creation.json`, `splash.mpk`) as `~/Games/HearthDAoC/patches`, a fresh copy on every run, and applies it after fetching and verifying the client files. `play.sh` runs that `apply_patches.py` just before every launch. Exit 0 launches; exit 3 launches with the stock screen and one short note; any other exit warns (stderr, and a dialog without a terminal) and still launches. Without the patches folder there is no patching.
+- **Windows:** the client bundle's `windows/` folder carries `connect-hearthdaoc.bat`, `patch-client.bat`, `patch-client.ps1` and `patches/`. The player puts them next to `connect.exe`. `connect-hearthdaoc.bat` runs `patch-client.ps1` from its own folder just before starting `connect.exe`, when it is there. Exit 0 or 3 goes on; any other exit prints a warning with the fix (run `patch-client.bat`, as administrator once for a Program Files install), pauses and still starts the game. `patch-client.bat` runs the applier by hand, for example `-Restore`.
+- **Opting out:** restore (`apply_patches.py --restore`, `patch-client.bat -Restore`), then delete the patches folder (Windows: `patch-client.ps1` and `patches`).
 - **Bundles:** the client bundle adds `patches/` (the patch set, `apply_patches.py`, `splash.mpk`). `deploy/build_bundles.sh` copies the committed `splash.mpk` and builds nothing when its SHA-256 isn't the one the patch set pins. It doesn't build `splash.mpk`: a rebuilt MPK carries new timestamps, so its hash cannot be pinned. CI's release job needs no .NET; the MPK tool is used only when the splash changes, before the commit.
 
 ## 5. Testing
@@ -177,7 +178,7 @@ Everything sub-project 2 adds to the client lives in `client/patches/`.
 | P3 or the Optimize removal misbehaves | Both are optional: drop P3, or move Optimize off-screen. |
 | Upstream ships a new client | Its hash won't match, so players get the stock screen. Regenerating the patch set joins the upstream-sync checklist (#50). |
 | The owner changes `disabled_classes` later | The client list is generated for the shipped world. A newly disabled base class would be refused by the server at creation. Regenerating the patch set fixes it; `FORK.md` notes this. |
-| On Windows, OfflineDAoC's launcher restores files | Re-run `patch-client.bat` (documented in `client/README.md`). |
+| On Windows, OfflineDAoC's launcher restores files | `connect-hearthdaoc.bat` patches them again at the next start. |
 
 ## 7. Documentation and bookkeeping
 
