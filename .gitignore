@@ -36,3 +36,5 @@
 # separate optional asset; they are not part of the editable source checkout.
 /tools/sluaghbinder/payload-v0.31b/
 /tools/sluaghbinder/patcher/
+# Built by client/patches/branding/build_splash_mpk.py: bundles carry it, the repo does not.
+/client/patches/splash.mpk
