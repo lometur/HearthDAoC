@@ -39,6 +39,7 @@ find_file() {  # find_file <bundle name> <repo path>
 FETCH="$(find_file odaoc_fetch.py tools/linux/odaoc_fetch.py)"
 [[ -n "$LOCK" ]] || LOCK="$(find_file upstream.lock deploy/upstream.lock)"
 TEMPLATE="$(find_file play.sh.in client/linux/play.sh.in)"
+PATCHER="$(find_file patches/apply_patches.py client/patches/apply_patches.py)"
 for t in python3 rsync; do command -v "$t" >/dev/null || { echo "Please install $t first." >&2; exit 1; }; done
 
 mkdir -p "$DEST"
@@ -46,6 +47,15 @@ echo "Copying your base client (read only) to $DEST/client ..."
 rsync -a --delete --exclude='*.dxvk-cache' --exclude='/logs/' --exclude='/login.log' "$BASE/" "$DEST/client/"
 echo "Fetching the OfflineDAoC $EDITION client files (each verified) ..."
 python3 "$FETCH" --lock "$LOCK" client --edition "$EDITION" --client-dir "$DEST/client"
+# Classic character creation and the HearthDAoC splash (client/patches). Exit 3 means the applier
+# refused a client file it doesn't know (e.g. the b edition) and changed nothing: the client works.
+echo "Applying HearthDAoC's client patches (classic character creation, loading splash) ..."
+rc=0; python3 "$PATCHER" --client "$DEST/client" || rc=$?
+if [[ $rc -eq 3 ]]; then
+    echo "Warning: the client was set up without HearthDAoC's patches (see the message above)." >&2
+elif [[ $rc -ne 0 ]]; then
+    echo "Patching the client failed (apply_patches.py exit $rc, see the message above)." >&2; exit 1
+fi
 sed -e "s|@SERVER@|$SERVER|g" -e "s|@EDITION@|$EDITION|g" "$TEMPLATE" > "$DEST/play.sh"
 chmod +x "$DEST/play.sh"
 cat <<EOF
