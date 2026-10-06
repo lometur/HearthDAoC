@@ -38,6 +38,11 @@ jobs:
           python3 -m unittest discover -s deploy/tests -t deploy -v
           python3 -m unittest discover -s client/tests -t client -v
 
+      - name: Server unit tests for the fork's server changes
+        env:
+          DOTNET_SYSTEM_GLOBALIZATION_INVARIANT: "0"
+        run: dotnet test source/server/Tests/Tests.csproj --nologo --filter "FullyQualifiedName~UT_CommandPrivLevelOverrides"
+
       - name: CLI integration tests
         env:
           HDC_TEST_WORLD: ${{ runner.temp }}/world/world/opendaoc.sqlite3.db

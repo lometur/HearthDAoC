@@ -19,8 +19,12 @@ old names (`odc`, `OFFLINEDAOC_*`, `offlinedaoc-*`) as written at the time.
 | Leveling spawns (owner's choice) | `deploy/bin/spawns.py`, `hdc spawns` | none: restores rows upstream's setup archived in `offline_classic165_removed_mobs` |
 | Design docs | `docs/fork/` | none |
 
-Server code under `source/server` is unchanged in sub-project 1. Later sub-projects list every
-server-code change in this table.
+Server code under `source/server` was unchanged in sub-project 1. Every later server-code change is
+listed here, so upstream syncs can account for it:
+
+| Change | Files | Why | Upstream |
+|---|---|---|---|
+| `command_plvl_overrides` server property (e.g. `/tele=2;/tc=2`) | `GameServer/gameutils/ScriptMgr.cs` (`CommandPrivLevel`, applied in `LoadCommands`), `GameServer/serverproperty/ServerProperties.cs`, test `Tests/UnitTests/UT_CommandPrivLevelOverrides.cs` | Makes single-player teleports GM-only on a shared server (#38); set from `HEARTHDAOC_GM_ONLY_COMMANDS` | Candidate: generic, off by default |
 
 ## Syncing with upstream
 
