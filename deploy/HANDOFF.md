@@ -84,6 +84,19 @@ editing `.env`, `./hdc up` recreates the server with them.
 Before remote players join: `./hdc auto-accounts off` and create their accounts with
 `./hdc account create <name> <password>`.
 
+**Classic battlegrounds.** At its first start, a world gets the classic battlegrounds (Abermenai 15-19,
+Thidranki 20-24, Murdaigean 25-29, Caledonia 30-35); `./hdc logs` shows each change on a line starting
+`Battlegrounds:`. This runs once per world: the row `classic-battlegrounds-v1` in the world's
+`fork_world_fixes` table records it, so later changes to the battlegrounds stay. Deleting that row makes
+it run again at the next start, and the parts whose results are still there change nothing. The `Mob`
+rows it removes (training dummies, Void Merchants, a stray Wizard) are kept in `fork_removed_mobs`; saved
+Atlas battleground daily quests (`Quest` rows) are deleted, not archived. If it fails, the start log says
+`Classic battlegrounds: not applied (...)`, the server starts with upstream's battlegrounds, and it tries
+again at the next start. `./hdc new-world` and `./hdc upgrade-world` make a world without that row, so it
+runs again there, and changes made in game to battleground keeps and guards are not carried over.
+Battleground keep guard levels follow `keep_guard_level_multiplier` (1.6), which also sets the frontier
+keeps' guards.
+
 ## Rollback
 
 `./hdc down` stops and removes the container; the world stays in the `hearthdaoc-data` volume.

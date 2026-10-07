@@ -18,6 +18,7 @@ old names (`odc`, `OFFLINEDAOC_*`, `offlinedaoc-*`) as written at the time.
 | Player setup | `client/` | none |
 | Classic character creation and splash (client patch set) | `client/patches/`, `client/windows/patch-client.*` | none: patches each player's own client files (see Client patches) |
 | Leveling spawns (owner's choice) | `deploy/bin/spawns.py`, `hdc spawns` | none: restores rows upstream's setup archived in `offline_classic165_removed_mobs` |
+| Classic battlegrounds 15-35, world data (once per world) | `deploy/bin/battlegrounds.py` (run by `deploy/bin/world_fixes.py`) | none |
 | Design docs | `docs/fork/` | none |
 
 Server code under `source/server` was unchanged in sub-project 1. Every later server-code change is
