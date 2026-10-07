@@ -76,8 +76,10 @@ Then ask the owner to connect from their PC (`~/Games/HearthDAoC/play.sh` after 
 new-world, upgrade-world, auto-accounts, spawns. Backups run daily into the volume (keep 7). The copies
 taken before add-bots keep their newest 3; the copies taken before restore and upgrade are kept until
 you remove them (`./hdc backups` lists them; they are in /data/backups).
-Settings live in `.env` (see `.env.example`), e.g. `HEARTHDAOC_AUTOSAVE_MINUTES` (default 5) and
-`HEARTHDAOC_GM_ONLY_COMMANDS` (default `/tele;/tc`: single-player teleports need GM rights); after
+Settings live in `.env` (see `.env.example`), e.g. `HEARTHDAOC_AUTOSAVE_MINUTES` (default 5),
+`HEARTHDAOC_GM_ONLY_COMMANDS` (default `/tele;/tc`: single-player teleports need GM rights) and
+`HEARTHDAOC_SI_START_CHOICE` (default `on`: a new level-1 character of a classic race is asked once
+whether to begin in its realm's Shrouded Isles town; `off` turns the question off); after
 editing `.env`, `./hdc up` recreates the server with them.
 Before remote players join: `./hdc auto-accounts off` and create their accounts with
 `./hdc account create <name> <password>`.
@@ -95,9 +97,10 @@ cd ~/hearthdaoc
 ./hdc update           # back up, install the latest release, keep .env values, restart
 ```
 `./hdc update <tag>` installs a specific release. New settings are added to `.env` with their defaults
-(it lists them). If the release is for another upstream version, it stops before starting: then run
-`./hdc upgrade-world` (it backs up, moves all progress into the new clean world, keeps bans and
-permissions, and lists server settings to re-check in its report), then `./hdc up`.
+(it lists them; for example, the release with the Shrouded Isles start choice adds
+`HEARTHDAOC_SI_START_CHOICE=on`). If the release is for another upstream version, it stops before
+starting: then run `./hdc upgrade-world` (it backs up, moves all progress into the new clean world,
+keeps bans and permissions, and lists server settings to re-check in its report), then `./hdc up`.
 
 Without `./hdc update` (a deployment older than it), do it by hand:
 ```bash

@@ -218,5 +218,30 @@ class ClientPatchWorkflowTests(unittest.TestCase):
         self.assertIn("The client's loading splash is OfflineDAoC's art", notes)
 
 
+SERVER_UNIT_TESTS = ("dotnet test source/server/Tests/Tests.csproj --nologo --filter "
+                     '"FullyQualifiedName~UT_CommandPrivLevelOverrides|FullyQualifiedName~UT_SiStartChoice"')
+UNIT_TESTS = os.path.join(ROOT, "source", "server", "Tests", "UnitTests")
+
+
+class ServerUnitTestWorkflowTests(unittest.TestCase):
+    """CI runs the fork's own server unit tests by name. dotnet test passes (exit 0) when its filter matches
+    no test at all, so every name in the filter must be a test class in source/server/Tests/UnitTests."""
+
+    def test_the_fork_server_unit_tests_run_with_the_pinned_filter(self):
+        steps = job(read("server-image.yml"), TEST_JOB).split("\n      - ")
+        found = [s for s in steps if s.startswith("name: Server unit tests for the fork's server changes\n")]
+        self.assertEqual(len(found), 1)
+        self.assertIn('DOTNET_SYSTEM_GLOBALIZATION_INVARIANT: "0"', found[0])
+        self.assertIn("cp deploy/serverconfig.build.xml source/server/CoreServer/config/serverconfig.xml\n", found[0])
+        self.assertIn(SERVER_UNIT_TESTS + "\n", found[0])
+
+    def test_every_name_in_the_filter_is_a_test_class(self):
+        names = re.findall(r"FullyQualifiedName~(\w+)", SERVER_UNIT_TESTS)
+        self.assertEqual(names, ["UT_CommandPrivLevelOverrides", "UT_SiStartChoice"])
+        for name in names:
+            with open(os.path.join(UNIT_TESTS, name + ".cs"), encoding="utf-8") as f:
+                self.assertIn(f"public sealed class {name}\n", f.read(), name)
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -88,6 +88,15 @@ The patch changes only `game.dll` and two files in the client's `pregame` folder
 `<file>.hearthdaoc-orig`. It changes nothing in any other client, such as the `b` edition: the game
 then works with the standard creation screen.
 
+**Where you start.** A new character of a classic race, such as a Briton, Troll or Celt (not an
+Inconnu, Valkyn, Sylvan, Half Ogre, Frostalf, Shar or Minotaur), first enters the world in its usual home village. A few seconds later, a
+two-button question asks whether to begin your journey in your realm's Shrouded Isles town instead:
+Caer Gothwaite, Aegirhamn or the Grove of Domnann. Accept takes you there and makes it your bind
+point, where you return after a death; Decline keeps you at home. Each character is asked only once.
+If the question goes away unanswered, for example because you logged out, it comes back at your next
+login while the character is still level 1. The question comes from the server, not from the patch,
+so it also appears with the standard creation screen, unless the server has turned it off.
+
 ## What happens at each launch
 
 Each time you start the game, `play.sh` (Linux) or `connect-hearthdaoc.bat` (Windows) checks

@@ -26,6 +26,7 @@ listed here, so upstream syncs can account for it:
 | Change | Files | Why | Upstream |
 |---|---|---|---|
 | `command_plvl_overrides` server property (e.g. `/tele=2;/tc=2`) | `GameServer/gameutils/ScriptMgr.cs` (`CommandPrivLevel`, applied in `LoadCommands`), `GameServer/serverproperty/ServerProperties.cs`, test `Tests/UnitTests/UT_CommandPrivLevelOverrides.cs` | Makes single-player teleports GM-only on a shared server (#38); set from `HEARTHDAOC_GM_ONLY_COMMANDS` | Candidate: generic, off by default |
+| Shrouded Isles start choice: `si_start_choice` server property | `GameServer/scripts/hearthdaoc/SiStartChoice.cs` (the decisions), `GameServer/scripts/hearthdaoc/SiStartChoiceScript.cs` (the property and the game wiring), test `Tests/UnitTests/UT_SiStartChoice.cs`. Upstream files touched: none | A new character of a classic race is asked once, a few seconds after its first entry into the world, whether to begin in its realm's Shrouded Isles town (#40, [spec](specs/2026-10-06-shrouded-isles-start-choice-design.md)); set from `HEARTHDAOC_SI_START_CHOICE` (default on) | Candidate: off by default |
 
 ## Client patches
 
