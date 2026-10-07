@@ -1,6 +1,6 @@
 # Sub-project 3: Shrouded Isles start choice (design)
 
-Status: draft for the owner's review. Date: 2026-10-06. Fork: `lometur/HearthDAoC`.
+Status: approved by the owner. Date: 2026-10-06. Fork: `lometur/HearthDAoC`.
 Issue: #40 (start-location choice). Branch: `sub3-si-start-choice`. Release: merging the PR
 publishes the next release (PR #70); the server picks it up with `./hdc update`.
 
