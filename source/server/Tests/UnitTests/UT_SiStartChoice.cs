@@ -347,4 +347,11 @@ public sealed class UT_SiStartChoice
         Assert.Throws<InvalidOperationException>(() => recorder.Apply(Aegirhamn));
         Assert.That(recorder.Calls, Is.EqualTo(new[] { "move", "bind", "save" }));
     }
+
+    [Test]
+    public void ADeadPlayerIsToldTheQuestionComesBack()
+    {
+        Assert.That(SiStartChoice.DeadMessage,
+            Is.EqualTo("You cannot choose while dead; you will be asked again at your next login."));
+    }
 }

@@ -1984,7 +1984,7 @@ The owner does this task in the real client. The agent writes the record from th
 - [ ] **Step 1: Check that the server loaded the destinations**
 
 Run (on the server): `docker logs hearthdaoc-server 2>&1 | grep -i 'shrouded isles start'`
-Expected: no warning about a missing destination. Any warning names the realm whose Teleport row was not found. In that case, check the world's Teleport rows before continuing.
+Expected: one line, `Shrouded Isles start choice: ready for Albion, Midgard, Hibernia (si_start_choice=True)`, and no warning. A warning names the realm whose Teleport row was not found, or says the Teleport table could not be read. In that case, check the world's Teleport rows before continuing.
 
 - [ ] **Step 2: Ask the owner to run the in-game checks** (spec section 4). Use a normal player account. Report each check as pass or fail, with what was seen:
 

@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Linq;
 using DOL.Database;
 using DOL.Events;
 using DOL.GS.PacketHandler;
@@ -38,19 +39,31 @@ public static class SiStartChoiceScript
     {
         Dictionary<int, SiStartDestination> destinations = new();
 
-        foreach (KeyValuePair<int, string> pair in SiStartChoice.TeleportIds)
+        try
         {
-            // The towns' own SI teleporters use these rows: Type is empty, and the key is case-sensitive.
-            DbTeleport row = WorldMgr.GetTeleportLocation((eRealm)pair.Key, ":" + pair.Value);
-            if (row == null)
+            foreach (KeyValuePair<int, string> pair in SiStartChoice.TeleportIds)
             {
-                Log.Warn($"Shrouded Isles start choice: no Teleport row \"{pair.Value}\" for realm {pair.Key}, " +
-                    "so that realm's new characters are not asked.");
-                continue;
+                // The towns' own SI teleporters use these rows: Type is empty, and the key is case-sensitive.
+                DbTeleport row = WorldMgr.GetTeleportLocation((eRealm)pair.Key, ":" + pair.Value);
+                if (row == null)
+                {
+                    Log.Warn($"Shrouded Isles start choice: no Teleport row \"{pair.Value}\" for realm {pair.Key}, " +
+                        "so that realm's new characters are not asked.");
+                    continue;
+                }
+
+                destinations[pair.Key] = new SiStartDestination(pair.Value, (ushort)row.RegionID, row.X, row.Y, row.Z,
+                    (ushort)row.Heading);
             }
 
-            destinations[pair.Key] = new SiStartDestination(pair.Value, (ushort)row.RegionID, row.X, row.Y, row.Z,
-                (ushort)row.Heading);
+            Log.Info("Shrouded Isles start choice: ready for " +
+                string.Join(", ", destinations.Keys.Select(realm => (eRealm)realm)) +
+                $" (si_start_choice={SI_START_CHOICE})");
+        }
+        catch (Exception ex)
+        {
+            destinations.Clear();
+            Log.Warn("Shrouded Isles start choice: the Teleport table could not be read, so nobody will be asked: " + ex.Message);
         }
 
         _destinations = destinations;
@@ -117,7 +130,10 @@ public static class SiStartChoiceScript
                 case SiStartOutcome.Decline:
                     WriteAnswer(player, SiStartChoice.AnswerNo);
                     break;
-                // Superseded or NotNow: nothing is saved, so the question comes back at the next login.
+                case SiStartOutcome.NotNow when !player.IsAlive:
+                    player.Out.SendMessage(SiStartChoice.DeadMessage, eChatType.CT_System, eChatLoc.CL_SystemWindow);
+                    break;
+                // Superseded or any other NotNow: nothing is saved, so the question comes back at the next login.
             }
         }
         catch (Exception ex)

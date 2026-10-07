@@ -100,7 +100,6 @@ class SettingDocsTests(unittest.TestCase):
 
 
 class ServerDeclarationTests(unittest.TestCase):
-    @unittest.skipUnless(os.path.exists(SCRIPT_CS), "needs source/server/GameServer/scripts/hearthdaoc/SiStartChoiceScript.cs")
     def test_server_declares_the_property_with_the_same_description(self):
         with open(SCRIPT_CS, encoding="utf-8") as f:
             found = re.findall(r'\[ServerProperty\(\s*"([^"]*)",\s*"si_start_choice",\s*"([^"]*)",\s*(\w+)\s*\)\]', f.read())

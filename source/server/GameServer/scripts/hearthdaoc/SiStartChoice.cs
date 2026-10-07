@@ -32,6 +32,9 @@ public static class SiStartChoice
     public const string AnswerKey = "hearthdaoc_si_start";
     public const string AnswerYes = "yes", AnswerNo = "no";
 
+    // Told to a player who answers while dead; nothing is saved.
+    public const string DeadMessage = "You cannot choose while dead; you will be asked again at your next login.";
+
     private const byte AcceptResponse = 0x01;
 
     // Realm -> TeleportID of the SI town's arrival point (WorldMgr.GetTeleportLocation(realm, ":" + id)).
