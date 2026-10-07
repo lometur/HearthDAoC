@@ -117,9 +117,10 @@ medallion. Each battleground has a portal keep for each realm and a central keep
 lord; kill the lord to take the keep for your realm.
 
 Going past a limit inside changes nothing at once: you may stay until you log out or die. You are then
-at your bind point (or at your realm's home portal keep, if your bind point is in a battleground), and
-the porter won't send you back. A character left inside after a lost connection is moved a moment
-after its next login, with a message saying why. No battleground has a zone experience bonus.
+at your bind point (after a logout, at your realm's home portal keep instead if your bind point is in a
+battleground), and the porter won't send you back. A character left inside after a lost connection is
+moved a moment after its next login, with a message saying why. No battleground has a zone experience
+bonus.
 
 ## What happens at each launch
 
