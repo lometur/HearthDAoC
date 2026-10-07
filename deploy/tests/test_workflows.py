@@ -166,7 +166,7 @@ class ClientPatchWorkflowTests(unittest.TestCase):
         i_world, _ = self.step(TEST_JOB, "init_world.py")
         i_tests, tests = self.step(TEST_JOB, PATCH_TESTS)
         self.assertIn("nasm", apt["run"].split())
-        self.assertLess(self.uses(TEST_JOB, "actions/setup-dotnet@v4"), i_mpk)
+        self.assertLess(self.uses(TEST_JOB, "actions/setup-dotnet@v5"), i_mpk)
         self.assertLess(max(i_apt, i_mpk, i_fetch, i_world), i_tests)
         env = tests["env"]
         self.assertEqual(env["HDC_MPK_TOOL"], "${{ github.workspace }}/" + MPK_TOOL)
@@ -205,7 +205,7 @@ class ClientPatchWorkflowTests(unittest.TestCase):
         # build_bundles.sh copies the committed splash.mpk: checkout, bundles, release, as before the client patches.
         steps = self.steps(RELEASE_JOB)
         self.assertEqual([s.get("uses") or s["name"] for s in steps],
-                         ["actions/checkout@v4", "Build bundles (no EA files)", "Create release (and its tag on this commit)"])
+                         ["actions/checkout@v5", "Build bundles (no EA files)", "Create release (and its tag on this commit)"])
         _, bundles = self.step(RELEASE_JOB, "deploy/build_bundles.sh")
         self.assertEqual((bundles["run"], bundles.get("env")), ('deploy/build_bundles.sh "$TAG" dist', None))
         for s in steps:
