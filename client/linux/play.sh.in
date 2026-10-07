@@ -9,15 +9,17 @@ CL="$HERE/client"
 SERVER="${HEARTHDAOC_SERVER:-@SERVER@}"
 CREDS="$HERE/account.txt"
 
-# Errors go to the terminal, and to a dialog when started from Steam (no terminal to read them).
-die() {
+# Errors and warnings go to the terminal, and to a dialog when started from Steam (no terminal to
+# read them).
+tell() {  # tell error|warning <message>
+    local kind="$1"; shift
     echo "play.sh: $*" >&2
     if [[ ! -t 2 && -n "${DISPLAY:-}${WAYLAND_DISPLAY:-}" ]]; then
-        if command -v zenity >/dev/null; then zenity --error --title="HearthDAoC" --text="$*" 2>/dev/null || true
+        if command -v zenity >/dev/null; then zenity --"$kind" --title="HearthDAoC" --text="$*" 2>/dev/null || true
         elif command -v notify-send >/dev/null; then notify-send "HearthDAoC" "$*" || true; fi
     fi
-    exit 1
 }
+die() { tell error "$@"; exit 1; }
 
 if [[ ! -f "$CREDS" ]]; then
     if command -v zenity >/dev/null && [[ -n "${DISPLAY:-}${WAYLAND_DISPLAY:-}" ]]; then
@@ -93,6 +95,22 @@ PROFILE="$PFX/drive_c/users/steamuser/AppData/Roaming/Electronic Arts/Dark Age o
 if [[ ! -f "$PROFILE/user.dat" ]]; then
     mkdir -p "$PROFILE"
     printf '[main]\r\nfullscreen_windowed=1\r\n' > "$PROFILE/user.dat"
+fi
+
+# HearthDAoC's client patches (classic character creation, loading splash), installed by setup.sh:
+# files that something put back are patched again; an already patched client is only read. The
+# game starts whatever happens: 3 means a client the patches don't support (e.g. the b edition),
+# which plays with the standard creation screen. No patches folder, no patching.
+if [[ -f "$HERE/patches/apply_patches.py" ]]; then
+    rc=0; out="$(python3 "$HERE/patches/apply_patches.py" --client "$CL" 2>&1)" || rc=$?
+    if [[ $rc -eq 0 ]]; then
+        grep -v '^Already patched: ' <<<"$out" || true
+    elif [[ $rc -eq 3 ]]; then
+        echo "play.sh: HearthDAoC's client patches don't support this client (for example the b edition); playing with the standard creation screen." >&2
+    else
+        [[ -z "$out" ]] || echo "$out" >&2
+        tell warning "Warning: HearthDAoC's client patches could not be applied (apply_patches.py exit $rc), so the classic creation screen may be missing. The game starts anyway. Run $HERE/play.sh in a terminal to see the details."
+    fi
 fi
 
 cd "$CL"

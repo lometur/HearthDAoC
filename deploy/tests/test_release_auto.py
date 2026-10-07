@@ -48,6 +48,23 @@ class ReleaseWorthyTests(unittest.TestCase):
             with self.subTest(path=path):
                 self.assertFalse(rt.release_worthy([path]))
 
+    def test_client_patches_ship_through_the_client_bundle(self):
+        # build_bundles.sh bundles the patch set, both appliers and the committed splash.mpk.
+        for path in ("client/patches/classic-creation.json", "client/patches/apply_patches.py",
+                     "client/patches/patchset.py", "client/windows/patch-client.ps1", "client/patches/splash.mpk"):
+            with self.subTest(path=path):
+                self.assertTrue(rt.release_worthy([path]))
+
+    def test_the_client_patch_set_generator_alone_does_not(self):
+        # What it makes, classic-creation.json and splash.mpk, is committed and ships; CI fails when
+        # classic-creation.json differs from a rebuild. Upstream's MPK tool only builds splash.mpk, before a commit.
+        for path in ("client/patches/build.py", "client/patches/pe.py", "client/patches/classdata.py",
+                     "client/patches/src/baseclass.asm", "client/patches/src/base_classes.py",
+                     "client/patches/branding/reletter_splash.py",
+                     "source/tools/OfflineDaoc.Mpk/Program.cs", "source/tools/OfflineDaoc.Mpk/OfflineDaoc.Mpk.csproj"):
+            with self.subTest(path=path):
+                self.assertFalse(rt.release_worthy([path]))
+
 
 class NextReleaseTests(unittest.TestCase):
     """next_release against a throwaway git repository: the tag a main build publishes, or ''."""
