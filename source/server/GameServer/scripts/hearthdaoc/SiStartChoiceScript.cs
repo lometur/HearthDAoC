@@ -23,7 +23,7 @@ public static class SiStartChoiceScript
 
     // GameEntered fires before the server sends "player init finished", the patch notes and the starter
     // help, so the question waits this long.
-    private const int AskDelay = 5000;
+    private const int AskDelay = 2000;
 
     private static readonly Logger Log = LoggerManager.Create(typeof(SiStartChoiceScript));
 
