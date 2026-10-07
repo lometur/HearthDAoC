@@ -245,6 +245,7 @@ def apply_fix(path, now=NOW):
     conn = sqlite3.connect(path)
     try:
         with conn:
+            conn.execute("BEGIN")
             return battlegrounds.apply(conn, now)
     finally:
         conn.close()
