@@ -1,6 +1,6 @@
 # Sub-project 5: classic battlegrounds 15–35 (design)
 
-Status: draft for the owner's review; the decisions in section 1 are the owner's. Date: 2026-10-07.
+Status: approved by the owner; the decisions in section 1 are the owner's. Date: 2026-10-07.
 Fork: `lometur/HearthDAoC`. Issue: #76. Branch: `sub5-battlegrounds`. Release: merging the PR publishes the
 next release; the server picks it up with `./hdc update`.
 
