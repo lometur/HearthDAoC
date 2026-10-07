@@ -47,6 +47,9 @@ class FixesTests(unittest.TestCase):
             c.execute("INSERT INTO ServerProperty (Category, `Key`, Value) VALUES ('classes', 'disabled_classes', '20;33;34;39;58-62')")
             c.execute("INSERT INTO StartupLocation (XPos, YPos, ZPos, Heading, Region, RealmID, RaceID, ClassID) "
                       "VALUES (532903, 549729, 4800, 5559, 51, 1, 13, 20)")
+            for key, text in wf.UPSTREAM_WELCOME.items():
+                c.execute("INSERT INTO ServerProperty (Category, `Key`, DefaultValue, Value) VALUES ('server', ?, ?, ?)",
+                          (key, text, text))
 
     def tearDown(self):
         self.tmp.cleanup()
@@ -57,7 +60,7 @@ class FixesTests(unittest.TestCase):
 
     def test_apply_enables_disciple_and_adds_the_saracen_start(self):
         changes = wf.apply(self.db)
-        self.assertEqual(len(changes), 2)
+        self.assertEqual(len(changes), 3)
         self.assertEqual(self.q("SELECT Value FROM ServerProperty WHERE `Key`='disabled_classes'"), [("33;34;39;58-62",)])
         self.assertEqual(self.q("SELECT XPos, YPos, ZPos, Heading, Region, RealmID FROM StartupLocation WHERE ClassID=20 AND RaceID=4"),
                          [(532903, 549729, 4800, 5559, 51, 1)])
@@ -71,8 +74,22 @@ class FixesTests(unittest.TestCase):
         with sqlite3.connect(self.db) as c:
             c.execute("UPDATE ServerProperty SET Value='33;35' WHERE `Key`='disabled_classes'")
             c.execute("INSERT INTO StartupLocation (XPos, Region, RealmID, RaceID, ClassID) VALUES (1, 1, 1, 4, 20)")
+            c.execute("UPDATE ServerProperty SET Value='Our own message' WHERE `Key`='motd'")
+            c.execute("UPDATE ServerProperty SET Value='' WHERE `Key`='starting_msg'")
         self.assertEqual(wf.apply(self.db), [])
         self.assertEqual(self.q("SELECT XPos FROM StartupLocation WHERE ClassID=20 AND RaceID=4"), [(1,)])
+        self.assertEqual(self.q("SELECT Value FROM ServerProperty WHERE `Key` IN ('motd', 'starting_msg') ORDER BY `Key`"),
+                         [("Our own message",), ("",)])
+
+    def test_welcome_messages_name_hearthdaoc(self):
+        changes = wf.apply(self.db)
+        self.assertIn("Welcome messages now name HearthDAoC (motd, starting_msg)", changes)
+        rows = dict(self.q("SELECT `Key`, Value FROM ServerProperty WHERE `Key` IN ('motd', 'starting_msg')"))
+        self.assertEqual(rows, wf.HEARTHDAOC_WELCOME)
+        for text in rows.values():
+            self.assertIn("HearthDAoC", text)
+            self.assertNotIn("Offline", text)
+            self.assertNotIn("alone", text)
 
     def test_cli(self):
         r = subprocess.run([sys.executable, os.path.join(BIN, "world_fixes.py"), "--db", self.db], capture_output=True, text=True)
@@ -82,9 +99,11 @@ class FixesTests(unittest.TestCase):
     @unittest.skipUnless(TEST_WORLD, "needs HDC_TEST_WORLD (a clean classic world database)")
     def test_shipped_world(self):
         shutil.copyfile(TEST_WORLD, self.db)
-        self.assertEqual(len(wf.apply(self.db)), 2)
+        self.assertEqual(len(wf.apply(self.db)), 3)
         self.assertEqual(self.q("SELECT Value FROM ServerProperty WHERE `Key`='disabled_classes'"), [("33;34;39;58-62",)])
         self.assertEqual(self.q("SELECT RaceID FROM StartupLocation WHERE ClassID=20 ORDER BY RaceID"), [(1,), (4,), (13,)])
+        self.assertEqual(dict(self.q("SELECT `Key`, Value FROM ServerProperty WHERE `Key` IN ('motd', 'starting_msg')")),
+                         wf.HEARTHDAOC_WELCOME)
 
 
 if __name__ == "__main__":
