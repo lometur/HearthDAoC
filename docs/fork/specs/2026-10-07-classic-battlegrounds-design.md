@@ -24,7 +24,7 @@ with Atlas's limits (Thidranki under 7,125 realm points, that is up to 1L9; Cale
 | The empty battlegrounds | Abermenai and Murdaigean become complete, like Thidranki: guards and a hastener at each of the three portal keeps, and a capturable central keep with guards and a lord, levelled for the range. |
 | Over the limit | Classic rules. The porter checks level and realm points when you port in. Once over a limit you may stay until you log out or die; then you are at your bind point, and the porter will not send you back. |
 | Death | Release to the bind point, as today. |
-| Atlas leftovers | Removed: the training dummies, the Void Merchants, the stray Wizard, the Atlas 34–39 quests and tokens, and the +50% XP bonus (all four battlegrounds the same: no bonus). |
+| Atlas leftovers | Removed: the training dummies, the Void Merchants, the stray Wizard, Atlas's battleground daily quests and their Pazz NPCs (Thidranki 20–24 and Caledonia 34–39) and tokens, and the +50% XP bonus (all four battlegrounds the same: no bonus). |
 | Keep and guard levels | Fit each range. Caer Caledon's guards (48) and lord (57) come down; Thidranki Faste's base level goes from 26 to 24; the new keeps are levelled for their ranges. |
 | Names | "Caledon" is shown as Caledonia. Murdaigean keeps its spelling (patch notes 1.48–1.61, the client's `zones.dat` and our data all spell it that way). |
 | Refusals | The porter tells the player why they can't go: level range or realm points. |
@@ -47,8 +47,8 @@ with Atlas's limits (Thidranki under 7,125 realm points, that is up to 1L9; Cale
   never trigger (`packets/Client/168/RegionChangeRequestHandler.cs:93-96`, `&&` instead of `||`; harmless, no
   zone point leads into a battleground), and release-to-portal-keep's `<=` test (`gameobjects/GamePlayer.cs:1455`,
   used only when `bg_release_to_portal_keep` is on).
-- Thidranki's Pazz NPCs with their 20–24 daily quests, and its 11 "New Object" static items: not in the
-  owner's list, so they stay.
+- Thidranki's 11 "New Object" static items: not in the owner's list, so they stay. (Its Pazz NPCs and 20–24
+  daily quests go, by the owner's decision of 2026-10-07; see 3.3.)
 - The client's own texts. Its `zones.dat` already calls zone 250 "Caledonia", but its loading screen data
   (`loading.dat` in the client's `gamedata.mpk`, `[region250] name=Caledon`) still says "Caledon". Only the
   server's `Zones` and `Regions` rows change.
@@ -81,7 +81,7 @@ with Atlas's limits (Thidranki under 7,125 realm points, that is up to 1L9; Cale
    - Killing the lord gives the keep to the killer's realm; its guards come back at the same levels.
    - `/ck` lists the keeps and their owners; a keep held by renegades shows as "None" (for example "Dun
      Abermenai: None"). `/who` shows the zone as "Caledonia".
-   - There are no dummies or Void Merchants, and no Pazz in Caledonia. No battleground has a zone XP bonus,
+   - There are no dummies or Void Merchants, and no Pazz in Thidranki or Caledonia. No battleground has a zone XP bonus,
      even on a server that turns zone bonuses on (`enable_zone_bonuses`, off in the shipped worlds).
 5. **Over the limit.** Levelling or earning realm points past the limit inside changes nothing at once.
    - **At logout**, the character is moved to its bind point.
@@ -110,8 +110,8 @@ with Atlas's limits (Thidranki under 7,125 realm points, that is up to 1L9; Cale
 | Central guard rows | 12: 6 casters, 4 fighters, lord, hastener | 19 (unchanged) | 12, as Abermenai | 16 (the stray Wizard removed) |
 | Guard / lord level | 21 / 24 | 26 / 31 (was 28 / 33) | 31 / 36 | 37 / 44 (was 48 / 57) |
 | Zone XP bonus (`Zones.Experience`) | none | none (was +50%) | none | none (was +50%) |
-| Removed | — | 15 training dummies, 2 Void Merchants | — | 1 Void Merchant, the stray Wizard, the six 34–39 daily quests and their Pazz NPCs |
-| Kept as is | — | Pazz and the 20–24 daily quests, 11 "New Object" statics | — | — |
+| Removed | — | 15 training dummies, 2 Void Merchants, the six 20–24 daily quests and their Pazz NPCs | — | 1 Void Merchant, the stray Wizard, the six 34–39 daily quests and their Pazz NPCs |
+| Kept as is | — | 11 "New Object" statics | — | — |
 | Monsters, bindstones | none | none (#47) | none | none (#47) |
 
 The +50% was paid only while `enable_zone_bonuses` is on (`gameobjects/GamePlayer.cs:4347`,
@@ -126,11 +126,11 @@ The +50% was paid only while `enable_zone_bonuses` is on (`gameobjects/GamePlaye
 |---|---|---|
 | Battleground rows, names, XP bonus, keep base levels | World data: new `deploy/bin/battlegrounds.py`, called by `deploy/bin/world_fixes.py` | It is world data; the fork fixes world data before every start, and upgraded or new worlds get it again |
 | Portal keep guards and the central keeps of Abermenai and Murdaigean | World data, same module | Keeps and guards are `Keep` and `Mob` rows; no code is needed (Thidranki's work the same way) |
-| Removing dummies, Void Merchants, the stray Wizard and saved Caledonia quests | World data, same module | They are rows. Removed `Mob` rows are archived in `fork_removed_mobs`, so they can be put back; the Caledonia `Quest` rows are deleted, since they hold only Atlas 34–39 daily quest progress for classes that no longer exist |
+| Removing dummies, Void Merchants, the stray Wizard and saved battleground daily quests | World data, same module | They are rows. Removed `Mob` rows are archived in `fork_removed_mobs`, so they can be put back; the Thidranki and Caledonia `Quest` rows are deleted, since they hold only Atlas daily quest progress for classes that no longer exist |
 | Porter levels, caps and refusal texts | Fork-owned `scripts/hearthdaoc/ClassicBattlegrounds.cs` (decisions) and `ClassicBattlegroundsScript.cs` (wiring), called from three lines in upstream's `OFTeleporters.cs` | The porter's medallion switch is private code inside upstream's class, with no hook; the decisions stay in fork files |
 | Bind point at logout, login check, keep level after a capture | Fork-owned script, through upstream's events (`GamePlayerEvent.Quit`, `GamePlayerEvent.GameEntered`, `KeepEvent.KeepTaken`) | Public events, so no upstream file changes |
 | "Svasud Faste" | Upstream `keeps/KeepManager.cs:786`, one word | The typo is in upstream code; it is also the upstream PR |
-| Atlas 34–39 quests and Caledonia's Pazz NPCs | The six upstream files `scripts/quests/BattlegroundQuests/Caledonia/*.cs` are deleted | They are compiled into the server and register themselves at load; no setting turns off one quest. The Pazz NPCs exist only in memory, made by these scripts at each start (3.2, step 6) |
+| Atlas's battleground daily quests (Thidranki 20–24, Caledonia 34–39) and their Pazz NPCs | The twelve upstream files in `scripts/quests/BattlegroundQuests/` (`Thidranki/*.cs` and `Caledonia/*.cs`) are deleted | They are compiled into the server and register themselves at load; no setting turns off one quest. The Pazz NPCs exist only in memory, made by these scripts at each start (3.2, step 6) |
 
 ### 3.2 World data: `deploy/bin/battlegrounds.py`
 
@@ -345,16 +345,19 @@ the csv layout. Fixture 414 is the same in both copies.
   - the stray Wizard, `caledon-guard-25`: a `GuardStaticCaster` named "Wizard", realm 1, level 48, at 33185,
     37386, 3722. It sits on a Thidranki caster's X and Y at Caledonia's floor height. It is removed only
     while it still has these values.
-- **No Pazz rows.** Caledonia's Pazz NPCs are not rows. The quest scripts make them at each start and call
+- **No Pazz rows.** The Pazz NPCs of Thidranki and Caledonia are not rows. The quest scripts make them at each start and call
   `SaveIntoDatabase()`, but that saves nothing for an NPC a script made (`LoadedFromScript` starts true,
   `gameobjects/GameNPC.cs:991`, and with no row yet it returns, `:1169-1175`). A world that has run with
-  `load_quests` on has no `Pazz` row either. Deleting the six quest scripts (3.3) removes them.
-- **Saved quests.** `Quest` rows of the six Caledonia quest classes are deleted, not archived. Active and
+  `load_quests` on has no `Pazz` row either. Deleting the twelve quest scripts (3.3) removes them.
+- **Saved quests.** `Quest` rows of the twelve battleground quest classes are deleted, not archived. Active and
   finished quests share the table and keep their progress in the row (`GamePlayer.cs:10502-10512`), and with
   the classes gone nothing could use them again. The clean world has no `Quest` rows. The classes are:
   `DOL.GS.DailyQuest.Albion.CaleKeepCaptureAlb`, `DOL.GS.DailyQuest.Hibernia.CaleKeepCaptureHib`,
   `DOL.GS.DailyQuest.Midgard.CaleKeepCaptureMid`, `DOL.GS.DailyQuest.Albion.CaleKillQuestAlb`,
-  `DOL.GS.DailyQuest.Hibernia.CaleKillQuestHib` and `DOL.GS.DailyQuest.Hibernia.CaleKillQuestMid` (sic).
+  `DOL.GS.DailyQuest.Hibernia.CaleKillQuestHib` and `DOL.GS.DailyQuest.Hibernia.CaleKillQuestMid` (sic);
+  `DOL.GS.DailyQuest.Albion.ThidKeepCaptureAlb`, `DOL.GS.DailyQuest.Hibernia.ThidKeepCaptureHib`,
+  `DOL.GS.DailyQuest.Midgard.ThidKeepCaptureMid`, `DOL.GS.DailyQuest.Albion.ThidKillQuestAlb`,
+  `DOL.GS.DailyQuest.Hibernia.ThidKillQuestHib` and `DOL.GS.DailyQuest.Hibernia.ThidKillQuestMid` (sic).
   Without their classes, the server would log "Could not find quest" at each login of those characters
   (`quests/QuestsMgr/AbstractQuest.cs:76-95`).
 
@@ -447,16 +450,19 @@ Isles start choice):
 - **`GameServer/keeps/KeepManager.cs:786`.** "Svasudheim Faste" becomes "Svasud Faste", the `TeleportID` of
   the rows `atlas_mid_svasud_faste` and `dc97a6d7-…`. Today `ExitBattleground` finds no row and moves no
   Midgard character. The fork needs it for the fallback above, and it is a one-line upstream PR.
-- **Deleted:** the six files in `GameServer/scripts/quests/BattlegroundQuests/Caledonia/`.
-  - They are Atlas's 34–39 daily quests ("[Daily] Caledonia Conquerer", "[Daily] Frontier Conquerer",
-    "[Daily] Fen's New Friends") and the code that creates their Pazz NPCs, in memory only (3.2, step 6).
+- **Deleted:** the twelve files in `GameServer/scripts/quests/BattlegroundQuests/`, six in `Caledonia/` and six
+  in `Thidranki/` (owner's decision, 2026-10-07: Thidranki's Pazz goes too).
+  - They are Atlas's daily quests for Caledonia 34–39 ("[Daily] Caledonia Conquerer", "[Daily] Frontier
+    Conquerer", "[Daily] Fen's New Friends") and Thidranki 20–24 ("[Daily] Thidranki Conquerer", "[Daily]
+    Frontier Conquerer", "[Daily] Fen's New Friends"), and the code that creates their Pazz NPCs in regions
+    250 and 252, in memory only (3.2, step 6).
     `CaleKillQuestMid` looks for an NPC named "Rey" (`CaleKillQuestMid.cs:68`), never finds one and makes
     another Midgard Pazz at each start; that goes too.
-  - The `<Folder Include=...Caledonia\>` line in `GameServer.csproj` stays; it is harmless, and keeping it
-    leaves the project file untouched.
+  - The `<Folder Include=...Caledonia\>` and `<Folder Include=...Thidranki\>` lines in `GameServer.csproj`
+    stay; they are harmless, and keeping them leaves the project file untouched.
   - **Tokens.** `AtlasROGManager.GenerateBattlegroundToken` (`Managers/RandomObjectGeneration/AtlasROGManager.cs:135-162`)
     gives `L20RewardToken` (20–24) or `L35RewardToken` (34–39). Neither item template exists in the shipped
-    worlds, so no token is ever given, and with these quests gone nothing asks for a 34–39 token. That file
+    worlds, so no token is ever given, and with these quests gone nothing asks for a token. That file
     stays as it is.
 
 **Unchanged on purpose:**
@@ -550,7 +556,7 @@ hasteners are level 1 (`AbstractGameKeep.cs:862-866`).
     `PortLocation = HearthDAoC.ClassicBattlegroundsScript.PorterDestination(this, player);` (and its
     `break;`), and no 7125 or 122500;
   - `KeepManager.cs` names "Svasud Faste" and not "Svasudheim Faste";
-  - the Caledonia quest folder holds no `.cs` file, and no code names the six classes.
+  - the `BattlegroundQuests` folders hold no `.cs` file, and no code names the twelve classes.
 - **Server unit tests** (C#, `UT_ClassicBattlegrounds`, like `UT_SiStartChoice`), for `ClassicBattlegrounds`:
   - **Brackets:**
     - levels 14 and 36 are refused with their texts;
@@ -593,7 +599,7 @@ hasteners are level 1 (`AbstractGameKeep.cs:862-866`).
     - with 350 or more, the porter explains why not, once per ceremony (not again at the second port 10
       seconds later);
     - guards are about 26 and the lord about 31;
-    - there are no dummies or Void Merchants.
+    - there are no dummies, Void Merchants or Pazz.
   - **Caledonia:**
     - level 30 gets in (refused today), and level 36 is refused with the text;
     - `/who` shows Caledonia;
@@ -619,8 +625,8 @@ hasteners are level 1 (`AbstractGameKeep.cs:862-866`).
   - The server-code table gets a row:
     - fork files: `scripts/hearthdaoc/ClassicBattlegrounds.cs`, `ClassicBattlegroundsScript.cs`, test
       `Tests/UnitTests/UT_ClassicBattlegrounds.cs`;
-    - upstream files touched: `OFTeleporters.cs` (three blocks), `KeepManager.cs` (one word), and the six
-      deleted Caledonia quest files;
+    - upstream files touched: `OFTeleporters.cs` (three blocks), `KeepManager.cs` (one word), and the twelve
+      deleted battleground quest files (Thidranki and Caledonia);
     - why: #76 and this spec;
     - upstream: the "Svasud Faste" fix is a candidate; the rest is fork-only.
 - **`deploy/bin/world_fixes.py`:** its docstring gets item 4, the battleground fix. So does the entrypoint
@@ -631,7 +637,7 @@ hasteners are level 1 (`AbstractGameKeep.cs:862-866`).
   - the fix runs once per world, and the `fork_world_fixes` row `classic-battlegrounds-v1` records it;
   - deleting that row makes it run again at the next start, and steps whose results are still there change
     nothing;
-  - removed `Mob` rows are in `fork_removed_mobs` (the Caledonia `Quest` rows are deleted, not archived);
+  - removed `Mob` rows are in `fork_removed_mobs` (the Thidranki and Caledonia `Quest` rows are deleted, not archived);
   - if the fix fails, the start log says "Classic battlegrounds: not applied (...)", the server starts with
     upstream's battlegrounds, and the fix tries again at the next start;
   - battleground keep guard levels follow `keep_guard_level_multiplier` (1.6), which also sets the frontier
@@ -652,7 +658,7 @@ hasteners are level 1 (`AbstractGameKeep.cs:862-866`).
 
 | Risk | Handling |
 |---|---|
-| An upstream sync changes `OFTeleporters.cs`, `KeepManager.cs` or the deleted quest files | Small, listed edits: three call lines, one word, six deletions (a modify/delete conflict is resolved by keeping them deleted). The source checks fail CI if a sync brings the old code back. Everything else uses public events and the keep manager's public methods. |
+| An upstream sync changes `OFTeleporters.cs`, `KeepManager.cs` or the deleted quest files | Small, listed edits: three call lines, one word, twelve deletions (a modify/delete conflict is resolved by keeping them deleted). The source checks fail CI if a sync brings the old code back. Everything else uses public events and the keep manager's public methods. |
 | A new upstream world changes the rows the fix expects | The real-data tests run on the pinned world in CI. When a sync pins a world whose battleground rows, keeps or guard rows differ, they fail in that PR, and the fix is updated there. On a live world the step's precondition simply doesn't match, and that step changes nothing. |
 | The battleground fix fails on a world | It rolls back only its own steps under its savepoint, prints "Classic battlegrounds: not applied (...)", and the server starts with the other fixes in place (3.2). The porter then follows upstream's battleground rows, so Abermenai and Murdaigean open without guards until a later start applies the fix. The unit tests cover the rollback. |
 | A world upgrade or a new world | Upstream's clean world has no marker, so the fix runs again at the next start. Edits the owner made in game to battleground guards and keeps are lost, as with any world data in an upgrade; HANDOFF says so. |
