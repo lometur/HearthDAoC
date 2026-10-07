@@ -89,7 +89,7 @@ The patch changes only `game.dll` and two files in the client's `pregame` folder
 then works with the standard creation screen.
 
 **Where you start.** A new character of a classic race, such as a Briton, Troll or Celt (not an
-Inconnu, Valkyn or Sylvan), first enters the world in its usual home village. A few seconds later, a
+Inconnu, Valkyn, Sylvan, Half Ogre, Frostalf, Shar or Minotaur), first enters the world in its usual home village. A few seconds later, a
 two-button question asks whether to begin your journey in your realm's Shrouded Isles town instead:
 Caer Gothwaite, Aegirhamn or the Grove of Domnann. Accept takes you there and makes it your bind
 point, where you return after a death; Decline keeps you at home. Each character is asked only once.
