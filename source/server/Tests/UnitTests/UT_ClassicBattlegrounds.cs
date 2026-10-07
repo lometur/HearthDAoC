@@ -303,6 +303,7 @@ public sealed class UT_ClassicBattlegrounds
 
         // The script checks again, and sends the message, this long after GameEntered.
         Assert.That(ClassicBattlegrounds.LoginCheckDelayMs, Is.EqualTo(1000));
+        Assert.That(ClassicBattlegrounds.LoginCheckAttempts, Is.EqualTo(10));
     }
 
     [Test]

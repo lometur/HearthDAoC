@@ -29,6 +29,7 @@ public static class ClassicBattlegrounds
     public const string RefusedAtKey = "hdc_bg_porter_refused";   // player.TempProperties key
     public const long RefusalQuietMs = 30_000;                    // "within the last 30 seconds"
     public const int LoginCheckDelayMs = 1000;                    // GameEntered -> check
+    public const int LoginCheckAttempts = 10;                     // checks while the client isn't Playing yet
 
     // 253, 252, 251, 250, in that order (also the order of log and report lists).
     public static readonly IReadOnlyList<ushort> Regions = new ReadOnlyCollection<ushort>(new ushort[] { 253, 252, 251, 250 });

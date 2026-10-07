@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using DOL.Database;
 using DOL.Events;
+using DOL.GS.Keeps;
 using DOL.GS.PacketHandler;
 using DOL.GS.ServerProperties;
 using DOL.Logging;
@@ -102,20 +103,32 @@ public static class ClassicBattlegroundsScript
             return;
 
         ushort region = player.CurrentRegionID;
-        new ECSGameTimer(player, timer => MoveOutIfStillOver(player, region), ClassicBattlegrounds.LoginCheckDelayMs);
+        int attempts = 0;
+        new ECSGameTimer(player, timer => MoveOutIfStillOver(player, region, ++attempts),
+            ClassicBattlegrounds.LoginCheckDelayMs);
     }
 
     // Only if the player is still in the game on the same client, still in that battleground and still over
-    // its limit.
-    private static int MoveOutIfStillOver(GamePlayer player, ushort region)
+    // its limit. A client that isn't Playing yet (a slow zone load) is checked again a second later, up to
+    // LoginCheckAttempts times in all.
+    private static int MoveOutIfStillOver(GamePlayer player, ushort region, int attempt)
     {
         try
         {
             GameClient client = player.Client;
-            if (player.ObjectState != GameObject.eObjectState.Active
-                || client.Player != player
-                || client.ClientState != GameClient.eClientState.Playing
-                || player.CurrentRegionID != region
+            if (player.ObjectState != GameObject.eObjectState.Active || client.Player != player)
+                return 0;
+
+            if (client.ClientState != GameClient.eClientState.Playing)
+            {
+                if (attempt < ClassicBattlegrounds.LoginCheckAttempts)
+                    return ClassicBattlegrounds.LoginCheckDelayMs;
+
+                Log.Info($"Classic battlegrounds: {player.Name} was not playing yet; login check skipped");
+                return 0;
+            }
+
+            if (player.CurrentRegionID != region
                 || !OverLimit(player, out BattlegroundBracket bracket))
                 return 0;
 
@@ -147,6 +160,15 @@ public static class ClassicBattlegroundsScript
             return;
 
         keep.ChangeLevel(1);
+
+        // Reset left the gates at level 4 health, and ChangeLevel rescales only a door that knows its old
+        // maximum, which one loaded from a Door row doesn't.
+        foreach (GameKeepDoor door in keep.Doors.Values)
+        {
+            door.Health = door.MaxHealth;
+            door.SaveIntoDatabase();
+        }
+
         keep.SaveIntoDatabase();
     }
 

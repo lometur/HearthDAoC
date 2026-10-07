@@ -7,7 +7,8 @@ two fork tables included, runs under one savepoint. If any step fails, the savep
 (no change, no fork table, no marker, so the next start tries again) and apply() returns only the
 "not applied" line; world_fixes.py still commits its own fixes and the server starts.
 
-Each step changes a value only while it still holds upstream's value, adds rows only where none of their
+Each step changes a value only while it still holds upstream's value (the keep Level reset in step 3 is
+the exception, as the spec requires), adds rows only where none of their
 kind are there yet, and adds one line to the result when it changed something:
 1. the Battleground rows get the classic level ranges and realm rank caps;
 2. Caledon is shown as Caledonia, and no battleground keeps a zone XP bonus;
