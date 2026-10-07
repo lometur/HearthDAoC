@@ -595,6 +595,31 @@ class BattlegroundFixTests(unittest.TestCase):
                          [row[:-2] + (LATER, row[-1]) if row[-1] == "hdc-bg253-ck-lord" else row for row in mobs])
         self.assertEqual(self.q("SELECT FixId, AppliedUtc FROM fork_world_fixes"), [("classic-battlegrounds-v1", LATER)])
 
+    def test_a_stray_copy_id_does_not_stop_the_fix(self):
+        # A row of the owner's that already has one of step 4's Mob_IDs (and is no keep guard) is left as it is,
+        # step 4 adds the other 10 copies, and the fix applies.
+        stray = "hdc-bg253-pk-" + PORTAL_KEEP_GUARDS[0]
+        execute(self.db, "INSERT INTO Mob (ClassType, Name, X, Y, Z, Region, Mob_ID) VALUES "
+                         f"('DOL.GS.GameNPC', 'stray', 1, 2, 3, 253, '{stray}')")
+        lines = apply_fix(self.db)
+        self.assertEqual(lines[3], "Battlegrounds: portal keep guards and hasteners for Abermenai (10), Murdaigean (11)")
+        self.assertEqual(self.q("SELECT ClassType, Name, X, Y, Z, Region FROM Mob WHERE Mob_ID=?", (stray,)),
+                         [("DOL.GS.GameNPC", "stray", 1, 2, 3, 253)])
+        self.assertEqual(self.q("SELECT COUNT(*) FROM Mob WHERE Mob_ID LIKE 'hdc-bg253-pk-%'"), [(11,)])
+        self.assertEqual(self.q("SELECT FixId FROM fork_world_fixes"), [("classic-battlegrounds-v1",)])
+
+    def test_a_keep_with_its_keep_id_already_there_is_not_added_again(self):
+        # An owner's Keep row with Dun Abermenai's Keep_ID (but no central keep of 253): no Keep insert, no
+        # central rows for that run, and the fix applies.
+        execute(self.db, "INSERT INTO Keep (KeepID, Name, Region, BaseLevel, Keep_ID) VALUES "
+                         "(90, 'Mine', 250, 255, 'hdc-bg253-dun-abermenai')")
+        lines = apply_fix(self.db)
+        self.assertEqual([x for x in lines if "central" in x],
+                         ["Battlegrounds: central keep Dun Murdaigean (keep 32, 12 guards); "
+                          "4 central doors closed at full health"])
+        self.assertEqual(self.q("SELECT COUNT(*) FROM Mob WHERE Mob_ID LIKE 'hdc-bg253-ck-%'"), [(0,)])
+        self.assertEqual(self.q("SELECT FixId FROM fork_world_fixes"), [("classic-battlegrounds-v1",)])
+
     def test_no_central_keep_without_the_rows_it_is_made_from(self):
         # Without Thidranki's Hibernia portal keep row, one of the source or template rows, or one of its central
         # doors, step 5 leaves that region as it is: no Keep row, no central rows, its doors unchanged. The fix
@@ -895,7 +920,7 @@ class BattlegroundShippedWorldTests(unittest.TestCase):
                     (target,) = self.before("SELECT X, Y, Z, Heading FROM Door WHERE InternalID=?",
                                             (region * 1000000 + central,))
                     x, y, z, heading = battlegrounds.moved(region, *door)
-                    self.assertLessEqual(math.hypot(x - target[0], y - target[1]), 50)
+                    self.assertLessEqual(math.hypot(x - target[0], y - target[1]), 41)
                     self.assertLessEqual(abs(z - target[2]), 25)
                     self.assertLessEqual(abs((heading - target[3] + 2048) % 4096 - 2048), 60)
 

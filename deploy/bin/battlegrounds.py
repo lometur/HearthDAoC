@@ -224,8 +224,9 @@ def _step4_portal_keep_guards(conn, now):
                                   "LastTimeRowUpdated": ("?", now)},
                            "m.Region=? AND m.ClassType IN (?, ?, ?) AND EXISTS (SELECT 1 FROM Keep k WHERE "
                            "k.Region=m.Region AND k.KeepID IN (?, ?, ?) AND "
-                           "(m.X-k.X)*(m.X-k.X) + (m.Y-k.Y)*(m.Y-k.Y) <= ?)",
-                           (source, *KEEP_GUARD_CLASSES, *keeps, radius * radius))
+                           "(m.X-k.X)*(m.X-k.X) + (m.Y-k.Y)*(m.Y-k.Y) <= ?) "
+                           "AND NOT EXISTS (SELECT 1 FROM Mob x WHERE x.Mob_ID = ? || m.Mob_ID)",
+                           (source, *KEEP_GUARD_CLASSES, *keeps, radius * radius, f"hdc-bg{region}-pk-"))
         if added:
             items.append(f"{NAMES[region]} ({added})")
     return "Battlegrounds: portal keep guards and hasteners for " + ", ".join(items) if items else None
@@ -242,7 +243,8 @@ def _step5_central_keeps(conn, now):
                    for mob_id in CENTRAL_SOURCES + (FIGHTER_TEMPLATE, LORD_TEMPLATE)}
         if portal_keep is None or None in spots.values() or None in sources.values():
             continue  # a row the keep is made from is missing: leave this region as it is
-        if not conn.execute("SELECT 1 FROM Keep WHERE Region=? AND BaseLevel<100", (region,)).fetchone():
+        if not conn.execute("SELECT 1 FROM Keep WHERE (Region=? AND BaseLevel<100) OR Keep_ID=?",
+                            (region, keep_key)).fetchone():
             keep_id = FIRST_KEEP_ID
             while conn.execute("SELECT 1 FROM Keep WHERE KeepID=?", (keep_id,)).fetchone():
                 keep_id += 1
