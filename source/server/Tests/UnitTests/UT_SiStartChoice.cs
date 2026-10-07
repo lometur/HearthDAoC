@@ -211,6 +211,66 @@ public sealed class UT_SiStartChoice
             Is.EqualTo(SiStartOutcome.NotNow));
     }
 
+    // Qualifies for a qualifying character, with one thing changed per call. reads counts how often it
+    // read the saved answer, which the script reads from the database.
+    private static bool QualifiesReading(out int reads, bool enabled = true, int level = 1, eRace race = eRace.Briton,
+        int region = Albion, string saved = null, bool hasDestination = true)
+    {
+        int count = 0;
+        bool result = SiStartChoice.Qualifies(enabled, level, (int)race, region,
+            () =>
+            {
+                count++;
+                return saved;
+            },
+            hasDestination);
+        reads = count;
+        return result;
+    }
+
+    [Test]
+    public void QualifiesGivesTheSameVerdictAsShouldAsk()
+    {
+        foreach (bool enabled in new[] { true, false })
+        foreach (int level in new[] { 1, 2 })
+        foreach (int race in new[] { 1, 12, 13, 16 })
+        foreach (int region in new[] { 1, 51, 100, 151, 181, 200 })
+        foreach (string saved in new[] { null, "", SiStartChoice.AnswerYes, SiStartChoice.AnswerNo })
+        foreach (bool hasDestination in new[] { true, false })
+        {
+            Assert.That(SiStartChoice.Qualifies(enabled, level, race, region, () => saved, hasDestination),
+                Is.EqualTo(SiStartChoice.ShouldAsk(enabled, level, race, region, saved, hasDestination)),
+                $"enabled {enabled}, level {level}, race {race}, region {region}, saved '{saved}', destination {hasDestination}");
+        }
+    }
+
+    [Test]
+    public void QualifiesReadsTheSavedAnswerOnceWhenAllElseQualifies()
+    {
+        Assert.That(QualifiesReading(out int reads), Is.True);
+        Assert.That(reads, Is.EqualTo(1));
+        Assert.That(QualifiesReading(out reads, saved: SiStartChoice.AnswerYes), Is.False);
+        Assert.That(reads, Is.EqualTo(1));
+        Assert.That(QualifiesReading(out reads, saved: SiStartChoice.AnswerNo), Is.False);
+        Assert.That(reads, Is.EqualTo(1));
+    }
+
+    // Most logins can't be asked. They never read the saved answer, so they cost no database query.
+    [Test]
+    public void QualifiesDoesNotReadTheSavedAnswerWhenSomethingElseRulesItOut()
+    {
+        Assert.That(QualifiesReading(out int reads, enabled: false), Is.False);
+        Assert.That(reads, Is.Zero, "setting off");
+        Assert.That(QualifiesReading(out reads, level: 2), Is.False);
+        Assert.That(reads, Is.Zero, "level 2");
+        Assert.That(QualifiesReading(out reads, race: eRace.Inconnu), Is.False);
+        Assert.That(reads, Is.Zero, "Inconnu");
+        Assert.That(QualifiesReading(out reads, region: 51), Is.False);
+        Assert.That(reads, Is.Zero, "region 51");
+        Assert.That(QualifiesReading(out reads, hasDestination: false), Is.False);
+        Assert.That(reads, Is.Zero, "no destination");
+    }
+
     // Records every call ApplyAccept makes, in order.
     private sealed class Recorder
     {

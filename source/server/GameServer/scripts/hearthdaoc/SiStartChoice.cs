@@ -79,6 +79,15 @@ public static class SiStartChoice
             && hasDestination;
     }
 
+    // ShouldAsk, but it reads the saved answer only when everything else already qualifies. The script
+    // reads the answer from the database, so most logins cost no query.
+    public static bool Qualifies(bool enabled, int level, int race, int region, Func<string> readSavedAnswer,
+        bool hasDestination)
+    {
+        return ShouldAsk(enabled, level, race, region, null, hasDestination)
+            && ShouldAsk(enabled, level, race, region, readSavedAnswer(), hasDestination);
+    }
+
     // stillPending: the player's pending dialog callback is still ours when the callback runs.
     // qualifies: ShouldAsk for the character's state when the callback runs.
     public static SiStartOutcome Classify(byte response, bool stillPending, bool qualifies, bool isAlive)
