@@ -75,7 +75,7 @@ Everything is in new fork-owned files. No upstream file changes.
     - **not answerable now**: the character is dead, or no longer qualifies. Nothing is saved.
 - **Event wiring** (a game-event script in `source/server/GameServer/scripts/`, registered like `BountyMasterRuntime`):
   - **Subscribing:** a `[ScriptLoadedEvent]` method adds a handler for `GamePlayerEvent.GameEntered` with `GameEventMgr.AddHandler`. That event fires once per login, in `PlayerInitRequestHandler`. Only a `GamePlayer` sender is handled; bots are `GameBot`, a `GameNPC`.
-  - **Delay:** when the character qualifies, it waits about five seconds with an `ECSGameTimer`, as `LostStoneOfArawn` does. The delay is there because `GameEntered` fires before the server sends "player init finished", the patch-notes window and the starter help.
+  - **Delay:** when the character qualifies, it waits about two seconds with an `ECSGameTimer` (five at first; the owner found that slow in game), as `LostStoneOfArawn` does. The delay is there because `GameEntered` fires before the server sends "player init finished", the patch-notes window and the starter help.
   - **When the timer fires:** it sends nothing unless the player is still active and playing on the same client, and still qualifies. PlayerInit can still move a player after `GameEntered`.
   - **Asking:** it then asks with `Out.SendCustomDialog(text, callback)`.
   - **Callback:** it checks qualification again before acting.
