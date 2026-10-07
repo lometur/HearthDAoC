@@ -229,48 +229,8 @@ namespace DOL.GS.Scripts
                                     PortLocation = new GameLocation("Caer Berkstead", 1, 584271, 390681,  5848, 2160);
                                     break;
                                 case BattlegroundsID:
-                                {
-                                    // if (player.Level is >= 15 and <= 19)
-                                    // {
-                                    //     if (player.RealmPoints >= 125)
-                                    //     {
-                                    //         break;
-                                    //     }
-                                    //
-                                    //     PortLocation = new GameLocation("Abermenai Alb", 253, 38113, 53507, 4160, 3268);
-                                    // }
-                                    // else 
-                                    if (player.Level is >= 20 and <= 24)
-                                    {
-                                        if (player.RealmPoints >= 7125)
-                                        {
-                                            break;
-                                        }
-
-                                        PortLocation = new GameLocation("Thidranki Alb", 252, 38113, 53507, 4160, 3268);
-                                    }
-                                    // else if (player.Level is >= 25 and <= 29)
-                                    // {
-                                    //     if (player.RealmPoints >= 1375)
-                                    //     {
-                                    //         break;
-                                    //     }
-                                    //
-                                    //     PortLocation = new GameLocation("Murdaigean Alb", 251, 38113, 53507, 4160,
-                                    //         3268);
-                                    // }
-                                    else if (player.Level is >= 34 and <= 39)
-                                    {
-                                        if (player.RealmPoints >= 122500)
-                                        {
-                                            break;
-                                        }
-
-                                        PortLocation = new GameLocation("Caledonia Alb", 250, 38113, 53507, 4160, 3268);
-                                    }
-
+                                    PortLocation = HearthDAoC.ClassicBattlegroundsScript.PorterDestination(this, player);
                                     break;
-                                }
                                 case DarknessFallsID:
                                     PortLocation = new GameLocation("DF Alb", 249, 31670, 27908, 22893);
                                     break;
@@ -388,47 +348,8 @@ namespace DOL.GS.Scripts
                                     PortLocation = new GameLocation("Glenlock Faste", 100, 707024, 657565, 5184, 2050);
                                     break;
                                 case BattlegroundsID:
-                                {
-                                    // if (player.Level >= 15 && player.Level <= 19)
-                                    // {
-                                    //     if (player.RealmPoints >= 125)
-                                    //     {
-                                    //         break;
-                                    //     }
-                                    //
-                                    //     PortLocation = new GameLocation("Abermenai Mid", 253, 53568, 23643, 4530);
-                                    // }
-                                    // else 
-                                    if (player.Level >= 20 && player.Level <= 24)
-                                    {
-                                        if (player.RealmPoints >= 7125)
-                                        {
-                                            break;
-                                        }
-
-                                        PortLocation = new GameLocation("Thidranki Mid", 252, 53568, 23643, 4530);
-                                    }
-                                    // else if (player.Level >= 25 && player.Level <= 29)
-                                    // {
-                                    //     if (player.RealmPoints >= 1375)
-                                    //     {
-                                    //         break;
-                                    //     }
-                                    //
-                                    //     PortLocation = new GameLocation("Murdaigean Mid", 251, 53568, 23643, 4530);
-                                    // }
-                                    else if (player.Level is >= 34 and <= 39)
-                                    {
-                                        if (player.RealmPoints >= 122500)
-                                        {
-                                            break;
-                                        }
-
-                                        PortLocation = new GameLocation("Caledonia Mid", 250, 53568, 23643, 4530);
-                                    }
-
+                                    PortLocation = HearthDAoC.ClassicBattlegroundsScript.PorterDestination(this, player);
                                     break;
-                                }
                                 case DarknessFallsID:
                                     PortLocation = new GameLocation("DF Mid", 249, 18584, 18887, 22892);
                                     break;
@@ -545,47 +466,8 @@ namespace DOL.GS.Scripts
                                     PortLocation = new GameLocation("Dun nGed", 200, 397316, 399496, 4328,3030);
                                     break;
                                 case BattlegroundsID:
-                                {
-                                    // if (player.Level >= 15 && player.Level <= 19)
-                                    // {
-                                    //     if (player.RealmPoints >= 125)
-                                    //     {
-                                    //         break;
-                                    //     }
-                                    //
-                                    //     PortLocation = new GameLocation("Abermenai Hib", 253, 17367, 18248, 4320);
-                                    // }
-                                    // else 
-                                    if (player.Level >= 20 && player.Level <= 24)
-                                    {
-                                        if (player.RealmPoints >= 7125)
-                                        {
-                                            break;
-                                        }
-
-                                        PortLocation = new GameLocation("Thidranki Hib", 252, 17367, 18248, 4320);
-                                    }
-                                    // else if (player.Level >= 25 && player.Level <= 29)
-                                    // {
-                                    //     if (player.RealmPoints >= 1375)
-                                    //     {
-                                    //         break;
-                                    //     }
-                                    //
-                                    //     PortLocation = new GameLocation("Murdaigean Hib", 251, 17367, 18248, 4320);
-                                    // }
-                                    else if (player.Level is >= 34 and <= 39)
-                                    {
-                                        if (player.RealmPoints >= 122500)
-                                        {
-                                            break;
-                                        }
-
-                                        PortLocation = new GameLocation("Caledonia Hib", 250, 17367, 18248, 4320);
-                                    }
-
+                                    PortLocation = HearthDAoC.ClassicBattlegroundsScript.PorterDestination(this, player);
                                     break;
-                                }
                                 case DarknessFallsID:
                                     PortLocation = new GameLocation("DF Hib", 249, 46385, 40298, 21357);
                                     break;

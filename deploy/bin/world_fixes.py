@@ -9,6 +9,9 @@
    has nowhere to enter the world. Add one, at the Inconnu Disciples' spot in the Shrouded Isles.
 3. The welcome messages players see (motd, starting_msg) name Offline DAoC and describe a world to play
    alone. Replace upstream's texts with HearthDAoC's.
+4. The classic battlegrounds (levels 15 to 35, as in the Shrouded Isles era): battlegrounds.py, once per
+   world (the marker classic-battlegrounds-v1 in fork_world_fixes). It runs last, under its own
+   savepoint: if it fails, it undoes only itself and prints why, and the fixes above are still saved.
 
 All of them only apply when needed and leave anything the owner set themselves alone.
 """
@@ -17,6 +20,8 @@ import datetime
 import re
 import sqlite3
 import sys
+
+import battlegrounds
 
 DISCIPLE, SARACEN, INCONNU = 20, 4, 13
 
@@ -85,6 +90,7 @@ def apply(db):
                     renamed.append(key)
             if renamed:
                 changes.append("Welcome messages now name HearthDAoC (%s)" % ", ".join(renamed))
+            changes.extend(battlegrounds.apply(conn, _now()))
     finally:
         conn.close()
     return changes

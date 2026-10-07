@@ -27,7 +27,8 @@ python3 "$BIN/region_ports.py" --db "$DATA/world/opendaoc.sqlite3.db" --port "${
 python3 "$BIN/server_properties.py" --db "$DATA/world/opendaoc.sqlite3.db" --gm-only-commands "${HEARTHDAOC_GM_ONLY_COMMANDS-/tele;/tc}" \
     --si-start-choice "${HEARTHDAOC_SI_START_CHOICE-on}"
 # Fixes to upstream's classic world data (Disciple enabled, Saracen Disciple start, HearthDAoC welcome
-# messages); see world_fixes.py.
+# messages) and, once per world, the classic battlegrounds; see world_fixes.py and battlegrounds.py. A
+# battleground fix that fails undoes itself and says so, and the start goes on.
 python3 "$BIN/world_fixes.py" --db "$DATA/world/opendaoc.sqlite3.db"
 
 mkdir -p "$DATA/logs" "$DATA/state" "$DATA/backups" "$DATA/navmesh"

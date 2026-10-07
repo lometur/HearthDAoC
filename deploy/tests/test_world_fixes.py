@@ -99,7 +99,21 @@ class FixesTests(unittest.TestCase):
     @unittest.skipUnless(TEST_WORLD, "needs HDC_TEST_WORLD (a clean classic world database)")
     def test_shipped_world(self):
         shutil.copyfile(TEST_WORLD, self.db)
-        self.assertEqual(len(wf.apply(self.db)), 3)
+        self.assertEqual(wf.apply(self.db), [
+            "Disciple (Necromancer's base class) enabled: disabled_classes 20;33;34;39;58-62 -> 33;34;39;58-62",
+            "Saracen Disciples get a starting location (with the Inconnu Disciples, region 51)",
+            "Welcome messages now name HearthDAoC (motd, starting_msg)",
+            "Battlegrounds: classic level and realm rank limits for Abermenai, Thidranki, Murdaigean, Caledonia",
+            "Battlegrounds: Caledon is shown as Caledonia; no zone XP bonus in Thidranki, Caledonia",
+            "Battlegrounds: keep levels for the ranges (Thidranki Faste base level 24, Caer Caledon base level 35, "
+            "4 gates' health)",
+            "Battlegrounds: portal keep guards and hasteners for Abermenai (34), Murdaigean (34)",
+            "Battlegrounds: central keeps Dun Abermenai (keep 32, 12 guards), Dun Murdaigean (keep 33, 12 guards); "
+            "4 central doors closed at full health",
+            "Battlegrounds: Atlas leftovers archived in fork_removed_mobs and removed (15 training dummies, "
+            "3 Void Merchants, the stray Wizard)",
+        ])
+        self.assertEqual(self.q("SELECT FixId FROM fork_world_fixes"), [("classic-battlegrounds-v1",)])
         self.assertEqual(self.q("SELECT Value FROM ServerProperty WHERE `Key`='disabled_classes'"), [("33;34;39;58-62",)])
         self.assertEqual(self.q("SELECT RaceID FROM StartupLocation WHERE ClassID=20 ORDER BY RaceID"), [(1,), (4,), (13,)])
         self.assertEqual(dict(self.q("SELECT `Key`, Value FROM ServerProperty WHERE `Key` IN ('motd', 'starting_msg')")),

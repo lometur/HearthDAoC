@@ -26,7 +26,7 @@ jobs:
     outputs:
       release: ${{ steps.rel.outputs.tag }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
         with:
           fetch-depth: 0  # history and tags, to find what changed since the last release
 
@@ -44,7 +44,7 @@ jobs:
           fi
           echo "tag=$tag" >> "$GITHUB_OUTPUT"
 
-      - uses: actions/setup-dotnet@v4
+      - uses: actions/setup-dotnet@v5
         with:
           dotnet-version: "10.0.x"
 
@@ -110,7 +110,7 @@ jobs:
         run: |
           # The server build copies config/serverconfig.xml; use the same loopback placeholder as the image build.
           cp deploy/serverconfig.build.xml source/server/CoreServer/config/serverconfig.xml
-          dotnet test source/server/Tests/Tests.csproj --nologo --filter "FullyQualifiedName~UT_CommandPrivLevelOverrides|FullyQualifiedName~UT_SiStartChoice"
+          dotnet test source/server/Tests/Tests.csproj --nologo --filter "FullyQualifiedName~UT_CommandPrivLevelOverrides|FullyQualifiedName~UT_SiStartChoice|FullyQualifiedName~UT_ClassicBattlegrounds"
 
       - name: CLI integration tests
         env:
@@ -144,7 +144,7 @@ jobs:
     env:
       TAG: ${{ needs.test-build-publish.outputs.release }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
       - name: Build bundles (no EA files)
         run: deploy/build_bundles.sh "$TAG" dist
       - name: Create release (and its tag on this commit)

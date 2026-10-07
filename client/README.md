@@ -97,6 +97,31 @@ If the question goes away unanswered, for example because you logged out, it com
 login while the character is still level 1. The question comes from the server, not from the patch,
 so it also appears with the standard creation screen, unless the server has turned it off.
 
+## Battlegrounds
+
+The four battlegrounds work as in the classic game. Get the free **Battlegrounds Medallion of
+Passage** from your realm's medallion merchant (Sall Fadri at Castle Sauvage, Gwulla at Svasud Faste,
+Araisa at Druim Ligen), wear it in the Mythical slot and stand by the frontier porter (Master Visur,
+Stor Gothi Annark or Glasny) when it casts, about every two minutes. The porter sends you to the
+battleground for your level, beside your realm's portal keep there, and the medallion is used up:
+
+| Battleground | Levels | Highest realm rank |
+|---|---|---|
+| Abermenai | 15 to 19 | 1L2 (under 125 realm points) |
+| Thidranki | 20 to 24 | 1L3 (under 350) |
+| Murdaigean | 25 to 29 | 1L5 (under 1,375) |
+| Caledonia | 30 to 35 | 1L9 (under 7,125) |
+
+If your level or realm points don't fit, the porter says why in the chat window and you keep the
+medallion. Each battleground has a portal keep for each realm and a central keep with guards and a
+lord; kill the lord to take the keep for your realm.
+
+Going past a limit inside changes nothing at once: you may stay until you log out or die. You are then
+at your bind point (after a logout, at your realm's home portal keep instead if your bind point is in a
+battleground), and the porter won't send you back. A character left inside after a lost connection is
+moved a moment after its next login, with a message saying why. No battleground has a zone experience
+bonus.
+
 ## What happens at each launch
 
 Each time you start the game, `play.sh` (Linux) or `connect-hearthdaoc.bat` (Windows) checks
