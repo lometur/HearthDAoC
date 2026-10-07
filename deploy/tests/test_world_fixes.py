@@ -107,6 +107,9 @@ class FixesTests(unittest.TestCase):
             "Battlegrounds: Caledon is shown as Caledonia; no zone XP bonus in Thidranki, Caledonia",
             "Battlegrounds: keep levels for the ranges (Thidranki Faste base level 24, Caer Caledon base level 35, "
             "4 gates' health)",
+            "Battlegrounds: portal keep guards and hasteners for Abermenai (34), Murdaigean (34)",
+            "Battlegrounds: central keeps Dun Abermenai (keep 32, 12 guards), Dun Murdaigean (keep 33, 12 guards); "
+            "4 central doors closed at full health",
             "Battlegrounds: Atlas leftovers archived in fork_removed_mobs and removed (15 training dummies, "
             "3 Void Merchants, the stray Wizard)",
         ])
