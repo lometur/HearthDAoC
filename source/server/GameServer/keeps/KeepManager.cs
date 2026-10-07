@@ -783,7 +783,7 @@ namespace DOL.GS.Keeps
 			switch (player.Realm)
 			{
 				case eRealm.Albion: location = "Castle Sauvage"; break;
-				case eRealm.Midgard: location = "Svasudheim Faste"; break;
+				case eRealm.Midgard: location = "Svasud Faste"; break;
 				case eRealm.Hibernia: location = "Druim Ligen"; break;
 			}
 
