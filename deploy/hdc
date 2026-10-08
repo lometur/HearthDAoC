@@ -54,7 +54,8 @@ hdc - HearthDAoC server
   init [--seed-navmesh DIR]      create the world now (optionally reuse verified navmesh files from DIR)
   add-bots <alb|mid|hib> <1|10|100> <1|50>
   account create <name> <password> [--plvl 1-3] | list | plvl <name> <1-3>
-  bot-goals show | set <1-19|20-49|50> <solo> <group> <rvr> | reset | import <file>   (changes need the server stopped)
+  bot-goals show | set <1-19|20-49|50> <solo> <group> <rvr> [<battlegrounds>] | reset | import <file>
+                                 (changes need the server stopped; set keeps Battlegrounds % when it is left out)
   backup | backups               take a manual backup now (kept until you delete it) | list backups
   restore <backup file name> [--force]   (server stopped; --force allows another edition)
   new-world [--edition classic|b]   archive the current world and start a fresh one (server stopped)

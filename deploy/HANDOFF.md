@@ -84,6 +84,22 @@ editing `.env`, `./hdc up` recreates the server with them.
 Before remote players join: `./hdc auto-accounts off` and create their accounts with
 `./hdc account create <name> <password>`.
 
+**Bot goals.** `./hdc bot-goals show` lists, for each level band, the share of bots given each goal: Solo
+PvE, Group PvE, RvR and Battlegrounds (new in upstream 0.35; upstream's default is 0 everywhere). Each row
+must add up to 100; levels 1-19 cannot have RvR and level 50 cannot have Battlegrounds. With the server
+stopped, `./hdc bot-goals set <1-19|20-49|50> <solo> <group> <rvr> [<battlegrounds>]` changes one row
+(leaving out Battlegrounds keeps its value); the server applies it at its next start. After the deploy,
+set the owner's split, one row at a time:
+
+| Levels | Solo PvE | Group PvE | RvR | Battlegrounds |
+|---|---|---|---|---|
+| 1-19 | 50 | 30 | 0 | 20 |
+| 20-49 | 20 | 20 | 30 | 30 |
+| 50 | 10 | 20 | 70 | 0 |
+
+For example, `./hdc stop && ./hdc bot-goals set 20-49 20 20 30 30`, then the other two rows the same
+way, then `./hdc up`.
+
 **Classic battlegrounds.** At its first start, a world gets the classic battlegrounds (Abermenai 15-19,
 Thidranki 20-24, Murdaigean 25-29, Caledonia 30-35); `./hdc logs` shows each change on a line starting
 `Battlegrounds:`. This runs once per world: the row `classic-battlegrounds-v1` in the world's
