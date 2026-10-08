@@ -26,6 +26,8 @@ DEFAULT_FILES = {
     "runtime/server/navmesh/zone001.nav": _blob(6, 5000),
     "runtime/server/navmesh/zone002.nav": _blob(7, 7000),
     "runtime/server/config/logconfig.xml": b"<nlog/>",
+    "runtime/server/classic-quests.json": b'{"Quests": {}}',
+    "runtime/server/classic-quest-guides.json": b'{"Guides": {}}',
 }
 
 
@@ -66,6 +68,8 @@ def build(directory, files=None, part_size=4096, tamper=None, extra_names=()):
         "client_prefix": "runtime/client-opendaoc/app/",
         "navmesh_prefix": "runtime/server/navmesh/",
         "config_prefix": "runtime/server/config/",
+        "server_prefix": "runtime/server/",
+        "server_files": ["classic-quests.json", "classic-quest-guides.json"],
         "editions": {
             "b": {"world_db": "runtime/data/opendaoc.sqlite3.db",
                   "game_dll": "runtime/client-opendaoc/app/game.dll"},

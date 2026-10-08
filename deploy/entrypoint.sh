@@ -14,8 +14,10 @@ EDITION="${HEARTHDAOC_EDITION:-classic}"
 LISTEN_IP="${HEARTHDAOC_LISTEN_IP:-0.0.0.0}"
 PORT="${HEARTHDAOC_PORT:-10301}"
 
-# init_world.py checks that /data is writable first and prints the exact fix (exit 64).
-init_args=(--lock "$LOCK" --data "$DATA" --edition "$EDITION")
+# init_world.py checks that /data is writable first and prints the exact fix (exit 64). It also links
+# the release's server data files (classic-quests.json and the like, kept in /data/server-files) into
+# the server's folder, where the server reads them.
+init_args=(--lock "$LOCK" --data "$DATA" --edition "$EDITION" --server-dir "$SRV")
 [[ -n "${HEARTHDAOC_SKIP_NAVMESH:-}" ]] && init_args+=(--skip-navmesh)
 python3 "$BIN/init_world.py" "${init_args[@]}"
 

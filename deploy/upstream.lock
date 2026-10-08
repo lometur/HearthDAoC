@@ -16,6 +16,8 @@
   "navmesh_prefix": "runtime/server/navmesh/",
   "config_prefix": "runtime/server/config/",
   "config_files": ["logconfig.xml", "invalidnames.txt", "MailConfig.xml"],
+  "server_prefix": "runtime/server/",
+  "server_files": ["classic-quests.json", "classic-quest-guides.json"],
   "editions": {
     "b": {
       "world_db": "runtime/data/opendaoc.sqlite3.db",

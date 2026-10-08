@@ -4,6 +4,9 @@
 First start: download the edition's clean world database and the navmeshes (all verified), then
 write /data/world.json LAST, so an interrupted first start simply resumes on the next start.
 Later starts: refuse if HEARTHDAOC_EDITION or the image's upstream version differs from the world's.
+Every start: make sure the release's server data files (the lock's server_files, which the server
+reads from its own folder) are in /data/server-files/<upstream version>, and with --server-dir link
+them into the server's folder.
 """
 import argparse
 import datetime
@@ -29,7 +32,7 @@ def not_writable_hint(data):
         os.makedirs(data, exist_ok=True)
     except OSError:
         pass
-    paths = [data] + [os.path.join(data, d) for d in ("world", "navmesh", "logs", "state", "backups")]
+    paths = [data] + [os.path.join(data, d) for d in ("world", "navmesh", "server-files", "logs", "state", "backups")]
     paths.append(world_paths(data)["db"])
     bad = [p for p in paths if os.path.exists(p) and not os.access(p, os.W_OK)]
     if not bad and os.access(data, os.W_OK):
@@ -109,6 +112,49 @@ def ensure_navmesh(release, navmesh_dir, seed=None, log=print):
     return len(files), fetched
 
 
+def server_files_dir(data, version):
+    return os.path.join(data, "server-files", version)
+
+
+def ensure_server_files(release, data, log=print):
+    """Download the lock's server_files (verified) into this upstream version's folder. A file is
+    only written once its hash checked out, so one that exists is complete: later starts need no
+    network. Returns how many were downloaded."""
+    folder = server_files_dir(data, release.version)
+    fetched = 0
+    for name in release.lock.get("server_files", []):
+        dest = os.path.join(folder, name)
+        if not os.path.isfile(dest):
+            release.extract(release.lock["server_prefix"] + name, dest)
+            fetched += 1
+    if fetched:
+        log(f"  server data files ready ({fetched} downloaded)")
+    return fetched
+
+
+def prune_server_files(data, version):
+    """Remove other upstream versions' server data files (the world is on `version`)."""
+    parent = os.path.dirname(server_files_dir(data, version))
+    if os.path.isdir(parent):
+        for name in os.listdir(parent):
+            if name != version:
+                shutil.rmtree(os.path.join(parent, name), ignore_errors=True)
+
+
+def link_server_files(release, data, server_dir):
+    """Link each server data file into server_dir, where the server reads it. .NET treats a dangling
+    link as an existing file, so a file that is missing gets no link."""
+    folder = server_files_dir(data, release.version)
+    for name in release.lock.get("server_files", []):
+        link, target = os.path.join(server_dir, name), os.path.join(folder, name)
+        if os.path.isdir(link) and not os.path.islink(link):
+            shutil.rmtree(link)
+        elif os.path.lexists(link):
+            os.remove(link)
+        if os.path.isfile(target):
+            os.symlink(target, link)
+
+
 def init(release, data, edition, skip_navmesh=False, seed_navmesh=None, log=print, recover=True):
     if recover:  # at server start; new-world turns it off because it is the swap in progress
         recover_interrupted_swap(data, log)
@@ -125,6 +171,7 @@ def init(release, data, edition, skip_navmesh=False, seed_navmesh=None, log=prin
             log(f"ERROR: this world is from upstream {meta['version']}, but this image is for {release.version}. "
                 "Deploy the matching image, or run: hdc upgrade-world (it backs up first).")
             return EXIT_VERSION
+        ensure_server_files(release, data, log)  # a world from before server_files, or a new version
         if not skip_navmesh and not meta.get("navmesh"):
             ensure_navmesh(release, p["navmesh"], seed_navmesh, log)
             meta["navmesh"] = True
@@ -133,6 +180,7 @@ def init(release, data, edition, skip_navmesh=False, seed_navmesh=None, log=prin
     log(f"Creating a new '{edition}' world from upstream {release.version}...")
     release.extract(release.edition(edition)["world_db"], p["db"])
     log("  world database ready")
+    ensure_server_files(release, data, log)
     navmesh = False
     if not skip_navmesh:
         total, fetched = ensure_navmesh(release, p["navmesh"], seed_navmesh, log)
@@ -155,13 +203,20 @@ def main(argv=None):
     ap.add_argument("--edition", required=True, choices=["classic", "b"])
     ap.add_argument("--skip-navmesh", action="store_true")
     ap.add_argument("--seed-navmesh", help="folder of already-downloaded zoneNNN.nav files to verify and reuse")
+    ap.add_argument("--server-dir", help="the server's folder: link the server data files into it")
     a = ap.parse_args(argv)
     hint = not_writable_hint(a.data)
     if hint:
         print(hint, file=sys.stderr)
         return EXIT_NOT_WRITABLE
     try:
-        return init(Release.from_lock_file(a.lock), a.data, a.edition, a.skip_navmesh, a.seed_navmesh)
+        release = Release.from_lock_file(a.lock)
+        rc = init(release, a.data, a.edition, a.skip_navmesh, a.seed_navmesh)
+        if rc == 0:  # the world is on this release's version, so other versions' files are stale
+            prune_server_files(a.data, release.version)
+            if a.server_dir:
+                link_server_files(release, a.data, a.server_dir)
+        return rc
     except FetchError as e:
         print(f"ERROR: world download failed: {e}. The server was not started; the next start resumes.",
               file=sys.stderr)
