@@ -38,6 +38,7 @@ namespace CEM.Client.ZoneExporter
         /// Ladder instances collected during export (links placed after Recast pass 1).
         /// </summary>
         public List<LadderDefinition> LadderDefinitions { get; }
+        private readonly List<object> _ladderAudit = new();
 
         /// <summary>
         /// Zone
@@ -79,6 +80,10 @@ namespace CEM.Client.ZoneExporter
 
             if (LadderDefinitions.Count > 0)
                 LadderDefinitionWriter.Write($"{ZoneFilePrefix}.ladders.json", Zone.ID, LadderDefinitions);
+
+            if (Program.Arguments.ExportLadderAudit)
+                File.WriteAllText($"{ZoneFilePrefix}.climb-audit.json",
+                    System.Text.Json.JsonSerializer.Serialize(_ladderAudit));
 
             GeomSetWriter.Flush();
             GeomSetWriter.Dispose();
@@ -266,7 +271,8 @@ namespace CEM.Client.ZoneExporter
                 }
                 else if (collide)
                 {
-                    AddModelToObj(nifs[nifid], worldMatrix, ["collide", "collidee", "collision"], true, fixtureId: fixid);
+                    AddModelToObj(nifs[nifid], worldMatrix, ["collide", "collidee", "collision"], true, fixtureId: fixid,
+                        openDoorLeaves: true);
                 }
 
                 ExtractDoor(nifs[nifid], worldMatrix, uniqueid == 0 ? fixid : uniqueid);
@@ -452,7 +458,9 @@ namespace CEM.Client.ZoneExporter
 
         private static string[] _collisionsMask = ["collisionswitch", "tree coll"];
 
-        private void AddModelToObj(NiFile model, Matrix4 worldMatrix, string[] filter, bool invertTris = false, int fixtureId = 0, bool both = false)
+        private static readonly string TraceFixture = Environment.GetEnvironmentVariable("BUILDNAV_TRACE_FIXTURE");
+
+        private void AddModelToObj(NiFile model, Matrix4 worldMatrix, string[] filter, bool invertTris = false, int fixtureId = 0, bool both = false, bool openDoorLeaves = false)
         {
             if (model == null)
             {
@@ -498,13 +506,17 @@ namespace CEM.Client.ZoneExporter
                 }
 
                 // Ignore LoD stuff and shadowcaster I guess.
-                if (IsMatched(avNode, ["!LoD_cullme", "shadowcaster", "far"]))
+                if (IsMatched(avNode, ["!LoD_cullme", "shadowcaster", "far"]) || IsFarLod(avNode))
                     continue;
 
                 if (filter.Length > 0)
                 {
                     // filter doors
-                    if (!IsMatched(avNode, filter) || FindMatchRegex(avNode, DoorRegex) != string.Empty)
+                    if (!MatchesCollisionFilter(avNode, filter) || FindMatchRegex(avNode, DoorRegex) != string.Empty)
+                        continue;
+
+                    // Door leaves are never walls: they join their door's area (ExtractDoor) or are walkable.
+                    if (openDoorLeaves && FindMatchRegex(avNode, DoorLeafRegex) != string.Empty)
                         continue;
                 }
 
@@ -521,6 +533,14 @@ namespace CEM.Client.ZoneExporter
 
                 if (!foundMesh)
                     continue;
+
+                // Debug: BUILDNAV_TRACE_FIXTURE=<zone>:<fixture id> lists every collision piece of one fixture.
+                if (TraceFixture == $"{Zone.ID}:{fixtureId}")
+                {
+                    var path = new List<string>();
+                    for (NiAVObject n = avNode; n != null; n = n.Parent) path.Add(n.Name.Value);
+                    Log.Normal($"TRACE {Zone.ID}:{fixtureId} {string.Join(" < ", path)} x {vertices.Min(v => v.X):0}-{vertices.Max(v => v.X):0} y {vertices.Min(v => v.Y):0}-{vertices.Max(v => v.Y):0} z {vertices.Min(v => v.Z):0}-{vertices.Max(v => v.Z):0}");
+                }
 
                 var filteredTriangles = new List<Triangle>(triangles.Length);
                 foreach (var tri in triangles)
@@ -605,6 +625,42 @@ namespace CEM.Client.ZoneExporter
         /// <summary>
         /// True if the current tree matches any or all of the specified filters
         /// </summary>
+        /// <summary>
+        /// Like IsMatched for the collision filter, except that "collisionswitch" is not itself a
+        /// collision node: it is the switch that holds both the collision shapes ("collidee") and the
+        /// visible LOD tree. Matching it made every visible mesh solid, including far-distance LOD
+        /// stand-ins such as the flat panel across every Hibernian Celtic hut doorway
+        /// (Hcelthut "Hut-Far/intF"), which sealed the huts (2026-10-06). "tree coll" is a collision
+        /// node (the trunk cylinders of big trees).
+        /// </summary>
+        private bool MatchesCollisionFilter(NiAVObject obj, string[] filters)
+        {
+            bool collisionFilter = filters.Any(f => f.Equals("collision", StringComparison.OrdinalIgnoreCase));
+            for (NiAVObject current = obj; current != null; current = current.Parent)
+            {
+                string name = current.Name.Value;
+                if (collisionFilter && name.Equals("collisionswitch", StringComparison.OrdinalIgnoreCase))
+                    continue;
+                if (collisionFilter && name.Equals("tree coll", StringComparison.OrdinalIgnoreCase))
+                    return true;
+                if (filters.Any(filter => string.IsNullOrEmpty(filter) || name.StartsWith(filter, StringComparison.OrdinalIgnoreCase)))
+                    return true;
+            }
+            return false;
+        }
+
+        /// <summary>A far-distance LOD branch ("Hut-Far", "Tower Far"...): only drawn from afar, never solid.</summary>
+        private static bool IsFarLod(NiAVObject obj)
+        {
+            for (NiAVObject current = obj; current != null; current = current.Parent)
+                if (FarLodRegex.IsMatch(current.Name.Value))
+                    return true;
+            return false;
+        }
+
+        private static readonly System.Text.RegularExpressions.Regex FarLodRegex =
+            new(@"(^|[-_ ])far$", System.Text.RegularExpressions.RegexOptions.IgnoreCase);
+
         private bool IsMatched(NiAVObject obj, string[] filters, bool all = false)
         {
             int matchCount = 0;

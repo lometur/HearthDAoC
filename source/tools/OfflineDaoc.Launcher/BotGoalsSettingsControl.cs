@@ -6,7 +6,7 @@ internal sealed class BotGoalsSettingsControl : UserControl
 {
     private readonly string _path;
     private readonly Func<bool> _serverStopped;
-    private readonly NumericUpDown[,] _values = new NumericUpDown[3, 3];
+    private readonly NumericUpDown[,] _values = new NumericUpDown[3, 4];
     private readonly Label[] _totals = new Label[3];
     private readonly Label _status = new() { AutoSize = true, MaximumSize = new Size(850, 0) };
     private readonly Button _save = new() { Text = "Save settings", AutoSize = true };
@@ -35,16 +35,16 @@ internal sealed class BotGoalsSettingsControl : UserControl
             Font = new Font(Font.FontFamily, 15, FontStyle.Bold), ForeColor = DaocTheme.GoldLight });
         body.Controls.Add(new Label { AutoSize = true, MaximumSize = new Size(850, 0), Margin = new Padding(3, 10, 3, 15),
             Text = "Choose the goal mix for each level bracket. Each row must total 100%.\n0% disables a goal; 100% selects only that goal. Applies to autonomous gamebots in all three realms." });
-        var table = new TableLayoutPanel { AutoSize = true, ColumnCount = 5, RowCount = 4, Margin = new Padding(3, 3, 3, 15) };
-        foreach (int width in new[] { 150, 135, 135, 135, 190 }) table.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, width));
-        string[] headings = ["Level bracket", "Solo PvE %", "Group PvE %", "RvR %", "Row total"];
-        for (int col = 0; col < 5; col++) table.Controls.Add(new Label { Text = headings[col], AutoSize = true, Padding = new Padding(0, 4, 0, 8) }, col, 0);
+        var table = new TableLayoutPanel { AutoSize = true, ColumnCount = 6, RowCount = 4, Margin = new Padding(3, 3, 3, 15) };
+        foreach (int width in new[] { 150, 125, 125, 125, 140, 190 }) table.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, width));
+        string[] headings = ["Level bracket", "Solo PvE %", "Group PvE %", "RvR %", "Battlegrounds %", "Row total"];
+        for (int col = 0; col < 6; col++) table.Controls.Add(new Label { Text = headings[col], AutoSize = true, Padding = new Padding(0, 4, 0, 8) }, col, 0);
         for (int row = 0; row < 3; row++)
         {
             table.Controls.Add(new Label { Text = new[] { "Levels 1–19", "Levels 20–49", "Level 50" }[row], AutoSize = true, Padding = new Padding(0, 8, 0, 8) }, 0, row + 1);
-            for (int col = 0; col < 3; col++)
+            for (int col = 0; col < 4; col++)
             {
-                var value = new NumericUpDown { Minimum = 0, Maximum = 100, Width = 108,
+                var value = new NumericUpDown { Minimum = 0, Maximum = 100, Width = 100,
                     Margin = new Padding(3, 5, 3, 8), AccessibleName = headings[col] + " " + row,
                     BackColor = DaocTheme.Panel, ForeColor = DaocTheme.Text };
                 _values[row, col] = value;
@@ -52,11 +52,13 @@ internal sealed class BotGoalsSettingsControl : UserControl
                 table.Controls.Add(value, col + 1, row + 1);
             }
             _totals[row] = new Label { AutoSize = true, Padding = new Padding(0, 8, 0, 8) };
-            table.Controls.Add(_totals[row], 4, row + 1);
+            table.Controls.Add(_totals[row], 5, row + 1);
         }
         body.Controls.Add(table);
         body.Controls.Add(new Label { AutoSize = true, MaximumSize = new Size(850, 0),
             Text = "Levels 1–19 cannot do RvR. Saved settings replace forced PvE after RvR, allowing back-to-back RvR.\n" +
+                "Battlegrounds % sends bots to the battleground of their level: Abermenai 15–19, Thidranki 20–24, Murdaigean 25–29,\n" +
+                "Caledonia 30–35. Bots outside those levels (1–14 and 36–49) do solo or group PvE with that share instead. Level 50 cannot.\n" +
                 "Percentages are population targets, not exact head counts at every moment. Existing allowed tasks finish normally.\n" +
                 "Group-only bots wait for a complete eight-member role roster; they never fall back to a 0% goal.\n" +
                 "Normal training, selling, recovery and town breaks remain. Player characters and /spawn companions are unchanged." });
@@ -77,7 +79,8 @@ internal sealed class BotGoalsSettingsControl : UserControl
     {
         Levels1To19 = Row(0), Levels20To49 = Row(1), Level50 = Row(2),
     };
-    private BotGoalWeights Row(int row) => new((int)_values[row, 0].Value, (int)_values[row, 1].Value, (int)_values[row, 2].Value);
+    private BotGoalWeights Row(int row) => new((int)_values[row, 0].Value, (int)_values[row, 1].Value, (int)_values[row, 2].Value,
+        (int)_values[row, 3].Value);
 
     private void SetValues(BotGoalSettings settings)
     {
@@ -88,6 +91,7 @@ internal sealed class BotGoalsSettingsControl : UserControl
             _values[row, 0].Value = rows[row].SoloPve;
             _values[row, 1].Value = rows[row].GroupPve;
             _values[row, 2].Value = rows[row].RvR;
+            _values[row, 3].Value = rows[row].Battlegrounds;
         }
         _loading = false;
     }
@@ -136,7 +140,8 @@ internal sealed class BotGoalsSettingsControl : UserControl
             valid &= total == 100;
             _totals[row].Text = total == 100 ? "100% — ready" : $"{total}% — needs 100%";
             _totals[row].ForeColor = total == 100 ? Color.LightGreen : Color.Salmon;
-            for (int col = 0; col < 3; col++) _values[row, col].Enabled = stopped && !(row == 0 && col == 2);
+            // Levels 1–19 have no RvR and level 50 has no battleground bracket.
+            for (int col = 0; col < 4; col++) _values[row, col].Enabled = stopped && !(row == 0 && col == 2) && !(row == 2 && col == 3);
         }
         _save.Enabled = stopped && valid;
         _defaults.Enabled = _undo.Enabled = stopped;

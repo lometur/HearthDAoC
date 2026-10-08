@@ -1,7 +1,7 @@
-"""Build the Offline DAoC 0.34 "Claude Takeover II" playable package (0.34b + 0.34 edition files).
+"""Build the Offline DAoC 0.35 "Claude Takeover III" playable package (0.35b + 0.35 edition files).
 
-    python build_release_034.py --snapshot <1:1 copy of the CLAUDE VERSION folder>
-                                --repo <this repository> --stock-game-dll <normal v0.32 game.dll>
+    python build_release_035.py --snapshot <1:1 copy of the CLAUDE VERSION folder>
+                                --repo <this repository> --edition-game-dll <0.35 client without the Sluaghbinder patches>
                                 --out <new staging folder>
 
 The package is the CLAUDE VERSION 1:1 except for three things, per the owner:
@@ -13,9 +13,12 @@ Builds that differ from the snapshot on purpose: GameServer.dll (edition switch)
 launcher (portable account, per-install client profile). Everything else is copied byte for
 byte and hash-verified. The snapshot is only read, never changed.
 
-The 0.34 "no custom class" edition is two swap-in files under editions/: a database with
+The 0.35 "no custom class" edition is two swap-in files under editions/: a database with
 classes/enable_sluaghbinder = False (plus no Sluaghbinder trainer, wisp or class skill rows)
-and the normal v0.32 game.dll, so the Hibernian Mauler slot is disabled as in v0.32.
+and a game.dll that is the 0.35b client without its two Sluaghbinder patches (class label, race links), so the
+Hibernian Mauler slot is disabled as in v0.32 while the classic war map, red quest markers and the QUEST GUIDE
+button work the same. It is the v0.32 client with patch_bounty_map_client.py, patch_quest_marker_range_client.py,
+patch_classic_warmap_client.py and patch_quest_journal_button_client.py applied, in that order.
 """
 from __future__ import annotations
 
@@ -28,16 +31,16 @@ import sqlite3
 from datetime import datetime, timezone
 from pathlib import Path
 
-STOCK_GAME_DLL_SHA256 = "67dcf68a37b95a93946a943b99d5e19b4a03e08cd6469275e25c7b909de21e99"
-SLUAGH_GAME_DLL_SHA256 = "01b1848e79b31d2822811effb3d3b098e07015db2d3db1178df5ba31ed805e96"
+EDITION_GAME_DLL_SHA256 = "f55ed6b068e22ce8e1106871c2fad6ee10c18390bbb8b5dc772219ad8c8b83bb"
+SLUAGH_GAME_DLL_SHA256 = "e1d471bb19108610ab9c8ca77dd41af40afe716685b03f4cdeda88c05678463b"
 DOTNET_VERSION = "10.0.11"
-CLIENT_PROFILE = "OfflineDAoC034"
+CLIENT_PROFILE = "OfflineDAoC035"
 SLUAGH_MOBS = ("sluaghbinder_trainer_tir_na_nog", "sluaghbinder_bound_wisp_tir_na_nog")
 
 # Personal or run-state files that are never part of a public world.
-EXCLUDED_DIRS = {"logs", "backups", "deployment-backups", "keep-relic-reset-backups", "progress-backups",
+EXCLUDED_DIRS = {"logs", "backups", "dxvk-staging", "deployment-backups", "keep-relic-reset-backups", "progress-backups",
                  "screenshots", ".git", "testresults"}
-EXCLUDED_NAMES = {"account.txt", "rvr-world.json", "bot-goals.json", "bot-world.json", "bot-world.request",
+EXCLUDED_NAMES = {"account.txt", "rvr-world.json", "bot-goals.json", "bot-world.json", "bot-world.request", "bot-ai-delay.json",
                   "realm-events.request.json", "realm-events.result.json", "realm-event-records.sqlite3",
                   "realm-event-records.sqlite3-wal", "realm-event-records.sqlite3-shm", "errorlog.txt",
                   "debug.log", "chat.log", "user.dat", "unins000.exe", "unins000.dat", "uninstdaoc.exe"}
@@ -185,14 +188,14 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--snapshot", type=Path, required=True)
     parser.add_argument("--repo", type=Path, required=True)
-    parser.add_argument("--stock-game-dll", type=Path, required=True)
+    parser.add_argument("--edition-game-dll", type=Path, required=True)
     parser.add_argument("--out", type=Path, required=True)
     args = parser.parse_args()
     snapshot, repo, out = args.snapshot.resolve(), args.repo.resolve(), args.out.resolve()
     if out.exists():
         raise SystemExit(f"{out} exists; refusing to overwrite a staging folder")
-    if sha(args.stock_game_dll) != STOCK_GAME_DLL_SHA256:
-        raise SystemExit("The stock game.dll is not the normal v0.32 client")
+    if sha(args.edition_game_dll) != EDITION_GAME_DLL_SHA256:
+        raise SystemExit("The edition game.dll is not the patched 0.35 client without the Sluaghbinder patches")
     live_runtime = snapshot / "runtime"
     if sha(live_runtime / "client-opendaoc/app/game.dll") != SLUAGH_GAME_DLL_SHA256:
         raise SystemExit("The snapshot client is not the Sluaghbinder client this release expects")
@@ -238,13 +241,13 @@ def main():
         if (dotnet / name).exists():
             shutil.copy2(dotnet / name, bundled / name)
 
-    # The progress importer is added by assemble_release_034.py, with the docs and source.
+    # The progress importer is added by assemble_release_035.py, with the docs and source.
 
-    print("Building the 0.34 no-custom-class edition files...", flush=True)
-    edition = out / "editions/0.34-no-custom-class"
+    print("Building the 0.35 no-custom-class edition files...", flush=True)
+    edition = out / "editions/0.35-no-custom-class"
     no_class = no_custom_class_database(database, edition / "runtime/data/opendaoc.sqlite3.db")
     (edition / "runtime/client-opendaoc/app").mkdir(parents=True, exist_ok=True)
-    shutil.copy2(args.stock_game_dll, edition / "runtime/client-opendaoc/app/game.dll")
+    shutil.copy2(args.edition_game_dll, edition / "runtime/client-opendaoc/app/game.dll")
 
     report = {
         "built_utc": datetime.now(timezone.utc).isoformat(),

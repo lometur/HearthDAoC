@@ -76,7 +76,8 @@ namespace CEM
             BuildNavmeshes();
             Log.Normal("---------------------------------------------------------------------------");
             Log.Normal("All done.");
-            Console.ReadKey();
+            if (!Console.IsInputRedirected && !Console.IsOutputRedirected)
+                Console.ReadKey();
         }
 
         private static IEnumerable<Zone2> GetZonesToBuild()
@@ -110,8 +111,7 @@ namespace CEM
             Log.Normal("");
             Console.Title = "NavGen";
             int finishedZones = 0;
-            // Keep the desktop responsive while baking the full Classic + SI set.
-            var po = new ParallelOptions() { MaxDegreeOfParallelism = Math.Min(6, Math.Max(1, Environment.ProcessorCount - 1)) };
+            var po = new ParallelOptions() { MaxDegreeOfParallelism = Math.Min(3, Math.Max(1, Environment.ProcessorCount - 1)) };
             Parallel.Invoke(po, zones.Select(z => new Action(() =>
             {
 #if !DEBUG
@@ -173,6 +173,9 @@ namespace CEM
 
             [Argument("obj", Description = "Export obj only")]
             public bool ExportObjOnly { get; set; }
+
+            [Argument("ladder-audit", Description = "Also export original world-space climb triangles for offline collision diagnosis")]
+            public bool ExportLadderAudit { get; set; }
 
             [Argument("normal-priority", Description = "Run at normal priority")]
             public bool NormalPriority { get; set; }

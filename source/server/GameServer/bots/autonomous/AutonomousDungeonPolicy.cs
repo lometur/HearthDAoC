@@ -15,7 +15,7 @@ namespace DOL.GS
         public static bool IsSharedFrontierDungeon(ushort region) => region is 246 or 248 or 276 or 277;
         public static bool IsSharedCombatDungeon(ushort region) => IsSharedFrontierDungeon(region) || region == 249;
         public static bool IsSupportedDungeonZone(ushort zone) => zone is
-            19 or 21 or 22 or 23 or 24 or 60 or 61 or 62 or
+            19 or 21 or 22 or 23 or 24 or 50 or 60 or 61 or 62 or
             125 or 126 or 127 or 128 or 129 or 150 or 160 or 161 or
             180 or 190 or 191 or 220 or 221 or 222 or 223 or 224 or
             246 or 248 or 276 or 277 ||

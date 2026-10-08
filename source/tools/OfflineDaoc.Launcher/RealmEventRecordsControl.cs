@@ -11,6 +11,7 @@ internal sealed class RealmEventRecordsControl : UserControl
     private readonly ComboBox _outcome=new(){DropDownStyle=ComboBoxStyle.DropDownList,Width=165};
     private readonly TextBox _search=new(){Width=200,PlaceholderText="Search event or outcome details"};
     private readonly Button _refresh=new(){Text="REFRESH",AutoSize=true},_previous=new(){Text="Previous",AutoSize=true},_next=new(){Text="Next",AutoSize=true};
+    private readonly Button _deleteAll=new(){Text="DELETE ALL RECORDS",AutoSize=true};
     private readonly DataGridView _grid=new();
     private readonly Label _status=new(){AutoSize=true,ForeColor=DaocTheme.GoldLight};
     private readonly TextBox _details=new(){ReadOnly=true,Multiline=true,Dock=DockStyle.Fill,ScrollBars=ScrollBars.Vertical,BackColor=DaocTheme.StoneDark,ForeColor=DaocTheme.Text};
@@ -25,10 +26,10 @@ internal sealed class RealmEventRecordsControl : UserControl
         layout.RowStyles.Add(new RowStyle(SizeType.Absolute,70));layout.RowStyles.Add(new RowStyle(SizeType.AutoSize));
         var toolbar=new FlowLayoutPanel{Dock=DockStyle.Fill,AutoSize=true,WrapContents=true};
         _realm.Items.AddRange(["All realms","Albion","Midgard","Hibernia"]);
-        _kind.Items.AddRange(["All events","Dragon","Epic dungeon","Keep","Relic keep","Relic"]);
-        _outcome.Items.AddRange(["All outcomes","In progress","Boss defeated","Failed rally","Timed out","Defended (timeout)","Captured","Captured / returned","Relic taken","Interrupted","Ended (unconfirmed)","Encounter unavailable"]);
+        _kind.Items.AddRange(["All events","Dragon","Epic dungeon","Neutral raid","Keep","Relic keep","Relic"]);
+        _outcome.Items.AddRange(["All outcomes","In progress","Boss defeated","Failed rally","Stopped by player","Route blocked","Timed out","Defended (timeout)","Captured","Captured / returned","Relic taken","Interrupted","Ended (unconfirmed)","Encounter unavailable"]);
         _realm.SelectedIndex=_kind.SelectedIndex=_outcome.SelectedIndex=0;
-        toolbar.Controls.AddRange([_realm,_kind,_outcome,_search,_refresh]);layout.Controls.Add(toolbar,0,0);
+        toolbar.Controls.AddRange([_realm,_kind,_outcome,_search,_refresh,_deleteAll]);layout.Controls.Add(toolbar,0,0);
         _grid.Dock=DockStyle.Fill;_grid.ReadOnly=true;_grid.AllowUserToAddRows=false;_grid.AllowUserToDeleteRows=false;
         _grid.AutoGenerateColumns=false;_grid.RowHeadersVisible=false;_grid.MultiSelect=false;_grid.SelectionMode=DataGridViewSelectionMode.FullRowSelect;
         _grid.BackgroundColor=DaocTheme.StoneDark;_grid.EnableHeadersVisualStyles=false;
@@ -44,6 +45,7 @@ internal sealed class RealmEventRecordsControl : UserControl
         _search.TextChanged+=(_,_)=>{_debounce.Stop();_debounce.Start();};
         _debounce.Tick+=async(_,_)=>{_debounce.Stop();_page=0;await RefreshAsync();};
         _refresh.Click+=async(_,_)=>await RefreshAsync();
+        _deleteAll.Click+=async(_,_)=>await DeleteAllAsync();
         _previous.Click+=async(_,_)=>{_page=Math.Max(0,_page-1);await RefreshAsync();};
         _next.Click+=async(_,_)=>{_page++;await RefreshAsync();};
         _status.Text="Event history is saved separately from accounts and the Realm Exchange. Refresh to read records.";
@@ -67,6 +69,24 @@ internal sealed class RealmEventRecordsControl : UserControl
         catch(Exception ex) when(ex is System.Data.SQLite.SQLiteException or IOException or UnauthorizedAccessException)
         {if(!IsDisposed&&request==_request)_status.Text="Could not read records: "+ex.Message;}
         finally{if(!IsDisposed&&request==_request)_refresh.Enabled=true;}
+    }
+    // Clears the launcher's event history only (its own ledger file). Characters, bots and the game
+    // database are never touched; an event still running reappears at the server's next save.
+    private async Task DeleteAllAsync()
+    {
+        if(MessageBox.Show(FindForm(),"Delete every Realm Records entry?"+Environment.NewLine+Environment.NewLine+"This only clears the launcher's event history. It does not change any game data (characters, bots or the game database). An event that is still running will be listed again when the server next saves it.",
+            "Delete all records",MessageBoxButtons.YesNo,MessageBoxIcon.Warning,MessageBoxDefaultButton.Button2)!=DialogResult.Yes)return;
+        _deleteAll.Enabled=false;
+        try
+        {
+            int deleted=await Task.Run(()=>RealmEventRecordStore.DeleteAll(_path));
+            if(IsDisposed)return;
+            _page=0;await RefreshAsync();
+            _status.Text=$"Deleted {deleted:N0} records. Game data was not changed.";
+        }
+        catch(Exception ex) when(ex is System.Data.SQLite.SQLiteException or IOException or UnauthorizedAccessException)
+        {if(!IsDisposed)_status.Text="Could not delete records: "+ex.Message;}
+        finally{if(!IsDisposed)_deleteAll.Enabled=true;}
     }
     protected override void Dispose(bool disposing){if(disposing){_request++;_debounce.Dispose();}base.Dispose(disposing);}
     private sealed record Row(RealmEventRecord Record)

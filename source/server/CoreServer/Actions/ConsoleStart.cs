@@ -2,6 +2,7 @@ using System;
 using System.Collections;
 using System.IO;
 using System.Reflection;
+using System.Threading;
 using DOL.GameServerConsole;
 using DOL.GS;
 
@@ -95,7 +96,12 @@ namespace DOL.DOLServer.Actions
                 string line = Console.ReadLine();
 
                 if (line == null)
+                {
+                    // Standard input has closed (the launcher exited, or the server runs as a service with
+                    // stdin at end-of-file). Back off instead of spinning a CPU core; input can still resume.
+                    Thread.Sleep(1000);
                     continue;
+                }
 
                 switch (line.ToLower())
                 {

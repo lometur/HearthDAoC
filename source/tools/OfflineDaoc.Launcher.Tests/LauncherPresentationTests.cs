@@ -49,7 +49,8 @@ public sealed class LauncherPresentationTests
         var grid = (DataGridView)main.GetField("_rvrObjectivesGrid", HiddenInstance)!.GetValue(form)!;
         var names = ((System.Collections.IEnumerable)grid.DataSource!).Cast<object>()
             .Select(row => row.GetType().GetProperty("Name")!.GetValue(row)).ToArray();
-        Assert.That(names, Is.EquivalentTo(new[] { "Caer Benowyc", "Castle Excalibur", "Golestandt", "Gjalpinulva", "Cuuldurach", "Caer Sidi", "Tuscaran Glacier", "Galladoria" }));
+        Assert.That(names, Is.EquivalentTo(new[] { "Caer Benowyc", "Castle Excalibur", "Golestandt", "Gjalpinulva", "Cuuldurach", "Caer Sidi", "Tuscaran Glacier", "Galladoria",
+            "Darkness Falls", "Darkness Falls", "Darkness Falls", "Summoner's Hall", "Summoner's Hall", "Summoner's Hall" }));
     }
 
     [Test]
@@ -80,7 +81,7 @@ public sealed class LauncherPresentationTests
     public void VersionIsManuallyPinnedAndRefreshRunsEveryFiveMinutes()
     {
         Type mainFormType = Launcher.GetType("OfflineDaoc.Launcher.MainForm")!;
-        Assert.That(mainFormType.GetField("DisplayVersion", HiddenStatic)!.GetRawConstantValue(), Is.EqualTo("0.34"));
+        Assert.That(mainFormType.GetField("DisplayVersion", HiddenStatic)!.GetRawConstantValue(), Is.EqualTo("0.35"));
         Assert.That(mainFormType.GetField("AutoRefreshMilliseconds", HiddenStatic)!.GetRawConstantValue(), Is.EqualTo(300_000));
         Assert.That(mainFormType.GetField("RvrSnapshotRefreshMilliseconds", HiddenStatic)!.GetRawConstantValue(), Is.EqualTo(30_000));
         Assert.That(mainFormType.GetField("ServerReadinessPollMilliseconds", HiddenStatic)!.GetRawConstantValue(), Is.EqualTo(500));
@@ -144,8 +145,8 @@ public sealed class LauncherPresentationTests
         using var form = (Form)Activator.CreateInstance(mainFormType)!;
         IReadOnlyList<Control> controls = Descendants(form).ToList();
 
-            Assert.That(controls.OfType<Label>().Any(label => label.Text.Contains("VERSION 0.34b", StringComparison.Ordinal)), Is.True);
-            Label version = controls.OfType<Label>().Single(label => label.Text == "VERSION 0.34b");
+            Assert.That(controls.OfType<Label>().Any(label => label.Text.Contains("VERSION 0.35b", StringComparison.Ordinal)), Is.True);
+            Label version = controls.OfType<Label>().Single(label => label.Text == "VERSION 0.35b");
         Assert.That(version.Font.Bold, Is.True);
         Assert.That(version.Font.Size, Is.GreaterThanOrEqualTo(12));
         Assert.That(controls.OfType<Label>().Any(label => label.Text.Contains("1× PROGRESSION", StringComparison.Ordinal)), Is.False);
@@ -154,12 +155,12 @@ public sealed class LauncherPresentationTests
         Assert.That(controls.OfType<Label>().Any(label => label.Text.Contains("BOT TICK P95", StringComparison.Ordinal)), Is.False);
         var performanceValue = (Label)mainFormType.GetField("_performanceValue", HiddenInstance)!.GetValue(form)!;
         var helpTip = (ToolTip)mainFormType.GetField("_helpTip", HiddenInstance)!.GetValue(form)!;
-        Assert.That(helpTip.GetToolTip(performanceValue), Does.Contain("95 out of 100"));
+        Assert.That(helpTip.GetToolTip(performanceValue), Does.Contain("bot and monster AI"));
         Assert.That(helpTip.GetToolTip(performanceValue), Does.Contain("1,000 ms equals one second"));
         Assert.That(controls.OfType<TabControl>().SelectMany(tab => tab.TabPages.Cast<TabPage>()).Select(page => page.Text),
             Does.Not.Contain("Realm Status"));
         Assert.That(controls.OfType<TabControl>().SelectMany(tab => tab.TabPages.Cast<TabPage>()).Select(page => page.Text),
-            Does.Contain("XP Settings"));
+            Does.Contain("Options"));
         Assert.That(controls.OfType<DataGridView>(), Is.Not.Empty);
         Assert.That(controls.OfType<DataGridView>().All(grid => !grid.RowHeadersVisible), Is.True);
         var populationGrid = (DataGridView)mainFormType.GetField("_grid", HiddenInstance)!.GetValue(form)!;
@@ -198,8 +199,8 @@ public sealed class LauncherPresentationTests
 
         Type snapshotType = mainFormType.GetNestedType("DashboardSnapshot", BindingFlags.NonPublic)!;
         object runningSnapshot = snapshotType.GetConstructors(BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic)
-            .Single(constructor => constructor.GetParameters().Length == 10)
-            .Invoke(new object[] { "Running", null!, null!, 0, 0d, 0d, 1d, 1d, false, null! });
+            .Single(constructor => constructor.GetParameters().Length == 12)
+            .Invoke(new object[] { "Running", null!, null!, 0, 0d, null!, 1d, 1d, false, null!, true, true });
         mainFormType.GetField("_stoppingServer", HiddenInstance)!.SetValue(form, false);
         mainFormType.GetMethod("UpdateXpRateControls", HiddenInstance)!.Invoke(form, new[] { runningSnapshot });
         var playerRate = (ComboBox)mainFormType.GetField("_playerXpRate", HiddenInstance)!.GetValue(form)!;
@@ -208,7 +209,7 @@ public sealed class LauncherPresentationTests
         Assert.That(playerRate.Enabled || botRate.Enabled, Is.False);
         var gm = (CheckBox)mainFormType.GetField("_makeMeGm", HiddenInstance)!.GetValue(form)!;
         Assert.That(gm.Enabled, Is.False);
-        Assert.That(xpStatus.Text, Does.Contain("XP RATE LOCKED"));
+        Assert.That(xpStatus.Text, Does.Contain("OPTIONS LOCKED"));
 
         mainFormType.GetMethod("ShowXpRateApplying", HiddenInstance)!.Invoke(form, new object[] { "3×", true });
         Assert.That(xpStatus.Text, Does.StartWith("APPLYING 3× TO YOUR PLAYER XP"));
@@ -265,9 +266,9 @@ public sealed class LauncherPresentationTests
         using var artwork = Image.FromStream(resource);
         Assert.That(artwork.Width, Is.GreaterThanOrEqualTo(1_000));
         Assert.That(artwork.Width / (double)artwork.Height, Is.GreaterThan(4.5));
-        using Stream shieldResource = Launcher.GetManifestResourceStream("OfflineDaoc.Launcher.Assets.offline-daoc-realm-shield.png")!;
-        using var shield = Image.FromStream(shieldResource);
-        Assert.That((shield.Width, shield.Height), Is.EqualTo((96, 128)));
+        using Stream emblemResource = Launcher.GetManifestResourceStream("OfflineDaoc.Launcher.Assets.offline-daoc-realm-emblem.png")!;
+        using var emblem = Image.FromStream(emblemResource);
+        Assert.That((emblem.Width, emblem.Height), Is.EqualTo((256, 256)));
 
         Type mainFormType = Launcher.GetType("OfflineDaoc.Launcher.MainForm")!;
         using var form = (Form)Activator.CreateInstance(mainFormType)!;
@@ -286,8 +287,8 @@ public sealed class LauncherPresentationTests
         preview.Save(Path.Combine(TestContext.CurrentContext.WorkDirectory, "launcher-v0.2-preview.png"));
 
         TabControl mainTabs = Descendants(form).OfType<TabControl>()
-            .First(tab => tab.TabPages.Cast<TabPage>().Any(page => page.Text == "XP Settings"));
-        mainTabs.SelectedTab = mainTabs.TabPages.Cast<TabPage>().First(page => page.Text == "XP Settings");
+            .First(tab => tab.TabPages.Cast<TabPage>().Any(page => page.Text == "Options"));
+        mainTabs.SelectedTab = mainTabs.TabPages.Cast<TabPage>().First(page => page.Text == "Options");
         Application.DoEvents();
         using var xpPreview = new Bitmap(form.Width, form.Height);
         form.DrawToBitmap(xpPreview, new Rectangle(Point.Empty, xpPreview.Size));
