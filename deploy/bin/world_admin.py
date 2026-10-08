@@ -299,6 +299,7 @@ def upgrade_world(release, data, importer_cmd, clean_world=None, same_version_ok
         log(f"{len(changed)} server setting(s) differ from the new world's values and were not carried over; see {report}.")
     log(f"Upgraded to upstream {release.version}: {counts_new}. Previous world archived in {archive}. "
         "Navmeshes are re-verified, and the new version's server data files downloaded, on the next start.")
+    log(f"Upgrade report: {report}")  # hdc update shows where it is
     return archive
 
 

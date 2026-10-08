@@ -63,6 +63,7 @@ hdc - HearthDAoC server
   spawns restore [--max-level N] | undo | status
                                  bring back the leveling monsters upstream archived (default levels 1-20; server stopped)
   update [TAG] | update --check  back up, install a release (latest by default) and restart; --check only reports
+                                 (a release for another upstream version upgrades the world first)
 EOF
 }
 
@@ -71,12 +72,16 @@ latest_release() {  # GitHub redirects .../releases/latest to .../releases/tag/<
     curl -fsSI "$RELEASES/latest" | tr -d '\r' | sed -n 's|^[Ll]ocation: .*/tag/\([^/]*\)$|\1|p' | tail -1
 }
 lock_version() { sed -n 's/.*"version": *"\([^"]*\)".*/\1/p' "$1" | head -1; }
+# The upstream version of the world in the volume; empty when there is no world yet.
+world_version() { { offline --entrypoint cat "$(image)" /data/world.json 2>/dev/null || true; } \
+    | sed -n 's/.*"version": *"\([^"]*\)".*/\1/p' | head -1; }
 
 # update [TAG] [--bundle FILE] [--check]: back up, install a release's deploy bundle, keep .env values
-# (adding new settings with their defaults), pull and restart. Stops before starting when the release
-# is for another upstream version (then: ./hdc upgrade-world). --bundle uses a local bundle (tests).
+# (adding new settings with their defaults), pull and restart. When the release is for another upstream
+# version, it first upgrades the world as ./hdc upgrade-world does; if that fails, the world stays as it
+# was and the server is not started. --bundle uses a local bundle (tests).
 update() {
-    local tag="" bundle="" check="" arg
+    local tag="" bundle="" check="" arg previous="${HEARTHDAOC_TAG:-}"
     for arg in "$@"; do
         case "$arg" in
             --check) check=1 ;;
@@ -129,16 +134,31 @@ update() {
 
     compose pull --ignore-pull-failures >/dev/null 2>&1 || true
     docker image inspect "$(image)" >/dev/null 2>&1 || { echo "Could not get the image $(image)." >&2; exit 1; }
-    local world_version new_version
+    local world new_version report=""
     new_version="$(lock_version "$here/upstream.lock")"
-    world_version="$(offline --entrypoint cat "$(image)" /data/world.json 2>/dev/null | sed -n 's/.*"version": *"\([^"]*\)".*/\1/p' | head -1)"
-    if [[ -n "$world_version" && "$world_version" != "$new_version" ]]; then
-        echo "Installed $tag, which is for upstream $new_version; the world is from upstream $world_version." >&2
-        echo "The server was not started. Run: ./hdc upgrade-world   then: ./hdc up" >&2
-        exit 3
+    world="$(world_version)"
+    if [[ -n "$world" && "$world" != "$new_version" ]]; then
+        echo "Installed $tag, which is for upstream $new_version; the world is from upstream $world."
+        echo "Upgrading the world to upstream $new_version (the same steps as ./hdc upgrade-world)..."
+        # The hdc just installed runs it, so the upgrade steps are the new release's own.
+        if ! "$here/hdc" upgrade-world 2>&1 | tee "$work/upgrade.log"; then
+            if [[ "$(world_version)" == "$new_version" ]]; then
+                echo "The world was upgraded, but a step after it failed (see above). Start the server with: ./hdc up" >&2
+            else
+                echo "The world upgrade failed (see above). The world is as it was, and the server was not started." >&2
+                echo "Fix the cause and try again: ./hdc upgrade-world   then: ./hdc up" >&2
+                echo "Or go back to the release you had: ./hdc update ${previous:-<previous tag>}" >&2
+            fi
+            exit 1
+        fi
+        report="$(sed -n 's/^Upgrade report: //p' "$work/upgrade.log" | tail -1)"
     fi
     "$here/hdc" up
     echo "Updated to $tag."
+    if [[ -n "$report" ]]; then
+        echo "Upgrade report (server settings to re-check): docker exec $CONTAINER cat $report"
+        echo "This first start on upstream $new_version downloads the changed navmeshes; ./hdc logs shows the progress."
+    fi
 }
 
 cmd="${1:-help}"; shift || true

@@ -21,7 +21,7 @@ HEARTHDAOC_MEM_LIMIT=4g
 HEARTHDAOC_CPUS=2
 EOF
 hdc() { "$W/hdc" "$@"; }
-cleanup() { hdc down >/dev/null 2>&1 || true; docker volume rm -f hearthdaoc-it-data >/dev/null 2>&1 || true; docker rmi "${IMAGE%%:*}:it-update" "${IMAGE%%:*}:it-update2" >/dev/null 2>&1 || true; rm -rf "$W"; }
+cleanup() { hdc down >/dev/null 2>&1 || true; docker volume rm -f hearthdaoc-it-data >/dev/null 2>&1 || true; docker rmi "${IMAGE%%:*}:it-update" "${IMAGE%%:*}:it-update2" "${IMAGE%%:*}:it-update3" >/dev/null 2>&1 || true; rm -rf "$W"; }
 trap cleanup EXIT
 fail() { echo "FAIL: $*" >&2; docker logs hearthdaoc-it-server 2>&1 | tail -30 >&2 || true; exit 1; }
 healthy() { for _ in $(seq 1 150); do [[ "$(docker inspect -f '{{.State.Health.Status}}' hearthdaoc-it-server 2>/dev/null)" == healthy ]] && return 0; sleep 2; done; return 1; }
@@ -106,10 +106,32 @@ hdc backups | grep -q -- "-pre-update.db" || fail "update made no backup first"
 healthy || fail "not healthy after update"
 [[ "$(docker inspect -f '{{.Config.Image}}' hearthdaoc-it-server)" == "${IMAGE%%:*}:it-update" ]] || fail "server not running the new image"
 echo "ok - hdc update backs up, installs the release, keeps settings and restarts"
-if out="$(hdc update --bundle "$(make_bundle it-update2 9.99z)" 2>&1)"; then fail "update across upstream versions should stop"; fi
-grep -q "upgrade-world" <<<"$out" || fail "no upgrade-world instruction: $out"
+# A release for another upstream version makes hdc update upgrade the world first. Here the upgrade fails (the
+# image is still for the world's version), so the world must stay as it was and the server stopped.
+world_version() { docker run --rm -v hearthdaoc-it-data:/data --entrypoint cat "$IMAGE" /data/world.json \
+    | python3 -c 'import json, sys; print(json.load(sys.stdin)["version"])'; }
+if out="$(hdc update --bundle "$(make_bundle it-update2 9.99z)" 2>&1)"; then fail "a failed world upgrade should stop hdc update"; fi
+grep -q "The world is as it was" <<<"$out" && grep -q "./hdc upgrade-world" <<<"$out" && grep -q "./hdc update it-update" <<<"$out" \
+    || fail "no retry or go-back instruction: $out"
 if docker inspect -f '{{.State.Running}}' hearthdaoc-it-server 2>/dev/null | grep -q true; then fail "server started on a world from another upstream version"; fi
-echo "ok - hdc update stops before starting a release for another upstream version"
+[[ "$(world_version)" == "$upstream" ]] || fail "a failed world upgrade changed the world"
+echo "ok - a failed world upgrade in hdc update leaves the world as it was and the server stopped"
+out="$(hdc update --bundle "$W/b-it-update/hearthdaoc-deploy-it-update.tar.gz")" || fail "going back to the previous release failed: $out"
+healthy || fail "not healthy after going back to the previous release"
+echo "ok - hdc update goes back to the previous release"
+# A world from an older upstream version: hdc update upgrades it (as ./hdc upgrade-world does), then starts.
+hdc stop >/dev/null
+docker run --rm -v hearthdaoc-it-data:/data --entrypoint sh "$IMAGE" \
+    -c 'sed -i "s/\"version\": *\"[^\"]*\"/\"version\": \"0.0it\"/" /data/world.json'
+[[ "$(world_version)" == 0.0it ]] || fail "could not make an older world"
+out="$(hdc update --bundle "$(make_bundle it-update3 "$upstream")")" || fail "hdc update with a world upgrade failed: $out"
+grep -q "^Upgrade report (server settings to re-check): docker exec hearthdaoc-it-server cat /data/archive/world-pre-upgrade-.*/upgrade-report.txt$" <<<"$out" \
+    || fail "no upgrade report location: $out"
+[[ "$(world_version)" == "$upstream" ]] || fail "the world was not upgraded"
+healthy || fail "not healthy after the world upgrade"
+hdc account list | grep -q Tester1 || fail "accounts lost in the world upgrade"
+hdc backups | grep -q -- "-pre-upgrade.db" || fail "the world upgrade made no backup"
+echo "ok - hdc update upgrades a world from another upstream version, then starts"
 python3 - "$W" <<'PY' &
 import http.server, sys, os
 class H(http.server.BaseHTTPRequestHandler):

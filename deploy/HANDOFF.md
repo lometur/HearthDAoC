@@ -62,7 +62,7 @@ machine uses another firewall, describe it to the owner rather than changing it.
 
 ```bash
 sleep 90 && ./hdc status                       # running (healthy), edition classic, navmesh True
-docker exec hearthdaoc-server grep -c "Loading NavMesh successful" /data/logs/server.log   # 99
+docker exec hearthdaoc-server grep -c "Loading NavMesh successful" /data/logs/server.log   # 103 (upstream 0.35b)
 docker exec hearthdaoc-server grep "Server is now listening" /data/logs/server.log | tail -1   # 0.0.0.0:10301
 docker exec hearthdaoc-server sqlite3 /data/world/opendaoc.sqlite3.db "SELECT DISTINCT Port FROM Regions"   # 10401
 docker ps --format '{{.Names}} {{.Status}}' | grep -i opendaoc   # OpenDAoC still up, unchanged
@@ -111,9 +111,27 @@ cd ~/hearthdaoc
 ```
 `./hdc update <tag>` installs a specific release. New settings are added to `.env` with their defaults
 (it lists them; for example, the release with the Shrouded Isles start choice adds
-`HEARTHDAOC_SI_START_CHOICE=on`). If the release is for another upstream version, it stops before
-starting: then run `./hdc upgrade-world` (it backs up, moves all progress into the new clean world,
-keeps bans and permissions, and lists server settings to re-check in its report), then `./hdc up`.
+`HEARTHDAOC_SI_START_CHOICE=on`). It always backs up the world first (`-pre-update` in `./hdc backups`).
+
+**A release for another upstream version** (the version at the start of its tag changes, for example from
+0.35b to 0.36b).
+`./hdc update` upgrades the world itself, with the same steps as `./hdc upgrade-world`:
+- it backs up again (`-pre-upgrade`), downloads the new version's clean world (about 30 MB) and moves all
+  progress into it, keeping bans and permissions;
+- it writes a report of the server settings to re-check, then starts the server and prints how to read
+  the report: `docker exec hearthdaoc-server cat /data/archive/world-pre-upgrade-<time>/upgrade-report.txt`;
+- the first start on the new version downloads the navmeshes that changed (about 570 MB for 0.35b) and
+  the new version's server data files. `./hdc logs` shows the progress; report the new
+  "Loading NavMesh successful" count (step 5) to the owner.
+
+If the upgrade fails, the world stays as it was and the server is not started. Fix the cause it names,
+then run `./hdc upgrade-world` and `./hdc up`. Or go back to the release you had: `./hdc update <old tag>`
+(the message names it).
+
+**From 0.34b to 0.35b.** The update to a 0.35b release is run by the 0.34b `hdc`, which does not upgrade
+the world yet: it installs the release, stops before starting and says so. Then run `./hdc upgrade-world`
+and `./hdc up`; the first start downloads about 570 MB of changed navmeshes. From the next upstream version
+on, `./hdc update` does all of this itself.
 
 Without `./hdc update` (a deployment older than it), do it by hand:
 ```bash
@@ -124,5 +142,6 @@ tar xzf hearthdaoc-deploy-<new tag>.tar.gz && cp compose.yml hdc HANDOFF.md upst
 diff .env new/.env.example     # copy any new settings into .env (keep the owner's values)
 sed -i 's/^HEARTHDAOC_TAG=.*/HEARTHDAOC_TAG=<new tag>/' .env
 docker compose -p hearthdaoc -f compose.yml --env-file .env pull
+./hdc upgrade-world   # only when the release is for another upstream version
 ./hdc up
 ```
