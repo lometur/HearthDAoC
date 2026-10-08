@@ -1,6 +1,7 @@
 # Sub-project 5: classic battlegrounds 15–35 (design)
 
 Status: approved by the owner; the decisions in section 1 are the owner's. Date: 2026-10-07.
+Section 7 updates this design for upstream 0.35 (2026-10-08). Where they differ, section 7 holds.
 Fork: `lometur/HearthDAoC`. Issue: #76. Branch: `sub5-battlegrounds`. Release: merging the PR publishes the
 next release; the server picks it up with `./hdc update`.
 
@@ -671,3 +672,107 @@ hasteners are level 1 (`AbstractGameKeep.cs:862-866`).
 | Battleground rows are read once, at server start | Edits to the rows by hand need a restart, as today. |
 | KeepIDs 32 and 33 taken by a future world | The fix takes the first free IDs from 32. The real-data test pins 32 and 33 on the pinned world. |
 | Logging in near a renegade central keep | Upstream moves a player who logs in near an enemy keep to the bind point after the grace period (`PlayerInitRequestHandler.cs:82-83`). That now also applies near Dun Abermenai and Dun Murdaigean, as it does near Thidranki Faste today. |
+
+## 7. Update for upstream 0.35
+
+Date: 2026-10-08. Branch: `sync/v0.35b`. Issue: #50. The world facts below are from the clean 0.35 classic world
+(`clean-classic-0.35.db`, the world of release v0.35b) against the 0.34 one.
+
+### 7.1 What 0.35 changed in the battlegrounds
+
+- **Caledonia's row** is now 30–35 (it was 30–34). Its label and cap are unchanged ("Caledonia (Level 34-39 -
+  RR3L5)", 25). The other three rows are as in 0.34.
+- **Two new central keeps.** Upstream added its own keeps where the fork had planned its own:
+  - Dun Murdaigean, KeepID 32, region 251, BaseLevel 31;
+  - Dun Abermenai, KeepID 33, region 253, BaseLevel 21.
+
+  Both rows stand on Thidranki Faste's spot (33089, 38271, 3720, heading 2915), held by renegades, at keep
+  Level 1. The client still draws the keep model where section 3.2 says; the Keep row only sets the keep area
+  (3,000 around it), and every guard and gate of these keeps is within 1,850 of it.
+- **Their guards.** 26 rows in Dun Abermenai (18 fighters, 4 archers, 3 commanders, a lord) and 27 in Dun
+  Murdaigean (18, 5, 3, 1). Upstream placed them from its navigation mesh: on the courtyard (Z 3721), the wall
+  tops (4137 to 4154) and the tower floor (4937, the lord). They have no casters and no hastener.
+- **Their gates** (`<region>000301`, `000302`) are closed already, at the full health for upstream's BaseLevel:
+  4,200 in 253 and 6,200 in 251.
+- **Monsters.** 66 to 84 per battleground, at most the top level of its range. None stands in a keep area of
+  251 or 253.
+- **Siege Masters** (`GameMerchant`) at the portal keeps of Caledonia, Thidranki and Murdaigean.
+- **Unchanged:** the portal keeps, which still have no guards in 251 and 253; Thidranki Faste and Caer Caledon
+  with their guards and gates; "Caledon" and the XP bonus; the dummies, Void Merchants and the stray Wizard;
+  no `Quest` rows; the keep and guard level code (`AbstractGameKeep.GetBaseLevel` and `SetGuardLevel`), and the
+  door health code.
+
+On a 0.35 world, v1 would have skipped Caledonia's limits (its row no longer matched), every portal keep guard
+(the new central keep guards are `DOL.GS.Keeps.*` rows too) and its own central keeps (the regions have one).
+
+### 7.2 Owner decisions (2026-10-08, #50)
+
+| Topic | Decision |
+|---|---|
+| Caps | The classic realm rank caps hold on every way into a battleground: the frontier porter, upstream's new [Battlegrounds] choice on the town teleporters (same refusal text as the porter), and `KeepManager.GetBGPK`. |
+| Bots | A gamebot at or over a battleground's cap gets no battleground goal for it and is never sent in. |
+| Central keeps of Abermenai and Murdaigean | Upstream's keeps 33 and 32, their doors and their guards, levelled to the fork's levels (guards about 21 and 31, lords about 24 and 36), plus the fork's six wall casters per keep and its capture fixes. |
+| Monsters | Upstream's battleground monsters stay. |
+
+The caps and bots are server code (section 3.3 and `docs/fork/FORK.md`). The rest is world data, below.
+
+### 7.3 `battlegrounds.py` v2
+
+Every world the 0.35 image runs is a fresh 0.35 world: `hdc new-world` and `hdc upgrade-world` start from
+upstream's clean world, without the fork tables. So v2 replaces v1's 0.34 expectations. The safety model is
+v1's: one savepoint, a row changes only while it holds the value the step expects, a failure rolls back only
+this fix with a "not applied" line, and the next start tries again. The marker is `classic-battlegrounds-v2`.
+
+| Step | v2 on the 0.35 world |
+|---|---|
+| 1. Battleground rows | As v1, but Caledonia's row is expected at 30–35. |
+| 2. Names and XP | As v1. |
+| 3. Keep levels and gates | Now all four central keeps: Dun Abermenai 21 → 19, Thidranki Faste 26 → 24, Dun Murdaigean 31 → 29, Caer Caledon 46 → 35, and Level → 1 where a capture left it higher. Each keep's two gates go from the old full health to the new one (BaseLevel × 200): 4,200 → 3,800, 5,200 → 4,800, 6,200 → 5,800, 9,200 → 7,000. New: a gate changes only while its keep has the new BaseLevel, so a keep the owner levelled keeps gates that match. |
+| 4. Portal keep guards | As v1 (34 rows copied into each of 251 and 253), but the precondition looks only inside the portal keeps' areas (4,000 around a keep with BaseLevel 100 or more). |
+| 5. Wall casters | New. Dun Abermenai and Dun Murdaigean each get Thidranki's Hibernia portal keep's six wall casters, moved onto the central keep model as in section 3.2 ("The move"). Mob_IDs `hdc-bg<region>-ck-<source Mob_ID>`. Added only when the keep's Keep row (KeepID and region) and all six sources are there, and the keep has no `GuardStaticCaster` in its area yet; each only if its Mob_ID is free. |
+| 6. Atlas leftovers | As v1: 15 dummies, 3 Void Merchants and the stray Wizard. |
+
+Gone from v1: the fork's own Keep rows, the moved hastener, the four gate fighters and the lord (and
+`gate_spots`). Upstream's keeps have their own guards and lord.
+
+**Levels.** The level code is unchanged in 0.35, so section 3.4 holds: at keep Level 1 and
+`keep_guard_level_multiplier` 1.6, BaseLevel 19 gives guards (fighters, archers, commanders and the casters)
+21 and the lord 24; BaseLevel 29 gives 31 and 36. BaseLevel alone gives the owner's levels; no code is needed.
+Upstream's own base levels would give 23 and 28, and 33 and 40.
+
+**The casters stand on the walls.** The move maps the client's keep model, not the Keep row, so the casters
+land on the same spots as in v1 (section 3.2's table), at Z 4136. Upstream's guards confirm it:
+- put back on the portal keep model with the inverse move, each of Dun Abermenai's 23 guards inside the keep
+  lands within 65 units of a Dun Murdaigean guard of the same class and height, so both moves fit the
+  models upstream placed its guards on;
+- upstream's wall tops are 416 above the courtyard (4137 against 3721), the same as the portal keep's walls
+  above its floor (4736 against 4320), where the casters come from;
+- where upstream put a wall-top archer next to a caster's spot (two in Dun Abermenai, three in Dun
+  Murdaigean), it is within 100 units.
+
+The in-game check of section 4 (casters on the walls, neither floating nor inside a wall) still applies.
+
+**Capture fixes.** The `KeepTaken` handler (3.3) goes by region and portal keep, not by KeepID, so it covers
+upstream's keeps 33 and 32 (v1's own keeps were 32 and 33 the other way round). After a capture the keep goes
+back to Level 1 and its gates to full health (3,800 and 5,800).
+
+**A v1 world.** The 0.35 image never runs one, since `hdc update` upgrades the world first. If it did, every
+v2 step's precondition would fail (v1's values are already there, and KeepIDs 32 and 33 are in the other
+regions), so v2 would only write its marker.
+
+### 7.4 What players see, changed from section 2
+
+- Dun Abermenai and Dun Murdaigean are upstream's keeps: 26 and 27 renegade guards and a "Renegade
+  Chieftain", plus six casters on the walls. Their levels are as in 2.1.
+- The central keeps of Abermenai and Murdaigean have no hastener (Thidranki Faste and Caer Caledon keep
+  theirs).
+- Monsters roam the battlegrounds (upstream's), and Siege Masters stand at most portal keeps.
+
+### 7.5 Tests
+
+`deploy/tests/test_battlegrounds.py`: the scratch world now holds 0.35's rows (upstream's central keeps, two
+of their guards each, the 0.35 gates). The real-data tests run on the 0.35 world: the values before, every
+row after, a second run that changes nothing, the guard levels from the Keep rows, every new and upstream
+guard in exactly one keep area, the door check, and the two caster checks above. Each step has an injected
+failure on its last statement, and the owner's values (a keep's BaseLevel, a gate, a portal keep guard, a
+caster) stay.
