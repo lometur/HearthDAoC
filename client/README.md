@@ -30,7 +30,7 @@ password appears on the game's command line, and it is saved on your PC as plain
 
 **Windows**
 - The **official** OfflineDAoC release for the server's edition: upstream's
-  `DOWNLOAD-AND-PLAY-v0.34.cmd` for `classic`, `DOWNLOAD-AND-PLAY-v0.34b.cmd` for `b`.
+  `DOWNLOAD-AND-PLAY-v0.35.cmd` for `classic`, `DOWNLOAD-AND-PLAY-v0.35b.cmd` for `b`.
 - The Windows feature **.NET Framework 3.5 (includes .NET 2.0 and 3.0)**, turned on; the game's
   `connect.exe` needs it.
 
@@ -177,8 +177,8 @@ If you set up the Linux client with `--dest`, use that folder instead of `~/Game
 ## Troubleshooting
 
 **"Not patched", or the standard creation screen.** HearthDAoC's patches support only the
-OfflineDAoC 0.34 `classic` client. Any other client, such as the `b` edition or a newer upstream
-client, keeps the standard creation screen and plays normally.
+OfflineDAoC 0.35 `classic` client. Any other client, such as the `b` edition or an older or newer
+upstream client, keeps the standard creation screen and plays normally.
 
 **Windows: a warning at every start that the client patches could not be applied.** Usually
 Windows doesn't let you change files in your OfflineDAoC folder, for example because it is under

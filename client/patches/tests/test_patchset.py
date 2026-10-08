@@ -383,7 +383,7 @@ class RestoreTests(unittest.TestCase):
 
 
 UNKNOWN_MESSAGE = ("Not patched: {path} is not the file this HearthDAoC release supports (for example the "
-                   "0.34b edition or a newer upstream client). The client still works with the standard "
+                   "b edition, or an older or newer upstream client). The client still works with the standard "
                    "creation screen.\n")
 CHANGED_MESSAGE = ("Not restored: {path} has changed since it was patched (for example a newer client was "
                    "installed); the saved original is kept as {path}.hearthdaoc-orig.\n")
