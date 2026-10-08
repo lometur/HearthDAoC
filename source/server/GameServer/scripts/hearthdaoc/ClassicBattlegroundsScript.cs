@@ -1,5 +1,7 @@
 using System;
 using System.Collections.Generic;
+using System.Linq;
+using System.Threading;
 using DOL.Database;
 using DOL.Events;
 using DOL.GS.Keeps;
@@ -11,10 +13,11 @@ namespace DOL.GS.HearthDAoC;
 
 // HearthDAoC: the game wiring of the classic battlegrounds. The frontier porter (OFTeleporter) asks
 // PorterDestination where a character wearing the battlegrounds medallion goes, and the realm teleporters'
-// [Battlegrounds] choice asks RealmRankRefusal; a character over its battleground's limit is moved out at
-// logout and, after a link death or a crash, a moment after its next login; and a captured central keep
-// goes back to level 1. ClassicBattlegrounds makes every decision; this class reads the battleground rows
-// and the character's state and carries out the outcome.
+// [Battlegrounds] choice asks RealmRankRefusal; the gamebots ask BotFits, PartyFits, BotOverCap and
+// BotFitsItsBattleground before a battleground goal or trip; a character over its battleground's limit is
+// moved out at logout and, after a link death or a crash, a moment after its next login; and a captured
+// central keep goes back to level 1. ClassicBattlegrounds makes every decision; this class reads the
+// battleground rows and the character's state and carries out the outcome.
 public static class ClassicBattlegroundsScript
 {
     private static readonly Logger Log = LoggerManager.Create(typeof(ClassicBattlegroundsScript));
@@ -74,6 +77,76 @@ public static class ClassicBattlegroundsScript
             Log.Error($"Classic battlegrounds: the teleporter could not check {player?.Name}'s realm rank", ex);
             return "I cannot send you to the battlegrounds right now.";
         }
+    }
+
+    // The bot rule (ClassicBattlegrounds.BotFits) for a trip or a camp in this battleground region: the
+    // reason a gamebot (or another member of its party) may not go in, or null when it may. A bot already in
+    // that region may stay. Called by upstream's bot code next to its level checks.
+    public static string BotOverCap(GameLiving bot, ushort region)
+    {
+        try
+        {
+            BattlegroundBracket bracket = Bracket(region);
+            return ClassicBattlegrounds.BotFits(bracket, RealmLevel(bot), bot.CurrentRegionID == region)
+                ? null
+                : ClassicBattlegrounds.BotOverCapReason(bracket);
+        }
+        catch (Exception ex)
+        {
+            // Closed on an error: the bot does something else.
+            LogBotError(bot, ex);
+            return "The battleground's realm rank cap could not be checked";
+        }
+    }
+
+    public static bool BotFits(GameLiving bot, ushort region)
+    {
+        return BotOverCap(bot, region) == null;
+    }
+
+    // BotFits for the bot and, when it plans for its whole party (a shared group camp), every member.
+    public static bool PartyFits(GameBot bot, bool wholeParty, ushort region)
+    {
+        return BotFits(bot, region)
+            && (!wholeParty || bot.Group == null || bot.Group.GetMembersInTheGroup().All(member => BotFits(member, region)));
+    }
+
+    // Whether a gamebot may be given the battleground goal: under the cap of the battleground for its level
+    // (upstream's BattlegroundBrackets.ForLevel; no battleground for the level is upstream's rule, not this
+    // one). Strict: a bot already inside gets no new battleground goal either.
+    public static bool BotFitsItsBattleground(GameBot bot)
+    {
+        try
+        {
+            BattlegroundBrackets.Bracket own = BattlegroundBrackets.ForLevel(bot.Level);
+            return own == null || ClassicBattlegrounds.BotFits(Bracket(own.RegionId), RealmLevel(bot));
+        }
+        catch (Exception ex)
+        {
+            LogBotError(bot, ex);
+            return false;
+        }
+    }
+
+    // A gamebot's realm level comes from its realm points (AutonomousBotRealmPointRewards.RealmLevelFor), on the
+    // players' table, so the caps mean the same for both.
+    private static int RealmLevel(GameLiving living)
+    {
+        return living switch
+        {
+            GamePlayer player => player.RealmLevel,
+            IGamePlayer bot => bot.RealmLevel,
+            _ => 0,
+        };
+    }
+
+    // Bots ask on their AI turns, so a broken row would log on every turn: only the first error is logged.
+    private static int _botErrorLogged;
+
+    private static void LogBotError(GameLiving bot, Exception ex)
+    {
+        if (Interlocked.Exchange(ref _botErrorLogged, 1) == 0)
+            Log.Error($"Classic battlegrounds: could not check {bot?.Name}'s realm rank for a battleground (logged once)", ex);
     }
 
     // The Keep Manager loads the battleground rows before the scripts' Loaded event (GameServer.Start).
@@ -207,12 +280,13 @@ public static class ClassicBattlegroundsScript
         return brackets;
     }
 
-    // One of the four regions' battleground row, or null (no row, or not one of the four). The cap is the realm
-    // points of MaxRealmLevel: REALMPOINTS_FOR_LEVEL[MaxRealmLevel], 0 without a cap. A MaxRealmLevel past the
-    // table's end can't be reached, since RealmLevel stops at its last entry.
+    // One of the four regions' battleground row, or null (no row, not one of the four, or no running server,
+    // as in upstream's unit tests that reach the bot hooks). The cap is the realm points of MaxRealmLevel:
+    // REALMPOINTS_FOR_LEVEL[MaxRealmLevel], 0 without a cap. A MaxRealmLevel past the table's end can't be
+    // reached, since RealmLevel stops at its last entry.
     private static BattlegroundBracket Bracket(ushort region)
     {
-        if (!ClassicBattlegrounds.IsBattleground(region))
+        if (!ClassicBattlegrounds.IsBattleground(region) || GameServer.Instance == null)
             return null;
 
         DbBattleground row = GameServer.KeepManager.GetBattleground(region);

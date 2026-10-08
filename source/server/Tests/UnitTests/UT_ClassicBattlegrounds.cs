@@ -10,7 +10,7 @@ namespace DOL.GS.Tests;
 // Caledonia 30-35) while its realm level is under that battleground's cap, and says why when it won't.
 // ClassicBattlegrounds holds every decision; the game wiring (ClassicBattlegroundsScript) only feeds it the
 // battleground rows and the character's state. The realm teleporters' [Battlegrounds] choice says the
-// porter's cap refusal.
+// porter's cap refusal, and the gamebots follow the same caps (the bot rule).
 [TestFixture]
 public sealed class UT_ClassicBattlegrounds
 {
@@ -126,6 +126,68 @@ public sealed class UT_ClassicBattlegrounds
             Is.EqualTo(Porter(row.MinLevel, refusedRealmLevel, refusedPoints).Refusal));
         Assert.That(ClassicBattlegrounds.CapRefusal(row with { MaxRealmLevel = 0, RealmPointCap = 0 }, 50, 1_000_000),
             Is.Null);
+    }
+
+    // The bot rule (owner, #50): a gamebot at or over a battleground's cap treats it as not fitting, so it gets
+    // no battleground goal and is not sent in. A bot's realm level starts at 0 (no realm points), not 1.
+    [TestCase(253, 0, true)]
+    [TestCase(253, 2, true)]
+    [TestCase(253, 3, false)]
+    [TestCase(253, 10, false)]
+    [TestCase(252, 3, true)]
+    [TestCase(252, 4, false)]
+    [TestCase(251, 5, true)]
+    [TestCase(251, 6, false)]
+    [TestCase(250, 9, true)]
+    [TestCase(250, 10, false)]
+    [TestCase(250, 50, false)]
+    public void ABotFitsABattlegroundOnlyUnderItsCap(int region, int realmLevel, bool fits)
+    {
+        Assert.That(ClassicBattlegrounds.BotFits(Row(region), realmLevel), Is.EqualTo(fits));
+        Assert.That(ClassicBattlegrounds.UnderCap(Row(region), realmLevel), Is.EqualTo(fits));
+        // The players' rule is the same: the porter's refusal at exactly the same realm levels.
+        Assert.That(ClassicBattlegrounds.CapRefusal(Row(region), realmLevel, 0) == null, Is.EqualTo(fits));
+
+        // One already inside is not pulled out, over the cap or not.
+        Assert.That(ClassicBattlegrounds.BotFits(Row(region), realmLevel, alreadyInside: true), Is.True);
+    }
+
+    // Bots earn realm points and their realm level is read from the players' table, so a bot is over the cap
+    // from exactly the realm points the porter names (125, 350, 1,375, 7,125).
+    [TestCase(253, 125)]
+    [TestCase(252, 350)]
+    [TestCase(251, 1375)]
+    [TestCase(250, 7125)]
+    public void ABotIsOverTheCapFromTheCapsRealmPoints(int region, long cap)
+    {
+        BattlegroundBracket row = Row(region);
+        Assert.That(row.RealmPointCap, Is.EqualTo(cap));
+        Assert.That(GamePlayer.REALMPOINTS_FOR_LEVEL[row.MaxRealmLevel], Is.EqualTo(cap));
+
+        Assert.That(ClassicBattlegrounds.BotFits(row, AutonomousBotRealmPointRewards.RealmLevelFor(0)), Is.True);
+        Assert.That(ClassicBattlegrounds.BotFits(row, AutonomousBotRealmPointRewards.RealmLevelFor(cap - 1)), Is.True);
+        Assert.That(ClassicBattlegrounds.BotFits(row, AutonomousBotRealmPointRewards.RealmLevelFor(cap)), Is.False);
+        Assert.That(ClassicBattlegrounds.BotFits(row, AutonomousBotRealmPointRewards.RealmLevelFor(cap * 10)), Is.False);
+    }
+
+    [Test]
+    public void ABotHasNoCapWithoutARowOrWithMaxRealmLevelZero()
+    {
+        Assert.That(ClassicBattlegrounds.BotFits(null, 50), Is.True);
+        Assert.That(ClassicBattlegrounds.BotFits(Uncapped(252).Single(b => b.Region == 252), 50), Is.True);
+    }
+
+    [Test]
+    public void ABotsTourEndsWithTheCapAsItsReason()
+    {
+        Assert.That(ClassicBattlegrounds.BotOverCapReason(Row(253)),
+            Is.EqualTo("Over the realm rank cap of Abermenai (1L2 and below)"));
+        Assert.That(ClassicBattlegrounds.BotOverCapReason(Row(252)),
+            Is.EqualTo("Over the realm rank cap of Thidranki (1L3 and below)"));
+        Assert.That(ClassicBattlegrounds.BotOverCapReason(Row(251)),
+            Is.EqualTo("Over the realm rank cap of Murdaigean (1L5 and below)"));
+        Assert.That(ClassicBattlegrounds.BotOverCapReason(Row(250)),
+            Is.EqualTo("Over the realm rank cap of Caledonia (1L9 and below)"));
     }
 
     [Test]

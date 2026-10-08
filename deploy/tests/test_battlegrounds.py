@@ -31,6 +31,10 @@ OF_TELEPORTERS = os.path.join(GAME_SERVER, "scripts", "teleporters", "OFTeleport
 KEEP_MANAGER = os.path.join(GAME_SERVER, "keeps", "KeepManager.cs")
 BATTLEGROUND_QUESTS = os.path.join(GAME_SERVER, "scripts", "quests", "BattlegroundQuests")
 BATTLEGROUND_OPTIONS = os.path.join(GAME_SERVER, "scripts", "teleporters", "BattlegroundTeleportOptions.cs")
+BOTS = os.path.join(GAME_SERVER, "bots", "autonomous")
+OBJECTIVE_ASSIGNMENTS = os.path.join(BOTS, "AutonomousObjectiveAssignments.cs")
+BOT_CONTROLLER = os.path.join(BOTS, "AutonomousWorldBotController.cs")
+BOT_BATTLEGROUND = os.path.join(BOTS, "AutonomousWorldBotController.Battleground.cs")
 FORK_CODE = os.path.join(GAME_SERVER, "scripts", "hearthdaoc")
 
 PORTER_CALL = "PortLocation = HearthDAoC.ClassicBattlegroundsScript.PorterDestination(this, player);"
@@ -112,6 +116,51 @@ class ClassicBattlegroundSourceTests(unittest.TestCase):
         self.assertLess(text.index("BattlegroundBrackets.Allows(bracket, player.Level)"), text.index(call))
         self.assertLess(text.index(call), text.index("BattlegroundBrackets.Entry("))
 
+    def test_bots_get_no_battleground_goal_over_the_cap(self):
+        text = read(OBJECTIVE_ASSIGNMENTS)
+        # The allocator counts and draws only bots under the cap.
+        can_take = between(text, "public static bool CanTakeBattleground(GameBot bot)", ";\n")
+        self.assertIn("HearthDAoC.ClassicBattlegroundsScript.BotFitsItsBattleground(bot)", can_take)
+        # Every assignment goes through Assign, which swaps a battleground goal over the cap for another goal.
+        assign = between(text, "private static void Assign(GameBot bot,", "record.ObjectiveKind = kind.ToString();")
+        swap = ("if (kind == eAutonomousObjectiveKind.Battleground && "
+                "!HearthDAoC.ClassicBattlegroundsScript.BotFitsItsBattleground(bot))")
+        self.assertIn(swap, assign)
+        self.assertIn("kind = AutonomousBotGoalPolicy.Choose(bot.Level, excludeBattlegrounds: true);", assign)
+        self.assertLess(assign.index("EnsureAllowed("), assign.index(swap))
+
+    def test_bots_over_the_cap_are_never_sent_in(self):
+        # A battleground tour ends before the bot travels; one already inside stays (BotOverCap says so).
+        tour = between(read(BOT_BATTLEGROUND), "private bool ExecuteBattleground(", "private bool RoamBattleground(")
+        self.assertIn("HearthDAoC.ClassicBattlegroundsScript.BotOverCap(bot, bracket.RegionId) is string overCap", tour)
+        self.assertIn("AutonomousObjectiveAssignments.EndBattlegroundTour(bot, overCap);", tour)
+        self.assertLess(tour.index("BotOverCap("), tour.index("TravelToBattleground("))
+
+        controller = read(BOT_CONTROLLER)
+        # A monster camp in a battleground is not offered over the cap (the bot, or any member of a shared party) ...
+        offer = between(controller, "campBattleground = AutonomousTownTeleporters.IsEnabled",
+                        "reachableRegions.Add(campBattleground.RegionId);")
+        self.assertIn("HearthDAoC.ClassicBattlegroundsScript.PartyFits(bot, sharedGroup, campBattleground.RegionId)", offer)
+        # ... and a camp chosen before the bot reached the cap is given up instead of travelled to.
+        travel = between(controller, "private bool TravelAcrossRegions(GameBot bot)", "FindNextCrossing(")
+        self.assertIn("HearthDAoC.ClassicBattlegroundsScript.BotOverCap(bot, bracket.RegionId) is string overCap", travel)
+        self.assertLess(travel.index("BotOverCap("), travel.index("TravelToBattleground("))
+
+    def test_every_bot_trip_into_a_battleground_is_capped(self):
+        # TravelToBattleground is the bots' only way in (a realm teleporter's [Battlegrounds] choice). If a sync
+        # adds a caller, check that it keeps the cap and add it here.
+        callers = {}
+        for path in cs_files(GAME_SERVER):
+            count = read(os.path.join(ROOT, path)).count("TravelToBattleground(")
+            if count:
+                callers[os.path.basename(path)] = count
+        self.assertEqual(callers, {
+            # The definition and the tour's call.
+            "AutonomousWorldBotController.Battleground.cs": 2,
+            # The battleground monster camp's call.
+            "AutonomousWorldBotController.cs": 1,
+        })
+
     def test_upstream_files_that_call_the_fork(self):
         # The fork's battleground hooks in upstream files, and how many calls each has.
         calls = {}
@@ -125,6 +174,9 @@ class ClassicBattlegroundSourceTests(unittest.TestCase):
         self.assertEqual(calls, {
             "OFTeleporters.cs": 3,
             "BattlegroundTeleportOptions.cs": 1,
+            "AutonomousObjectiveAssignments.cs": 2,
+            "AutonomousWorldBotController.Battleground.cs": 1,
+            "AutonomousWorldBotController.cs": 2,
         })
 
     def test_battleground_quests_are_gone(self):

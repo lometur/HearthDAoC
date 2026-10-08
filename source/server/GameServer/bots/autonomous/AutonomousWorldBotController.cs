@@ -807,6 +807,12 @@ namespace DOL.GS
                     AbandonCamp(bot, $"{camp.ZoneName} is outside this bot's battleground level bracket");
                     return true;
                 }
+                // HearthDAoC: nor at or over its realm rank cap.
+                if (HearthDAoC.ClassicBattlegroundsScript.BotOverCap(bot, bracket.RegionId) is string overCap)
+                {
+                    AbandonCamp(bot, overCap);
+                    return true;
+                }
                 return TravelToBattleground(bot, bracket, new(camp.X, camp.Y, camp.Z));
             }
 
@@ -3141,6 +3147,9 @@ namespace DOL.GS
             HashSet<ushort> reachableRegions = ReachableRegions(bot.Realm,
                 BattlegroundBrackets.IsBattlegroundRegion(bot.CurrentRegionID) ? RealmRaidNeutralEvents.HomeRegion(bot.Realm) : bot.CurrentRegionID);
             BattlegroundBrackets.Bracket campBattleground = AutonomousTownTeleporters.IsEnabled ? BattlegroundBrackets.ForLevel(bot.Level) : null;
+            // HearthDAoC: nor at or over its realm rank cap (the bot, or any member of a shared party).
+            if (campBattleground != null && !HearthDAoC.ClassicBattlegroundsScript.PartyFits(bot, sharedGroup, campBattleground.RegionId))
+                campBattleground = null;
             if (campBattleground != null && (!sharedGroup || bot.Group == null ||
                     bot.Group.GetMembersInTheGroup().All(member => BattlegroundBrackets.Allows(campBattleground, member.Level))))
                 reachableRegions.Add(campBattleground.RegionId);

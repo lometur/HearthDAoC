@@ -188,8 +188,10 @@ public static class AutonomousObjectiveAssignments
             Battlegrounds = target.Battlegrounds - surplus };
     }
 
+    // HearthDAoC: and under its battleground's realm rank cap.
     public static bool CanTakeBattleground(GameBot bot) =>
-        bot != null && AutonomousBotGoalPolicy.Allows(bot.Level, eAutonomousObjectiveKind.Battleground);
+        bot != null && AutonomousBotGoalPolicy.Allows(bot.Level, eAutonomousObjectiveKind.Battleground) &&
+        HearthDAoC.ClassicBattlegroundsScript.BotFitsItsBattleground(bot);
 
     private static Allocation Allocate(int count, double soloWeight, double groupWeight, double rvrWeight, double battlegroundWeight = 0)
     {
@@ -509,6 +511,9 @@ public static class AutonomousObjectiveAssignments
         // Recovery and task-boundary callers cannot reintroduce a disabled goal.
         if (AutonomousBotGoalPolicy.IsConfigured && !forcedRaid)
             kind = AutonomousBotGoalPolicy.EnsureAllowed(bot.Level, kind);
+        // HearthDAoC: a bot at or over its battleground's realm rank cap gets another goal.
+        if (kind == eAutonomousObjectiveKind.Battleground && !HearthDAoC.ClassicBattlegroundsScript.BotFitsItsBattleground(bot))
+            kind = AutonomousBotGoalPolicy.Choose(bot.Level, excludeBattlegrounds: true);
         OfflineWorldBotRecord record = bot.PersistentRecord;
         // eRealm.Albion and _FirstPlayerRealm share a value; ToString() labelled Albion assignments "_firstplayerrealm-...".
         string assignment = $"{GlobalConstants.RealmToName(bucket.Realm).ToLowerInvariant()}-{bucket.Band}-{epoch}-{kind}";

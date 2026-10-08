@@ -33,6 +33,13 @@ namespace DOL.GS
                 _nextPlanTick = 0;
                 return true;
             }
+            // HearthDAoC: at or over the battleground's realm rank cap, the tour ends before the bot goes in.
+            if (HearthDAoC.ClassicBattlegroundsScript.BotOverCap(bot, bracket.RegionId) is string overCap)
+            {
+                AutonomousObjectiveAssignments.EndBattlegroundTour(bot, overCap);
+                _nextPlanTick = 0;
+                return true;
+            }
             if (bot.CurrentRegionID != bracket.RegionId)
             {
                 GameLocation entry = BattlegroundBrackets.BotArrival(bracket, bot.Realm);
