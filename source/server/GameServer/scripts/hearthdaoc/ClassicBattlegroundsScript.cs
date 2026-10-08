@@ -10,10 +10,11 @@ using DOL.Logging;
 namespace DOL.GS.HearthDAoC;
 
 // HearthDAoC: the game wiring of the classic battlegrounds. The frontier porter (OFTeleporter) asks
-// PorterDestination where a character wearing the battlegrounds medallion goes; a character over its
-// battleground's limit is moved out at logout and, after a link death or a crash, a moment after its next
-// login; and a captured central keep goes back to level 1. ClassicBattlegrounds makes every decision; this
-// class reads the battleground rows and the character's state and carries out the outcome.
+// PorterDestination where a character wearing the battlegrounds medallion goes, and the realm teleporters'
+// [Battlegrounds] choice asks RealmRankRefusal; a character over its battleground's limit is moved out at
+// logout and, after a link death or a crash, a moment after its next login; and a captured central keep
+// goes back to level 1. ClassicBattlegrounds makes every decision; this class reads the battleground rows
+// and the character's state and carries out the outcome.
 public static class ClassicBattlegroundsScript
 {
     private static readonly Logger Log = LoggerManager.Create(typeof(ClassicBattlegroundsScript));
@@ -53,6 +54,25 @@ public static class ClassicBattlegroundsScript
             // The porter goes through every player in range; one player's error must not stop the others.
             Log.Error($"Classic battlegrounds: the porter could not decide for {player?.Name}", ex);
             return null;
+        }
+    }
+
+    // Called by upstream's BattlegroundTeleportOptions (the realm teleporters' [Battlegrounds] choice, 0.35)
+    // once a player of the right level, not a GM, picks a battleground: the refusal to say, or null when the
+    // realm rank is under that battleground's cap or the region has no battleground row. Unlike the porter's,
+    // it is said every time: the player asked.
+    public static string RealmRankRefusal(GamePlayer player, ushort region)
+    {
+        try
+        {
+            BattlegroundBracket bracket = Bracket(region);
+            return bracket == null ? null : ClassicBattlegrounds.CapRefusal(bracket, player.RealmLevel, player.RealmPoints);
+        }
+        catch (Exception ex)
+        {
+            // Closed on an error, like the porter: no teleport.
+            Log.Error($"Classic battlegrounds: the teleporter could not check {player?.Name}'s realm rank", ex);
+            return "I cannot send you to the battlegrounds right now.";
         }
     }
 
@@ -172,26 +192,37 @@ public static class ClassicBattlegroundsScript
         keep.SaveIntoDatabase();
     }
 
-    // The battleground rows the Keep Manager loaded at start, in ClassicBattlegrounds.Regions order. The cap
-    // is the realm points of MaxRealmLevel: REALMPOINTS_FOR_LEVEL[MaxRealmLevel], 0 without a cap. A
-    // MaxRealmLevel past the table's end can't be reached, since RealmLevel stops at its last entry.
+    // The battleground rows the Keep Manager loaded at start, in ClassicBattlegrounds.Regions order.
     private static List<BattlegroundBracket> Brackets()
     {
         List<BattlegroundBracket> brackets = new();
-        long[] points = GamePlayer.REALMPOINTS_FOR_LEVEL;
 
         foreach (ushort region in ClassicBattlegrounds.Regions)
         {
-            DbBattleground row = GameServer.KeepManager.GetBattleground(region);
-            if (row == null)
-                continue;
-
-            long cap = row.MaxRealmLevel == 0 ? 0 : points[Math.Min((int)row.MaxRealmLevel, points.Length - 1)];
-            brackets.Add(new BattlegroundBracket(region, ClassicBattlegrounds.Names[region], row.MinLevel,
-                row.MaxLevel, row.MaxRealmLevel, cap));
+            BattlegroundBracket bracket = Bracket(region);
+            if (bracket != null)
+                brackets.Add(bracket);
         }
 
         return brackets;
+    }
+
+    // One of the four regions' battleground row, or null (no row, or not one of the four). The cap is the realm
+    // points of MaxRealmLevel: REALMPOINTS_FOR_LEVEL[MaxRealmLevel], 0 without a cap. A MaxRealmLevel past the
+    // table's end can't be reached, since RealmLevel stops at its last entry.
+    private static BattlegroundBracket Bracket(ushort region)
+    {
+        if (!ClassicBattlegrounds.IsBattleground(region))
+            return null;
+
+        DbBattleground row = GameServer.KeepManager.GetBattleground(region);
+        if (row == null)
+            return null;
+
+        long[] points = GamePlayer.REALMPOINTS_FOR_LEVEL;
+        long cap = row.MaxRealmLevel == 0 ? 0 : points[Math.Min((int)row.MaxRealmLevel, points.Length - 1)];
+        return new BattlegroundBracket(region, ClassicBattlegrounds.Names[region], row.MinLevel, row.MaxLevel,
+            row.MaxRealmLevel, cap);
     }
 
     // The character's state now. A character without an account counts as privilege level 0, never over.

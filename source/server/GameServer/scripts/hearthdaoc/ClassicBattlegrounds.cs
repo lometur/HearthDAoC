@@ -8,10 +8,11 @@ namespace DOL.GS.HearthDAoC;
 // HearthDAoC: the classic battlegrounds, Abermenai (15-19), Thidranki (20-24), Murdaigean (25-29) and
 // Caledonia (30-35), each with a realm rank cap from its battleground row. This class holds every decision:
 // where the frontier porter sends a character wearing the battlegrounds medallion, or why it won't and
-// whether it says so now; when a character is over a battleground's limit and where it goes then; and a
-// central keep's level after a capture. It reads nothing from the running server (GameServer, WorldMgr,
-// ServerProperties, GamePlayer), so unit tests drive it directly; ClassicBattlegroundsScript feeds it the
-// battleground rows and the character's state and carries out the outcome.
+// whether it says so now; the cap refusal the realm teleporters say too; when a character is over a
+// battleground's limit and where it goes then; and a central keep's level after a capture. It reads nothing
+// from the running server (GameServer, WorldMgr, ServerProperties, GamePlayer), so unit tests drive it
+// directly; ClassicBattlegroundsScript feeds it the battleground rows and the character's state and carries
+// out the outcome.
 
 // One battleground's row. RealmPointCap is REALMPOINTS_FOR_LEVEL[MaxRealmLevel] (0 when MaxRealmLevel is 0);
 // the script computes it, so this file never reads GamePlayer.
@@ -76,11 +77,10 @@ public static class ClassicBattlegrounds
 
         if (bracket != null)
         {
-            if (bracket.MaxRealmLevel == 0 || realmLevel < bracket.MaxRealmLevel)
-                return new PorterDecision(Landing(realm, bracket), null);
-
-            string rank = RankLabel(bracket.MaxRealmLevel - 1);
-            return Refuse($"{bracket.Name} is for realm rank {rank} and below, under {bracket.RealmPointCap:N0} realm points. You have {realmPoints:N0}, so I cannot send you there.");
+            string capRefusal = CapRefusal(bracket, realmLevel, realmPoints);
+            return capRefusal == null
+                ? new PorterDecision(Landing(realm, bracket), null)
+                : new PorterDecision(null, capRefusal);
         }
 
         if (brackets.Count > 0)
@@ -96,6 +96,25 @@ public static class ClassicBattlegrounds
         }
 
         return Refuse($"No battleground on this server takes level {level}.");
+    }
+
+    // Under the battleground's realm rank cap: a realm level below its MaxRealmLevel (0: no cap). The one rule
+    // for players (porter, realm teleporters, over-limit moves).
+    public static bool UnderCap(BattlegroundBracket bracket, int realmLevel)
+    {
+        return bracket.MaxRealmLevel == 0 || realmLevel < bracket.MaxRealmLevel;
+    }
+
+    // The realm rank refusal for a character whose level fits this battleground, or null when it is under the
+    // cap. The frontier porter and the realm teleporters' [Battlegrounds] choice (upstream's
+    // BattlegroundTeleportOptions, 0.35) both say it, word for word.
+    public static string CapRefusal(BattlegroundBracket bracket, int realmLevel, long realmPoints)
+    {
+        if (UnderCap(bracket, realmLevel))
+            return null;
+
+        string rank = RankLabel(bracket.MaxRealmLevel - 1);
+        return FormattableString.Invariant($"{bracket.Name} is for realm rank {rank} and below, under {bracket.RealmPointCap:N0} realm points. You have {realmPoints:N0}, so I cannot send you there.");
     }
 
     // Numbers as in English (350, 1,375, 7,125), whatever the server's culture.
@@ -128,7 +147,7 @@ public static class ClassicBattlegrounds
         if (row == null)
             return false;
 
-        if (level <= row.MaxLevel && (row.MaxRealmLevel == 0 || realmLevel < row.MaxRealmLevel))
+        if (level <= row.MaxLevel && UnderCap(row, realmLevel))
             return false;
 
         bracket = row;

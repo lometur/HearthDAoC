@@ -9,7 +9,8 @@ namespace DOL.GS.Tests;
 // medallion to the battleground for its level (Abermenai 15-19, Thidranki 20-24, Murdaigean 25-29,
 // Caledonia 30-35) while its realm level is under that battleground's cap, and says why when it won't.
 // ClassicBattlegrounds holds every decision; the game wiring (ClassicBattlegroundsScript) only feeds it the
-// battleground rows and the character's state.
+// battleground rows and the character's state. The realm teleporters' [Battlegrounds] choice says the
+// porter's cap refusal.
 [TestFixture]
 public sealed class UT_ClassicBattlegrounds
 {
@@ -107,6 +108,24 @@ public sealed class UT_ClassicBattlegrounds
         Assert.That(goes.Destination.Region, Is.EqualTo(region));
 
         Assert.That(Porter(level, refusedRealmLevel, refusedPoints), Is.EqualTo(Refused(refusal)));
+    }
+
+    // The realm teleporters' [Battlegrounds] choice (upstream 0.35) says the porter's cap refusal, word for word.
+    [TestCase(253, 2, 124, 3, 125)]
+    [TestCase(252, 3, 349, 4, 412)]
+    [TestCase(251, 5, 1374, 6, 1375)]
+    [TestCase(250, 9, 7124, 10, 10000)]
+    [SetCulture("fr-FR")]
+    public void TheTeleportersCapRefusalIsThePorters(int region, int highestRealmLevel, long highestPoints,
+        int refusedRealmLevel, long refusedPoints)
+    {
+        BattlegroundBracket row = Row(region);
+        Assert.That(ClassicBattlegrounds.CapRefusal(row, highestRealmLevel, highestPoints), Is.Null);
+        Assert.That(ClassicBattlegrounds.CapRefusal(row, refusedRealmLevel, refusedPoints), Is.Not.Null);
+        Assert.That(ClassicBattlegrounds.CapRefusal(row, refusedRealmLevel, refusedPoints),
+            Is.EqualTo(Porter(row.MinLevel, refusedRealmLevel, refusedPoints).Refusal));
+        Assert.That(ClassicBattlegrounds.CapRefusal(row with { MaxRealmLevel = 0, RealmPointCap = 0 }, 50, 1_000_000),
+            Is.Null);
     }
 
     [Test]

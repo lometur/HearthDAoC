@@ -50,6 +50,13 @@ namespace DOL.GS.Scripts
                     teleporter.SayTo(player, $"{bracket.Name} is only for fighters of levels {bracket.MinLevel} to {bracket.MaxLevel}.");
                     return true;
                 }
+                // HearthDAoC: the classic realm rank caps (1L2, 1L3, 1L5, 1L9), as at the frontier porter.
+                string capRefusal = gameMaster ? null : HearthDAoC.ClassicBattlegroundsScript.RealmRankRefusal(player, bracket.RegionId);
+                if (capRefusal != null)
+                {
+                    teleporter.SayTo(player, capRefusal);
+                    return true;
+                }
                 GameLocation entry = BattlegroundBrackets.Entry(bracket, realm);
                 if (entry == null) return true;
                 destination = new DbTeleport

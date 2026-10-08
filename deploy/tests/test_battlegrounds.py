@@ -30,6 +30,8 @@ GAME_SERVER = os.path.join(SOURCE, "server", "GameServer")
 OF_TELEPORTERS = os.path.join(GAME_SERVER, "scripts", "teleporters", "OFTeleporters.cs")
 KEEP_MANAGER = os.path.join(GAME_SERVER, "keeps", "KeepManager.cs")
 BATTLEGROUND_QUESTS = os.path.join(GAME_SERVER, "scripts", "quests", "BattlegroundQuests")
+BATTLEGROUND_OPTIONS = os.path.join(GAME_SERVER, "scripts", "teleporters", "BattlegroundTeleportOptions.cs")
+FORK_CODE = os.path.join(GAME_SERVER, "scripts", "hearthdaoc")
 
 PORTER_CALL = "PortLocation = HearthDAoC.ClassicBattlegroundsScript.PorterDestination(this, player);"
 # Atlas's daily quests for Caledonia 34-39 and Thidranki 20-24, whose scripts also made the Pazz NPCs.
@@ -39,6 +41,18 @@ QUEST_CLASS_NAMES = (
     "ThidKeepCaptureAlb", "ThidKeepCaptureHib", "ThidKeepCaptureMid",
     "ThidKillQuestAlb", "ThidKillQuestHib", "ThidKillQuestMid",
 )
+
+
+def read(path):
+    """A C# source file's text (upstream files may start with a BOM; a few are not UTF-8)."""
+    with open(path, encoding="utf-8-sig", errors="replace") as f:
+        return f.read()
+
+
+def between(text, start, end):
+    """The text from the first start up to the first end after it."""
+    body = text[text.index(start):]
+    return body[:body.index(end)]
 
 
 def cs_files(top):
@@ -51,7 +65,7 @@ def cs_files(top):
 
 class ClassicBattlegroundSourceTests(unittest.TestCase):
     def test_porter_blocks_call_the_fork(self):
-        # The file starts with a BOM, and its line endings are mixed (CRLF and LF).
+        # The file starts with a BOM; upstream 0.35 made its line endings all CRLF.
         with open(OF_TELEPORTERS, encoding="utf-8-sig") as f:
             text = f.read()
         lines = text.splitlines()
@@ -73,11 +87,45 @@ class ClassicBattlegroundSourceTests(unittest.TestCase):
 
     def test_keep_manager_names_svasud_faste(self):
         # ExitBattleground looks the realm's home portal keep up by TeleportID; the world's row is "Svasud Faste".
-        with open(KEEP_MANAGER, encoding="utf-8") as f:
-            text = f.read()
-        midgard = [line.strip() for line in text.splitlines() if "case eRealm.Midgard: location =" in line]
+        # Upstream fixed it the same way in 0.35, with a comment after the code that names the old "Svasudheim".
+        text = read(KEEP_MANAGER)
+        midgard = [line.split("//")[0].strip() for line in text.splitlines() if "case eRealm.Midgard: location =" in line]
         self.assertEqual(midgard, ['case eRealm.Midgard: location = "Svasud Faste"; break;'])
-        self.assertNotIn("Svasudheim", text)
+        self.assertNotIn('location = "Svasudheim', text)
+
+    # Every way into a battleground keeps the classic realm rank caps (owner, #50). Upstream 0.35 checks level
+    # only, so a sync that drops one of these hooks fails here.
+
+    def test_battleground_portal_keep_keeps_the_cap(self):
+        # GetBGPK, GameTeleporter's "battlegrounds" whisper: upstream 0.35 dropped the cap; the fork keeps 0.34's.
+        body = between(read(KEEP_MANAGER), "AbstractGameKeep GetBGPK(GamePlayer player)", "return null;")
+        self.assertIn("// HearthDAoC:", body)
+        self.assertIn("(bg.MaxRealmLevel == 0 || player.RealmLevel < bg.MaxRealmLevel)", body)
+
+    def test_realm_teleporters_check_the_cap(self):
+        # Upstream 0.35's [Battlegrounds] choice on every realm teleporter checks level only; the fork adds the
+        # porter's cap refusal after the level check, for players who are not game masters.
+        text = read(BATTLEGROUND_OPTIONS)
+        call = "string capRefusal = gameMaster ? null : HearthDAoC.ClassicBattlegroundsScript.RealmRankRefusal(player, bracket.RegionId);"
+        self.assertEqual(text.count(call), 1)
+        self.assertEqual(text.count("BattlegroundBrackets.Entry("), 1)
+        self.assertLess(text.index("BattlegroundBrackets.Allows(bracket, player.Level)"), text.index(call))
+        self.assertLess(text.index(call), text.index("BattlegroundBrackets.Entry("))
+
+    def test_upstream_files_that_call_the_fork(self):
+        # The fork's battleground hooks in upstream files, and how many calls each has.
+        calls = {}
+        fork = os.path.relpath(FORK_CODE, ROOT)
+        for path in cs_files(GAME_SERVER):
+            if path.startswith(fork + os.sep):
+                continue
+            count = len(re.findall(r"HearthDAoC\.ClassicBattlegroundsScript\.", read(os.path.join(ROOT, path))))
+            if count:
+                calls[os.path.basename(path)] = count
+        self.assertEqual(calls, {
+            "OFTeleporters.cs": 3,
+            "BattlegroundTeleportOptions.cs": 1,
+        })
 
     def test_battleground_quests_are_gone(self):
         self.assertEqual(cs_files(BATTLEGROUND_QUESTS), [])
