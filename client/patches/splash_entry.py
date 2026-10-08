@@ -55,7 +55,7 @@ def splash_entry(client_dir, splash_mpk_path):
     check_splash_mpk(splash_mpk_path)
     before = sha256_file(os.path.join(client_dir, *SPLASH_PATH.split("/")))
     if before != STOCK_SPLASH_SHA256:
-        raise SplashError(f"{SPLASH_PATH} in {client_dir} isn't OfflineDAoC 0.34's splash "
+        raise SplashError(f"{SPLASH_PATH} in {client_dir} isn't OfflineDAoC 0.35's splash "
                           f"(SHA-256 {before})")
     return {"path": SPLASH_PATH, "before": before, "after": sha256_file(splash_mpk_path),
             "ops": [{"op": "file", "source": SPLASH_SOURCE}]}

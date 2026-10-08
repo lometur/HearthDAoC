@@ -17,7 +17,7 @@ REPO = os.path.dirname(os.path.dirname(PATCHES))
 SERVER_SRC = os.path.join(REPO, "source", "server")
 CLIENT = os.environ.get("HDC_CLIENT_FILES")
 WORLD_DB = os.environ.get("HDC_TEST_WORLD")
-NEEDS_FILES = ("set HDC_CLIENT_FILES to an OfflineDAoC 0.34 classic client folder and "
+NEEDS_FILES = ("set HDC_CLIENT_FILES to an OfflineDAoC 0.35 classic client folder and "
                "HDC_TEST_WORLD to a clean classic world database")
 
 
@@ -74,7 +74,7 @@ class RealBuildTests(unittest.TestCase):
 
     def test_lists_game_dll_and_the_stats_xml(self):
         self.assertEqual([self.patchset[key] for key in ("format", "name", "client")],
-                         [1, "classic-creation", "OfflineDAoC 0.34 classic"])
+                         [1, "classic-creation", "OfflineDAoC 0.35 classic"])
         self.assertEqual([entry["path"] for entry in self.patchset["files"]],
                          ["game.dll", "pregame/character_customize_stats.xml"])
 
@@ -96,7 +96,7 @@ class RealBuildTests(unittest.TestCase):
         ops = self.patchset["files"][0]["ops"]
         # NumberOfSections, SizeOfCode, SizeOfImage + CheckSum, the .hdcc section header, P2, P1, P3, the hook
         self.assertEqual([(op["op"], op.get("offset")) for op in ops],
-                         [("replace", 0x15E), ("replace", 0x175), ("replace", 0x1A9), ("replace", 0x390),
+                         [("replace", 0x15E), ("replace", 0x175), ("replace", 0x1A9), ("replace", 0x3B8),
                           ("replace", 0x19A853), ("replace", 0x19C0B2), ("replace", 0x19C574),
                           ("replace", 0x1B0052), ("append", None)])
         self.assertEqual(len(ops[-1]["data"]), 2 * 0x1000)

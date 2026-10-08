@@ -12,7 +12,7 @@ IMAGE_BASE = 0x400000
 FILE_ALIGN = 0x200
 SECTION_ALIGN = 0x1000
 CLIENT = os.environ.get("HDC_CLIENT_FILES")
-NEEDS_CLIENT = "set HDC_CLIENT_FILES to an OfflineDAoC 0.34 classic client folder"
+NEEDS_CLIENT = "set HDC_CLIENT_FILES to an OfflineDAoC 0.35 classic client folder"
 
 
 def align(value, alignment):
@@ -198,7 +198,7 @@ class RealGameDllTests(unittest.TestCase):
         p = pe.PE(data)
         self.assertEqual(p.image_base, 0x400000)
         self.assertEqual([s.name for s in p.sections],
-                         [".text", ".rdata", ".data", "Shared", ".rsrc", ".botmap", ".ofly", ".raid"])
+                         [".text", ".rdata", ".data", "Shared", ".rsrc", ".botmap", ".ofly", ".raid", ".bounty"])
         self.assertEqual(p.offset(0x59C0B2), 0x19C0B2)
         stored = struct.unpack_from("<I", data, p.header_offsets["checksum"])[0]
         self.assertEqual(pe.checksum(data, p.header_offsets["checksum"]), stored)

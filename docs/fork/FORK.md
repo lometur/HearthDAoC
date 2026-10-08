@@ -32,7 +32,7 @@ listed here, so upstream syncs can account for it:
 
 ## Client patches
 
-The patch set `client/patches/classic-creation.json` gives the OfflineDAoC 0.34 classic client a classic
+The patch set `client/patches/classic-creation.json` gives the OfflineDAoC 0.35 classic client a classic
 character creation screen and the HearthDAoC loading splash (sub-project 2, see
 [its spec](specs/2026-10-06-classic-character-creation-design.md)). It holds only SHA-256 hashes, byte and text edits
 and our own code, never an EA file. The launchers apply it at every launch, just before the game starts, so
@@ -102,10 +102,10 @@ committed `splash.mpk`. From the repository root:
 
 ```bash
 c="$(mktemp -d)"  # EA files from the pinned release, verified; never commit or share them
-python3 tools/linux/odaoc_fetch.py --lock deploy/upstream.lock extract editions/0.34-no-custom-class/runtime/client-opendaoc/app/game.dll "$c/game.dll"
+python3 tools/linux/odaoc_fetch.py --lock deploy/upstream.lock extract editions/0.35-no-custom-class/runtime/client-opendaoc/app/game.dll "$c/game.dll"
 python3 tools/linux/odaoc_fetch.py --lock deploy/upstream.lock extract runtime/client-opendaoc/app/pregame/character_customize_stats.xml "$c/pregame/character_customize_stats.xml"
 python3 tools/linux/odaoc_fetch.py --lock deploy/upstream.lock extract runtime/client-opendaoc/app/pregame/splash.mpk "$c/pregame/splash.mpk"
-python3 tools/linux/odaoc_fetch.py --lock deploy/upstream.lock extract editions/0.34-no-custom-class/runtime/data/opendaoc.sqlite3.db "$c/world.db"
+python3 tools/linux/odaoc_fetch.py --lock deploy/upstream.lock extract editions/0.35-no-custom-class/runtime/data/opendaoc.sqlite3.db "$c/world.db"
 python3 client/patches/build.py --client "$c" --world-db "$c/world.db" --server-src source/server \
   --splash-mpk client/patches/splash.mpk --out client/patches/classic-creation.json
 HDC_CLIENT_FILES="$c" HDC_TEST_WORLD="$c/world.db" python3 -m unittest discover -s client/patches/tests -t client/patches

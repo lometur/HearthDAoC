@@ -2,7 +2,7 @@
 
 The unit tests read this repo's server sources (source/server) and use the shipped classic world's
 disabled_classes value. Real-file checks run only when the files are given:
-- HDC_CLIENT_FILES: an OfflineDAoC 0.34 classic client folder (its game.dll is read, never changed);
+- HDC_CLIENT_FILES: an OfflineDAoC 0.35 classic client folder (its game.dll is read, never changed);
 - HDC_TEST_WORLD: a clean classic world database (opened read-only).
 """
 import hashlib
@@ -21,10 +21,10 @@ SERVER_SRC = os.path.join(REPO, "source", "server")
 sys.path.insert(0, PATCHES)
 import classdata  # noqa: E402
 
-SHIPPED_DISABLED = "20;33;34;39;58-62"  # clean classic 0.34 world, before world_fixes.py
+SHIPPED_DISABLED = "20;33;34;39;58-62"  # clean classic 0.35 world, before world_fixes.py
 CLIENT = os.environ.get("HDC_CLIENT_FILES")
 WORLD = os.environ.get("HDC_TEST_WORLD")
-GAME_DLL_SHA256 = "67dcf68a37b95a93946a943b99d5e19b4a03e08cd6469275e25c7b909de21e99"
+GAME_DLL_SHA256 = "f55ed6b068e22ce8e1106871c2fad6ee10c18390bbb8b5dc772219ad8c8b83bb"
 
 BRI, AVA, HIG, SAR, NOR, TRO, DWA, KOB, CEL, FIR, ELF, LUR, INC, VAL, SYL = range(1, 16)
 # docs/fork/specs/2026-10-06-classic-character-creation-design.md, section 2:
@@ -124,7 +124,7 @@ class ServerSourceTests(unittest.TestCase):
     def test_final_class_ids_are_the_servers_full_classes_but_sluaghbinder(self):
         classes = classdata.read_server_classes(SERVER_SRC)
         finals = {c.id for c in classes.values() if c.parent != "CharacterClassBase"}
-        self.assertIn(63, finals)  # Sluaghbinder: 0.34b only, unknown to the classic client
+        self.assertIn(63, finals)  # Sluaghbinder: b edition only, unknown to the classic client
         self.assertEqual(classdata.FINAL_CLASS_IDS, sorted(finals - {63}))
         self.assertEqual(len(classdata.FINAL_CLASS_IDS), 47)
 
@@ -261,7 +261,7 @@ def va_to_offset(data, va):
     raise ValueError(f"VA {va:#x} is not in the file")
 
 
-@unittest.skipUnless(CLIENT, "needs HDC_CLIENT_FILES (an OfflineDAoC 0.34 classic client folder)")
+@unittest.skipUnless(CLIENT, "needs HDC_CLIENT_FILES (an OfflineDAoC 0.35 classic client folder)")
 class RealGameDllTests(unittest.TestCase):
     NAME_TABLE = (0x44E769, 0x44F800)  # code that fills the class-name table (0x104B400 + id * 0x1E)
     STRING_LOOKUP = 0x7303FB
@@ -272,7 +272,7 @@ class RealGameDllTests(unittest.TestCase):
         with open(os.path.join(CLIENT, "game.dll"), "rb") as f:
             cls.data = f.read()
         if hashlib.sha256(cls.data).hexdigest() != GAME_DLL_SHA256:
-            raise AssertionError("HDC_CLIENT_FILES/game.dll is not the OfflineDAoC 0.34 classic game.dll")
+            raise AssertionError("HDC_CLIENT_FILES/game.dll is not the OfflineDAoC 0.35 classic game.dll")
         cls.bcs = classdata.base_classes(SERVER_SRC, SHIPPED_DISABLED)
 
     def test_each_name_pointer_holds_the_class_name(self):
