@@ -2401,7 +2401,9 @@ namespace DOL.GS.Quests
 				DbCharacterXDataQuest charQuest = GetCharacterQuest(player, ID, true);
 				DataQuest dq = new DataQuest(player, living, DBDataQuest, charQuest);
 				dq.Step = 1;
-				player.AddQuest(dq);
+				// HearthDAoC: a full quest log refuses the quest; then no item and no text (the item without the quest).
+				if (!player.AddQuest(dq))
+					return;
 				if (firstItem != null)
 					GiveItem(living, player, firstItem, false);
 				if (m_sourceTexts.Count > 0)
