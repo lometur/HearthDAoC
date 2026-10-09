@@ -15,11 +15,117 @@ tell() {  # tell error|warning <message>
     local kind="$1"; shift
     echo "play.sh: $*" >&2
     if [[ ! -t 2 && -n "${DISPLAY:-}${WAYLAND_DISPLAY:-}" ]]; then
-        if command -v zenity >/dev/null; then zenity --"$kind" --title="HearthDAoC" --text="$*" 2>/dev/null || true
+        if command -v zenity >/dev/null; then zenity --"$kind" --no-markup --title="HearthDAoC" --text="$*" 2>/dev/null || true
         elif command -v notify-send >/dev/null; then notify-send "HearthDAoC" "$*" || true; fi
     fi
 }
 die() { tell error "$@"; exit 1; }
+
+# Updates. setup.sh saved its settings and the installed release in hearthdaoc-client.conf (read here,
+# never run). At each launch, play.sh asks GitHub for the newest release, for 5 seconds at most. When it is
+# newer, it asks the player first. Yes downloads the release's client bundle and runs its setup.sh with the
+# saved settings, then starts the new play.sh. No, or a failed update, plays this release, and the next
+# launch asks again. HEARTHDAOC_NO_UPDATE=1 turns the check off. An install without a saved release
+# (setup.sh from a checkout, or from an older bundle) never checks.
+CONF="$HERE/hearthdaoc-client.conf"
+RELEASES="${HEARTHDAOC_RELEASES_URL:-https://github.com/lometur/HearthDAoC/releases}"
+RELEASE_TAG='^v[0-9]+(\.[0-9]+)*[a-z]?-hearth\.[0-9]+$'  # as deploy/release_tag.py
+
+conf() {  # conf <key>: the value setup.sh saved, or nothing
+    sed -n "s/^$1=//p" "$CONF" 2>/dev/null | tr -d '\r' | tail -n 1 || true
+}
+latest_release() {  # GitHub redirects .../releases/latest to .../releases/tag/<tag>; nothing when unreachable
+    { curl -fsI --max-time 5 "$RELEASES/latest" 2>/dev/null || true; } | tr -d '\r' |
+        sed -n 's|^[Ll]ocation: .*/tag/\([^/]*\)$|\1|p' | tail -n 1
+}
+newer() {  # newer <tag> <other tag>: whether <tag> is the later release
+    # sort -V puts v0.35b-hearth.1 before v0.35-hearth.1. With "~" (sorted before letters) in place of
+    # "-hearth.", it puts 0.35 before 0.35b, in upstream's order.
+    local a b
+    a="$(sed 's/-hearth\./~/' <<<"$1")"; b="$(sed 's/-hearth\./~/' <<<"$2")"
+    [[ "$a" != "$b" && "$(printf '%s\n' "$a" "$b" | sort -V | tail -n 1)" == "$a" ]]
+}
+ask() {  # ask <question>: 0 yes, 1 no, 2 no way to ask (no terminal, and no display or no zenity)
+    local answer=""
+    if [[ -t 0 ]]; then
+        read -rp "$1 [y/N] " answer || true
+        [[ "$answer" == [Yy]* ]]
+    elif [[ -n "${DISPLAY:-}${WAYLAND_DISPLAY:-}" ]] && command -v zenity >/dev/null; then
+        zenity --question --title="HearthDAoC" --text="$1" 2>/dev/null || return 1
+    else
+        return 2
+    fi
+}
+# Started from Steam: the update shows its progress in a window.
+progress_window() { [[ ! -t 2 && -n "${DISPLAY:-}${WAYLAND_DISPLAY:-}" ]] && command -v zenity >/dev/null; }
+
+update_failed() { echo "$*" > "$UPDATE_DIR/failed"; }  # update_failed <why>: for the warning
+install_release() {  # install_release <tag>: download its client bundle into $UPDATE_DIR, check it, run its setup.sh
+    local tag="$1" bundle="$UPDATE_DIR/new/hearthdaoc-client-$1" url version show=(-sS)
+    url="$RELEASES/download/$tag/hearthdaoc-client-$tag.zip"
+    [[ ! -t 2 ]] || show=(--progress-bar)
+    echo "Downloading HearthDAoC $tag ..."
+    # About 27 MB. A download that stalls for a minute gives up.
+    curl -fL "${show[@]}" --connect-timeout 10 --speed-limit 1024 --speed-time 60 -o "$UPDATE_DIR/bundle.zip" "$url" ||
+        { update_failed "could not download $url"; return 1; }
+    # Python unpacks it (no unzip needed). Unpacking drops the exec bits: the scripts run through bash.
+    python3 -I -m zipfile -e "$UPDATE_DIR/bundle.zip" "$UPDATE_DIR/new" ||
+        { update_failed "the download is not a zip file"; return 1; }
+    [[ -f "$bundle/setup.sh" ]] || { update_failed "the download holds no hearthdaoc-client-$tag/setup.sh"; return 1; }
+    version="$(head -n 1 "$bundle/VERSION" 2>/dev/null | tr -d '\r' || true)"
+    [[ "$version" == "$tag" ]] || { update_failed "the download's VERSION file doesn't say $tag"; return 1; }
+    bash "$bundle/setup.sh" --server "$(conf server)" --edition "$(conf edition)" \
+        --base-client "$(conf base_client)" --dest "$HERE" || { update_failed "its setup.sh failed (exit $?)"; return 1; }
+}
+update_to() {  # update_to <tag> <installed tag>: 0 when <tag> is installed
+    local tag="$1" rc=0 pid why log msg
+    # A folder of its own in the install folder, removed in every case.
+    UPDATE_DIR="$(mktemp -d "$HERE/.update.XXXXXX")" ||
+        { tell warning "Warning: the update to HearthDAoC $tag failed: cannot write in $HERE."; return 1; }
+    trap 'rm -rf "$UPDATE_DIR"' EXIT
+    if progress_window; then
+        : > "$UPDATE_DIR/log"  # before tail opens it
+        install_release "$tag" >> "$UPDATE_DIR/log" 2>&1 &
+        pid=$!
+        tail -n +1 -f --pid="$pid" "$UPDATE_DIR/log" 2>/dev/null | sed -u 's/^/# /' |
+            zenity --progress --pulsate --auto-close --no-cancel --title="HearthDAoC" \
+                --text="Updating to HearthDAoC $tag ..." 2>/dev/null || true
+        wait "$pid" || rc=$?
+    else
+        install_release "$tag" || rc=$?
+    fi
+    why="$(cat "$UPDATE_DIR/failed" 2>/dev/null || echo "exit $rc")"
+    log="$(tail -n 3 "$UPDATE_DIR/log" 2>/dev/null || true)"  # what the progress window showed last
+    rm -rf "$UPDATE_DIR"
+    trap - EXIT
+    [[ $rc -ne 0 ]] || return 0
+    msg="Warning: the update to HearthDAoC $tag failed: $why. The game starts with $2; the next launch offers the update again."
+    if [[ -n "$log" ]]; then msg+=$'\n\n'"$log"; fi
+    tell warning "$msg"
+    return 1
+}
+offer_update() {  # offer_update: 0 when a newer release was installed
+    local installed latest rc=0
+    installed="$(conf tag)"
+    [[ "$installed" =~ $RELEASE_TAG && -n "$(conf server)" && -n "$(conf edition)" && -n "$(conf base_client)" ]] ||
+        return 1
+    latest="$(latest_release)"
+    if [[ ! "$latest" =~ $RELEASE_TAG ]]; then
+        echo "play.sh: could not check for a HearthDAoC update; playing $installed." >&2
+        return 1
+    fi
+    newer "$latest" "$installed" || return 1
+    ask "HearthDAoC $latest is out (you have $installed). Update the client now?" || rc=$?
+    if [[ $rc -eq 2 ]]; then
+        tell warning "HearthDAoC $latest is out (you have $installed). To update, run $HERE/play.sh from a terminal," \
+            "or run setup.sh from the new release's client bundle."
+    fi
+    [[ $rc -eq 0 ]] && update_to "$latest" "$installed"
+}
+if [[ "${HEARTHDAOC_NO_UPDATE:-}" != 1 ]] && offer_update; then
+    export HEARTHDAOC_NO_UPDATE=1  # the new play.sh starts the game without checking again
+    exec bash "$HERE/play.sh" "$@"
+fi
 
 if [[ ! -f "$CREDS" ]]; then
     if command -v zenity >/dev/null && [[ -n "${DISPLAY:-}${WAYLAND_DISPLAY:-}" ]]; then
