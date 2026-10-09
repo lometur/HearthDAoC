@@ -1,5 +1,9 @@
 # Classic Battlegrounds Implementation Plan
 
+> Note (2026-10-08): this plan built v1 of the world fix for the 0.34 world. For upstream 0.35 (v2, upstream's
+> central keeps, the caps on every way in and the bots), see section 7 of the
+> [design](../specs/2026-10-07-classic-battlegrounds-design.md).
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Make the four classic battlegrounds work as they did in the Shrouded Isles era. Abermenai is
