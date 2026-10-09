@@ -151,14 +151,15 @@ Linux clients update at launch, after asking the player. Windows players still c
   them in only when everything worked; a failed setup, say a download that stops, leaves the install as it
   was. rsync, `odaoc_fetch.py` and the patches replace files by a rename and never write into them, so the
   hard-linked old client stays as it was. A first setup builds `<dest>/client` in place.
-- At each launch, before the login, `play.sh` reads that file (never sources it) and asks
-  `$HEARTHDAOC_RELEASES_URL/latest` (GitHub's releases page by default, as `hdc update` does) for the newest
-  tag, for 5 seconds at most. It offers a newer one (`sort -V`, with 0.35 before 0.35b) with a zenity or
-  terminal question. Yes downloads `hearthdaoc-client-<tag>.zip` into `<dest>/.update.XXXXXX`, checks its
-  `setup.sh` and that `VERSION` says the tag, runs that `setup.sh` with the saved options and `--dest <dest>`,
-  then starts the new `play.sh` with `HEARTHDAOC_NO_UPDATE=1`. A failure warns, keeps the saved tag and plays
-  the installed release. Before each update, it removes `.update.*` folders left by one cut short (a power
-  cut). `HEARTHDAOC_NO_UPDATE=1` turns the check off.
+- At each launch, before the login, `play.sh` reads that file (never sources it) and asks GitHub's releases
+  page (`.../releases/latest`, as `hdc update` does) for the newest tag, for 5 seconds at most. For tests,
+  `HEARTHDAOC_RELEASES_URL` points `play.sh` (and `hdc`) at a local server instead; players never set it. It
+  offers a newer tag (`sort -V`, with 0.35 before 0.35b) with a zenity or terminal question. Yes downloads
+  `hearthdaoc-client-<tag>.zip` into `<dest>/.update.XXXXXX`, checks its `setup.sh` and that `VERSION` says
+  the tag, runs that `setup.sh` with the saved options and `--dest <dest>`, then starts the new `play.sh` with
+  `HEARTHDAOC_NO_UPDATE=1`. A failure warns, keeps the saved tag and plays the installed release. Before each
+  update, it removes `.update.*` folders left by one cut short (a power cut). `HEARTHDAOC_NO_UPDATE=1` turns
+  the check off.
 
 So every client bundle must keep `hearthdaoc-client-<tag>/setup.sh` and `VERSION`, and every `setup.sh` must
 accept the options of the earlier ones: the players' `play.sh` runs it with them. Every `setup.sh` must also
