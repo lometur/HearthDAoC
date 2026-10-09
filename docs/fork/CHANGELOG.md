@@ -32,9 +32,10 @@ To update:
 
 - **Owner:** `./hdc update`. The 0.34b `hdc` installs this release, but it does not upgrade the world: it
   stops before starting and says so. Then run `./hdc upgrade-world` and `./hdc up`, once. All progress
-  moves into the 0.35 world, and the report names the server settings to re-check. The first start downloads about 570 MB of changed navmeshes
-  and the two quest data files. Then set the bot goals split in `deploy/HANDOFF.md` (Bot goals) with
-  `./hdc bot-goals set`; upstream's default sends no bots to the battlegrounds.
+  moves into the 0.35 world, and the report names the server settings to re-check. The first start
+  downloads about 570 MB of changed navmeshes and the two quest data files. Then set the bot goals split in
+  `deploy/HANDOFF.md` (Bot goals) with `./hdc bot-goals set`; upstream's default sends no bots to the
+  battlegrounds.
 - **Players:** update to the 0.35 classic client. On Linux, run the new client bundle's `setup.sh` again
   (it downloads about 3.4 MB). On Windows, install upstream's `DOWNLOAD-AND-PLAY-v0.35.cmd`, then use the
   new bundle's `connect-hearthdaoc.bat`. The launchers leave a 0.34 `game.dll` alone, so until then the game
