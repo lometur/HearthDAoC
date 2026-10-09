@@ -79,6 +79,10 @@ install_release() {  # install_release <tag>: download its client bundle into $U
     bash "$bundle/setup.sh" --server "$(conf server)" --edition "$(conf edition)" \
         --base-client "$(conf base_client)" --dest "$HERE" || { update_failed "its setup.sh failed (exit $?)"; return 1; }
 }
+# Steam starts play.sh with its 32- and 64-bit overlay libraries in LD_PRELOAD, and the loader of every program the
+# update runs then prints "ERROR: ld.so: object ... cannot be preloaded ... ignored." into the progress window.
+# The update needs no overlay; the game keeps it.
+install_release_quietly() { (unset LD_PRELOAD; install_release "$@"); }
 update_to() {  # update_to <tag> <installed tag>: 0 when <tag> is installed
     local tag="$1" rc=0 pid why log msg
     # A folder of its own in the install folder, removed in every case. One left by an update cut short (a
@@ -89,14 +93,14 @@ update_to() {  # update_to <tag> <installed tag>: 0 when <tag> is installed
     trap 'rm -rf "$UPDATE_DIR"' EXIT
     if progress_window; then
         : > "$UPDATE_DIR/log"  # before tail opens it
-        install_release "$tag" >> "$UPDATE_DIR/log" 2>&1 &
+        install_release_quietly "$tag" >> "$UPDATE_DIR/log" 2>&1 &
         pid=$!
         tail -n +1 -f --pid="$pid" "$UPDATE_DIR/log" 2>/dev/null | sed -u 's/^/# /' |
             zenity --progress --pulsate --auto-close --no-cancel --title="HearthDAoC" \
                 --text="Updating to HearthDAoC $tag ..." 2>/dev/null || true
         wait "$pid" || rc=$?
     else
-        install_release "$tag" || rc=$?
+        install_release_quietly "$tag" || rc=$?
     fi
     why="$(cat "$UPDATE_DIR/failed" 2>/dev/null || echo "exit $rc")"
     log="$(tail -n 3 "$UPDATE_DIR/log" 2>/dev/null || true)"  # what the progress window showed last

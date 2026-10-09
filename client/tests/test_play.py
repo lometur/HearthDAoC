@@ -299,6 +299,7 @@ exit 1
 # The next release's play.sh: it logs how it was started.
 NEW_PLAY = r'''#!/usr/bin/env bash
 printf 'new play.sh pid=%s no_update=%s args=%s\n' "$$" "${HEARTHDAOC_NO_UPDATE:-}" "$*" >> "@CALLS@"
+printf 'preload=%s\n' "${LD_PRELOAD:-}" >> "@CALLS@"
 '''
 
 
@@ -539,6 +540,20 @@ class UpdateTests(UpdateTestCase):
             progress = f.read().splitlines()
         self.assertEqual(progress[0], f"# Downloading HearthDAoC {NEW} ...")
         self.assertIn("# Setting up the client ...", progress)
+
+    def test_steam_overlay_preload_stays_out_of_the_progress_window(self):
+        # Steam sets LD_PRELOAD to its 32- and 64-bit overlay libraries; the loader of each program the update
+        # runs then printed "ERROR: ld.so: object ... cannot be preloaded ... ignored." into the window.
+        preload = os.path.join(self.tmp.name, "ubuntu12_32", "gameoverlayrenderer.so")
+        with ReleaseServer(NEW, {zip_name(NEW): self.bundle()}) as srv:
+            r = self.run_play(HEARTHDAOC_RELEASES_URL=srv.url, LD_PRELOAD=preload, **self.zenity(0))
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertEqual(self.saved_tag(), [NEW])
+        with open(self.progress, encoding="utf-8") as f:
+            progress = f.read()
+        self.assertNotIn("LD_PRELOAD", progress)
+        self.assertIn("# Setting up the client ...", progress.splitlines())
+        self.assertEqual(self.calls_of("preload="), ["preload=" + preload])  # the game still gets the overlay
 
     def test_yes_in_a_terminal_installs_the_release_with_plain_output(self):
         master, slave = pty.openpty()
