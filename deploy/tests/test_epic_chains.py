@@ -100,7 +100,7 @@ CLASSIC = "DOL.GS.Quests.ClassicQuestStep"
 NOW = "2026-10-09 12:00:00"
 # The clean 0.35 world's summary line. Tasks 6 and 7 update it as they add steps.
 SUMMARY = ("Epic chains: Guild of Shadows 60 links, 60 XP and coin, 4 Supply Runs closed, 2 rewards and 7 texts fixed; "
-           "87 other links; 0 items added, 0 item fixes; 0 level-50 quests, Lord Elidyn's camp 0 restored; "
+           "87 other links; 41 items added, 36 item fixes; 0 level-50 quests, Lord Elidyn's camp 0 restored; "
            "Shadows_50: 0 finished carried, 0 removed, 0 epic vests recharged")
 # Every other line's steps pinned on the clean 0.35 world: (name, level) -> rows (spec 2.5).
 EXPECTED_PINS = {
@@ -123,6 +123,15 @@ EXPECTED_PINS = {
 }
 FINALES = {"Feast of the Decadent", "Passage to Eternity", "Symbol of the Broken", "An End to the Daggers",
            "Saving the Clan", "The Desire of a God", "Last Heir", "The Moonstone Twin", "Lord of Deceit"}
+# Upstream's level-40 lists (classic-quests.json, quests 20169-20173), less the two the fix drops for the Reaver.
+WEAPON_CHOICES = {
+    "Infiltrator": ["cq_alb_crackling_impaler", "cq_alb_death_s_touch", "cq_alb_death_dancer", "cq_alb_spark_of_midnight"],
+    "Mercenary": ["cq_alb_crackling_impaler", "cq_alb_death_s_touch", "cq_alb_glitter", "cq_alb_spark", "cq_alb_dazzle",
+                  "cq_alb_arcing_bludgeoner"],
+    "Cabalist": ["cq_alb_staff_of_eternal_lifeforce", "cq_alb_staff_of_earth_channeling", "cq_alb_staff_of_spirit_consumption"],
+    "Necromancer": ["cq_alb_staff_of_cursed_bondage", "cq_alb_staff_of_clouded_vision", "cq_alb_staff_of_ceaseless_agony"],
+    "Reaver": ["cq_alb_blood_encrusted_whip", "cq_alb_sap_of_lost_will", "cq_alb_bloodletter", "cq_alb_flail_of_fallen_graces"],
+}
 
 
 def rows(conn, sql, params=()):
@@ -353,6 +362,66 @@ class EpicWorldTests(unittest.TestCase):
                 if column not in touched:
                     self.assertEqual(new[column], value, (qid, column))
 
+    def test_every_reward_and_weapon_choice_exists(self):
+        def exists(item):
+            return self.conn.execute("SELECT 1 FROM ItemTemplate WHERE Id_nb=?", (item,)).fetchone() is not None
+
+        for key, step in self.data["steps"].items():
+            if step.get("new"):
+                continue
+            for qid in step["ids"]:
+                if qid is None:
+                    continue
+                for item in filter(None, (self.after[qid]["FinalRewardItemTemplates"] or "").split("|")):
+                    with self.subTest(step=key, quest=qid, item=item):
+                        self.assertTrue(exists(item))
+        for name, items in WEAPON_CHOICES.items():
+            for item in items:
+                with self.subTest(name=name, item=item):
+                    self.assertTrue(exists(item))
+
+    def test_the_items_added_are_the_data_rows(self):
+        import uuid
+        for item in self.data["items"]:
+            with self.subTest(item["Id_nb"]):
+                row = rows(self.conn, "SELECT * FROM ItemTemplate WHERE Id_nb=?", (item["Id_nb"],))[0]
+                self.assertEqual({k: row[k] for k in item}, item)
+                self.assertEqual(row["ItemTemplate_ID"], str(uuid.uuid5(uuid.NAMESPACE_URL, "hearthdaoc:item:" + item["Id_nb"])))
+                self.assertEqual(row["LastTimeRowUpdated"], NOW)
+
+    def test_the_item_fixes(self):
+        # Every fix applied as the data says (the level-50 armour, upstream's broken rewards, the class locks).
+        for fix in self.data["item_fixes"]:
+            with self.subTest(fix["Id_nb"]):
+                row = rows(self.conn, "SELECT * FROM ItemTemplate WHERE Id_nb=?", (fix["Id_nb"],))[0]
+                self.assertEqual({k: str(row[k]) for k in fix["set"]}, {k: str(v) for k, v in fix["set"].items()})
+        vest = rows(self.conn, "SELECT * FROM ItemTemplate WHERE Id_nb='MercenaryEpicVest'")[0]
+        self.assertEqual((vest["Name"], vest["AllowedClasses"], vest["SpellID"], vest["Charges"]),
+                         ("Hauberk of the Shadowy Embers", "11", 31131, 3))
+        choker = rows(self.conn, "SELECT * FROM ItemTemplate WHERE Id_nb='cq_alb_choker_of_dark_deeds'")[0]
+        self.assertEqual(sorted((choker[f"Bonus{i}Type"], choker[f"Bonus{i}"]) for i in range(1, 5)),
+                         [(5, 4), (9, 3), (11, 1), (26, 2)])  # Int 4, Power 3, Body 1%, Death Servant +2
+
+    def test_every_reward_is_locked_to_the_class_it_is_for(self):
+        classes = self.data["classes"]
+        given = {}
+        for key, step in self.data["steps"].items():
+            if step.get("new"):
+                continue
+            for qid, class_id in zip(step["ids"], self.data["classes"].values()):
+                if qid is not None:
+                    for item in filter(None, (self.after[qid]["FinalRewardItemTemplates"] or "").split("|")):
+                        given.setdefault(item, set()).add(class_id)
+        for name, items in WEAPON_CHOICES.items():
+            for item in items:
+                given.setdefault(item, set()).add(classes[name])
+        self.assertEqual(len(given), 68)
+        for item, class_ids in given.items():
+            with self.subTest(item):
+                allowed = self.conn.execute("SELECT AllowedClasses FROM ItemTemplate WHERE Id_nb=?", (item,)).fetchone()[0]
+                self.assertNotIn(allowed, ("", "0"))
+                self.assertTrue(class_ids <= {int(c) for c in allowed.split(";")}, allowed)
+
 
 def world_digest(conn):
     """Every row of the tables the fix touches, as one comparable value."""
@@ -404,6 +473,17 @@ class EpicSafetyTests(unittest.TestCase):
     def test_a_world_without_the_quest_tables_is_left_alone(self):
         empty = sqlite3.connect(":memory:")
         self.assertEqual(epic_chains.apply(empty, NOW), [])
+
+    def test_items_that_exist_are_left_alone(self):
+        # Upstream added one meanwhile (or the owner edited it), and the owner set a vest's charges.
+        self.conn.execute("INSERT INTO ItemTemplate (Id_nb, Name) VALUES ('cq_alb_ring_of_shades', 'Their Ring')")
+        self.conn.execute("UPDATE ItemTemplate SET SpellID=999, Charges=1, MaxCharges=1 WHERE Id_nb='ReaverEpicVest'")
+        result = epic_chains.apply(self.conn, NOW)
+        self.assertIn("40 items added, 35 item fixes", result[0])
+        self.assertEqual(self.conn.execute("SELECT Name FROM ItemTemplate WHERE Id_nb='cq_alb_ring_of_shades'").fetchone(),
+                         ("Their Ring",))
+        self.assertEqual(self.conn.execute("SELECT SpellID, Charges FROM ItemTemplate WHERE Id_nb='ReaverEpicVest'").fetchone(),
+                         (999, 1))
 
 
 if __name__ == "__main__":

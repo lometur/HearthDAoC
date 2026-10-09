@@ -20,11 +20,14 @@ epic_chains_data.json, beside this file.
 4. The chain's XP and coin, in the last stage's entry (the 11 SI also pays coin at stage 3).
 5. Necromancer 11: one reward for each version.
 6. Texts: the Reaver's level-40 list without the two weapons that don't exist; the level-30 speech's source tags.
+7. Items: the missing rewards and level-40 weapons, inserted where missing; fixes to existing rows (the level-50
+   armour, upstream's broken rewards, every Guild of Shadows reward locked to its class).
 """
 import datetime
 import json
 import os
 import re
+import uuid
 
 FIX_ID = "epic-chains-v1"
 MARKER_TABLE = "fork_world_fixes"
@@ -205,7 +208,39 @@ def _texts(conn, now, data):
     return {"texts": len(changed)}
 
 
-STEPS = (_gos_links, _pin_names, _close_supply_runs, _pay, _rewards, _texts)
+def _item_columns(conn, names):
+    known = {row[1] for row in conn.execute('PRAGMA table_info("ItemTemplate")')}
+    unknown = set(names) - known
+    if unknown:
+        raise ValueError(f"not ItemTemplate columns: {', '.join(sorted(unknown))}")
+    return names
+
+
+def _items(conn, now, data):
+    added = 0
+    for item in data["items"]:
+        if conn.execute("SELECT 1 FROM ItemTemplate WHERE Id_nb=?", (item["Id_nb"],)).fetchone():
+            continue
+        # A stable ItemTemplate_ID, so the same item has the same row ID in every world.
+        row = dict(item, ItemTemplate_ID=str(uuid.uuid5(uuid.NAMESPACE_URL, "hearthdaoc:item:" + item["Id_nb"])),
+                   LastTimeRowUpdated=now)
+        columns = ", ".join(f'"{c}"' for c in _item_columns(conn, list(row)))
+        conn.execute(f"INSERT INTO ItemTemplate ({columns}) VALUES ({', '.join('?' * len(row))})", tuple(row.values()))
+        added += 1
+    fixed = 0
+    for fix in data["item_fixes"]:
+        expect = _item_columns(conn, list(fix["expect"]))
+        current = conn.execute(f"SELECT {', '.join(expect)} FROM ItemTemplate WHERE Id_nb=?", (fix["Id_nb"],)).fetchone()
+        if current is None or [str(v) for v in current] != [str(fix["expect"][c]) for c in expect]:
+            continue
+        sets = ", ".join(f"{c}=?" for c in _item_columns(conn, list(fix["set"])))
+        conn.execute(f"UPDATE ItemTemplate SET {sets}, LastTimeRowUpdated=? WHERE Id_nb=?",
+                     (*fix["set"].values(), now, fix["Id_nb"]))
+        fixed += 1
+    return {"items": added, "fixes": fixed}
+
+
+STEPS = (_gos_links, _pin_names, _close_supply_runs, _pay, _rewards, _texts, _items)
 
 
 def _now():
