@@ -73,9 +73,9 @@ Then ask the owner to connect from their PC (`~/Games/HearthDAoC/play.sh` after 
 ## 6. Day-to-day
 
 `./hdc help` lists everything: status, logs, add-bots, accounts, bot goals, backups, restore,
-new-world, upgrade-world, auto-accounts, spawns. Backups run daily into the volume (keep 7). The copies
-taken before add-bots keep their newest 3; the copies taken before restore and upgrade are kept until
-you remove them (`./hdc backups` lists them; they are in /data/backups).
+new-world, upgrade-world, carry-rvr, auto-accounts, spawns. Backups run daily into the volume (keep 7). The
+copies taken before add-bots keep their newest 3; the copies taken before restore, upgrade and carry-rvr are
+kept until you remove them (`./hdc backups` lists them; they are in /data/backups).
 Settings live in `.env` (see `.env.example`), e.g. `HEARTHDAOC_AUTOSAVE_MINUTES` (default 5),
 `HEARTHDAOC_GM_ONLY_COMMANDS` (default `/tele;/tc`: single-player teleports need GM rights) and
 `HEARTHDAOC_SI_START_CHOICE` (default `on`: a new level-1 character of a classic race is asked once
@@ -109,7 +109,9 @@ rows it removes (training dummies, Void Merchants, a stray Wizard) are kept in `
 Atlas battleground daily quests (`Quest` rows) are deleted, not archived. If it fails, the start log says
 `Classic battlegrounds: not applied (...)`, the server starts with upstream's battlegrounds, and it tries
 again at the next start. `./hdc new-world` and `./hdc upgrade-world` make a world without that row, so it
-runs again there, and changes made in game to battleground keeps and guards are not carried over.
+runs again there. A new world starts with the battleground keeps as upstream ships them. An upgraded world
+keeps who holds them and their gates' health (see Upgrading), but a central keep above level 1 goes back to
+level 1, and changes made in game to the guards are not carried over.
 Battleground keep guard levels follow `keep_guard_level_multiplier` (1.6), which also sets the frontier
 keeps' guards. The realm rank caps (1L2, 1L3, 1L5, 1L9) hold on every way in: the frontier porter, the town
 teleporters' [Battlegrounds] choice, and for bots too.
@@ -135,8 +137,13 @@ cd ~/hearthdaoc
 `./hdc update` upgrades the world itself, with the same steps as `./hdc upgrade-world`:
 - it backs up again (`-pre-upgrade`), downloads the new version's clean world (about 30 MB) and moves all
   progress into it, keeping bans and permissions;
-- it writes a report of the server settings to re-check, then starts the server and prints how to read
-  the report: `docker exec hearthdaoc-server cat /data/archive/world-pre-upgrade-<time>/upgrade-report.txt`;
+- it keeps the RvR state too: each keep's realm, level and claiming guild, its doors' health and whether
+  they are broken open, where each relic is and which realm holds it, items on keep hookpoints, and the
+  keep capture log. Keeps are matched by name and region, so a keep the new version renumbers keeps its
+  state; a keep only in one of the two worlds stays as the new world ships it;
+- it writes a report of what it carried over (and the keeps it could not match) and of the server settings
+  to re-check, then starts the server and prints how to read the report:
+  `docker exec hearthdaoc-server cat /data/archive/world-pre-upgrade-<time>/upgrade-report.txt`;
 - the first start on the new version downloads the navmeshes that changed (about 570 MB for 0.35b) and
   the new version's server data files. `./hdc logs` shows the progress; report the new
   "Loading NavMesh successful" count (step 5) to the owner.
@@ -149,6 +156,18 @@ then run `./hdc upgrade-world` and `./hdc up`. Or go back to the release you had
 the world yet: it installs the release, stops before starting and says so. Then run `./hdc upgrade-world`
 and `./hdc up`; the first start downloads about 570 MB of changed navmeshes. From the next upstream version
 on, `./hdc update` does all of this itself.
+
+**Keep and relic state from an archived world.** An upgrade by a release before this one left every keep,
+gate and relic as the new version ships them. `./hdc carry-rvr` lists the archived worlds (the
+`world-pre-upgrade-<time>` one is the world before that upgrade). Then, with the server stopped:
+```bash
+./hdc stop && ./hdc carry-rvr world-pre-upgrade-<time> && ./hdc up
+```
+It backs up the world first (`-pre-carry-rvr` in `./hdc backups`), then copies the same state an upgrade
+keeps from the archived world and prints the same report. It replaces the current keep, door and relic
+state with the archived one, so captures made since that world was archived are undone; hookpoint items
+and capture log entries are added to those already there. The 0.34b world's own Dun Abermenai and Dun
+Murdaigean carry onto 0.35b's.
 
 Without `./hdc update` (a deployment older than it), do it by hand:
 ```bash
