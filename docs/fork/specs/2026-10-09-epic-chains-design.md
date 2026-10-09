@@ -31,7 +31,12 @@ steps go in order.
   give nothing (section 4).
 - **Level 50.** `scripts/quests/Albion/epic/Shadows50.cs` is still a copy of the Defenders quest ("Feast of the
   Decadent", Lidmann Halsey) with the class list changed; Lord Elidyn is archived.
-- **XP** varies from 2% to 22% of a level between steps.
+- **XP** varies from 2% to 22% of a level between steps, and the last stage's XP and coin are never paid (next
+  item).
+- **Final rewards (every classic quest).** `DataQuest` pays a stage's XP, realm points, champion XP, bounty points
+  and coin from that stage's entry when the stage advances, but `FinishQuest` pays the first entry instead of the
+  finishing stage's. Upstream's data puts the reward in the last entry, so 1,240 of its 1,302 classic quests never
+  give their final XP and 419 never give their final coin (only one-stage quests pay).
 
 ### Decisions (owner, 2026-10-07 to 2026-10-09)
 
@@ -43,6 +48,7 @@ steps go in order.
 | Shrouded Isles steps | The Caer Gothwaite versions of 7 and 11 count as 7 and 11. Taking one version closes the other; either one unlocks the next step. |
 | XP | A quarter of a level for 7 and 11 (both versions), a tenth of a level from 15 on, none at 50 (section 2.3). |
 | Coin | What the sources give (7 SI: 7 silver; 11 SI: 6 silver twice; 43: none); every other step its level in silver. |
+| Final rewards | Fixed in the quest engine for every quest (owner, 2026-10-09): finishing pays the finishing stage's entries (section 3.1). |
 | Existing characters | Finished steps stay finished. A finished old `Shadows_50` counts as the finished 50 step (no second armour set). |
 | Testing | CI tests, and an in-game test guide with GM commands, including a GM-only `/epic`. |
 | Upstream | Nothing is sent upstream now. After the chain is implemented and tested in game, and if upstream hasn't fixed it meanwhile, the owner may offer it upstream; ask first. The upstream-able parts are separate commits (section 6). |
@@ -99,7 +105,8 @@ finished. The new 50 IDs are fixed: `99` `05` and the class ID, outside upstream
 
 XP is a share of the XP needed to go from the step's level to the next, `XPForLevel[L] − XPForLevel[L−1]`. DataQuest pays
 `RewardXP` with `ForceGainExperience`, a fixed amount like every upstream quest (the server's `xp_rate` doesn't scale
-it). The whole amount is paid on the step's last stage; earlier stages pay none. Coin is in `RewardMoney` (100 copper
+it). The whole amount is in the last stage's entry, paid when the step finishes (with the fix of section 3.1);
+earlier stages pay none. Coin is in `RewardMoney` (100 copper
 to the silver), also on the last stage unless the table says otherwise.
 
 | Step | XP | Coin |
@@ -192,6 +199,12 @@ the counts are updated after a look.
 - An entry that doesn't parse (`#`, `#x`, `!#`) is never met, and the quest logs one error at load naming the entry.
   The world fix writes only valid entries, and the tests check them.
 - Quests without these forms behave exactly as before.
+
+**Final rewards.** `FinishQuest` pays XP, realm points, champion XP, bounty points and coin from the finishing
+stage's entry: index `min(Step, entries) − 1` of each list (the first entry when the list is empty of stages or has
+a single value), instead of always the first entry. One-stage quests and the collection quests (single values) pay
+as before. The index rule is a public static method with unit tests. A player with `/xp off` still can't finish a
+quest that pays XP (upstream's rule), which now concerns nearly every classic quest.
 
 ### 3.2 HearthDAoC's own quest data (`quests/QuestsMgr/ClassicQuests.cs`, upstream file)
 
@@ -372,6 +385,8 @@ Added to the CI filter.
 - **`UT_DataQuestDependency`:** the entry forms of section 3.1 against finished and active ID sets: a plain name, one
   ID, any-of, closed-by, several entries together, malformed entries never met, and quests without the new forms
   unchanged.
+- **`UT_DataQuestFinishRewards`:** the index rule: several stages and full lists (the last entry), one value
+  (that value), a list shorter than the stages (its last entry), no entries (nothing).
 - **`UT_ClassicQuestsExtra`:** merging an extra file: new IDs added, upstream's entry kept on the same ID, quest
   monster IDs joined, and a missing or broken file changing nothing.
 - Source checks: `Shadows50.cs` stays deleted; each of the four lookup lines matches its creation line.
@@ -408,7 +423,8 @@ refused). Results go in `docs/fork/verification/sub4-ingame.md`.
 
 ## 6. Upstream, later
 
-Kept as separate, self-contained commits so they can be offered on their own: the dependency forms (3.1), the
+Kept as separate, self-contained commits so they can be offered on their own: the final-reward fix and the
+dependency forms (3.1), the
 `Shadows50.cs` removal with the level-50 rows, the four lookup fixes, and the data file of section 3.4. Nothing is sent
 upstream now. After the owner's in-game run, check whether upstream has fixed the chains meanwhile, note candidates on
 tracker #49, and ask the owner before opening anything.
