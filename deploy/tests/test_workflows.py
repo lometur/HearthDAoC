@@ -221,7 +221,8 @@ class ClientPatchWorkflowTests(unittest.TestCase):
 SERVER_UNIT_TESTS = ("dotnet test source/server/Tests/Tests.csproj --nologo --filter "
                      '"FullyQualifiedName~UT_CommandPrivLevelOverrides|FullyQualifiedName~UT_SiStartChoice'
                      '|FullyQualifiedName~UT_ClassicBattlegrounds|FullyQualifiedName~UT_DataQuestFinishRewards'
-                     '|FullyQualifiedName~UT_DataQuestDependency|FullyQualifiedName~UT_ClassicQuestsExtra"')
+                     '|FullyQualifiedName~UT_DataQuestDependency|FullyQualifiedName~UT_ClassicQuestsExtra'
+                     '|FullyQualifiedName~UT_EpicChain"')
 UNIT_TESTS = os.path.join(ROOT, "source", "server", "Tests", "UnitTests")
 
 
@@ -242,7 +243,8 @@ class ServerUnitTestWorkflowTests(unittest.TestCase):
         self.assertEqual(names, ["UT_CommandPrivLevelOverrides", "UT_SiStartChoice", "UT_ClassicBattlegrounds",
                                  "UT_DataQuestFinishRewards",
                                  "UT_DataQuestDependency",
-                                 "UT_ClassicQuestsExtra"])
+                                 "UT_ClassicQuestsExtra",
+                                 "UT_EpicChain"])
         for name in names:
             with open(os.path.join(UNIT_TESTS, name + ".cs"), encoding="utf-8") as f:
                 self.assertIn(f"public sealed class {name}\n", f.read(), name)
