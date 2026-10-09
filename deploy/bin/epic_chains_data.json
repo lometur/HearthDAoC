@@ -1,0 +1,29 @@
+{
+  "_about": "The Guild of Shadows chain for deploy/bin/epic_chains.py (spec docs/fork/specs/2026-10-09-epic-chains-design.md, sections 2 and 3.4). \"ids\": the quest of each class, in the order of \"classes\" (null: none). \"upstream\": the values upstream 0.35b ships; a row is changed only while it still has them. \"links\": the step's QuestDependency entries by step key (\"7/7closed/7si\": any one finished; \"!11si\": closed while it is active or finished). \"xp\" and \"money\" (copper) go in the last stage's entry; \"money_at\" adds coin at a stage. \"new\": rows the fix adds (step 8).",
+  "classes": {"Infiltrator": 9, "Mercenary": 11, "Cabalist": 13, "Necromancer": 12, "Reaver": 19},
+  "steps": {
+    "7": {"ids": [21500, 21498, 21499, 20497, 21501], "upstream": {"QuestDependency": "", "RewardXP": "0|0|3300", "RewardMoney": "0|0|0"}, "links": ["!7si/7closed"], "xp": 5500, "money": 700},
+    "7closed": {"ids": [21324, 21322, 21323, null, 21325], "upstream": {"QuestDependency": ""}},
+    "7si": {"ids": [20478, 20476, 20477, 20480, 20479], "upstream": {"QuestDependency": "", "RewardXP": "0|0|0|0|6400", "RewardMoney": "0|0|0|0|700"}, "links": ["!7/7closed"], "xp": 5500, "money": 700},
+    "11": {"ids": [20157, 20155, 20156, 20159, 20158], "upstream": {"QuestDependency": "", "RewardXP": "0|0|0|0|0|31920", "RewardMoney": "0|0|0|0|0|0"}, "links": ["7/7closed/7si", "!11si"], "xp": 95000, "money": 1100},
+    "11si": {"ids": [20469, 20467, 20468, 20471, 20470], "upstream": {"QuestDependency": "", "RewardXP": "0|0|0|57960", "RewardMoney": "0|0|0|600"}, "links": ["7/7closed/7si", "!11"], "xp": 95000, "money": 600, "money_at": {"3": 600}},
+    "15": {"ids": [20188, 20186, 20187, 20190, 20189], "upstream": {"QuestDependency": "Entry Into Tomorrow", "RewardXP": "0|0|0|151200", "RewardMoney": "0|0|0|0"}, "links": ["11/11si"], "xp": 180000, "money": 1500},
+    "20": {"ids": [20455, 20453, 20454, 20457, 20456], "upstream": {"QuestDependency": "Rebellion Accepted", "RewardXP": "0|0|0|0|1033200", "RewardMoney": "0|0|0|0|0"}, "links": ["15"], "xp": 1230000, "money": 2000},
+    "25": {"ids": [21306, 21304, 21305, 21308, 21307], "upstream": {"QuestDependency": "Path of the Renegade", "RewardXP": "0|0|0|1378000", "RewardMoney": "0|0|0|0"}, "links": ["20"], "xp": 5300000, "money": 2500},
+    "30": {"ids": [21491, 21489, 21490, 21493, 21492], "upstream": {"QuestDependency": "Regal Nobility", "RewardXP": "0|0|60878593", "RewardMoney": "0|0|0"}, "links": ["25"], "xp": 21000000, "money": 3000},
+    "40": {"ids": [20171, 20169, 20170, 20173, 20172], "upstream": {"QuestDependency": "Regal Nobility", "RewardXP": "0|0|0|52428800|0|52428800|0|52428800", "RewardMoney": "0|0|0|0|0|0|0|0"}, "links": ["30"], "xp": 430000000, "money": 4000},
+    "43": {"ids": [20435, 20433, 20434, 20437, 20436], "upstream": {"QuestDependency": "Hidden Insurrection", "RewardXP": "0|0|0|0|0|0|0|1083932608", "RewardMoney": "0|0|0|0|0|0|0|0"}, "links": ["40"], "xp": 1080000000, "money": 0},
+    "45": {"ids": [21297, 21295, 21296, 21299, 21298], "upstream": {"QuestDependency": "Lord of Deceit", "RewardXP": "0|0|0|0|0|1300000000|1300000000", "RewardMoney": "0|0|0|0|0|0|0"}, "links": ["43"], "xp": 1560000000, "money": 4500},
+    "48": {"ids": [21482, 21480, 21481, 21484, 21483], "upstream": {"QuestDependency": "Lord of Deceit", "RewardXP": "0|0|2440223333", "RewardMoney": "0|0|0"}, "links": ["45"], "xp": 2700000000, "money": 4800},
+    "50": {"ids": [990509, 990511, 990513, 990512, 990519], "new": true, "links": ["48"], "xp": 0, "money": 5000}
+  },
+  "rewards": [
+    {"id": 20159, "upstream": "cq_alb_arawn_s_beads|cq_alb_flayed_skin_necklace", "value": "cq_alb_flayed_skin_necklace"},
+    {"id": 20471, "upstream": "cq_alb_arawn_s_beads|cq_alb_flayed_skin_necklace", "value": "cq_alb_arawn_s_beads"}
+  ],
+  "texts": [
+    {"ids": [20172], "column": "StepText", "replace": [["(Blood Encrusted Whip, Kiss of Death, Sap of Lost Will, Bloodletter, Flail of Fallen Graces, Blood Encrusted Flail).", "(Blood Encrusted Whip, Sap of Lost Will, Bloodletter, Flail of Fallen Graces)."]]},
+    {"ids": [20172], "column": "SourceText", "replace": [["[Blood Encrusted Whip], [Kiss of Death], [Sap of Lost Will], [Bloodletter], [Flail of Fallen Graces], [Blood Encrusted Flail].", "[Blood Encrusted Whip], [Sap of Lost Will], [Bloodletter], [Flail of Fallen Graces]."]]},
+    {"ids": [21489, 21490, 21491, 21492, 21493, 21494], "column": "SourceText", "replace": [["Let this (reward) be", "Let this reward be"], ["(prof name)", "the Guild of Shadows"], ["(class name)", "<Class>"]]}
+  ]
+}
