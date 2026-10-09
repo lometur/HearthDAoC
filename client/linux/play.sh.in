@@ -80,7 +80,9 @@ install_release() {  # install_release <tag>: download its client bundle into $U
 }
 update_to() {  # update_to <tag> <installed tag>: 0 when <tag> is installed
     local tag="$1" rc=0 pid why log msg
-    # A folder of its own in the install folder, removed in every case.
+    # A folder of its own in the install folder, removed in every case. One left by an update cut short (a
+    # power cut) goes first: only play.sh makes these folders, and one update runs at a time.
+    rm -rf "$HERE"/.update.*
     UPDATE_DIR="$(mktemp -d "$HERE/.update.XXXXXX")" ||
         { tell warning "Warning: the update to HearthDAoC $tag failed: cannot write in $HERE."; return 1; }
     trap 'rm -rf "$UPDATE_DIR"' EXIT

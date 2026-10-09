@@ -567,6 +567,15 @@ class UpdateTests(UpdateTestCase):
         self.assertEqual(r.stderr, f"play.sh: HearthDAoC {NEW} is out (you have {OLD}). To update, run {self.play} "
                                    "from a terminal, or run setup.sh from the new release's client bundle.\n")
 
+    def test_the_next_update_removes_a_folder_left_by_one_cut_short(self):
+        # A power cut during an update leaves its folder in the install folder, with the download in it.
+        write_bytes(os.path.join(self.dest, ".update.Cut123", "bundle.zip"), b"PK" * 1000)
+        with ReleaseServer(NEW, {zip_name(NEW): self.bundle()}) as srv:
+            r = self.run_play(HEARTHDAOC_RELEASES_URL=srv.url, **self.zenity(0))
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertEqual(self.saved_tag(), [NEW])
+        self.assertEqual(glob.glob(os.path.join(self.dest, ".update.*")), [])
+
     def test_a_failed_update_warns_and_plays_this_release(self):
         url = None  # set below: the server's
         cases = {

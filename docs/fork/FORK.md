@@ -157,7 +157,8 @@ Linux clients update at launch, after asking the player. Windows players still c
   terminal question. Yes downloads `hearthdaoc-client-<tag>.zip` into `<dest>/.update.XXXXXX`, checks its
   `setup.sh` and that `VERSION` says the tag, runs that `setup.sh` with the saved options and `--dest <dest>`,
   then starts the new `play.sh` with `HEARTHDAOC_NO_UPDATE=1`. A failure warns, keeps the saved tag and plays
-  the installed release. `HEARTHDAOC_NO_UPDATE=1` turns the check off.
+  the installed release. Before each update, it removes `.update.*` folders left by one cut short (a power
+  cut). `HEARTHDAOC_NO_UPDATE=1` turns the check off.
 
 So every client bundle must keep `hearthdaoc-client-<tag>/setup.sh` and `VERSION`, and every `setup.sh` must
 accept the options of the earlier ones: the players' `play.sh` runs it with them. Every `setup.sh` must also
