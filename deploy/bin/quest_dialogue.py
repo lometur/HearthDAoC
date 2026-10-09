@@ -20,7 +20,8 @@ The file:
   StepItemTemplates). A value is a string (every class), an object with all five class names, or (for the per-stage
   columns SourceText, StepText, TargetText, AdvanceText, StepItemTemplates) a list with one entry, a string or a
   per-class object, for each stage of the quest row (its StepType split on "|"); the list is joined with "|". No
-  value may contain "|".
+  value may contain "|". A quest row with another number of stages than a list has entries is left alone and counted
+  with the rows changed since upstream; the other rows still apply.
 - guard: for each quest ID, the digests of its `set` columns' values that may be replaced. digest() makes them;
   `quest_dialogue.py --digests WORLD.db` prints them for upstream's text (after epic_chains) of every entry.
 """
@@ -79,7 +80,8 @@ def _per_class_strings(value, what):
 
 
 def resolve(column, value, classes, stages):
-    """The text of `column` for each class: {class name: text}. `stages` is {class name: number of stages}."""
+    """The text of `column` for each class: {class name: text}. `stages` is {class name: number of stages}; a class
+    whose quest row has another number of stages than a per-stage list has entries gets None (that row is left alone)."""
     what = column
     if column not in COLUMNS:
         raise ValueError(f"unknown column {column}")
@@ -91,8 +93,9 @@ def resolve(column, value, classes, stages):
     out = {}
     for name in classes:
         if stages[name] is not None and len(value) != stages[name]:
-            raise ValueError(f"{what}: {len(value)} entries for {stages[name]} stages ({name})")
-        out[name] = "|".join(entry[name] for entry in entries)
+            out[name] = None
+        else:
+            out[name] = "|".join(entry[name] for entry in entries)
     return out
 
 
@@ -103,7 +106,10 @@ def _rows(conn, ids):
 
 
 def _plan(conn, data, chains):
-    """The work: [(quest id, columns in sorted order, new values, guard digests)], after checking the whole file."""
+    """The work: [(quest id, columns in sorted order, new values, guard digests)], after checking the whole file. The
+    new values are None for a row whose number of stages (its StepType) is not the length of a per-stage list: the
+    owner or a later world changed that quest's steps, so the file's text doesn't fit it, and the row is left alone
+    (the other rows still apply)."""
     classes = list(chains["classes"])
     plan, seen = [], set()
     for entry in data.get("quests", []):
@@ -122,7 +128,8 @@ def _plan(conn, data, chains):
             stages.setdefault(name, None)
         resolved = {column: resolve(column, entry["set"][column], classes, stages) for column in columns}
         for name, qid in by_class.items():
-            plan.append((qid, columns, [resolved[column][name] for column in columns],
+            values = [resolved[column][name] for column in columns]
+            plan.append((qid, columns, None if None in values else values,
                          set(entry.get("guard", {}).get(str(qid), []))))
     return plan
 
@@ -145,6 +152,9 @@ def apply(conn, now=None, data=None, chains=None):
         for qid, columns, values, guard in _plan(conn, data, chains):
             row = conn.execute(f"SELECT {', '.join(columns)} FROM DataQuest WHERE ID=?", (qid,)).fetchone()
             if row is None:
+                continue
+            if values is None:  # its stages differ from the file's
+                kept += 1
                 continue
             held = [value or "" for value in row]
             if held == values:

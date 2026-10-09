@@ -137,9 +137,24 @@ class SyntheticTests(unittest.TestCase):
         self.assertEqual(qd.apply(conn, NOW, self.data(), CHAINS), [])
         conn.close()
 
+    def test_a_list_with_another_number_of_stages_keeps_the_rows_and_is_not_an_error(self):
+        before = self.conn.execute("SELECT * FROM DataQuest ORDER BY ID").fetchall()
+        self.assertEqual(self.run_fix(self.data(set={"StepText": ["only one"]})), [])
+        self.assertEqual(self.conn.execute("SELECT * FROM DataQuest ORDER BY ID").fetchall(), before)
+
+    def test_one_row_with_another_number_of_stages_is_kept_and_the_other_is_rewritten(self):
+        # The owner (or a later world) gave quest 200 a third stage: the file's two-stage text doesn't fit it.
+        self.conn.execute("UPDATE DataQuest SET StepType='2|0|3' WHERE ID=200")
+        self.conn.commit()
+        data = self.data(set={"Description": {"Alpha": "new A", "Beta": "new B"}, "StepText": ["go", "come back"]},
+                         guard={"100": [guard_for("old A", "")], "200": [guard_for("old B", "")]})
+        self.assertEqual(self.run_fix(data),
+                         ["Quest dialogue: 1 quests rewritten; 1 left as they are (changed since upstream)"])
+        self.assertEqual(self.row(100, "Description", "StepText"), ("new A", "go|come back"))
+        self.assertEqual(self.row(200, "Description", "StepText", "LastTimeRowUpdated"), ("old B", None, OLD))
+
     def test_a_bad_file_rolls_back_the_fix_and_says_so(self):
         bad = {
-            "a list with the wrong number of stages": self.data(set={"StepText": ["only one"]}),
             "a list in a column that has no stages": self.data(set={"Description": ["a", "b"]}),
             "a class missing": self.data(set={"Description": {"Alpha": "x"}}),
             "an unknown class": self.data(set={"Description": {"Alpha": "x", "Beta": "y", "Gamma": "z"}}),
