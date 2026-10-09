@@ -21,7 +21,9 @@ HEARTHDAOC_MEM_LIMIT=4g
 HEARTHDAOC_CPUS=2
 EOF
 hdc() { "$W/hdc" "$@"; }
-cleanup() { hdc down >/dev/null 2>&1 || true; docker volume rm -f hearthdaoc-it-data >/dev/null 2>&1 || true; docker rmi "${IMAGE%%:*}:it-update" "${IMAGE%%:*}:it-update2" >/dev/null 2>&1 || true; rm -rf "$W"; }
+# Checks grep hdc's whole output (grep -q X <<<"$(hdc ...)"), not a pipe: grep -q stops reading at its first
+# match, a later write by hdc then meets a closed pipe (SIGPIPE), and pipefail turns that into a failure.
+cleanup() { hdc down >/dev/null 2>&1 || true; docker volume rm -f hearthdaoc-it-data >/dev/null 2>&1 || true; docker rmi "${IMAGE%%:*}:it-update" "${IMAGE%%:*}:it-update2" "${IMAGE%%:*}:it-update3" >/dev/null 2>&1 || true; rm -rf "$W"; }
 trap cleanup EXIT
 fail() { echo "FAIL: $*" >&2; docker logs hearthdaoc-it-server 2>&1 | tail -30 >&2 || true; exit 1; }
 healthy() { for _ in $(seq 1 150); do [[ "$(docker inspect -f '{{.State.Health.Status}}' hearthdaoc-it-server 2>/dev/null)" == healthy ]] && return 0; sleep 2; done; return 1; }
@@ -36,11 +38,12 @@ echo "ok - isolation settings applied"
 docker exec hearthdaoc-it-server grep -q "<DBAutosaveInterval>7</DBAutosaveInterval>" /app/server/config/serverconfig.xml \
     || fail "HEARTHDAOC_AUTOSAVE_MINUTES from .env did not reach the server config"
 echo "ok - autosave interval comes from .env"
-hdc status | grep -q "edition .* classic" || fail "status"
+out="$(hdc status 2>&1)" || fail "status exited $?: $out"
+grep -q "edition .* classic" <<<"$out" || fail "status: $out"
 hdc account create Tester1 pw1 >/dev/null || fail "account create"
-hdc account list | grep -q Tester1 || fail "account list"
-hdc add-bots hib 1 1 | grep -q . || fail "add-bots"
-hdc backup | grep -q "/data/backups/world-.*-manual.db" || fail "hdc backup should make a 'manual' backup (not counted in the daily ones)"
+grep -q Tester1 <<<"$(hdc account list)" || fail "account list"
+grep -q . <<<"$(hdc add-bots hib 1 1)" || fail "add-bots"
+grep -q "/data/backups/world-.*-manual.db" <<<"$(hdc backup)" || fail "hdc backup should make a 'manual' backup (not counted in the daily ones)"
 echo "ok - status, accounts, add-bots and backup while running"
 if hdc bot-goals set 50 10 30 60 2>/dev/null; then fail "bot-goals write allowed while running"; fi
 if hdc restore x.db 2>/dev/null; then fail "restore allowed while running"; fi
@@ -48,10 +51,10 @@ if hdc spawns restore 2>/dev/null; then fail "spawns restore allowed while runni
 echo "ok - stopped-only commands refuse while running"
 hdc stop >/dev/null
 docker logs hearthdaoc-it-server > "$W/stop.log" 2>&1; grep -q "| DOL.GS.GameServer | Stopped" "$W/stop.log" || fail "no clean save"
-hdc bot-goals set 50 10 30 60 | grep -q "Saved" || fail "bot-goals set while stopped"
-hdc account plvl Tester1 3 | grep -q "plvl 3" || fail "plvl while stopped"
+grep -q "Saved" <<<"$(hdc bot-goals set 50 10 30 60)" || fail "bot-goals set while stopped"
+grep -q "plvl 3" <<<"$(hdc account plvl Tester1 3)" || fail "plvl while stopped"
 latest="$(hdc backups | awk '/-manual.db/ {print $NF}' | tail -1)"
-hdc restore "$latest" | grep -q "Restored" || fail "restore"
+grep -q "Restored" <<<"$(hdc restore "$latest")" || fail "restore"
 echo "ok - stopped-only commands work when stopped"
 sed -i 's/^HEARTHDAOC_EDITION=classic/HEARTHDAOC_EDITION=b/' "$W/.env"
 if out="$(hdc up 2>&1)"; then fail "hdc up did not report the refused start"; fi
@@ -68,13 +71,13 @@ grep -qi "edition" <<<"$(hdc status)" || fail "hdc status does not explain the r
 hdc stop >/dev/null 2>&1 || true
 sed -i 's/^HEARTHDAOC_EDITION=b/HEARTHDAOC_EDITION=classic/' "$W/.env"
 echo "ok - edition change refused through compose"
-hdc spawns restore --max-level 20 | grep -q "Restored" || fail "spawns restore while stopped"
-hdc spawns status | grep -qE "^enabled +True" || fail "spawns status after restore"
+grep -q "Restored" <<<"$(hdc spawns restore --max-level 20)" || fail "spawns restore while stopped"
+grep -qE "^enabled +True" <<<"$(hdc spawns status)" || fail "spawns status after restore"
 echo "ok - spawns restore works when stopped"
 hdc auto-accounts off >/dev/null; healthy || fail "not healthy after auto-accounts off"
 docker exec hearthdaoc-it-server grep -q "<AutoAccountCreation>False</AutoAccountCreation>" /app/server/config/serverconfig.xml || fail "auto-accounts not off"
 echo "ok - auto-accounts off recreates the server with the new setting"
-hdc spawns status | grep -qE "^restored +[1-9]" || fail "restored spawns missing after restart"
+grep -qE "^restored +[1-9]" <<<"$(hdc spawns status)" || fail "restored spawns missing after restart"
 echo "ok - the server starts healthy with the restored spawns"
 # A crash: kill the game server inside the container (docker kill would count as a manual stop).
 docker exec hearthdaoc-it-server sh -c 'for p in /proc/[0-9]*; do grep -qa "CoreServer[.]dll" "$p/cmdline" 2>/dev/null && kill -9 "${p#/proc/}"; done; true'
@@ -102,14 +105,51 @@ grep -q "^HEARTHDAOC_TAG=it-update$" "$W/.env" || fail "update did not set the t
 grep -q "^HEARTHDAOC_IT_NEW_SETTING=hello$" "$W/.env" || fail "update did not add the new setting"
 grep -q "^HEARTHDAOC_PORT=10392$" "$W/.env" || fail "update lost the owner's settings"
 grep -q "# bundle it-update" "$W/compose.yml" || fail "update did not install the new compose.yml"
-hdc backups | grep -q -- "-pre-update.db" || fail "update made no backup first"
+grep -q -- "-pre-update.db" <<<"$(hdc backups)" || fail "update made no backup first"
 healthy || fail "not healthy after update"
 [[ "$(docker inspect -f '{{.Config.Image}}' hearthdaoc-it-server)" == "${IMAGE%%:*}:it-update" ]] || fail "server not running the new image"
 echo "ok - hdc update backs up, installs the release, keeps settings and restarts"
-if out="$(hdc update --bundle "$(make_bundle it-update2 9.99z)" 2>&1)"; then fail "update across upstream versions should stop"; fi
-grep -q "upgrade-world" <<<"$out" || fail "no upgrade-world instruction: $out"
+# A release for another upstream version makes hdc update upgrade the world first. Here the upgrade fails (the
+# image is still for the world's version), so the world must stay as it was and the server stopped.
+world_version() { docker run --rm -v hearthdaoc-it-data:/data --entrypoint cat "$IMAGE" /data/world.json \
+    | python3 -c 'import json, sys; print(json.load(sys.stdin)["version"])'; }
+if out="$(hdc update --bundle "$(make_bundle it-update2 9.99z)" 2>&1)"; then fail "a failed world upgrade should stop hdc update"; fi
+grep -q "The world is as it was" <<<"$out" && grep -q "./hdc upgrade-world" <<<"$out" && grep -q "./hdc update it-update" <<<"$out" \
+    || fail "no retry or go-back instruction: $out"
 if docker inspect -f '{{.State.Running}}' hearthdaoc-it-server 2>/dev/null | grep -q true; then fail "server started on a world from another upstream version"; fi
-echo "ok - hdc update stops before starting a release for another upstream version"
+[[ "$(world_version)" == "$upstream" ]] || fail "a failed world upgrade changed the world"
+echo "ok - a failed world upgrade in hdc update leaves the world as it was and the server stopped"
+out="$(hdc update --bundle "$W/b-it-update/hearthdaoc-deploy-it-update.tar.gz")" || fail "going back to the previous release failed: $out"
+healthy || fail "not healthy after going back to the previous release"
+echo "ok - hdc update goes back to the previous release"
+# A world from an older upstream version: hdc update upgrades it (as ./hdc upgrade-world does), then starts.
+hdc stop >/dev/null
+docker run --rm -v hearthdaoc-it-data:/data --entrypoint sh "$IMAGE" \
+    -c 'sed -i "s/\"version\": *\"[^\"]*\"/\"version\": \"0.0it\"/" /data/world.json'
+[[ "$(world_version)" == 0.0it ]] || fail "could not make an older world"
+# world_sql <SQL>: run one statement on the world in the volume; prints the first row's values joined by |.
+world_sql() { docker run --rm -v hearthdaoc-it-data:/data --entrypoint python3 "$IMAGE" -c 'import sqlite3, sys
+c = sqlite3.connect("/data/world/opendaoc.sqlite3.db", timeout=30)
+with c:
+    row = c.execute(sys.argv[1]).fetchone()
+print("|".join(map(str, row or ())))' "$1"; }
+# A captured and claimed keep: the upgrade carries it over (upstream's import engine leaves keeps as it ships them).
+KEEP="FROM Keep WHERE Name='Caer Benowyc' AND Region=1"
+world_sql "UPDATE Keep SET Realm=2, ClaimedGuildName='HearthIT' WHERE Name='Caer Benowyc' AND Region=1" >/dev/null
+[[ "$(world_sql "SELECT Realm, ClaimedGuildName $KEEP")" == "2|HearthIT" ]] || fail "could not capture a keep"
+out="$(hdc update --bundle "$(make_bundle it-update3 "$upstream")")" || fail "hdc update with a world upgrade failed: $out"
+grep -q "^Upgrade report (what carried over, and server settings to re-check): docker exec hearthdaoc-it-server cat /data/archive/world-pre-upgrade-.*/upgrade-report.txt$" <<<"$out" \
+    || fail "no upgrade report location: $out"
+[[ "$(world_version)" == "$upstream" ]] || fail "the world was not upgraded"
+healthy || fail "not healthy after the world upgrade"
+grep -q Tester1 <<<"$(hdc account list)" || fail "accounts lost in the world upgrade"
+grep -q -- "-pre-upgrade.db" <<<"$(hdc backups)" || fail "the world upgrade made no backup"
+echo "ok - hdc update upgrades a world from another upstream version, then starts"
+keep="$(world_sql "SELECT Realm, ClaimedGuildName $KEEP")"
+[[ "$keep" == "2|HearthIT" ]] || fail "the world upgrade did not carry the keep's realm and claim: $keep"
+report="$(sed -n 's/^Upgrade report (what carried over, and server settings to re-check): docker exec hearthdaoc-it-server cat //p' <<<"$out")"
+grep -q "'Keep': [1-9]" <<<"$(docker exec hearthdaoc-it-server cat "$report")" || fail "the upgrade report has no carried keeps"
+echo "ok - the world upgrade carries the keeps' realm and claim"
 python3 - "$W" <<'PY' &
 import http.server, sys, os
 class H(http.server.BaseHTTPRequestHandler):

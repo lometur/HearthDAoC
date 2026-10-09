@@ -105,7 +105,7 @@ public sealed partial class AutonomousWorldBotController
                 bot.StopMovingOnPath(); bot.StopMoving();
                 SetRvrStatus(bot, "Keep route retry", destination.MonsterName,
                     $"{failure}; retaining the siege and backing off before retrying");
-                Log.Warn($"RVR_KEEP_ROUTE_FAILED bot=\"{bot.Name}\" id={bot.DatabaseID} realm={bot.Realm} " +
+                Log.Warn($"RVR_KEEP_ROUTE_FAILED bot=\"{bot.Name}\" id={bot.DatabaseID} realm={GlobalConstants.RealmToName(bot.Realm)} " +
                     $"target=\"{destination.Id}\" region={bot.CurrentRegionID} from={current} queries={queries} " +
                     $"reason=\"{failure}\" retryMs={_keepTravelRetry-now}");
                 return true;
@@ -195,7 +195,7 @@ public sealed partial class AutonomousWorldBotController
             _keepStallAnchor = current;
         _keepStallSince = now;
         _keepHop = null;
-        Log.Warn($"RVR_KEEP_TRAVEL_STALL bot=\"{bot.Name}\" id={bot.DatabaseID} realm={bot.Realm} target=\"{destination.Id}\" " +
+        Log.Warn($"RVR_KEEP_TRAVEL_STALL bot=\"{bot.Name}\" id={bot.DatabaseID} realm={GlobalConstants.RealmToName(bot.Realm)} target=\"{destination.Id}\" " +
                  $"region={bot.CurrentRegionID} from={(int)current.X},{(int)current.Y},{(int)current.Z} " +
                  $"next={(int)next.X},{(int)next.Y},{(int)next.Z} segment={_keepTravelIndex + 1}/{_keepTravelPoints?.Length ?? 0} " +
                  $"moving={bot.IsMoving} stalls={_keepTravelStalls}");

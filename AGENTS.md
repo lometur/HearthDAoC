@@ -6,11 +6,11 @@ Claude Code as `CLAUDE.md`.
 ## What this is
 
 Offline DAoC is a single-player DAoC server (OpenDAoC fork, .NET 10, SQLite) with autonomous
-gamebots, companion bots and a Windows launcher. The current release is **0.34 "Claude
-Takeover II"**. It comes in two editions from one build:
-- **0.34b:** the custom Hibernian Sluaghbinder class is on.
-- **0.34:** the class is off. The server setting `classes / enable_sluaghbinder` is `False`, and
-  the client uses the normal v0.32 `game.dll`.
+gamebots, companion bots and a Windows launcher. The current release is **0.35 "Claude
+Takeover III"**. It comes in two editions from one build:
+- **0.35b:** the custom Hibernian Sluaghbinder class is on.
+- **0.35:** the class is off. The server setting `classes / enable_sluaghbinder` is `False`, and
+  the client is the 0.35b `game.dll` without its two Sluaghbinder patches.
 
 ## Layout
 
@@ -21,8 +21,8 @@ Takeover II"**. It comes in two editions from one build:
 | `source/server/GameServer/bots/autonomous` | Autonomous gamebots: goals, camps, groups, travel, watchdog |
 | `source/tools/OfflineDaoc.Launcher` | Launcher (the in-game version label is `MainForm.DisplayVersion`) |
 | `source/tools/OfflineDaoc.ProgressImport` | Progress transfer tool (`progress-policy.json` lists the saved-progress tables) |
-| `source/tools/build_release_034.py` | Builds the clean playable package from a local install (then `assemble_release_034.py` and `seal_release_034.py`) |
-| `source/tools/smoke_release_034.py` | Starts a package's server and logs in, as a player would |
+| `source/tools/build_release_035.py` | Builds the clean playable package from a local install (then `assemble_release_035.py` and `seal_release_035.py`) |
+| `source/tools/smoke_release_035.py` | Starts a package's server and logs in, as a player would |
 | `tools/pet-art` | Art pipeline for the private pet models and skins, pet weapons and spell effects. Each install step has a rollback. |
 | `docs/` | Player and developer guides; `docs/history/` holds earlier versions' notes |
 
@@ -36,7 +36,7 @@ In a playable folder:
 - **Protect player data.**
   - Never commit or publish a played database, `account.txt`, logs, bot rosters, backups or
     credentials.
-  - Public packages are built only by `build_release_034.py`, which empties every saved-progress
+  - Public packages are built only by `build_release_035.py`, which empties every saved-progress
     table and verifies it.
 - **Keep the owner's gameplay rules.** Preserve these unless the owner asks otherwise:
   - real loot, inventories, coins and equipment upgrades
@@ -60,7 +60,7 @@ In a playable folder:
 - **Navigation:** don't rebuild or replace navmeshes globally to fix one route without evidence.
 - **Be honest in reports.** Report automated tests separately from real in-game checks. Don't
   describe Darkness Falls raid AI, Legion or the hardest level 70+ encounters as implemented.
-- **Keep the old releases.** v0.3–v0.33b stay available as legacy releases, and their branches
+- **Keep the old releases.** v0.3–v0.34b stay available as legacy releases, and their branches
   and tags are not rewritten.
 
 ## Useful facts

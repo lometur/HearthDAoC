@@ -332,8 +332,10 @@ namespace DOL.AI.Brain
 		{
             bool encounterAggro = CheckProximityAggro();
             EncounterAdds.Tick(Body, AggroList.Select(static entry => entry.Key), encounterAggro, IsRestless);
+            if (encounterAggro) DragonDiagnostics.Fighting(Body, AggroList.Count);
 			if (!encounterAggro)
 			{
+				DragonDiagnostics.BeforeReset(Body);
 				Body.Health = Body.MaxHealth;
 				#region !IsRestless
 				if (!IsRestless)

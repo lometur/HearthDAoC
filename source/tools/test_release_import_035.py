@@ -1,12 +1,12 @@
 """Test the packaged progress importer against real saves, in throwaway copies only.
 
-    python test_release_import_034.py --package <staging>/OfflineDAoC-v0.34b --work <new empty folder>
+    python test_release_import_035.py --package <staging>/OfflineDAoC-v0.35b --work <new empty folder>
         --case NAME=EDITION:EXPECT:SOURCE_FOLDER [--case ...] [--server-check NAME]
 
-EDITION is "b" (0.34b database) or "plain" (the 0.34 no-custom-class database). EXPECT is one of
+EDITION is "b" (0.35b database) or "plain" (the 0.35 no-custom-class database). EXPECT is one of
   ok        the import must succeed with every saved table copied row for row,
   refuse    the import must stop without changing the new folder,
-  leave     like "refuse" first, then succeed with --leave-sluaghbinder-bots (the 0.34 edition
+  leave     like "refuse" first, then succeed with --leave-sluaghbinder-bots (the 0.35 edition
             leaves the autonomous Sluaghbinder bots and the items they carry behind).
 SOURCE_FOLDER is only read. --server-check NAME then starts the packaged server (bundled .NET only)
 on that case's imported save and logs in with its account.txt through connect.exe, as ENTER REALM
@@ -73,7 +73,7 @@ def make_destination(package: Path, edition: str, target: Path):
     data = target / "runtime/data"
     data.mkdir(parents=True)
     db = (package / "runtime/data/opendaoc.sqlite3.db" if edition == "b"
-          else package / "editions/0.34-no-custom-class/runtime/data/opendaoc.sqlite3.db")
+          else package / "editions/0.35-no-custom-class/runtime/data/opendaoc.sqlite3.db")
     shutil.copy2(db, data / "opendaoc.sqlite3.db")
 
 

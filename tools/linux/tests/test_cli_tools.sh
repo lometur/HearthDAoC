@@ -31,15 +31,30 @@ dotnet "$OUT/offline-bots/offline-bots.dll" add "$T/w/opendaoc.sqlite3.db" 1 1x5
 ok "offline-bots gives a level-50 bot its gear"
 
 # bot-goals (port 9 is never listening, so writes are allowed)
-dotnet "$OUT/bot-goals/bot-goals.dll" --port 9 "$T/w" set 50 10 30 60 >/dev/null
-[[ -f "$T/w/bot-goals.json" ]] && dotnet "$OUT/bot-goals/bot-goals.dll" --port 9 "$T/w" show | grep -qE '^  50 .*60%$' \
-    || fail "bot-goals set did not write"
+bg() { dotnet "$OUT/bot-goals/bot-goals.dll" --port 9 "$T/w" "$@"; }
+row() { bg show | grep -E "^  $1 " | tr -s ' ' | cut -d' ' -f3-; }   # row 20-49 -> "20% 20% 30% 30%"
+bg set 50 10 30 60 >/dev/null
+[[ -f "$T/w/bot-goals.json" && "$(row 50)" == "10% 30% 60% 0%" ]] || fail "bot-goals set did not write"
 ok "bot-goals set writes bot-goals.json"
 if dotnet "$OUT/bot-goals/bot-goals.dll" --port 9 "$T/w" set 50 10 30 50 2>"$T/err"; then fail "bad total accepted"; fi
 grep -q "add up to exactly 100" "$T/err" || fail "bad total message missing"
 if dotnet "$OUT/bot-goals/bot-goals.dll" --port 9 "$T/w" set 1-19 50 40 10 2>"$T/err"; then fail "low-level RvR accepted"; fi
 grep -q "cannot have RvR" "$T/err" || fail "low-level RvR message missing"
 ok "bot-goals rejects invalid percentages with upstream's messages"
+# Upstream 0.35's fourth goal, Battlegrounds %: shown, set as a fourth number, kept when not given.
+bg show | grep -q "Battlegrounds" || fail "bot-goals show has no Battlegrounds column"
+bg set 1-19 50 30 0 20 >/dev/null && bg set 20-49 20 20 30 30 >/dev/null || fail "bot-goals set with Battlegrounds"
+[[ "$(row 1-19)" == "50% 30% 0% 20%" && "$(row 20-49)" == "20% 20% 30% 30%" ]] || fail "Battlegrounds not saved: $(bg show)"
+python3 -c 'import json, sys; assert json.load(open(sys.argv[1]))["Levels20To49"]["Battlegrounds"] == 30' "$T/w/bot-goals.json" \
+    || fail "Battlegrounds not in bot-goals.json"
+bg set 20-49 30 10 30 >/dev/null || fail "set without Battlegrounds"
+[[ "$(row 20-49)" == "30% 10% 30% 30%" && "$(row 1-19)" == "50% 30% 0% 20%" ]] || fail "set without Battlegrounds changed it: $(bg show)"
+if bg set 20-49 40 40 20 2>"$T/err"; then fail "a row that adds up to 130 with the kept Battlegrounds was accepted"; fi
+grep -q "Battlegrounds stays at 30%" "$T/err" || fail "no hint about the kept Battlegrounds: $(cat "$T/err")"
+if bg set 50 10 20 50 20 2>"$T/err"; then fail "level-50 Battlegrounds accepted"; fi
+grep -q "Level 50 cannot have battleground goals" "$T/err" || fail "level-50 Battlegrounds message missing"
+[[ "$(row 50)" == "10% 30% 60% 0%" ]] || fail "a refused set changed the file"
+ok "bot-goals shows and sets Battlegrounds %, and keeps it when set leaves it out"
 python3 -m http.server 10399 --bind 127.0.0.1 >/dev/null 2>&1 & srv=$!; sleep 1
 if dotnet "$OUT/bot-goals/bot-goals.dll" --port 10399 "$T/w" reset 2>"$T/err"; then kill "$srv"; fail "write allowed while port busy"; fi
 kill "$srv"; grep -q "Stop the server" "$T/err" || fail "busy-port message missing"

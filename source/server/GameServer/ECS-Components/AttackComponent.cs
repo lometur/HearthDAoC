@@ -645,7 +645,7 @@ namespace DOL.GS
                     else
                     {
                         if (_startAttackTarget is GameNPC npcTarget)
-                            player.Out.SendMessage(LanguageMgr.GetTranslation(player.Client.Account.Language, "GamePlayer.StartAttack.CombatTarget", _startAttackTarget.GetName(0, false, player.Client.Account.Language, npcTarget)), eChatType.CT_YouHit, eChatLoc.CL_SystemWindow);
+                            player.Out.SendMessage(LanguageMgr.GetTranslation(player.Client.Account.Language, "GamePlayer.StartAttack.CombatTarget", AutonomousNameMask.NameFor(player, npcTarget, 0, false, player.Client.Account.Language)), eChatType.CT_YouHit, eChatLoc.CL_SystemWindow);
                         else
                             player.Out.SendMessage(LanguageMgr.GetTranslation(player.Client.Account.Language, "GamePlayer.StartAttack.CombatTarget", _startAttackTarget.GetName(0, false)), eChatType.CT_YouHit, eChatLoc.CL_SystemWindow);
 
@@ -1986,14 +1986,14 @@ namespace DOL.GS
                     // Message: "You attack <OriginalTarget>, but <FinalTarget> steps in the way!"
                     SendLocalizedMessage(player,
                         "GamePlayer.Attack.Intercepted",
-                        ad.Target.GetName(0, true),
-                        ad.OriginalTarget.GetName(0, false));
+                        AutonomousNameMask.NameFor(player, ad.Target, 0, true),
+                        AutonomousNameMask.NameFor(player, ad.OriginalTarget, 0, false));
                     SendLocalizedMessage(player,
                         "GamePlayer.Attack.InterceptedHit",
                         attackTypeMsg,
-                        ad.OriginalTarget.GetName(0, false),
+                        AutonomousNameMask.NameFor(player, ad.OriginalTarget, 0, false),
                         hitWeapon,
-                        ad.Target.GetName(0, false),
+                        AutonomousNameMask.NameFor(player, ad.Target, 0, false),
                         ad.Damage,
                         modMessage);
                 }
@@ -2002,7 +2002,7 @@ namespace DOL.GS
                     SendLocalizedMessage(player,
                         "GamePlayer.Attack.InterceptHit",
                         attackTypeMsg,
-                        ad.Target.GetName(0, false),
+                        AutonomousNameMask.NameFor(player, ad.Target, 0, false),
                         hitWeapon,
                         ad.Damage,
                         modMessage);
@@ -2011,7 +2011,7 @@ namespace DOL.GS
                 // Send critical hit message if applicable.
                 if (ad.CriticalDamage > 0)
                 {
-                    string baseMessage = LanguageMgr.GetTranslation(player.Client.Account.Language, "GamePlayer.Attack.Critical", ad.Target.GetName(0, false, player.Client.Account.Language, ad.Target as GameNPC), ad.CriticalDamage);
+                    string baseMessage = LanguageMgr.GetTranslation(player.Client.Account.Language, "GamePlayer.Attack.Critical", AutonomousNameMask.NameFor(player, ad.Target, 0, false, player.Client.Account.Language), ad.CriticalDamage);
                     string criticalMessage = $"{baseMessage} ({ad.CriticalChance}%)";
                     player.Out.SendMessage(criticalMessage, eChatType.CT_YouHit, eChatLoc.CL_SystemWindow);
                 }

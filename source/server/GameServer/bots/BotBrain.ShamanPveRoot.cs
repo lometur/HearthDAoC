@@ -10,15 +10,18 @@ namespace DOL.AI.Brain
         private readonly Dictionary<GameLiving, long> _shamanPveRootRetryUntil = new();
 
         /// <summary>
-        /// Grouped Shamans root an add that is running at the party while the
-        /// party fights a different monster. Solo Shamans and the kill target
-        /// are never rooted in PvE (damage breaks the root at once).
+        /// Grouped healers (first the Shaman, now every healing class) root an add
+        /// that is running at the party while the party fights a different
+        /// monster. Solo healers and the kill target are never rooted in PvE
+        /// (damage breaks the root at once). Heals always run first: CheckSpells
+        /// calls CheckHeals before this.
         /// </summary>
         private bool TryShamanPveAddRoot()
         {
             GameBot shaman = BotBody;
             Group group = shaman?.Group;
-            if (shaman?.CharacterClass?.ID != (int)eCharacterClass.Shaman ||
+            if (shaman?.CharacterClass == null ||
+                !ShamanBotCombatPolicy.KeepsRootsForAdds((eCharacterClass)shaman.CharacterClass.ID) ||
                 !BardBotCrowdControlPolicy.HasGroupForPveAdd(group?.MemberCount) ||
                 shaman.CanCastCrowdControlSpells != true ||
                 shaman.IsIncapacitated || shaman.IsCasting ||

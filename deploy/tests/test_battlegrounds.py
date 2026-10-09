@@ -30,6 +30,13 @@ GAME_SERVER = os.path.join(SOURCE, "server", "GameServer")
 OF_TELEPORTERS = os.path.join(GAME_SERVER, "scripts", "teleporters", "OFTeleporters.cs")
 KEEP_MANAGER = os.path.join(GAME_SERVER, "keeps", "KeepManager.cs")
 BATTLEGROUND_QUESTS = os.path.join(GAME_SERVER, "scripts", "quests", "BattlegroundQuests")
+BATTLEGROUND_OPTIONS = os.path.join(GAME_SERVER, "scripts", "teleporters", "BattlegroundTeleportOptions.cs")
+BOTS = os.path.join(GAME_SERVER, "bots", "autonomous")
+OBJECTIVE_ASSIGNMENTS = os.path.join(BOTS, "AutonomousObjectiveAssignments.cs")
+BOT_CONTROLLER = os.path.join(BOTS, "AutonomousWorldBotController.cs")
+BOT_BATTLEGROUND = os.path.join(BOTS, "AutonomousWorldBotController.Battleground.cs")
+GOAL_POLICY = os.path.join(BOTS, "AutonomousBotGoalPolicy.cs")
+FORK_CODE = os.path.join(GAME_SERVER, "scripts", "hearthdaoc")
 
 PORTER_CALL = "PortLocation = HearthDAoC.ClassicBattlegroundsScript.PorterDestination(this, player);"
 # Atlas's daily quests for Caledonia 34-39 and Thidranki 20-24, whose scripts also made the Pazz NPCs.
@@ -39,6 +46,18 @@ QUEST_CLASS_NAMES = (
     "ThidKeepCaptureAlb", "ThidKeepCaptureHib", "ThidKeepCaptureMid",
     "ThidKillQuestAlb", "ThidKillQuestHib", "ThidKillQuestMid",
 )
+
+
+def read(path):
+    """A C# source file's text (upstream files may start with a BOM; a few are not UTF-8)."""
+    with open(path, encoding="utf-8-sig", errors="replace") as f:
+        return f.read()
+
+
+def between(text, start, end):
+    """The text from the first start up to the first end after it."""
+    body = text[text.index(start):]
+    return body[:body.index(end)]
 
 
 def cs_files(top):
@@ -51,7 +70,7 @@ def cs_files(top):
 
 class ClassicBattlegroundSourceTests(unittest.TestCase):
     def test_porter_blocks_call_the_fork(self):
-        # The file starts with a BOM, and its line endings are mixed (CRLF and LF).
+        # The file starts with a BOM; upstream 0.35 made its line endings all CRLF.
         with open(OF_TELEPORTERS, encoding="utf-8-sig") as f:
             text = f.read()
         lines = text.splitlines()
@@ -73,11 +92,104 @@ class ClassicBattlegroundSourceTests(unittest.TestCase):
 
     def test_keep_manager_names_svasud_faste(self):
         # ExitBattleground looks the realm's home portal keep up by TeleportID; the world's row is "Svasud Faste".
-        with open(KEEP_MANAGER, encoding="utf-8") as f:
-            text = f.read()
-        midgard = [line.strip() for line in text.splitlines() if "case eRealm.Midgard: location =" in line]
+        # Upstream fixed it the same way in 0.35, with a comment after the code that names the old "Svasudheim".
+        text = read(KEEP_MANAGER)
+        midgard = [line.split("//")[0].strip() for line in text.splitlines() if "case eRealm.Midgard: location =" in line]
         self.assertEqual(midgard, ['case eRealm.Midgard: location = "Svasud Faste"; break;'])
-        self.assertNotIn("Svasudheim", text)
+        self.assertNotIn('location = "Svasudheim', text)
+
+    # Every way into a battleground keeps the classic realm rank caps (owner, #50). Upstream 0.35 checks level
+    # only, so a sync that drops one of these hooks fails here.
+
+    def test_battleground_portal_keep_keeps_the_cap(self):
+        # GetBGPK, GameTeleporter's "battlegrounds" whisper: upstream 0.35 dropped the cap; the fork keeps 0.34's.
+        body = between(read(KEEP_MANAGER), "AbstractGameKeep GetBGPK(GamePlayer player)", "return null;")
+        self.assertIn("// HearthDAoC:", body)
+        self.assertIn("(bg.MaxRealmLevel == 0 || player.RealmLevel < bg.MaxRealmLevel)", body)
+
+    def test_realm_teleporters_check_the_cap(self):
+        # Upstream 0.35's [Battlegrounds] choice on every realm teleporter checks level only; the fork adds the
+        # porter's cap refusal after the level check, for players who are not game masters.
+        text = read(BATTLEGROUND_OPTIONS)
+        call = "string capRefusal = gameMaster ? null : HearthDAoC.ClassicBattlegroundsScript.RealmRankRefusal(player, bracket.RegionId);"
+        self.assertEqual(text.count(call), 1)
+        self.assertEqual(text.count("BattlegroundBrackets.Entry("), 1)
+        self.assertLess(text.index("BattlegroundBrackets.Allows(bracket, player.Level)"), text.index(call))
+        self.assertLess(text.index(call), text.index("BattlegroundBrackets.Entry("))
+
+    def test_bots_get_no_battleground_goal_over_the_cap(self):
+        text = read(OBJECTIVE_ASSIGNMENTS)
+        # The allocator counts and draws only bots under the cap.
+        can_take = between(text, "public static bool CanTakeBattleground(GameBot bot)", ";\n")
+        self.assertIn("HearthDAoC.ClassicBattlegroundsScript.BotFitsItsBattleground(bot)", can_take)
+        # Every assignment goes through Assign, which swaps a battleground goal over the cap for another goal.
+        assign = between(text, "private static void Assign(GameBot bot,", "record.ObjectiveKind = kind.ToString();")
+        swap = ("if (kind == eAutonomousObjectiveKind.Battleground && "
+                "!HearthDAoC.ClassicBattlegroundsScript.BotFitsItsBattleground(bot))")
+        self.assertIn(swap, assign)
+        self.assertIn("kind = AutonomousBotGoalPolicy.Choose(bot.Level, excludeBattlegrounds: true);", assign)
+        self.assertLess(assign.index("EnsureAllowed("), assign.index(swap))
+
+    def test_bots_over_the_cap_are_never_sent_in(self):
+        # A battleground tour ends before the bot travels; one already inside stays (BotOverCap says so).
+        tour = between(read(BOT_BATTLEGROUND), "private bool ExecuteBattleground(", "private bool RoamBattleground(")
+        self.assertIn("HearthDAoC.ClassicBattlegroundsScript.BotOverCap(bot, bracket.RegionId) is string overCap", tour)
+        self.assertIn("AutonomousObjectiveAssignments.EndBattlegroundTour(bot, overCap);", tour)
+        self.assertLess(tour.index("BotOverCap("), tour.index("TravelToBattleground("))
+
+        controller = read(BOT_CONTROLLER)
+        # A monster camp in a battleground is not offered over the cap (the bot, or any member of a shared party) ...
+        offer = between(controller, "campBattleground = AutonomousTownTeleporters.IsEnabled",
+                        "reachableRegions.Add(campBattleground.RegionId);")
+        self.assertIn("HearthDAoC.ClassicBattlegroundsScript.PartyFits(bot, sharedGroup, campBattleground.RegionId)", offer)
+        # ... and a camp chosen before the bot (or a member of its shared party) reached the cap is given up
+        # instead of travelled to. The check runs on every travel turn, so also on the turn of the port.
+        travel = between(controller, "private bool TravelAcrossRegions(GameBot bot)", "FindNextCrossing(")
+        self.assertIn("HearthDAoC.ClassicBattlegroundsScript.PartyOverCap(bot, _groupDirective?.IsDynamic == true,\n"
+                      "                        bracket.RegionId) is string overCap", travel)
+        self.assertLess(travel.index("PartyOverCap("), travel.index("TravelToBattleground("))
+
+    def test_saved_records_get_no_battleground_goal_over_the_cap(self):
+        # ReconcileSavedAssignment re-rolls a disabled saved goal before the bot enters the world, without Assign.
+        text = read(GOAL_POLICY)
+        reconcile = between(text, "public static bool ReconcileSavedAssignment(", "record.ObjectiveAssignmentId = string.Empty;")
+        self.assertIn("// HearthDAoC:", reconcile)
+        self.assertIn("record.ObjectiveKind = Choose(record.Level,\n                excludeBattlegrounds: "
+                      "!HearthDAoC.ClassicBattlegroundsScript.RecordFitsItsBattleground(record)).ToString();", reconcile)
+
+    def test_every_bot_trip_into_a_battleground_is_capped(self):
+        # TravelToBattleground is the bots' only way in (a realm teleporter's [Battlegrounds] choice). If a sync
+        # adds a caller, check that it keeps the cap and add it here.
+        callers = {}
+        for path in cs_files(GAME_SERVER):
+            count = read(os.path.join(ROOT, path)).count("TravelToBattleground(")
+            if count:
+                callers[os.path.basename(path)] = count
+        self.assertEqual(callers, {
+            # The definition and the tour's call.
+            "AutonomousWorldBotController.Battleground.cs": 2,
+            # The battleground monster camp's call.
+            "AutonomousWorldBotController.cs": 1,
+        })
+
+    def test_upstream_files_that_call_the_fork(self):
+        # The fork's battleground hooks in upstream files, and how many calls each has.
+        calls = {}
+        fork = os.path.relpath(FORK_CODE, ROOT)
+        for path in cs_files(GAME_SERVER):
+            if path.startswith(fork + os.sep):
+                continue
+            count = len(re.findall(r"HearthDAoC\.ClassicBattlegroundsScript\.", read(os.path.join(ROOT, path))))
+            if count:
+                calls[os.path.basename(path)] = count
+        self.assertEqual(calls, {
+            "OFTeleporters.cs": 3,
+            "BattlegroundTeleportOptions.cs": 1,
+            "AutonomousBotGoalPolicy.cs": 1,
+            "AutonomousObjectiveAssignments.cs": 2,
+            "AutonomousWorldBotController.Battleground.cs": 1,
+            "AutonomousWorldBotController.cs": 2,
+        })
 
     def test_battleground_quests_are_gone(self):
         self.assertEqual(cs_files(BATTLEGROUND_QUESTS), [])
@@ -97,7 +209,7 @@ LATER = "2026-10-08 12:00:00"
 INJECTED = "CREATE TRIGGER injected {} BEGIN SELECT RAISE(ABORT, 'injected failure'); END"
 
 # The scratch world: the tables battlegrounds.py needs, trimmed to the columns it uses (Keep in full),
-# with rows copied from the clean classic world (clean-classic-0.34.db) unless a comment says otherwise.
+# with rows copied from the clean classic world (clean-classic-0.35.db) unless a comment says otherwise.
 WORLD_SCHEMA = [
     "CREATE TABLE Battleground (RegionID INT NOT NULL DEFAULT 0, MinLevel INT NOT NULL DEFAULT 0, "
     "MaxLevel INT NOT NULL DEFAULT 0, MaxRealmLevel INT NOT NULL DEFAULT 0, "
@@ -134,7 +246,7 @@ WORLD_SCHEMA = [
 SEED = {
     "Battleground (RegionID, MinLevel, MaxLevel, MaxRealmLevel, Battleground_ID)": [
         (165, 45, 49, 45, "Cathal Valley (Level 45-49)"),
-        (250, 30, 34, 25, "Caledonia (Level 34-39 - RR3L5)"),
+        (250, 30, 35, 25, "Caledonia (Level 34-39 - RR3L5)"),
         (251, 25, 29, 5, "Murdaigean (Level 25-29)"),
         (252, 20, 24, 10, "Thidranki (Level 20-24 - RR2L0)"),
         (253, 15, 19, 2, "Abermenai (Level 15-19)"),
@@ -154,12 +266,17 @@ SEED = {
     "Keep (KeepID, Name, Region, X, Y, Z, Heading, Realm, Level, ClaimedGuildName, AlbionDifficultyLevel, "
     "MidgardDifficultyLevel, HiberniaDifficultyLevel, OriginalRealm, KeepType, BaseLevel, SkinType, CreateInfo, "
     "LastTimeRowUpdated, Keep_ID)": [
+        # The four central keeps: Atlas's two and upstream 0.35's two.
         (11, "Thidranki Faste", 252, 33089, 38271, 3720, 2915, 0, 1, "", 1, 1, 1, 0, 0, 26, 0, "Atlas BG",
          "2022-10-09 21:09:42", "11"),
         (31, "Caer Caledon", 250, 33089, 38271, 3720, 2915, 0, 1, "", 1, 1, 1, 0, 0, 46, 0, "Atlas BG",
          "2022-08-18 17:36:33", "31"),
-        # Thidranki's portal keeps (steps 4 and 5), and the Hibernia portal keeps of 253 and 251: BaseLevel 255,
-        # so they are not central keeps.
+        (32, "Dun Murdaigean", 251, 33089, 38271, 3720, 2915, 0, 1, "", 1, 1, 1, 0, 0, 31, 0,
+         "Classic BG (Claude 2026-10-07)", "2022-10-09 21:09:42", "32"),
+        (33, "Dun Abermenai", 253, 33089, 38271, 3720, 2915, 0, 1, "", 1, 1, 1, 0, 0, 21, 0,
+         "Classic BG (Claude 2026-10-07)", "2022-10-09 21:09:42", "33"),
+        # Thidranki's portal keeps (step 4), and the Hibernia portal keeps of 253 and 251: BaseLevel 255,
+        # so they are portal keeps.
         (12, "Hibernia Portal Keep", 252, 18362, 18257, 4320, 3517, 3, 1, "", 1, 1, 1, 3, 0, 255, 0,
          "Kelt;/keep create 12 255 0 Hibernia Portal Keep", "2021-12-03 21:32:39", "5e26c703-7d47-4176-961f-d87c2adf1cd1"),
         (13, "Midgard Portal Keep", 252, 54053, 24680, 4320, 346, 2, 1, "", 1, 1, 1, 2, 0, 255, 0,
@@ -171,16 +288,16 @@ SEED = {
         (41, "Hibernia Portal Keep", 251, 18362, 18257, 4320, 3517, 3, 1, "", 1, 1, 1, 3, 0, 255, 0, "HPK Murdaigean",
          "2021-12-03 21:32:39", "41"),
     ],
+    # The gates of the four central keeps (step 3), closed at upstream's full health.
     "Door (Z, Y, X, Heading, InternalID, Health, State, LastTimeRowUpdated, Door_ID)": [
         (3783, 39237, 32673, 2665, 250000301, 9200, 1, "2023-06-15 11:03:20", "55c128b4-5410-49a3-b7de-cf288dd244ec"),
         (3914, 37634, 33192, 1599, 250000302, 9200, 1, "2023-06-15 11:03:20", "cbad55f4-2e57-4533-b083-a92357043c6a"),
+        (3724, 37404, 32337, 3642, 251000301, 6200, 1, "2026-10-07 19:30:10.0098444Z", "779977ba-fca8-4898-b797-936bd3f9627d"),
+        (3720, 37833, 32698, 1589, 251000302, 6200, 1, "2026-10-07 19:30:10.0105201Z", "5b46ea74-78fd-4c74-b969-4ba635c6ceca"),
         (3720, 38275, 34333, 1024, 252000301, 5200, 1, "2023-06-15 11:03:20", "2b95f0c0-f9a8-493d-ac4f-11d89d0809e7"),
         (3720, 38180, 32654, 1030, 252000302, 5200, 1, "2023-06-15 11:03:20", "91ce710c-043d-4c17-aaad-26b5046df3d0"),
-        # The central doors of 253 and 251 (step 5): open, at 2,545.
-        (3737, 39604, 33849, 1864, 253000301, 2545, 0, "2022-05-29 14:20:20", "cb36d60f-d020-44ac-84bd-f1e7780d5422"),
-        (3720, 39059, 33659, 3901, 253000302, 2545, 0, "2022-05-29 14:20:49", "45d1b8c3-4b8e-499f-9ed0-e5e6eadecccf"),
-        (3724, 37404, 32337, 3642, 251000301, 2545, 0, "2022-05-29 14:21:53", "779977ba-fca8-4898-b797-936bd3f9627d"),
-        (3720, 37833, 32698, 1589, 251000302, 2545, 0, "2022-05-29 14:21:35", "5b46ea74-78fd-4c74-b969-4ba635c6ceca"),
+        (3737, 39604, 33849, 1864, 253000301, 4200, 1, "2026-10-07 16:27:09.0947576Z", "cb36d60f-d020-44ac-84bd-f1e7780d5422"),
+        (3720, 39059, 33659, 3901, 253000302, 4200, 1, "2026-10-07 16:27:09.0973911Z", "45d1b8c3-4b8e-499f-9ed0-e5e6eadecccf"),
     ],
     "Mob (ClassType, Name, X, Y, Z, Heading, Region, Model, Level, Realm, LastTimeRowUpdated, Mob_ID)": [
         ("DOL.GS.DPSDummy", "Total: 0 DPS: 0", 18826, 17862, 4320, 447, 252, 34, 24, 0, "2022-08-16 17:54:56",
@@ -207,8 +324,8 @@ SEED = {
         # A Caer Caledon guard stays.
         ("DOL.GS.Keeps.GuardStaticCaster", "Renegade Runemaster", 32475, 38015, 4106, 1539, 250, 507, 38, 0,
          "2022-06-21 20:04:28", "caledon-guard-23"),
-        # Thidranki's Hibernia portal keep (12): the hastener and six casters that stand on its model (step 5
-        # moves them), the fighter that is step 5's fighter template, and its other fighter.
+        # Thidranki's Hibernia portal keep (12): its hastener beside its gate and the six casters on its walls
+        # (step 5 moves them), and its two fighters.
         ("DOL.GS.Keeps.FrontierHastener", "new mob", 19075, 19035, 4320, 3547, 252, 408, 1, 0, "2022-05-29 21:49:07",
          "802a1b0a-f47e-47b9-a688-e401ad33e42f"),
         ("DOL.GS.Keeps.GuardStaticCaster", "new mob", 16751, 18401, 4736, 946, 252, 408, 1, 0, "2022-05-29 21:48:07",
@@ -232,11 +349,22 @@ SEED = {
          "9a6e81bd-4024-48e1-8703-04ab84a72f8c"),
         ("DOL.GS.Keeps.FrontierHastener", "new mob", 37196, 51612, 3948, 2009, 252, 408, 1, 0, "2022-05-29 21:43:12",
          "bde71996-1358-42da-a6a2-1a49c7c0adf1"),
-        # Thidranki Faste's hastener and its lord (step 5's lord template): keep guards, but at no portal keep.
+        # Thidranki Faste's hastener and its lord: keep guards, but at no portal keep, so step 4 leaves them.
         ("DOL.GS.Keeps.FrontierHastener", "new mob", 34365, 38483, 3720, 3180, 252, 408, 1, 0, "2022-05-29 21:52:39",
          "d558473e-fc07-4a9b-804f-26127f296afd"),
         ("DOL.GS.Keeps.GuardLord", "new mob", 32296, 38267, 4592, 1068, 252, 408, 1, 0, "2022-05-29 21:50:18",
          "863582fc-af9c-4661-8e60-4d8b2985ad2a"),
+        # Upstream's guards of Dun Abermenai and Dun Murdaigean (two of each keep's): keep guards in 253 and
+        # 251, but in the central keep's area, so step 4 still adds the portal keep guards; and no casters or
+        # hastener, so step 5 adds its own.
+        ("DOL.GS.Keeps.GuardLord", "Renegade Chieftain Abermenai", 32880, 37637, 4937, 1722, 253, 700, 29, 0,
+         "2026-10-07 06:32:18", "91c88f86-159d-486c-a374-a1b0c96ba3cc"),
+        ("DOL.GS.Keeps.GuardArcher", "Renegade Ranger", 31879, 37912, 4137, 1349, 253, 342, 22, 0,
+         "2026-10-07 06:32:18", "47454e17-34d6-4a6a-8569-c3cf5aab47e0"),
+        ("DOL.GS.Keeps.GuardLord", "Renegade Chieftain Murdaigean", 33901, 38869, 4937, 3553, 251, 700, 39, 0,
+         "2026-10-07 06:32:18", "fd847893-4c73-4613-a7c2-fda3e6c16dcf"),
+        ("DOL.GS.Keeps.GuardArcher", "Renegade Ranger", 34758, 38283, 4137, 3180, 251, 342, 32, 0,
+         "2026-10-07 06:32:18", "fcfe1db1-7930-4f00-9964-c4427ca5795a"),
     ],
     # The clean world has no Quest rows; these stand for characters that took Atlas's daily quests.
     "Quest (Name, Step, Character_ID, Quest_ID)": [
@@ -257,49 +385,39 @@ PORTAL_KEEP_GUARDS = ("2fc59f4b-0b0d-4efc-bf3b-93a1b01e681a", "3a07da41-d088-417
                       "b67eacce-2719-48a9-8be7-1dbf0c16b7d2", "bde71996-1358-42da-a6a2-1a49c7c0adf1",
                       "be8e2cbf-6569-4c46-a4aa-d84903a902fc", "ccaf179f-6c9e-4d09-b375-254d4429ebc2",
                       "f1f1d987-1b9a-421b-a8a1-9df423f118fe")
-FIGHTER = "b67eacce-2719-48a9-8be7-1dbf0c16b7d2"  # step 5's templates: a Hibernia portal keep fighter
-LORD = "863582fc-af9c-4661-8e60-4d8b2985ad2a"  # and Thidranki Faste's lord
+UPSTREAM_CENTRAL_GUARDS = ("47454e17-34d6-4a6a-8569-c3cf5aab47e0", "91c88f86-159d-486c-a374-a1b0c96ba3cc",
+                           "fcfe1db1-7930-4f00-9964-c4427ca5795a", "fd847893-4c73-4613-a7c2-fda3e6c16dcf")
 KEEP_COLUMNS = ("KeepID, Name, Region, X, Y, Z, Heading, Realm, Level, ClaimedGuildName, AlbionDifficultyLevel, "
                 "MidgardDifficultyLevel, HiberniaDifficultyLevel, OriginalRealm, KeepType, BaseLevel, SkinType, "
                 "CreateInfo, LastTimeRowUpdated, Keep_ID")
-# Step 5's Keep rows, with every value, after a run at NOW.
-NEW_KEEPS = {
-    253: (32, "Dun Abermenai", 253, 33383, 38627, 3720, 3858, 0, 1, "", 1, 1, 1, 0, 0, 19, 0,
-          "HearthDAoC classic-battlegrounds-v1", NOW, "hdc-bg253-dun-abermenai"),
-    251: (33, "Dun Murdaigean", 251, 33113, 38138, 3720, 1583, 0, 1, "", 1, 1, 1, 0, 0, 29, 0,
-          "HearthDAoC classic-battlegrounds-v1", NOW, "hdc-bg251-dun-murdaigean"),
-}
-# And the 12 rows of each new keep: the end of the Mob_ID (after "hdc-bg<region>-ck-"), X, Y, Z, Heading.
-CENTRAL_ROWS = {
+# Step 5's six wall casters of each central keep (spec 3.2 and its 0.35 update): the source Mob_ID (the end of
+# the new Mob_ID, after "hdc-bg<region>-ck-"), then X, Y, Z, Heading.
+CASTERS = {
     253: [
-        ("802a1b0a-f47e-47b9-a688-e401ad33e42f", 33612, 39657, 3720, 3888),  # the hastener
-        ("62f874d0-333b-475f-a044-109cb0bd74b6", 31916, 37946, 4136, 1287),  # the six casters
+        ("62f874d0-333b-475f-a044-109cb0bd74b6", 31916, 37946, 4136, 1287),
         ("be8e2cbf-6569-4c46-a4aa-d84903a902fc", 32320, 39124, 4136, 860),
         ("3a07da41-d088-4174-980f-1d5ad21fc334", 33816, 37292, 4136, 2202),
         ("2fc59f4b-0b0d-4efc-bf3b-93a1b01e681a", 32584, 39729, 4136, 127),
         ("b05f95a5-9e55-4ddf-93d0-340336bc2e16", 34056, 37934, 4136, 2819),
         ("f1f1d987-1b9a-421b-a8a1-9df423f118fe", 34509, 38996, 4136, 3320),
-        ("fighter-1", 33697, 39351, 3720, 3877),  # in the gate passage
-        ("fighter-2", 33811, 39312, 3720, 3877),
-        ("fighter-3", 33553, 38937, 3720, 3877),  # inside the inner door
-        ("fighter-4", 33666, 38898, 3720, 3877),
-        ("lord", 33383, 38627, 3720, 3877),
     ],
     251: [
-        ("802a1b0a-f47e-47b9-a688-e401ad33e42f", 32546, 37248, 3720, 1613),
         ("62f874d0-333b-475f-a044-109cb0bd74b6", 34724, 38276, 4136, 3108),
         ("be8e2cbf-6569-4c46-a4aa-d84903a902fc", 33942, 37307, 4136, 2681),
         ("3a07da41-d088-4174-980f-1d5ad21fc334", 33163, 39541, 4136, 4023),
         ("2fc59f4b-0b0d-4efc-bf3b-93a1b01e681a", 33487, 36829, 4136, 1948),
         ("b05f95a5-9e55-4ddf-93d0-340336bc2e16", 32718, 39019, 4136, 544),
         ("f1f1d987-1b9a-421b-a8a1-9df423f118fe", 31929, 38176, 4136, 1045),
-        ("fighter-1", 32563, 37580, 3720, 1592),
-        ("fighter-2", 32472, 37657, 3720, 1592),
-        ("fighter-3", 32840, 37909, 3720, 1592),
-        ("fighter-4", 32749, 37986, 3720, 1592),
-        ("lord", 33113, 38138, 3720, 1592),
     ],
 }
+# Step 5's hastener of each central keep: Thidranki's Hibernia portal keep hastener (the end of the new Mob_ID),
+# moved beside the central keep's outer gate (spec 7.3), then X, Y, Z, Heading.
+HASTENERS = {
+    253: ("802a1b0a-f47e-47b9-a688-e401ad33e42f", 33612, 39657, 3720, 3888),
+    251: ("802a1b0a-f47e-47b9-a688-e401ad33e42f", 32546, 37248, 3720, 1613),
+}
+# The guard and lord levels the server gives each central keep at keep Level 1 (spec 3.4), by KeepID.
+GUARD_LEVELS = {33: (21, 24), 11: (26, 31), 32: (31, 36), 31: (37, 44)}
 
 
 def query(path, sql, params=()):
@@ -371,21 +489,43 @@ def copies(q, region, kind, rows, now):
     return actual, sorted(expected, key=lambda row: row[names.index("Mob_ID")])
 
 
-def central_rows(region):
-    """CENTRAL_ROWS[region] as copies() takes them: a moved row copies its source, a fighter FIGHTER, the lord LORD."""
-    return [(end, LORD if end == "lord" else FIGHTER if end.startswith("fighter-") else end, spot)
-            for end, *spot in CENTRAL_ROWS[region]]
+def casters(region):
+    """CASTERS[region] as copies() takes them: each caster copies its source."""
+    return [(end, end, spot) for end, *spot in CASTERS[region]]
+
+
+def hastener(region):
+    """HASTENERS[region] as copies() takes it: the hastener copies its source."""
+    end, *spot = HASTENERS[region]
+    return [(end, end, spot)]
+
+
+def guard_levels(base_level, level, multiplier):
+    """A central keep's guard and lord levels, as the server sets them (AbstractGameKeep.GetBaseLevel and
+    SetGuardLevel: the byte cast rounds down)."""
+    return (int(base_level + 1 + level * multiplier),
+            int(base_level + (base_level // 10 + 1) * 2 + level * multiplier))
+
+
+def to_model(region, x, y):
+    """The opposite of battlegrounds.moved for X, Y: a spot on region's central keep model, put back on
+    Thidranki's Hibernia portal keep model, where the central keeps of 253 and 251 can be compared."""
+    (cx, cy), degrees = battlegrounds.MOVES[region]
+    angle = -math.radians(degrees)
+    dx, dy = x - cx, y - cy
+    return (battlegrounds.P[0] + dx * math.cos(angle) - dy * math.sin(angle),
+            battlegrounds.P[1] + dx * math.sin(angle) + dy * math.cos(angle))
 
 
 class BattlegroundFixTests(unittest.TestCase):
     LINES = [
         "Battlegrounds: classic level and realm rank limits for Abermenai, Thidranki, Murdaigean, Caledonia",
         "Battlegrounds: Caledon is shown as Caledonia; no zone XP bonus in Thidranki, Caledonia",
-        "Battlegrounds: keep levels for the ranges (Thidranki Faste base level 24, Caer Caledon base level 35, "
-        "4 gates' health)",
+        "Battlegrounds: keep levels for the ranges (Dun Abermenai base level 19, Thidranki Faste base level 24, "
+        "Dun Murdaigean base level 29, Caer Caledon base level 35, 8 gates' health)",
         "Battlegrounds: portal keep guards and hasteners for Abermenai (11), Murdaigean (11)",
-        "Battlegrounds: central keeps Dun Abermenai (keep 32, 12 guards), Dun Murdaigean (keep 33, 12 guards); "
-        "4 central doors closed at full health",
+        "Battlegrounds: central keep guards for Dun Abermenai (6 wall casters, 1 hastener), "
+        "Dun Murdaigean (6 wall casters, 1 hastener)",
         "Battlegrounds: Atlas leftovers archived in fork_removed_mobs and removed (4 training dummies, "
         "3 Void Merchants, the stray Wizard); 2 saved battleground daily quests deleted",
     ]
@@ -396,7 +536,8 @@ class BattlegroundFixTests(unittest.TestCase):
         "_step2_names_and_xp": "BEFORE UPDATE OF Experience ON Zones WHEN OLD.ZoneID = 250",
         "_step3_keep_levels": "BEFORE UPDATE ON Door WHEN OLD.InternalID = 250000302",
         "_step4_portal_keep_guards": "BEFORE INSERT ON Mob WHEN NEW.Region = 251",
-        "_step5_central_keeps": "BEFORE UPDATE ON Door WHEN OLD.InternalID = 251000302",
+        "_step5_central_keep_guards": "BEFORE INSERT ON Mob WHEN NEW.Mob_ID = "
+                                      "'hdc-bg251-ck-802a1b0a-f47e-47b9-a688-e401ad33e42f'",
         "_step6_atlas_leftovers": "BEFORE DELETE ON Quest",
     }
 
@@ -424,11 +565,11 @@ class BattlegroundFixTests(unittest.TestCase):
         self.assertEqual(apply_fix(self.db), [
             "Battlegrounds: classic level and realm rank limits for Abermenai, Thidranki, Murdaigean, Caledonia",
             "Battlegrounds: Caledon is shown as Caledonia; no zone XP bonus in Thidranki, Caledonia",
-            "Battlegrounds: keep levels for the ranges (Thidranki Faste base level 24, Caer Caledon base level 35, "
-            "Caer Caledon back to level 1, 4 gates' health)",
+            "Battlegrounds: keep levels for the ranges (Dun Abermenai base level 19, Thidranki Faste base level 24, "
+            "Dun Murdaigean base level 29, Caer Caledon base level 35, Caer Caledon back to level 1, 8 gates' health)",
             "Battlegrounds: portal keep guards and hasteners for Abermenai (11), Murdaigean (11)",
-            "Battlegrounds: central keeps Dun Abermenai (keep 32, 12 guards), Dun Murdaigean (keep 33, 12 guards); "
-            "4 central doors closed at full health",
+            "Battlegrounds: central keep guards for Dun Abermenai (6 wall casters, 1 hastener), "
+            "Dun Murdaigean (6 wall casters, 1 hastener)",
             "Battlegrounds: Atlas leftovers archived in fork_removed_mobs and removed (4 training dummies, "
             "3 Void Merchants, the stray Wizard); 2 saved battleground daily quests deleted",
         ])
@@ -450,11 +591,9 @@ class BattlegroundFixTests(unittest.TestCase):
         ])
         self.assertEqual(self.q("SELECT KeepID, BaseLevel, Level, LastTimeRowUpdated FROM Keep ORDER BY KeepID"), [
             (11, 24, 1, NOW), (12, 255, 1, "2021-12-03 21:32:39"), (13, 255, 1, "2021-12-03 21:44:42"),
-            (14, 255, 1, "2021-12-03 21:46:26"), (31, 35, 1, NOW), (32, 19, 1, NOW), (33, 29, 1, NOW),
+            (14, 255, 1, "2021-12-03 21:46:26"), (31, 35, 1, NOW), (32, 29, 1, NOW), (33, 19, 1, NOW),
             (35, 255, 1, "2021-12-03 21:32:39"), (41, 255, 1, "2021-12-03 21:32:39"),
         ])
-        self.assertEqual(self.q(f"SELECT {KEEP_COLUMNS} FROM Keep WHERE KeepID IN (32, 33) ORDER BY KeepID"),
-                         [NEW_KEEPS[253], NEW_KEEPS[251]])
         self.assertEqual(self.q("SELECT InternalID, Health, State, LastTimeRowUpdated FROM Door ORDER BY InternalID"), [
             (250000301, 7000, 1, NOW), (250000302, 7000, 1, NOW), (251000301, 5800, 1, NOW), (251000302, 5800, 1, NOW),
             (252000301, 4800, 1, NOW), (252000302, 4800, 1, NOW), (253000301, 3800, 1, NOW), (253000302, 3800, 1, NOW),
@@ -463,16 +602,32 @@ class BattlegroundFixTests(unittest.TestCase):
         self.assertEqual(self.q("SELECT Mob_ID FROM Mob WHERE Region NOT IN (251, 252, 253) "
                                 "OR ClassType NOT LIKE 'DOL.GS.Keeps.%' ORDER BY Mob_ID"),
                          [("125d80ca-f7b0-4b13-8340-d14d1c306a94",), ("caledon-guard-23",)])
-        # Thidranki's 13 keep guard rows stay. 253 and 251 each get a copy of its 11 portal keep rows on the
-        # same spots, and their new keep's 12 rows on the spec's spots, every other column from the template.
+        # Thidranki's 13 keep guard rows stay, and so do upstream's central keep guards. 253 and 251 each get a
+        # copy of Thidranki's 11 portal keep rows on the same spots, although their central keeps have guards,
+        # and six wall casters and a hastener on the spec's spots, every other column from the source.
         self.assertEqual(self.q("SELECT COUNT(*) FROM Mob WHERE Region=252"), [(13,)])
+        self.assertEqual(self.q(f"SELECT COUNT(*) FROM Mob WHERE Mob_ID IN ({marks(4)}) AND LastTimeRowUpdated=?",
+                                UPSTREAM_CENTRAL_GUARDS + ("2026-10-07 06:32:18",)), [(4,)])
         for region in (253, 251):
             with self.subTest(region=region):
-                self.assertEqual(self.q("SELECT COUNT(*) FROM Mob WHERE Region=?", (region,)), [(23,)])
+                self.assertEqual(self.q("SELECT COUNT(*) FROM Mob WHERE Region=?", (region,)), [(2 + 11 + 7,)])
                 self.assertEqual(*copies(self.q, region, "pk", [(m, m, None) for m in PORTAL_KEEP_GUARDS], NOW))
-                self.assertEqual(*copies(self.q, region, "ck", central_rows(region), NOW))
+                self.assertEqual(*copies(self.q, region, "ck", casters(region) + hastener(region), NOW))
         self.assertEqual(self.q("SELECT Name FROM Quest"), [("DOL.GS.DailyQuest.Hibernia.CaptureKeepQuestHib",)])
-        self.assertEqual(self.q("SELECT FixId, AppliedUtc FROM fork_world_fixes"), [("classic-battlegrounds-v1", NOW)])
+        self.assertEqual(self.q("SELECT FixId, AppliedUtc FROM fork_world_fixes"), [("classic-battlegrounds-v2", NOW)])
+
+    def test_a_keep_put_back_to_level_1_gets_level_1_gate_health(self):
+        # As the server does after a capture (OnKeepTaken). Here an upgrade carried Dun Abermenai at level 4, its
+        # outer gate at level 4's full health, its inner gate damaged and open.
+        execute(self.db, "UPDATE Keep SET Level=4 WHERE KeepID=33",
+                "UPDATE Door SET Health=15200 WHERE InternalID=253000301",
+                "UPDATE Door SET Health=2000, State=0 WHERE InternalID=253000302")
+        self.assertIn("Battlegrounds: keep levels for the ranges (Dun Abermenai base level 19, Thidranki Faste base "
+                      "level 24, Dun Murdaigean base level 29, Caer Caledon base level 35, Dun Abermenai back to level 1, "
+                      "7 gates' health)", apply_fix(self.db))
+        self.assertEqual(self.q("SELECT InternalID, Health, State FROM Door WHERE InternalID IN (253000301, 253000302) "
+                                "ORDER BY InternalID"), [(253000301, 3800, 1), (253000302, 2000, 0)])
+        self.assertEqual(self.q("SELECT Level, BaseLevel FROM Keep WHERE KeepID=33"), [(1, 19)])
 
     def test_second_run_changes_nothing(self):
         self.assertEqual(apply_fix(self.db), self.LINES)
@@ -517,25 +672,32 @@ class BattlegroundFixTests(unittest.TestCase):
                 "UPDATE Zones SET Name='Caledonia Fields' WHERE ZoneID=250",
                 "UPDATE Regions SET Description='Caledonia Fields' WHERE RegionID=250",
                 "UPDATE Zones SET Experience=25 WHERE ZoneID=252",
+                # Thidranki Faste and Dun Abermenai at the owner's base levels: their gates stay as they are.
                 "UPDATE Keep SET BaseLevel=30 WHERE KeepID=11",
+                "UPDATE Keep SET BaseLevel=25 WHERE KeepID=33",
                 "UPDATE Door SET Health=6000 WHERE InternalID=252000301",
+                "UPDATE Door SET Health=3000 WHERE InternalID=253000301",
                 "UPDATE Mob SET Level=50 WHERE Mob_ID='caledon-guard-25'",
                 # The owner removed all but one dummy and one Void Merchant; one saved quest is left.
                 "DELETE FROM Mob WHERE Mob_ID IN ('08cf170a-3774-42c2-9816-934f78d5bd4e', "
                 "'120a1ccf-94e8-4420-bc72-05ec20390e44', '853682fd-1de2-4100-adb5-02f05c8ed7d1', "
                 "'27d30f96-e238-482d-b359-fc5387589108', 'ecb08ffb-cf86-47f1-a53b-28581a48666b')",
                 "DELETE FROM Quest WHERE Quest_ID='quest-cale'",
+                # A guard of the owner's at Abermenai's Hibernia portal keep, a caster in Dun Murdaigean and a
+                # hastener in Dun Abermenai.
                 "INSERT INTO Mob (ClassType, Name, X, Y, Z, Region, Mob_ID) VALUES ('DOL.GS.Keeps.GuardFighter', "
                 "'new mob', 19000, 19000, 4320, 253, 'owner-guard')",
-                "INSERT INTO Keep (KeepID, Name, Region, BaseLevel, Keep_ID) VALUES (32, 'Dun Murdaigean', 251, 25, "
-                "'owner-keep')",
-                "UPDATE Door SET Health=3000, State=1 WHERE InternalID=253000301")
+                "INSERT INTO Mob (ClassType, Name, X, Y, Z, Region, Mob_ID) VALUES ('DOL.GS.Keeps.GuardStaticCaster', "
+                "'new mob', 34000, 39000, 4137, 251, 'owner-caster')",
+                "INSERT INTO Mob (ClassType, Name, X, Y, Z, Region, Mob_ID) VALUES ('DOL.GS.Keeps.FrontierHastener', "
+                "'new mob', 32000, 37500, 3721, 253, 'owner-hastener')")
         self.assertEqual(apply_fix(self.db), [
             "Battlegrounds: classic level and realm rank limits for Abermenai, Murdaigean, Caledonia",
             "Battlegrounds: no zone XP bonus in Caledonia",
-            "Battlegrounds: keep levels for the ranges (Caer Caledon base level 35, 3 gates' health)",
+            "Battlegrounds: keep levels for the ranges (Dun Murdaigean base level 29, Caer Caledon base level 35, "
+            "4 gates' health)",
             "Battlegrounds: portal keep guards and hasteners for Murdaigean (11)",
-            "Battlegrounds: central keep Dun Abermenai (keep 33, 12 guards); 3 central doors closed at full health",
+            "Battlegrounds: central keep guards for Dun Abermenai (6 wall casters), Dun Murdaigean (1 hastener)",
             "Battlegrounds: Atlas leftovers archived in fork_removed_mobs and removed (1 training dummy, "
             "1 Void Merchant); 1 saved battleground daily quest deleted",
         ])
@@ -544,18 +706,19 @@ class BattlegroundFixTests(unittest.TestCase):
         self.assertEqual(self.q("SELECT Name, Experience FROM Zones WHERE ZoneID IN (250, 252) ORDER BY ZoneID"),
                          [("Caledonia Fields", 0), ("Thidranki", 25)])
         self.assertEqual(self.q("SELECT Description FROM Regions WHERE RegionID=250"), [("Caledonia Fields",)])
-        self.assertEqual(self.q("SELECT BaseLevel FROM Keep WHERE KeepID=11"), [(30,)])
-        self.assertEqual(self.q("SELECT Health FROM Door WHERE InternalID=252000301"), [(6000,)])
+        self.assertEqual(self.q("SELECT KeepID, BaseLevel FROM Keep WHERE KeepID IN (11, 33) ORDER BY KeepID"),
+                         [(11, 30), (33, 25)])
+        self.assertEqual(self.q("SELECT InternalID, Health FROM Door WHERE InternalID IN (252000301, 252000302, "
+                                "253000301, 253000302) ORDER BY InternalID"),
+                         [(252000301, 6000), (252000302, 5200), (253000301, 3000), (253000302, 4200)])
         self.assertEqual(self.q("SELECT Name, Level FROM Mob WHERE Mob_ID='caledon-guard-25'"), [("Wizard", 50)])
-        # 253 gets no portal keep copies but its central keep, with the first free KeepID; 251 keeps the owner's.
-        self.assertEqual(self.q("SELECT Mob_ID FROM Mob WHERE Region=253 AND Mob_ID NOT LIKE 'hdc-bg253-ck-%'"),
-                         [("owner-guard",)])
-        self.assertEqual(*copies(self.q, 253, "ck", central_rows(253), NOW))
-        self.assertEqual(self.q("SELECT COUNT(*) FROM Mob WHERE Mob_ID LIKE 'hdc-bg251-ck-%'"), [(0,)])
-        self.assertEqual(self.q("SELECT KeepID, Name, Region, BaseLevel FROM Keep WHERE KeepID IN (32, 33) "
-                                "ORDER BY KeepID"), [(32, "Dun Murdaigean", 251, 25), (33, "Dun Abermenai", 253, 19)])
-        self.assertEqual(self.q("SELECT Health, State FROM Door WHERE InternalID=253000301"), [(3000, 1)])
-        self.assertEqual(self.q("SELECT FixId FROM fork_world_fixes"), [("classic-battlegrounds-v1",)])
+        # 253 gets no portal keep copies but its wall casters; 251 the other way round. The casters and the
+        # hastener go by their own class: 253 gets no hastener, and 251 gets its hastener but no casters.
+        self.assertEqual(self.q("SELECT COUNT(*) FROM Mob WHERE Mob_ID LIKE 'hdc-bg253-pk-%'"), [(0,)])
+        self.assertEqual(*copies(self.q, 253, "ck", casters(253), NOW))
+        self.assertEqual(*copies(self.q, 251, "ck", hastener(251), NOW))
+        self.assertEqual(self.q("SELECT COUNT(*) FROM Mob WHERE Mob_ID LIKE 'hdc-bg251-pk-%'"), [(11,)])
+        self.assertEqual(self.q("SELECT FixId FROM fork_world_fixes"), [("classic-battlegrounds-v2",)])
 
     def test_removed_rows_are_archived(self):
         mob = [(name, declared) for _, name, declared, *_ in self.q('PRAGMA table_info("Mob")')]
@@ -565,7 +728,7 @@ class BattlegroundFixTests(unittest.TestCase):
         apply_fix(self.db)
         self.assertEqual(self.q(f"SELECT Mob_ID FROM Mob WHERE Mob_ID IN ({marks(len(REMOVED))})", REMOVED), [])
         self.assertEqual(self.q(f"SELECT {names}, FixId, RemovedUtc FROM fork_removed_mobs ORDER BY Mob_ID"),
-                         [row + ("classic-battlegrounds-v1", NOW) for row in rows])
+                         [row + ("classic-battlegrounds-v2", NOW) for row in rows])
         self.assertEqual([(name, declared) for _, name, declared, *_ in self.q('PRAGMA table_info("fork_removed_mobs")')],
                          mob + [("FixId", "TEXT"), ("RemovedUtc", "TEXT")])
 
@@ -578,73 +741,65 @@ class BattlegroundFixTests(unittest.TestCase):
         rows = query(db, f"SELECT {older} FROM Mob WHERE Mob_ID IN ({marks(len(REMOVED))}) ORDER BY Mob_ID", REMOVED)
         apply_fix(db)
         self.assertEqual(query(db, f"SELECT {older}, FixId, RemovedUtc FROM fork_removed_mobs ORDER BY Mob_ID"),
-                         [row + ("classic-battlegrounds-v1", NOW) for row in rows])
+                         [row + ("classic-battlegrounds-v2", NOW) for row in rows])
 
-    def test_a_removed_keep_comes_back_without_doubling_guards(self):
+    def test_a_run_without_the_marker_adds_nothing_twice(self):
+        # The owner removes one of Dun Abermenai's casters and deletes the marker: the next run finds every step
+        # done (the keep still has casters, and its hastener), changes nothing else and writes the marker again.
         self.assertEqual(apply_fix(self.db), self.LINES)
-        mobs = self.q("SELECT * FROM Mob ORDER BY Mob_ID")
-        # The owner removes Dun Abermenai's Keep row and its lord, and deletes the marker.
-        execute(self.db, "DELETE FROM Keep WHERE KeepID=32", "DELETE FROM Mob WHERE Mob_ID='hdc-bg253-ck-lord'",
-                "DELETE FROM fork_world_fixes")
-        self.assertEqual(apply_fix(self.db, LATER), ["Battlegrounds: central keep Dun Abermenai (keep 32, 1 guard)"])
-        self.assertEqual(self.q(f"SELECT {KEEP_COLUMNS} FROM Keep WHERE KeepID=32"),
-                         [NEW_KEEPS[253][:-2] + (LATER, "hdc-bg253-dun-abermenai")])
-        # The lord is back as it was (the last two columns are LastTimeRowUpdated and Mob_ID), and no row is
-        # there twice.
-        self.assertEqual(self.q("SELECT * FROM Mob ORDER BY Mob_ID"),
-                         [row[:-2] + (LATER, row[-1]) if row[-1] == "hdc-bg253-ck-lord" else row for row in mobs])
-        self.assertEqual(self.q("SELECT FixId, AppliedUtc FROM fork_world_fixes"), [("classic-battlegrounds-v1", LATER)])
+        caster = "hdc-bg253-ck-" + CASTERS[253][0][0]
+        execute(self.db, f"DELETE FROM Mob WHERE Mob_ID='{caster}'", "DELETE FROM fork_world_fixes")
+        before = dump(self.db)
+        self.assertEqual(apply_fix(self.db, LATER), [])
+        after = dump(self.db)
+        self.assertEqual([line for line in after if line not in before],
+                         ["INSERT INTO \"fork_world_fixes\" VALUES('classic-battlegrounds-v2','2026-10-08 12:00:00');"])
+        self.assertEqual([line for line in before if line not in after], [])
 
     def test_a_stray_copy_id_does_not_stop_the_fix(self):
-        # A row of the owner's that already has one of step 4's Mob_IDs (and is no keep guard) is left as it is,
-        # step 4 adds the other 10 copies, and the fix applies.
-        stray = "hdc-bg253-pk-" + PORTAL_KEEP_GUARDS[0]
-        execute(self.db, "INSERT INTO Mob (ClassType, Name, X, Y, Z, Region, Mob_ID) VALUES "
-                         f"('DOL.GS.GameNPC', 'stray', 1, 2, 3, 253, '{stray}')")
+        # A row of the owner's that already has one of step 4's or step 5's Mob_IDs (and is no keep guard) is
+        # left as it is, the step adds the other copies, and the fix applies.
+        strays = ("hdc-bg253-pk-" + PORTAL_KEEP_GUARDS[0], "hdc-bg251-ck-" + CASTERS[251][0][0],
+                  "hdc-bg253-ck-" + HASTENERS[253][0])
+        for stray in strays:
+            execute(self.db, "INSERT INTO Mob (ClassType, Name, X, Y, Z, Region, Mob_ID) VALUES "
+                             f"('DOL.GS.GameNPC', 'stray', 1, 2, 3, {stray[6:9]}, '{stray}')")
         lines = apply_fix(self.db)
-        self.assertEqual(lines[3], "Battlegrounds: portal keep guards and hasteners for Abermenai (10), Murdaigean (11)")
-        self.assertEqual(self.q("SELECT ClassType, Name, X, Y, Z, Region FROM Mob WHERE Mob_ID=?", (stray,)),
-                         [("DOL.GS.GameNPC", "stray", 1, 2, 3, 253)])
+        self.assertEqual(lines[3:5], ["Battlegrounds: portal keep guards and hasteners for Abermenai (10), Murdaigean (11)",
+                                      "Battlegrounds: central keep guards for Dun Abermenai (6 wall casters), "
+                                      "Dun Murdaigean (5 wall casters, 1 hastener)"])
+        for stray in strays:
+            self.assertEqual(self.q("SELECT ClassType, Name, X, Y, Z, Region FROM Mob WHERE Mob_ID=?", (stray,)),
+                             [("DOL.GS.GameNPC", "stray", 1, 2, 3, int(stray[6:9]))])
         self.assertEqual(self.q("SELECT COUNT(*) FROM Mob WHERE Mob_ID LIKE 'hdc-bg253-pk-%'"), [(11,)])
-        self.assertEqual(self.q("SELECT FixId FROM fork_world_fixes"), [("classic-battlegrounds-v1",)])
+        self.assertEqual(self.q("SELECT Region, COUNT(*) FROM Mob WHERE Mob_ID LIKE 'hdc-bg%-ck-%' GROUP BY Region"),
+                         [(251, 7), (253, 7)])
+        self.assertEqual(self.q("SELECT FixId FROM fork_world_fixes"), [("classic-battlegrounds-v2",)])
 
-    def test_a_keep_with_its_keep_id_already_there_is_not_added_again(self):
-        # An owner's Keep row with Dun Abermenai's Keep_ID (but no central keep of 253): no Keep insert, no
-        # central rows for that run, and the fix applies.
-        execute(self.db, "INSERT INTO Keep (KeepID, Name, Region, BaseLevel, Keep_ID) VALUES "
-                         "(90, 'Mine', 250, 255, 'hdc-bg253-dun-abermenai')")
-        lines = apply_fix(self.db)
-        self.assertEqual([x for x in lines if "central" in x],
-                         ["Battlegrounds: central keep Dun Murdaigean (keep 32, 12 guards); "
-                          "4 central doors closed at full health"])
-        self.assertEqual(self.q("SELECT COUNT(*) FROM Mob WHERE Mob_ID LIKE 'hdc-bg253-ck-%'"), [(0,)])
-        self.assertEqual(self.q("SELECT FixId FROM fork_world_fixes"), [("classic-battlegrounds-v1",)])
-
-    def test_no_central_keep_without_the_rows_it_is_made_from(self):
-        # Without Thidranki's Hibernia portal keep row, one of the source or template rows, or one of its central
-        # doors, step 5 leaves that region as it is: no Keep row, no central rows, its doors unchanged. The fix
-        # still applies and writes its marker.
-        unchanged = [(251000301, 2545, 0), (251000302, 2545, 0), (253000301, 2545, 0), (253000302, 2545, 0)]
+    def test_no_central_keep_rows_without_the_rows_they_are_made_from(self):
+        # Without a central keep's Keep row (here: in another region), step 5 leaves that keep as it is. Without
+        # one of Thidranki's six wall casters, no keep gets casters, and without its hastener no keep gets a
+        # hastener; each time the other kind is still added. The fix still applies and writes its marker.
+        both = "Dun Murdaigean (6 wall casters, 1 hastener)"
         cases = [
-            ("DELETE FROM Keep WHERE KeepID=12", [], unchanged, None),
-            ("DELETE FROM Mob WHERE Mob_ID='f1f1d987-1b9a-421b-a8a1-9df423f118fe'", [], unchanged, None),
-            (f"DELETE FROM Mob WHERE Mob_ID='{LORD}'", [], unchanged, None),
-            ("DELETE FROM Door WHERE InternalID=253000302", [(32, 251)],
-             [(251000301, 5800, 1), (251000302, 5800, 1), (253000301, 2545, 0)],
-             "Battlegrounds: central keep Dun Murdaigean (keep 32, 12 guards); 2 central doors closed at full health"),
+            ("DELETE FROM Keep WHERE KeepID=33", ["Battlegrounds: central keep guards for " + both], [(251, 7)]),
+            ("UPDATE Keep SET Region=251 WHERE KeepID=33", ["Battlegrounds: central keep guards for " + both],
+             [(251, 7)]),
+            ("DELETE FROM Mob WHERE Mob_ID='f1f1d987-1b9a-421b-a8a1-9df423f118fe'",
+             ["Battlegrounds: central keep guards for Dun Abermenai (1 hastener), Dun Murdaigean (1 hastener)"],
+             [(251, 1), (253, 1)]),
+            ("DELETE FROM Mob WHERE Mob_ID='802a1b0a-f47e-47b9-a688-e401ad33e42f'",
+             ["Battlegrounds: central keep guards for Dun Abermenai (6 wall casters), Dun Murdaigean (6 wall casters)"],
+             [(251, 6), (253, 6)]),
         ]
-        for n, (statement, keeps, doors, line) in enumerate(cases):
+        for n, (statement, lines, added) in enumerate(cases):
             with self.subTest(statement):
                 db = self.world(f"missing-{n}.db")
                 execute(db, statement)
-                lines = apply_fix(db)
-                self.assertEqual([x for x in lines if "central" in x], [line] if line else [])
-                self.assertEqual(query(db, "SELECT KeepID, Region FROM Keep WHERE Keep_ID LIKE 'hdc-%'"), keeps)
+                self.assertEqual([x for x in apply_fix(db) if "central keep guards" in x], lines)
                 self.assertEqual(query(db, "SELECT Region, COUNT(*) FROM Mob WHERE Mob_ID LIKE 'hdc-bg%-ck-%' "
-                                           "GROUP BY Region"), [(251, 12)] if keeps else [])
-                self.assertEqual(query(db, "SELECT InternalID, Health, State FROM Door WHERE InternalID IN "
-                                           "(251000301, 251000302, 253000301, 253000302) ORDER BY InternalID"), doors)
-                self.assertEqual(query(db, "SELECT FixId FROM fork_world_fixes"), [("classic-battlegrounds-v1",)])
+                                           "GROUP BY Region"), added)
+                self.assertEqual(query(db, "SELECT FixId FROM fork_world_fixes"), [("classic-battlegrounds-v2",)])
 
     def test_no_marker_without_the_needed_tables(self):
         for table in battlegrounds.NEEDED_TABLES:
@@ -657,7 +812,7 @@ class BattlegroundFixTests(unittest.TestCase):
 
 
 class BattlegroundGeometryTests(unittest.TestCase):
-    """The move onto a central keep model (spec 3.2, "The move") and the fighters' spots at its gate."""
+    """The move onto a central keep model (spec 3.2, "The move")."""
 
     def test_p_maps_to_c(self):
         self.assertEqual(battlegrounds.moved(253, 18048, 18176, 4320, 0), (33152, 38400, 3720, 341))
@@ -673,49 +828,51 @@ class BattlegroundGeometryTests(unittest.TestCase):
                 self.assertEqual((x, y, z, heading), spot)
                 self.assertAlmostEqual(math.hypot(x - cx, y - cy), 100, delta=1)
                 self.assertAlmostEqual(math.degrees(math.atan2(y - cy, x - cx)) % 360, degrees, delta=0.5)
+                self.assertLess(math.dist(to_model(region, x, y), (18148, 18176)), 1)
 
     def test_headings_wrap_at_4096(self):
         self.assertEqual(battlegrounds.moved(253, 18048, 18176, 4320, 4000)[3], 245)  # 4000 + 341 - 4096
         self.assertEqual(battlegrounds.moved(251, 18048, 18176, 4320, 1934)[3], 0)  # 1934 + 2162 = 4096
         self.assertEqual(battlegrounds.moved(251, 18048, 18176, 4320, 4095)[3], 2161)
-        # The server's headings: 0 towards +Y, 1024 towards -X, 2048 towards -Y, 3072 towards +X; a hair
-        # short of +Y is 4095, not -1.
-        self.assertEqual([battlegrounds.facing((0, 0), to) for to in ((0, 100), (-100, 0), (0, -100), (100, 0), (1, 1000))],
-                         [0, 1024, 2048, 3072, 4095])
 
-    def test_gate_spots_from_the_door_rows(self):
-        # The outer (000301) and inner (000302) central door rows of 253, then 251, give the spec's fighter spots.
-        self.assertEqual(battlegrounds.gate_spots((33849, 39604, 3737), (33659, 39059, 3720)), [
-            (33697, 39351, 3720, 3877), (33811, 39312, 3720, 3877), (33553, 38937, 3720, 3877), (33666, 38898, 3720, 3877),
-        ])
-        self.assertEqual(battlegrounds.gate_spots((32337, 37404, 3724), (32698, 37833, 3720)), [
-            (32563, 37580, 3720, 1592), (32472, 37657, 3720, 1592), (32840, 37909, 3720, 1592), (32749, 37986, 3720, 1592),
-        ])
+    def test_guard_levels(self):
+        # Spec 3.4: at keep Level 1 and keep_guard_level_multiplier 1.6.
+        self.assertEqual({keep_id: guard_levels(battlegrounds.KEEP_LEVELS[keep_id][3], 1, 1.6)
+                          for keep_id in GUARD_LEVELS}, GUARD_LEVELS)
+        # Upstream 0.35's base levels would give Dun Abermenai 23 and 28, Dun Murdaigean 33 and 40.
+        self.assertEqual([guard_levels(battlegrounds.KEEP_LEVELS[keep_id][2], 1, 1.6) for keep_id in (33, 32)],
+                         [(23, 28), (33, 40)])
 
 
 @unittest.skipUnless(TEST_WORLD, "needs HDC_TEST_WORLD (a clean classic world database)")
 class BattlegroundShippedWorldTests(unittest.TestCase):
-    """The clean classic world before the fix (read-only), and a copy of it after one run."""
+    """The clean classic world (0.35) before the fix (read-only), and a copy of it after one run."""
 
     LINES = [
         "Battlegrounds: classic level and realm rank limits for Abermenai, Thidranki, Murdaigean, Caledonia",
         "Battlegrounds: Caledon is shown as Caledonia; no zone XP bonus in Thidranki, Caledonia",
-        "Battlegrounds: keep levels for the ranges (Thidranki Faste base level 24, Caer Caledon base level 35, "
-        "4 gates' health)",
+        "Battlegrounds: keep levels for the ranges (Dun Abermenai base level 19, Thidranki Faste base level 24, "
+        "Dun Murdaigean base level 29, Caer Caledon base level 35, 8 gates' health)",
         "Battlegrounds: portal keep guards and hasteners for Abermenai (34), Murdaigean (34)",
-        "Battlegrounds: central keeps Dun Abermenai (keep 32, 12 guards), Dun Murdaigean (keep 33, 12 guards); "
-        "4 central doors closed at full health",
+        "Battlegrounds: central keep guards for Dun Abermenai (6 wall casters, 1 hastener), "
+        "Dun Murdaigean (6 wall casters, 1 hastener)",
         "Battlegrounds: Atlas leftovers archived in fork_removed_mobs and removed (15 training dummies, "
         "3 Void Merchants, the stray Wizard)",
     ]
     LEFTOVERS = ("(ClassType IN ('DOL.GS.DPSDummy', 'DOL.GS.HitbackDummy', 'DOL.GS.HealDummy', "
                  "'DOL.GS.Scripts.RPTradeInMerchant') AND Region BETWEEN 250 AND 253) OR Mob_ID='caledon-guard-25'")
-    GATES = "InternalID IN (250000301, 250000302, 252000301, 252000302)"
-    CENTRAL_DOORS = "InternalID IN (251000301, 251000302, 253000301, 253000302)"
+    CENTRAL_KEEPS = "KeepID IN (11, 31, 32, 33)"
+    GATES = ("InternalID IN (250000301, 250000302, 251000301, 251000302, 252000301, 252000302, 253000301, "
+             "253000302)")
     # Thidranki's portal keep guards and hasteners: the rows step 4 copies.
     PORTAL_KEEP_GUARDS = ("Region=252 AND ClassType IN ('DOL.GS.Keeps.FrontierHastener', 'DOL.GS.Keeps.GuardFighter', "
                           "'DOL.GS.Keeps.GuardStaticCaster') AND EXISTS (SELECT 1 FROM Keep k WHERE k.KeepID IN (12, 13, 14) "
                           "AND (Mob.X-k.X)*(Mob.X-k.X) + (Mob.Y-k.Y)*(Mob.Y-k.Y) <= 4000*4000)")
+    # The keep areas (keeps/KeepArea.cs): 4,000 around a portal keep (BaseLevel 100 or more), 3,000 around a keep.
+    AREA = ("k.Region=m.Region AND (m.X-k.X)*(m.X-k.X) + (m.Y-k.Y)*(m.Y-k.Y) <= "
+            "CASE WHEN k.BaseLevel >= 100 THEN 4000*4000 ELSE 3000*3000 END")
+    # Upstream 0.35's guards of Dun Abermenai (253) and Dun Murdaigean (251), as Mob rows m.
+    UPSTREAM_CENTRAL_GUARDS = "m.Region IN (251, 253) AND m.ClassType LIKE 'DOL.GS.Keeps.%' AND m.Mob_ID NOT LIKE 'hdc-%'"
 
     @classmethod
     def setUpClass(cls):
@@ -742,7 +899,7 @@ class BattlegroundShippedWorldTests(unittest.TestCase):
         self.assertEqual(self.before("SELECT RegionID, Battleground_ID, MinLevel, MaxLevel, MaxRealmLevel "
                                      "FROM Battleground ORDER BY RegionID"), [
             (165, "Cathal Valley (Level 45-49)", 45, 49, 45),
-            (250, "Caledonia (Level 34-39 - RR3L5)", 30, 34, 25),
+            (250, "Caledonia (Level 34-39 - RR3L5)", 30, 35, 25),
             (251, "Murdaigean (Level 25-29)", 25, 29, 5),
             (252, "Thidranki (Level 20-24 - RR2L0)", 20, 24, 10),
             (253, "Abermenai (Level 15-19)", 15, 19, 2),
@@ -754,12 +911,29 @@ class BattlegroundShippedWorldTests(unittest.TestCase):
         self.assertEqual(self.before("SELECT RegionID, Description FROM Regions WHERE RegionID BETWEEN 250 AND 253 "
                                      "ORDER BY RegionID"),
                          [(250, "Caledon"), (251, "Murdaigean"), (252, "Thidranki"), (253, "Abermenai")])
-        self.assertEqual(self.before("SELECT KeepID, Name, Region, BaseLevel, Level FROM Keep WHERE KeepID IN (11, 31) "
-                                     "ORDER BY KeepID"),
-                         [(11, "Thidranki Faste", 252, 26, 1), (31, "Caer Caledon", 250, 46, 1)])
-        self.assertEqual(self.before(f"SELECT InternalID, Health, State FROM Door WHERE {self.GATES} ORDER BY InternalID"), [
-            (250000301, 9200, 1), (250000302, 9200, 1), (252000301, 5200, 1), (252000302, 5200, 1),
+        # The four central keeps: Atlas's two, and upstream 0.35's Dun Murdaigean (32) and Dun Abermenai (33), all
+        # on the same spot, held by renegades, at keep Level 1.
+        self.assertEqual(self.before(f"SELECT {KEEP_COLUMNS} FROM Keep WHERE {self.CENTRAL_KEEPS} ORDER BY KeepID"), [
+            (11, "Thidranki Faste", 252, 33089, 38271, 3720, 2915, 0, 1, "", 1, 1, 1, 0, 0, 26, 0, "Atlas BG",
+             "2022-10-09 21:09:42", "11"),
+            (31, "Caer Caledon", 250, 33089, 38271, 3720, 2915, 0, 1, "", 1, 1, 1, 0, 0, 46, 0, "Atlas BG",
+             "2022-08-18 17:36:33", "31"),
+            (32, "Dun Murdaigean", 251, 33089, 38271, 3720, 2915, 0, 1, "", 1, 1, 1, 0, 0, 31, 0,
+             "Classic BG (Claude 2026-10-07)", "2022-10-09 21:09:42", "32"),
+            (33, "Dun Abermenai", 253, 33089, 38271, 3720, 2915, 0, 1, "", 1, 1, 1, 0, 0, 21, 0,
+             "Classic BG (Claude 2026-10-07)", "2022-10-09 21:09:42", "33"),
         ])
+        self.assertEqual(self.before("SELECT Region, KeepID FROM Keep WHERE Region BETWEEN 250 AND 253 AND BaseLevel < 100 "
+                                     "ORDER BY Region"), [(250, 31), (251, 32), (252, 11), (253, 33)])
+        # Their gates: closed, at full health for upstream's BaseLevel (x 200).
+        self.assertEqual(self.before(f"SELECT InternalID, Health, State FROM Door WHERE {self.GATES} ORDER BY InternalID"), [
+            (250000301, 9200, 1), (250000302, 9200, 1), (251000301, 6200, 1), (251000302, 6200, 1),
+            (252000301, 5200, 1), (252000302, 5200, 1), (253000301, 4200, 1), (253000302, 4200, 1),
+        ])
+        self.assertEqual(self.before("SELECT `Key`, Value FROM ServerProperty WHERE `Key` IN ('keep_doors_base_health', "
+                                     "'keep_guard_level_multiplier', 'starting_keep_level') ORDER BY `Key`"),
+                         [("keep_doors_base_health", "200"), ("keep_guard_level_multiplier", "1.6"),
+                          ("starting_keep_level", "4")])
         self.assertEqual(self.before("SELECT ClassType, Region, COUNT(*) FROM Mob WHERE ClassType IN ('DOL.GS.DPSDummy', "
                                      "'DOL.GS.HitbackDummy', 'DOL.GS.HealDummy') AND Region BETWEEN 250 AND 253 "
                                      "GROUP BY ClassType, Region ORDER BY ClassType"),
@@ -781,8 +955,8 @@ class BattlegroundShippedWorldTests(unittest.TestCase):
                                      "GROUP BY TeleportID, Realm, RegionID ORDER BY TeleportID"),
                          [("Castle Sauvage", 1, 1, 2), ("Druim Ligen", 3, 200, 2), ("Svasud Faste", 2, 100, 2)])
         # Step 4: Thidranki's 34 portal keep guards and hasteners. The Hibernia (12) and Midgard (13) portal keeps
-        # have 1 hastener, 2 fighters and 8 casters each, and the Albion one (14) 1, 2 and 9. 251 and 253 have
-        # no Mob rows.
+        # have 1 hastener, 2 fighters and 8 casters each, and the Albion one (14) 1, 2 and 9. The portal keeps of
+        # 251 and 253 have no keep guards.
         self.assertEqual(self.before(
             "SELECT k.KeepID, m.ClassType, COUNT(*) FROM Mob m JOIN Keep k ON k.KeepID IN (12, 13, 14) "
             "AND (m.X-k.X)*(m.X-k.X) + (m.Y-k.Y)*(m.Y-k.Y) <= 4000*4000 WHERE m.Region=252 AND m.ClassType IN "
@@ -796,37 +970,51 @@ class BattlegroundShippedWorldTests(unittest.TestCase):
             (14, "DOL.GS.Keeps.GuardStaticCaster", 9),
         ])
         self.assertEqual(self.before(f"SELECT COUNT(*) FROM Mob WHERE {self.PORTAL_KEEP_GUARDS}"), [(34,)])
-        self.assertEqual(self.before("SELECT COUNT(*) FROM Mob WHERE Region IN (251, 253)"), [(0,)])
-        # Step 5: the Keep row it moves; no central keep in 251 or 253, and KeepIDs 32 and 33 free.
-        self.assertEqual(self.before("SELECT KeepID, Region, X, Y, Z, Heading, BaseLevel FROM Keep WHERE KeepID IN "
-                                     "(12, 32, 33) OR (Region IN (251, 253) AND BaseLevel < 100)"),
-                         [(12, 252, 18362, 18257, 4320, 3517, 255)])
-        # The Hibernia portal keep's 7 rows on its model (the hastener on the floor, the casters on the walls) and
-        # the two templates: all "new mob" placeholders at level 1, model 408.
-        sources = [end for end, *_ in CENTRAL_ROWS[253][:7]] + [FIGHTER, LORD]
-        self.assertEqual(self.before(f"SELECT DISTINCT Name, Level, Model FROM Mob WHERE Mob_ID IN ({marks(9)})", sources),
-                         [("new mob", 1, 408)])
-        self.assertEqual(self.before(f"SELECT Mob_ID, ClassType, Region, X, Y, Z, Heading FROM Mob "
-                                     f"WHERE Mob_ID IN ({marks(9)}) ORDER BY Mob_ID", sources), [
-            ("2fc59f4b-0b0d-4efc-bf3b-93a1b01e681a", "DOL.GS.Keeps.GuardStaticCaster", 252, 18221, 19611, 4736, 3882),
-            ("3a07da41-d088-4174-980f-1d5ad21fc334", "DOL.GS.Keeps.GuardStaticCaster", 252, 18069, 16884, 4736, 1861),
-            ("62f874d0-333b-475f-a044-109cb0bd74b6", "DOL.GS.Keeps.GuardStaticCaster", 252, 16751, 18401, 4736, 946),
-            ("802a1b0a-f47e-47b9-a688-e401ad33e42f", "DOL.GS.Keeps.FrontierHastener", 252, 19075, 19035, 4320, 3547),
-            ("863582fc-af9c-4661-8e60-4d8b2985ad2a", "DOL.GS.Keeps.GuardLord", 252, 32296, 38267, 4592, 1068),
-            ("b05f95a5-9e55-4ddf-93d0-340336bc2e16", "DOL.GS.Keeps.GuardStaticCaster", 252, 18598, 17320, 4736, 2478),
-            ("b67eacce-2719-48a9-8be7-1dbf0c16b7d2", "DOL.GS.Keeps.GuardFighter", 252, 18983, 20057, 4080, 3493),
-            ("be8e2cbf-6569-4c46-a4aa-d84903a902fc", "DOL.GS.Keeps.GuardStaticCaster", 252, 17690, 19219, 4736, 519),
-            ("f1f1d987-1b9a-421b-a8a1-9df423f118fe", "DOL.GS.Keeps.GuardStaticCaster", 252, 19521, 18014, 4736, 2979),
+        self.assertEqual(self.before(f"SELECT COUNT(*) FROM Mob m JOIN Keep k ON {self.AREA} AND k.BaseLevel >= 100 "
+                                     "WHERE m.Region IN (251, 253) AND m.ClassType LIKE 'DOL.GS.Keeps.%'"), [(0,)])
+        # Upstream's central keep guards: 26 in Dun Abermenai and 27 in Dun Murdaigean, each in its keep's area and
+        # in no other, and no casters or hastener among them (step 5's preconditions).
+        self.assertEqual(self.before(f"SELECT m.Region, k.KeepID, m.ClassType, COUNT(*) FROM Mob m JOIN Keep k ON {self.AREA} "
+                                     f"WHERE {self.UPSTREAM_CENTRAL_GUARDS} GROUP BY 1, 2, 3 ORDER BY 1 DESC, 3"), [
+            (253, 33, "DOL.GS.Keeps.GuardArcher", 4), (253, 33, "DOL.GS.Keeps.GuardCommander", 3),
+            (253, 33, "DOL.GS.Keeps.GuardFighter", 18), (253, 33, "DOL.GS.Keeps.GuardLord", 1),
+            (251, 32, "DOL.GS.Keeps.GuardArcher", 5), (251, 32, "DOL.GS.Keeps.GuardCommander", 3),
+            (251, 32, "DOL.GS.Keeps.GuardFighter", 18), (251, 32, "DOL.GS.Keeps.GuardLord", 1),
         ])
-        # The central doors (000301 outer, 000302 inner) of 251 and 253, open at 2,545, and their Hibernia portal
-        # keep doors (041601, 041602), which the door check moves.
-        self.assertEqual(self.before("SELECT InternalID, X, Y, Z, Heading, Health, State FROM Door WHERE InternalID IN "
+        self.assertEqual(self.before(f"SELECT Region, COUNT(*) FROM Mob m WHERE {self.UPSTREAM_CENTRAL_GUARDS} "
+                                     "GROUP BY Region ORDER BY Region"), [(251, 27), (253, 26)])
+        # No monster (upstream 0.35's GameNPC rows) stands in a keep area of 251 or 253.
+        self.assertEqual(self.before(f"SELECT COUNT(*) FROM Mob m JOIN Keep k ON {self.AREA} WHERE m.Region IN (251, 253) "
+                                     "AND m.ClassType='DOL.GS.GameNPC'"), [(0,)])
+        # Step 5: the Hibernia portal keep's six casters on its walls and its hastener beside its gate, "new mob"
+        # placeholders at level 1, model 408.
+        sources = [end for end, *_ in CASTERS[253]] + [HASTENERS[253][0]]
+        self.assertEqual(self.before(f"SELECT Mob_ID, ClassType, Name, Region, Level, Model, X, Y, Z, Heading FROM Mob "
+                                     f"WHERE Mob_ID IN ({marks(7)}) ORDER BY Mob_ID", sources), [
+            ("2fc59f4b-0b0d-4efc-bf3b-93a1b01e681a", "DOL.GS.Keeps.GuardStaticCaster", "new mob", 252, 1, 408,
+             18221, 19611, 4736, 3882),
+            ("3a07da41-d088-4174-980f-1d5ad21fc334", "DOL.GS.Keeps.GuardStaticCaster", "new mob", 252, 1, 408,
+             18069, 16884, 4736, 1861),
+            ("62f874d0-333b-475f-a044-109cb0bd74b6", "DOL.GS.Keeps.GuardStaticCaster", "new mob", 252, 1, 408,
+             16751, 18401, 4736, 946),
+            ("802a1b0a-f47e-47b9-a688-e401ad33e42f", "DOL.GS.Keeps.FrontierHastener", "new mob", 252, 1, 408,
+             19075, 19035, 4320, 3547),
+            ("b05f95a5-9e55-4ddf-93d0-340336bc2e16", "DOL.GS.Keeps.GuardStaticCaster", "new mob", 252, 1, 408,
+             18598, 17320, 4736, 2478),
+            ("be8e2cbf-6569-4c46-a4aa-d84903a902fc", "DOL.GS.Keeps.GuardStaticCaster", "new mob", 252, 1, 408,
+             17690, 19219, 4736, 519),
+            ("f1f1d987-1b9a-421b-a8a1-9df423f118fe", "DOL.GS.Keeps.GuardStaticCaster", "new mob", 252, 1, 408,
+             19521, 18014, 4736, 2979),
+        ])
+        # The central doors (000301 outer, 000302 inner) of 251 and 253, and their Hibernia portal keep doors
+        # (041601, 041602), which the door check moves.
+        self.assertEqual(self.before("SELECT InternalID, X, Y, Z, Heading FROM Door WHERE InternalID IN "
                                      "(251000301, 251000302, 251041601, 251041602, 253000301, 253000302, 253041601, "
                                      "253041602) ORDER BY InternalID"), [
-            (251000301, 32337, 37404, 3724, 3642, 2545, 0), (251000302, 32698, 37833, 3720, 1589, 2545, 0),
-            (251041601, 19263, 18884, 4317, 1482, 51000, 1), (251041602, 18821, 18479, 4320, 3581, 51000, 1),
-            (253000301, 33849, 39604, 3737, 1864, 2545, 0), (253000302, 33659, 39059, 3720, 3901, 2545, 0),
-            (253041601, 19257, 18865, 4318, 1469, 51000, 1), (253041602, 18807, 18470, 4320, 3591, 51000, 1),
+            (251000301, 32337, 37404, 3724, 3642), (251000302, 32698, 37833, 3720, 1589),
+            (251041601, 19263, 18884, 4317, 1482), (251041602, 18821, 18479, 4320, 3581),
+            (253000301, 33849, 39604, 3737, 1864), (253000302, 33659, 39059, 3720, 3901),
+            (253041601, 19257, 18865, 4318, 1469), (253041602, 18807, 18470, 4320, 3591),
         ])
 
     def test_after_the_fix(self):
@@ -843,13 +1031,19 @@ class BattlegroundShippedWorldTests(unittest.TestCase):
                                     "ORDER BY ZoneID"),
                          [(250, "Caledonia", 0), (251, "Murdaigean", 0), (252, "Thidranki", 0), (253, "Abermenai", 0)])
         self.assertEqual(self.after("SELECT Description FROM Regions WHERE RegionID=250"), [("Caledonia",)])
-        self.assertEqual(self.after("SELECT KeepID, BaseLevel, Level, LastTimeRowUpdated FROM Keep WHERE KeepID IN (11, 31) "
-                                    "ORDER BY KeepID"), [(11, 24, 1, NOW), (31, 35, 1, NOW)])
-        self.assertEqual(self.after(f"SELECT InternalID, Health, State FROM Door WHERE {self.GATES} ORDER BY InternalID"), [
-            (250000301, 7000, 1), (250000302, 7000, 1), (252000301, 4800, 1), (252000302, 4800, 1),
+        # The central keeps: only BaseLevel and LastTimeRowUpdated change.
+        before = self.before(f"SELECT {KEEP_COLUMNS} FROM Keep WHERE {self.CENTRAL_KEEPS} ORDER BY KeepID")
+        self.assertEqual(self.after(f"SELECT {KEEP_COLUMNS} FROM Keep WHERE {self.CENTRAL_KEEPS} ORDER BY KeepID"),
+                         [row[:15] + (base_level,) + row[16:18] + (NOW,) + row[19:]
+                          for row, base_level in zip(before, (24, 35, 29, 19))])
+        self.assertEqual(self.after(f"SELECT InternalID, Health, State, LastTimeRowUpdated FROM Door WHERE {self.GATES} "
+                                    "ORDER BY InternalID"), [
+            (250000301, 7000, 1, NOW), (250000302, 7000, 1, NOW), (251000301, 5800, 1, NOW), (251000302, 5800, 1, NOW),
+            (252000301, 4800, 1, NOW), (252000302, 4800, 1, NOW), (253000301, 3800, 1, NOW), (253000302, 3800, 1, NOW),
         ])
-        for sql in ("SELECT * FROM Keep WHERE KeepID NOT IN (11, 31, 32, 33) ORDER BY KeepID",
-                    f"SELECT * FROM Door WHERE NOT {self.GATES} AND NOT {self.CENTRAL_DOORS} ORDER BY Door_ID"):
+        for sql in (f"SELECT * FROM Keep WHERE NOT {self.CENTRAL_KEEPS} ORDER BY KeepID",
+                    f"SELECT * FROM Door WHERE NOT {self.GATES} ORDER BY Door_ID",
+                    f"SELECT * FROM Mob m WHERE {self.UPSTREAM_CENTRAL_GUARDS} ORDER BY Mob_ID"):
             with self.subTest(unchanged=sql):
                 self.assertEqual(self.after(sql), self.before(sql))
         self.assertEqual(self.after(f"SELECT COUNT(*) FROM Mob WHERE {self.LEFTOVERS}"), [(0,)])
@@ -857,11 +1051,11 @@ class BattlegroundShippedWorldTests(unittest.TestCase):
         removed = self.before(f"SELECT {mob} FROM Mob WHERE {self.LEFTOVERS} ORDER BY Mob_ID")
         self.assertEqual(len(removed), 19)
         self.assertEqual(self.after(f"SELECT {mob}, FixId, RemovedUtc FROM fork_removed_mobs ORDER BY Mob_ID"),
-                         [row + ("classic-battlegrounds-v1", NOW) for row in removed])
-        # 19 removed; 34 portal keep rows and 12 central rows added in each of 253 and 251.
+                         [row + ("classic-battlegrounds-v2", NOW) for row in removed])
+        # 19 removed; 34 portal keep rows, 6 wall casters and a hastener added in each of 253 and 251.
         self.assertEqual(self.after("SELECT COUNT(*) FROM Mob")[0][0],
-                         self.before("SELECT COUNT(*) FROM Mob")[0][0] - 19 + 2 * (34 + 12))
-        self.assertEqual(self.after("SELECT FixId, AppliedUtc FROM fork_world_fixes"), [("classic-battlegrounds-v1", NOW)])
+                         self.before("SELECT COUNT(*) FROM Mob")[0][0] - 19 + 2 * (34 + 6 + 1))
+        self.assertEqual(self.after("SELECT FixId, AppliedUtc FROM fork_world_fixes"), [("classic-battlegrounds-v2", NOW)])
         # Step 4: in 253 and 251, a copy of each of Thidranki's 34 portal keep rows, on the same spot.
         sources = [(m, m, None) for (m,) in self.before(f"SELECT Mob_ID FROM Mob WHERE {self.PORTAL_KEEP_GUARDS}")]
         self.assertEqual(len(sources), 34)
@@ -878,40 +1072,37 @@ class BattlegroundShippedWorldTests(unittest.TestCase):
         finally:
             conn.close()
 
-    def test_new_central_keeps(self):
-        self.assertEqual(self.after(f"SELECT {KEEP_COLUMNS} FROM Keep WHERE KeepID IN (32, 33) ORDER BY KeepID"),
-                         [NEW_KEEPS[253], NEW_KEEPS[251]])
-        for region, health in ((253, 3800), (251, 5800)):
+    def test_wall_casters_and_hastener(self):
+        for region in (253, 251):
             with self.subTest(region=region):
-                self.assertEqual(*copies(self.after, region, "ck", central_rows(region), NOW))
-                # The central doors: closed, at full health, and within the new keep's area (3,000).
-                outer, inner = region * 1000000 + 301, region * 1000000 + 302
-                doors = self.after("SELECT InternalID, X, Y, Health, State, LastTimeRowUpdated FROM Door "
-                                   "WHERE InternalID IN (?, ?) ORDER BY InternalID", (outer, inner))
-                self.assertEqual([(door, h, s, t) for door, _, _, h, s, t in doors],
-                                 [(outer, health, 1, NOW), (inner, health, 1, NOW)])
-                for _, x, y, *_ in doors:
-                    self.assertLessEqual(math.hypot(x - NEW_KEEPS[region][3], y - NEW_KEEPS[region][4]), 3000)
+                self.assertEqual(*copies(self.after, region, "ck", casters(region) + hastener(region), NOW))
 
-    def test_new_guards_stand_in_their_keep_area(self):
-        # The server gives every keep an area (keeps/KeepArea.cs): 4,000 around a portal keep (BaseLevel 100 or
-        # more) and 3,000 around a central keep. A guard belongs to the keep whose area holds it. Every new row
-        # stands in exactly one area of its region: a portal keep copy in that portal keep's, a central row in
-        # the new keep's.
-        area = ("k.Region=m.Region AND (m.X-k.X)*(m.X-k.X) + (m.Y-k.Y)*(m.Y-k.Y) <= "
-                "CASE WHEN k.BaseLevel >= 100 THEN 4000*4000 ELSE 3000*3000 END")
+    def test_guard_levels(self):
+        # The levels the server gives the central keeps' guards and lords from their Keep rows (spec 3.4):
+        # 21 and 24 in Dun Abermenai, 31 and 36 in Dun Murdaigean.
+        ((multiplier,),) = self.after("SELECT Value FROM ServerProperty WHERE `Key`='keep_guard_level_multiplier'")
+        keeps = self.after(f"SELECT KeepID, BaseLevel, Level FROM Keep WHERE {self.CENTRAL_KEEPS}")
+        self.assertEqual({keep_id: guard_levels(base_level, level, float(multiplier))
+                          for keep_id, base_level, level in keeps}, GUARD_LEVELS)
+
+    def test_every_guard_stands_in_its_keep_area(self):
+        # The server gives every keep an area (keeps/KeepArea.cs), and a guard belongs to the keep whose area
+        # holds it. Every new row stands in exactly one area of its region: a portal keep copy in that portal
+        # keep's, a wall caster or a hastener in its central keep's. So does every one of upstream's central keep
+        # guards.
         self.assertEqual(self.after(f"SELECT m.Region, k.KeepID, substr(m.Mob_ID, 11, 2), COUNT(*) FROM Mob m "
-                                    f"JOIN Keep k ON {area} WHERE m.Mob_ID LIKE 'hdc-bg%' "
+                                    f"JOIN Keep k ON {self.AREA} WHERE m.Mob_ID LIKE 'hdc-bg%' "
                                     f"GROUP BY m.Region, k.KeepID, substr(m.Mob_ID, 11, 2) ORDER BY m.Region DESC, k.KeepID"), [
-            (253, 32, "ck", 12), (253, 35, "pk", 11), (253, 36, "pk", 11), (253, 37, "pk", 12),
-            (251, 33, "ck", 12), (251, 41, "pk", 11), (251, 42, "pk", 11), (251, 43, "pk", 12),
+            (253, 33, "ck", 7), (253, 35, "pk", 11), (253, 36, "pk", 11), (253, 37, "pk", 12),
+            (251, 32, "ck", 7), (251, 41, "pk", 11), (251, 42, "pk", 11), (251, 43, "pk", 12),
         ])
-        self.assertEqual(self.after(f"SELECT m.Mob_ID FROM Mob m WHERE m.Mob_ID LIKE 'hdc-bg%' "
-                                    f"AND (SELECT COUNT(*) FROM Keep k WHERE {area}) <> 1"), [])
-        self.assertEqual(self.after("SELECT COUNT(*) FROM Mob WHERE Mob_ID LIKE 'hdc-bg%'"), [(92,)])
+        self.assertEqual(self.after(f"SELECT m.Mob_ID FROM Mob m WHERE (m.Mob_ID LIKE 'hdc-bg%' OR "
+                                    f"{self.UPSTREAM_CENTRAL_GUARDS}) AND "
+                                    f"(SELECT COUNT(*) FROM Keep k WHERE {self.AREA}) <> 1"), [])
+        self.assertEqual(self.after("SELECT COUNT(*) FROM Mob WHERE Mob_ID LIKE 'hdc-bg%'"), [(82,)])
 
     def test_door_check(self):
-        # Spec 3.2, "Check": each region's Hibernia portal keep doors, moved like the guards, land on its central
+        # Spec 3.2, "Check": each region's Hibernia portal keep doors, moved like the casters, land on its central
         # doors (outer 041601 on 000301, inner 041602 on 000302).
         for region in (253, 251):
             for portal, central in ((41601, 301), (41602, 302)):
@@ -924,6 +1115,69 @@ class BattlegroundShippedWorldTests(unittest.TestCase):
                     self.assertLessEqual(abs(z - target[2]), 25)
                     self.assertLessEqual(abs((heading - target[3] + 2048) % 4096 - 2048), 60)
 
+    def test_upstream_guards_confirm_the_move(self):
+        # Upstream placed each central keep's guards on that keep's model from its navigation mesh, on its own.
+        # Put back on the portal keep model, every guard of Dun Abermenai that stands in the keep (Z 3700 or more:
+        # courtyard 3721, wall tops 4137, tower floor 4937) lands within 65 units of a guard of Dun Murdaigean of
+        # the same class at the same height, so both moves fit the models upstream placed them on.
+        guards = {region: [(cls, *to_model(region, x, y), z) for cls, x, y, z in self.before(
+            f"SELECT ClassType, X, Y, Z FROM Mob m WHERE Region=? AND {self.UPSTREAM_CENTRAL_GUARDS}", (region,))]
+            for region in (253, 251)}
+        inside = [guard for guard in guards[253] if guard[3] >= 3700]
+        self.assertEqual(len(inside), 23)
+        for cls, x, y, z in inside:
+            with self.subTest(guard=(cls, round(x), round(y), z)):
+                self.assertLessEqual(min(math.hypot(x - x2, y - y2) for cls2, x2, y2, z2 in guards[251]
+                                         if cls2 == cls and abs(z - z2) < 60), 65)
+
+    def test_wall_casters_stand_on_the_walls(self):
+        # Upstream's guards on the wall tops stand at 4137 to 4154, 416 above the courtyard (3721): the height of
+        # the portal keep's walls above its floor (4736 against 4320). The casters stand at 4136. Where upstream
+        # put a wall-top guard next to one (Dun Abermenai 2, Dun Murdaigean 3), it is within 100 units.
+        expected = {253: ["2fc59f4b-0b0d-4efc-bf3b-93a1b01e681a", "62f874d0-333b-475f-a044-109cb0bd74b6"],
+                    251: ["2fc59f4b-0b0d-4efc-bf3b-93a1b01e681a", "3a07da41-d088-4174-980f-1d5ad21fc334",
+                          "62f874d0-333b-475f-a044-109cb0bd74b6"]}
+        for region in (253, 251):
+            with self.subTest(region=region):
+                walls = self.before(f"SELECT X, Y, Z FROM Mob m WHERE Region=? AND {self.UPSTREAM_CENTRAL_GUARDS} "
+                                    "AND Z BETWEEN 4100 AND 4200", (region,))
+                self.assertEqual(min(z for _, _, z in walls), 4137)
+                self.assertLessEqual(max(z for _, _, z in walls), 4154)
+                spots = self.after("SELECT substr(Mob_ID, 14), X, Y, Z FROM Mob WHERE Mob_ID LIKE ? AND ClassType=?",
+                                   (f"hdc-bg{region}-ck-%", battlegrounds.CASTER_CLASS))
+                self.assertEqual({z for _, _, _, z in spots}, {4136})
+                near = sorted(mob_id for mob_id, x, y, _ in spots
+                              if min(math.hypot(x - x2, y - y2) for x2, y2, _ in walls) <= 100)
+                self.assertEqual(near, expected[region])
+
+    def test_hasteners_stand_beside_the_outer_gate(self):
+        # Each central keep's hastener stands on the floor (Z 3720) beside its outer gate, on the same side. Measured
+        # from the outer gate door (000301), with u along the line from the inner gate door (000302) out through
+        # it and v across that line: Caer Caledon's at (-93, 233), Thidranki Faste's at (44, 206), and the moved
+        # ones at (-15, 260) in Dun Murdaigean and (-28, 241) in Dun Abermenai. (The Keep rows cannot show this:
+        # the four share one spot and heading, while the client draws a different model, or one turned, in each.)
+        spots = {}
+        for region in (250, 251, 252, 253):
+            (outer,), (inner,) = (self.after("SELECT X, Y FROM Door WHERE InternalID=?", (region * 1000000 + door,))
+                                  for door in (301, 302))
+            ((x, y, z),) = self.after(f"SELECT m.X, m.Y, m.Z FROM Mob m JOIN Keep k ON {self.AREA} AND k.BaseLevel < 100 "
+                                      "WHERE m.Region=? AND m.ClassType='DOL.GS.Keeps.FrontierHastener'", (region,))
+            angle = math.atan2(outer[1] - inner[1], outer[0] - inner[0])
+            dx, dy = x - outer[0], y - outer[1]
+            spots[region] = (round(dx * math.cos(angle) + dy * math.sin(angle)),
+                             round(dy * math.cos(angle) - dx * math.sin(angle)), z)
+        self.assertEqual(spots, {250: (-93, 233, 3720), 251: (-15, 260, 3720), 252: (44, 206, 3720),
+                                 253: (-28, 241, 3720)})
+        # The nearest of upstream's guards is one of its gate fighters, 65 and 60 units away. (Upstream's own
+        # guards at the same height stand at least 152 apart.)
+        for region, distance in ((251, 65), (253, 60)):
+            with self.subTest(region=region):
+                ((x, y),) = self.after("SELECT X, Y FROM Mob WHERE Mob_ID=?", (f"hdc-bg{region}-ck-{HASTENERS[region][0]}",))
+                guards = self.after(f"SELECT ClassType, X, Y FROM Mob m WHERE Region=? AND {self.UPSTREAM_CENTRAL_GUARDS}",
+                                    (region,))
+                nearest = min(guards, key=lambda guard: math.hypot(guard[1] - x, guard[2] - y))
+                self.assertEqual((nearest[0], round(math.hypot(nearest[1] - x, nearest[2] - y))),
+                                 ("DOL.GS.Keeps.GuardFighter", distance))
 
 if __name__ == "__main__":
     unittest.main()

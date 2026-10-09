@@ -1,5 +1,9 @@
 # Sub-project 5: in-game verification (classic battlegrounds 15–35)
 
+> Note (2026-10-08): this checked v1 on the 0.34 world. Upstream 0.35 changed the central keeps of Abermenai
+> and Murdaigean (section 7 of the [design](../specs/2026-10-07-classic-battlegrounds-design.md)); its
+> in-game check still applies.
+
 Date: 2026-10-07. Tested by the owner on the LAN server with the HearthDAoC client.
 
 - Server: `v0.34b-hearth.12` (PR #77), installed with `./hdc update`. The battleground fix ran at the first start after the update.

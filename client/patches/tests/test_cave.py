@@ -1,7 +1,7 @@
 """Tests for the base-class code cave: baseclass_data.inc, the nasm build and the patched game.dll.
 
 The unit tests need nasm (apt install nasm) and read this repo's server sources. The real-file
-tests also need HDC_CLIENT_FILES, an OfflineDAoC 0.34 classic client folder; its game.dll is only
+tests also need HDC_CLIENT_FILES, an OfflineDAoC 0.35 classic client folder; its game.dll is only
 read.
 """
 import dataclasses
@@ -23,10 +23,10 @@ import pe  # noqa: E402
 
 REPO = os.path.dirname(os.path.dirname(PATCHES))
 SERVER_SRC = os.path.join(REPO, "source", "server")
-SHIPPED_DISABLED = "20;33;34;39;58-62"  # the clean classic 0.34 world's disabled_classes
+SHIPPED_DISABLED = "20;33;34;39;58-62"  # the clean classic 0.35 world's disabled_classes
 CLIENT = os.environ.get("HDC_CLIENT_FILES")
-NEEDS_CLIENT = "set HDC_CLIENT_FILES to an OfflineDAoC 0.34 classic client folder"
-ORG = 0x248B000  # the VA the .hdcc section gets in the classic 0.34 game.dll
+NEEDS_CLIENT = "set HDC_CLIENT_FILES to an OfflineDAoC 0.35 classic client folder"
+ORG = 0x248C000  # the VA the .hdcc section gets in the classic 0.35 game.dll
 CALLED = {0x5B438C, 0x5B01A3, 0x5B4A65, 0x520E28, 0x45BDC3}  # game.dll functions the cave calls
 FIGHTER = ("    ; 14 Fighter: Armsman, Mercenary, Paladin, Reaver\n"
            "    dd 14, 1, 0x242, 0x940c7c, desc_14\n"
@@ -158,7 +158,7 @@ class RealGameDllCaveTests(unittest.TestCase):
     def test_the_section_table_is_valid(self):
         old, new = self.old, self.new
         self.assertEqual(self.org, ORG)
-        self.assertEqual(len(new.sections), 9)
+        self.assertEqual(len(new.sections), 10)
         self.assertEqual([s.name for s in new.sections], [s.name for s in old.sections] + [".hdcc"])
         self.assertEqual(new.sections[:-1], old.sections)
         raw_size = pe.align(len(self.cave), new.file_alignment)
@@ -189,7 +189,7 @@ class RealGameDllCaveTests(unittest.TestCase):
     def test_the_hook_calls_the_cave_entry(self):
         at = self.new.offset(build.HOOK_VA)
         self.assertEqual(self.original[at:at + 5].hex(), build.HOOK_FROM)
-        self.assertEqual(self.patched[at:at + 5].hex(), "e8aaafed01")
+        self.assertEqual(self.patched[at:at + 5].hex(), "e8aabfed01")
         rel = struct.unpack_from("<i", self.patched, at + 1)[0]
         self.assertEqual(build.HOOK_VA + 5 + rel, self.new.sections[-1].va)
 

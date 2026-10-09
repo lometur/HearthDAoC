@@ -32,6 +32,10 @@ namespace CEM.World
 
         /// <summary>Optional intermediate Z heights from multi-part climb meshes.</summary>
         public float[] SeedHeights { get; init; } = [];
+
+        /// <summary>Original client climb-surface vertices, in game coordinates.</summary>
+        public Vector3[] SurfaceVertices { get; init; } = [];
+        public Vector3[][] SurfaceTriangles { get; init; } = [];
     }
 
     /// <summary>
@@ -55,6 +59,8 @@ namespace CEM.World
         public float ThinAxisX { get; init; }
         public float ThinAxisY { get; init; }
         public float[] SeedHeights { get; init; } = [];
+        public float[][] SurfaceVertices { get; init; } = [];
+        public float[][][] SurfaceTriangles { get; init; } = [];
 
         public static LadderDefinitionDto From(LadderDefinition def)
         {
@@ -76,6 +82,8 @@ namespace CEM.World
                 ThinAxisX = def.ThinAxis.X,
                 ThinAxisY = def.ThinAxis.Y,
                 SeedHeights = def.SeedHeights,
+                SurfaceVertices = def.SurfaceVertices.Select(v => new[] { v.X, v.Y, v.Z }).ToArray(),
+                SurfaceTriangles = def.SurfaceTriangles.Select(t => t.Select(v => new[] { v.X, v.Y, v.Z }).ToArray()).ToArray(),
             };
         }
 
@@ -92,6 +100,10 @@ namespace CEM.World
                 Tangent = new(TangentX, TangentY),
                 ThinAxis = new(ThinAxisX, ThinAxisY),
                 SeedHeights = SeedHeights ?? [],
+                SurfaceVertices = (SurfaceVertices ?? []).Where(v => v.Length == 3)
+                    .Select(v => new Vector3(v[0], v[1], v[2])).ToArray(),
+                SurfaceTriangles = (SurfaceTriangles ?? []).Where(t => t.Length == 3 && t.All(v => v.Length == 3))
+                    .Select(t => t.Select(v => new Vector3(v[0], v[1], v[2])).ToArray()).ToArray(),
             };
         }
     }

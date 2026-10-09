@@ -69,5 +69,12 @@ namespace DOL.GS
 
         public static bool IsBotExcludedSpawn(string internalId) =>
             !string.IsNullOrEmpty(internalId) && BotExcludedSpawnIds.Contains(internalId);
+
+        /// <summary>
+        /// Spawns gamebots never hunt: the audited list above plus classic quest monsters (a player's quest event
+        /// spawn or a named quest monster), so a bot never takes a player's quest kill.
+        /// </summary>
+        public static bool IsBotExcludedNpc(GameNPC npc) =>
+            npc != null && (IsBotExcludedSpawn(npc.InternalID) || Quests.ClassicQuests.IsQuestMonster(npc));
     }
 }

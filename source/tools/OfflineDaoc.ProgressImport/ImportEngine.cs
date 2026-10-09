@@ -20,18 +20,20 @@ public sealed record ImportSummary(long Accounts, long Characters, long Bots, lo
 
 /// <summary>
 /// Moves saved progress (account, characters, items, money, houses, guild state, bots) from any
-/// earlier Offline DAoC folder — v0.3, v0.31, v0.31b, v0.32, v0.32b, v0.33, v0.33b, the "new class
-/// test" builds — into a NEW 0.34 folder. The old folder is only read. The new folder keeps its own
+/// earlier Offline DAoC folder — v0.3, v0.31, v0.31b, v0.32, v0.32b, v0.33, v0.33b, v0.34, v0.34b, the "new class
+/// test" builds — into a NEW 0.35 folder. The old folder is only read. The new folder keeps its own
 /// world, rules, edition and launcher settings; only the saved-progress tables are replaced, after a
 /// backup.
 /// </summary>
 public static class ImportEngine
 {
     /// <summary>This release; the "b" edition has the custom class, the plain one does not.</summary>
-    public const string Release = "0.34";
+    public const string Release = "0.35";
     public static readonly Policy Rules = JsonSerializer.Deserialize<Policy>(File.ReadAllText(Path.Combine(AppContext.BaseDirectory,"progress-policy.json")))!;
     const int SluaghbinderClass = 63, AcolyteClass = 16, Hibernia = 3;
-    const string SluaghbinderClientSha256 = "01b1848e79b31d2822811effb3d3b098e07015db2d3db1178df5ba31ed805e96";
+    // The Sluaghbinder client of 0.33b/0.34b, and of 0.35b (classic war map, red quest markers, QUEST GUIDE button).
+    static readonly string[] SluaghbinderClientSha256 = ["01b1848e79b31d2822811effb3d3b098e07015db2d3db1178df5ba31ed805e96",
+        "e1d471bb19108610ab9c8ca77dd41af40afe716685b03f4cdeda88c05678463b"];
 
     public static string LocateRuntime(string folder)
     {
@@ -98,7 +100,7 @@ public static class ImportEngine
     public static string DetectVersion(string runtime, out bool sluaghbinderClient)
     {
         string game=Path.Combine(runtime,"client-opendaoc","app","game.dll");
-        sluaghbinderClient=File.Exists(game) && Convert.ToHexString(SHA256.HashData(File.ReadAllBytes(game))).Equals(SluaghbinderClientSha256,StringComparison.OrdinalIgnoreCase);
+        sluaghbinderClient=File.Exists(game) && SluaghbinderClientSha256.Contains(Convert.ToHexString(SHA256.HashData(File.ReadAllBytes(game))),StringComparer.OrdinalIgnoreCase);
         string launcher=Path.Combine(runtime,"OfflineDAoC.dll");
         if(!File.Exists(launcher))return "unknown";
         byte[] data=File.ReadAllBytes(launcher);byte[] marker=Encoding.Unicode.GetBytes("VERSION ");
@@ -117,7 +119,7 @@ public static class ImportEngine
             at=next<0?-1:at+marker.Length+next;
         }
         if(labels.Count==0)return "unknown";
-        // Since 0.34 one launcher carries both labels ("0.34b" and "0.34"); the client decides.
+        // Since 0.34 one launcher carries both labels (e.g. "0.35b" and "0.35"); the client decides.
         string plain=labels.FirstOrDefault(l=>labels.Contains(l+"b"))??"";
         if(plain.Length>0)return sluaghbinderClient?plain+"b":plain;
         return labels[0];

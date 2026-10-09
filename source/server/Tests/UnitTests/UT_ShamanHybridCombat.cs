@@ -35,7 +35,10 @@ namespace DOL.UnitTests
                 Assert.That(ShamanBotCombatPolicy.AllowsOrdinaryOffense(eCharacterClass.Shaman, root), Is.False);
                 Assert.That(ShamanBotCombatPolicy.AllowsOrdinaryOffense(eCharacterClass.Shaman, S("DirectDamage")), Is.True);
                 Assert.That(ShamanBotCombatPolicy.AllowsOrdinaryOffense(eCharacterClass.Shaman, S("DamageOverTime")), Is.True);
-                Assert.That(ShamanBotCombatPolicy.AllowsOrdinaryOffense(eCharacterClass.Healer, root), Is.True, "other classes unchanged");
+                Assert.That(ShamanBotCombatPolicy.AllowsOrdinaryOffense(eCharacterClass.Healer, root), Is.False, "healers keep roots for adds");
+                Assert.That(ShamanBotCombatPolicy.AllowsOrdinaryOffense(eCharacterClass.Druid, root), Is.False);
+                Assert.That(ShamanBotCombatPolicy.AllowsOrdinaryOffense(eCharacterClass.Healer, S("DirectDamage")), Is.True);
+                Assert.That(ShamanBotCombatPolicy.AllowsOrdinaryOffense(eCharacterClass.Wizard, root), Is.True, "non-healers unchanged");
             });
         }
 

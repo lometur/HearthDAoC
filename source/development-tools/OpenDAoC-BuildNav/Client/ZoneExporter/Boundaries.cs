@@ -1,6 +1,7 @@
 ﻿using System;
 using System.Collections.Generic;
 using System.Diagnostics;
+using System.Globalization;
 using System.IO;
 using System.Linq;
 using System.Text;
@@ -40,11 +41,20 @@ namespace CEM.Client.ZoneExporter
           Debug.Assert(data.Length % 2 == 0);
           Debug.Assert(data.Length >= 6); // atleast 6 values needed (id, count, x1, y1, x2, y2)?
 
+          // data[1] is the number of points; the x,y pairs follow. The old loop stopped at
+          // index cnt instead of 2 + 2 * cnt, so only the first half of every wall was built and
+          // bots walked through the rest (2026-10-06 audit: 31,855 of 56,212 crossings open).
           var cnt = int.Parse(data[1]);
-
-          for (int i = 2; i < cnt; i += 2)
+          if (data.Length < 2 + cnt * 2)
           {
-            points.Add(new Vector2(float.Parse(data[i + 0]) + Zone.XOffset, float.Parse(data[i + 1]) + Zone.YOffset));
+            Log.Warn($"bound.csv in zone {ZoneID} lists {cnt} points but has {(data.Length - 2) / 2}; using those");
+            cnt = (data.Length - 2) / 2;
+          }
+
+          for (int i = 0; i < cnt; i++)
+          {
+            points.Add(new Vector2(float.Parse(data[2 + i * 2], CultureInfo.InvariantCulture) + Zone.XOffset,
+              float.Parse(data[3 + i * 2], CultureInfo.InvariantCulture) + Zone.YOffset));
           }
 
           zoneBounds.Add(points);

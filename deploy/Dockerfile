@@ -21,7 +21,8 @@ RUN cmake -S source/server/Pathing/Detour -B /tmp/detour -DCMAKE_BUILD_TYPE=Rele
  && cmake --build /tmp/detour -j"$(nproc)" \
  && install -D -m 755 /tmp/detour/libDetour.so.1.0.0 source/server/Release/lib/Detour.so \
  && test "$(nm -D --defined-only source/server/Release/lib/Detour.so | grep -cE ' T (LoadNavMesh|FreeNavMesh|CreateNavMeshQuery|FreeNavMeshQuery|PathStraight|MoveAlongSurface|MoveAlongSurfaceGrounded|FindRandomPointAroundCircle|FindClosestPoint|FindClosestPointInBox|HasLineOfSight|UpdateFlags|GetPolyAt|GetPolysInBox)$')" = 14
-# Upstream release config files the source tree lacks (verified against the pinned manifest)
+# Upstream release config files the source tree lacks (verified against the pinned manifest). The release's
+# server data files (the lock's server_files) are not baked in: init_world.py downloads them into /data.
 RUN for f in logconfig.xml invalidnames.txt MailConfig.xml; do \
       python3 tools/linux/odaoc_fetch.py --lock deploy/upstream.lock extract "runtime/server/config/$f" "source/server/Release/config/$f"; \
     done

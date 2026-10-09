@@ -22,6 +22,7 @@ namespace CEM.Client.ZoneExporter
             public required string FullName { get; set; }
             public required string BaseName { get; set; }
             public required Vector3[] Vertices { get; set; }
+            public required Vector3[][] SurfaceTriangles { get; set; }
             public int Index { get; set; }
             public Vector3 BottomAnchor { get; set; }
             public Vector3 TopAnchor { get; set; }
@@ -55,6 +56,18 @@ namespace CEM.Client.ZoneExporter
                 if (vertices == null || vertices.Length == 0)
                     continue;
 
+                // Diagnostic output only: retain original curved/segmented climb
+                // surfaces instead of treating the bottom/top average as a mesh.
+                if (Program.Arguments.ExportLadderAudit)
+                    _ladderAudit.Add(new
+                    {
+                        Name = climbName,
+                        Vertices = vertices.Select(v => new[] { v.X, v.Y, v.Z }).ToArray(),
+                        Triangles = triangles?.Select(t => new[] { t.X, t.Y, t.Z }).ToArray()
+                    });
+
+                Vector3[][] surfaceTriangles = triangles == null ? [] : triangles
+                    .Select(t => new[] { vertices[t.X], vertices[t.Y], vertices[t.Z] }).ToArray();
                 vertices = vertices.Distinct().ToArray();
 
                 if (!TryComputeAnchors(vertices, out Vector3 bottomAnchor, out Vector3 topAnchor))
@@ -83,6 +96,7 @@ namespace CEM.Client.ZoneExporter
                     BaseName = baseName,
                     Index = index,
                     Vertices = vertices,
+                    SurfaceTriangles = surfaceTriangles,
                     BottomAnchor = bottomAnchor,
                     TopAnchor = topAnchor,
                 });
@@ -134,6 +148,8 @@ namespace CEM.Client.ZoneExporter
                 Tangent = tangent,
                 ThinAxis = thinAxis,
                 SeedHeights = seedHeights.ToArray(),
+                SurfaceVertices = allVertices.Distinct().ToArray(),
+                SurfaceTriangles = sortedParts.SelectMany(p => p.SurfaceTriangles).ToArray(),
             };
         }
 

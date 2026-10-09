@@ -2,7 +2,8 @@
 # Build a release's two bundles (no EA files): the deploy bundle and the player (client) bundle.
 # Usage: deploy/build_bundles.sh <tag> <output dir> [--deploy-only]
 #   (run from the repository root; used by CI and tests). The client bundle carries the committed
-#   client/patches/splash.mpk, only when it has the SHA-256 client/patches/classic-creation.json pins.
+#   client/patches/splash.mpk, only when it has the SHA-256 client/patches/classic-creation.json pins,
+#   and its tag in VERSION.
 #   --deploy-only builds only the deploy bundle (deploy/tests/hdc_integration.sh).
 set -euo pipefail
 tag="${1:?release tag}"
@@ -42,6 +43,7 @@ c="$work/client/hearthdaoc-client-$tag"
 mkdir -p "$c/patches" "$c/windows/patches"
 cp "$root"/client/README.md "$root"/client/linux/setup.sh "$root"/client/linux/play.sh.in \
    "$root"/tools/linux/odaoc_fetch.py "$root"/deploy/upstream.lock "$c/"
+echo "$tag" > "$c/VERSION"  # the release: setup.sh saves it, and play.sh offers the newer ones
 # Client patches (classic character creation, splash): our patch data, the appliers and our splash.mpk.
 cp "$root"/client/patches/{classic-creation.json,apply_patches.py,patchset.py,splash.mpk} "$c/patches/"
 cp "$root"/client/windows/{connect-hearthdaoc.bat,patch-client.bat,patch-client.ps1} "$c/windows/"

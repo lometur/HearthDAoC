@@ -105,15 +105,15 @@ class FixesTests(unittest.TestCase):
             "Welcome messages now name HearthDAoC (motd, starting_msg)",
             "Battlegrounds: classic level and realm rank limits for Abermenai, Thidranki, Murdaigean, Caledonia",
             "Battlegrounds: Caledon is shown as Caledonia; no zone XP bonus in Thidranki, Caledonia",
-            "Battlegrounds: keep levels for the ranges (Thidranki Faste base level 24, Caer Caledon base level 35, "
-            "4 gates' health)",
+            "Battlegrounds: keep levels for the ranges (Dun Abermenai base level 19, Thidranki Faste base level 24, "
+            "Dun Murdaigean base level 29, Caer Caledon base level 35, 8 gates' health)",
             "Battlegrounds: portal keep guards and hasteners for Abermenai (34), Murdaigean (34)",
-            "Battlegrounds: central keeps Dun Abermenai (keep 32, 12 guards), Dun Murdaigean (keep 33, 12 guards); "
-            "4 central doors closed at full health",
+            "Battlegrounds: central keep guards for Dun Abermenai (6 wall casters, 1 hastener), "
+            "Dun Murdaigean (6 wall casters, 1 hastener)",
             "Battlegrounds: Atlas leftovers archived in fork_removed_mobs and removed (15 training dummies, "
             "3 Void Merchants, the stray Wizard)",
         ])
-        self.assertEqual(self.q("SELECT FixId FROM fork_world_fixes"), [("classic-battlegrounds-v1",)])
+        self.assertEqual(self.q("SELECT FixId FROM fork_world_fixes"), [("classic-battlegrounds-v2",)])
         self.assertEqual(self.q("SELECT Value FROM ServerProperty WHERE `Key`='disabled_classes'"), [("33;34;39;58-62",)])
         self.assertEqual(self.q("SELECT RaceID FROM StartupLocation WHERE ClassID=20 ORDER BY RaceID"), [(1,), (4,), (13,)])
         self.assertEqual(dict(self.q("SELECT `Key`, Value FROM ServerProperty WHERE `Key` IN ('motd', 'starting_msg')")),

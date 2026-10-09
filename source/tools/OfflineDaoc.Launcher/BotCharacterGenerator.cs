@@ -83,7 +83,7 @@ internal static class BotCharacterGenerator
     public static Identity Generate(int realm, ISet<string> reservedNames, bool allowSluaghbinder = true)
     {
         int gender = Random.Shared.Next(1, 3);
-        // The "no custom class" edition (0.33, 0.34; classes/enable_sluaghbinder = False) never rolls class 63.
+        // The "no custom class" edition (0.33, 0.34, 0.35; classes/enable_sluaghbinder = False) never rolls class 63.
         Choice[] pool = allowSluaghbinder ? Choices[realm] : Choices[realm].Where(entry => entry.ClassId != 63).ToArray();
         Choice choice = pool[Random.Shared.Next(pool.Length)];
         var race = choice.Races[Random.Shared.Next(choice.Races.Length)];

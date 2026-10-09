@@ -1,13 +1,13 @@
 #!/usr/bin/env python3
 """Generate HearthDAoC's classic character creation patch set (classic-creation.json).
 
-Reads an OfflineDAoC 0.34 classic client's own files, applies HearthDAoC's edits in memory and
+Reads an OfflineDAoC 0.35 classic client's own files, applies HearthDAoC's edits in memory and
 writes only patch data: SHA-256 hashes and byte and text edits, plus our own code cave. No EA file
 is ever copied into the patch set. Running it twice on the same inputs gives byte-identical output.
 Needs nasm (apt install nasm) for the cave, src/baseclass.asm.
 
   python3 client/patches/build.py --client ~/Games/HearthDAoC/client \\
-      --world-db clean-classic-0.34.db --server-src source/server \\
+      --world-db clean-classic-0.35.db --server-src source/server \\
       --splash-mpk client/patches/splash.mpk --out client/patches/classic-creation.json
 """
 import argparse
@@ -28,9 +28,9 @@ from splash_entry import splash_entry
 HERE = os.path.dirname(os.path.abspath(__file__))
 FORMAT = 1
 NAME = "classic-creation"
-CLIENT = "OfflineDAoC 0.34 classic"
+CLIENT = "OfflineDAoC 0.35 classic"
 GAME_DLL = "game.dll"
-GAME_DLL_SHA256 = "67dcf68a37b95a93946a943b99d5e19b4a03e08cd6469275e25c7b909de21e99"
+GAME_DLL_SHA256 = "f55ed6b068e22ce8e1106871c2fad6ee10c18390bbb8b5dc772219ad8c8b83bb"
 CUSTOMIZE_STATS = "pregame/character_customize_stats.xml"
 
 # Classic stat flow in game.dll: (VA, original bytes, new bytes), hex. From the 2026-10-06 investigation.
@@ -85,9 +85,9 @@ def read_client_file(client_dir: str, path: str) -> bytes:
 
 
 def check_game_dll(original: bytes) -> None:
-    """ValueError unless `original` is the OfflineDAoC 0.34 classic game.dll."""
+    """ValueError unless `original` is the OfflineDAoC 0.35 classic game.dll."""
     if sha256(original) != GAME_DLL_SHA256:
-        raise ValueError(f"{GAME_DLL} is not the OfflineDAoC 0.34 classic file (SHA-256 {GAME_DLL_SHA256})")
+        raise ValueError(f"{GAME_DLL} is not the OfflineDAoC 0.35 classic file (SHA-256 {GAME_DLL_SHA256})")
 
 
 def cave_origin(original: bytes) -> int:
@@ -153,7 +153,7 @@ def assemble_cave(org: int, data_inc: str) -> bytes:
 
 
 def patch_game_dll(original: bytes, cave: bytes | None = None) -> bytes:
-    """The classic 0.34 game.dll with the stat-flow patches and a fresh PE checksum. With `cave`
+    """The classic 0.35 game.dll with the stat-flow patches and a fresh PE checksum. With `cave`
     (src/baseclass.asm assembled for cave_origin(original)), also the .hdcc section holding it and
     the hook at HOOK_VA that calls it."""
     check_game_dll(original)
@@ -218,7 +218,7 @@ def to_json(patchset: dict) -> str:
 
 def main(argv=None) -> int:
     parser = argparse.ArgumentParser(description="Generate HearthDAoC's classic-creation patch set.")
-    parser.add_argument("--client", required=True, help="OfflineDAoC 0.34 classic client folder (read only)")
+    parser.add_argument("--client", required=True, help="OfflineDAoC 0.35 classic client folder (read only)")
     parser.add_argument("--world-db", required=True, help="the classic edition's clean world database (read only)")
     parser.add_argument("--server-src", required=True, help="the server sources holding GameServer/, source/server")
     parser.add_argument("--splash-mpk", help="the built splash.mpk (branding/build_splash_mpk.py); "

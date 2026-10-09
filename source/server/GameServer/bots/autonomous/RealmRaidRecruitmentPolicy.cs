@@ -8,10 +8,8 @@ public static class RealmRaidRecruitmentPolicy
     public const int MaximumParties = (MaximumBots + 7) / 8;
     public const int AutonomousMinimumPresent = 200;
     public const int MinimumParties = AutonomousMinimumPresent / 8;
-    public const long ForcedStagingMilliseconds = 45 * 60_000L;
     public const long AutonomousMinimumStagingMilliseconds = 15 * 60_000L;
     public const long AutonomousStagingLimitMilliseconds = 90 * 60_000L;
-    public const long ForcedStagingLimitMilliseconds = 90 * 60_000L;
     public const long BattleMilliseconds = 4 * 60 * 60_000L;
     public const double NewEventChance = .20;
     public const double JoinExistingChance = .95;
@@ -28,8 +26,11 @@ public static class RealmRaidRecruitmentPolicy
     public static bool CanOpenEvent(bool forced, bool sameRealmEvent, bool sameEncounterEvent) =>
         !sameEncounterEvent && (forced || !sameRealmEvent);
 
+    // Forced raids (started by the player) go in as soon as 200 are staged and, for a dragon,
+    // it has landed. They have no staging or battle time limit: they run until the encounter
+    // is defeated, the player presses Stop event, or the server stops.
     public static bool Ready(bool forced, long elapsed, int present, bool landed) =>
-        elapsed >= (forced ? ForcedStagingMilliseconds : AutonomousMinimumStagingMilliseconds) &&
+        elapsed >= (forced ? 0 : AutonomousMinimumStagingMilliseconds) &&
         (present >= AutonomousMinimumPresent ||
          !forced && elapsed >= AutonomousLateStartMilliseconds && present >= AutonomousLateStartMinimumPresent) &&
         landed;
@@ -38,6 +39,11 @@ public static class RealmRaidRecruitmentPolicy
         alreadyDeparted || presentBots >= AutonomousMinimumPresent;
 
     public static bool StagingExpired(bool forced, long elapsed, int present = 0, bool landed = true) =>
-        elapsed >= (forced ? ForcedStagingLimitMilliseconds : AutonomousStagingLimitMilliseconds) &&
+        !forced && elapsed >= AutonomousStagingLimitMilliseconds &&
         !(present >= AutonomousMinimumPresent && !landed);
+
+    public static bool BattleExpired(bool forced, long now, long deadline) => !forced && now >= deadline;
+
+    /// <summary>A raid party that lost members (but still exists) takes replacements up to its size when it joined.</summary>
+    public static bool NeedsReplacement(int target, int members) => members > 0 && members < target;
 }

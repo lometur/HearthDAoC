@@ -3,6 +3,24 @@
 > It is **not** the original OfflineDAoC project. For the official game, releases and support, go to
 > [shadowofze/OfflineDAoC](https://github.com/shadowofze/OfflineDAoC). Fork details: [docs/fork/FORK.md](docs/fork/FORK.md).
 
+> **Disclaimer.** Dark Age of Camelot is the intellectual property of Electronic Arts and Broadsword
+> Online Games. Offline DAoC is not affiliated with, endorsed by, or connected to either company. The
+> game client, textures, models and other assets it uses belong to them, and this project is built on
+> top of that copyrighted work.
+>
+> This is a free, non-commercial fan project. It is not a product and it is not for sale. No donations
+> are accepted, and the project owner has not made, and will not make, any money from it. The client
+> files are the same publicly available ones every free shard uses; the work original to this
+> repository is the bot system and the server customizations. Because the code is open source, the
+> owner cannot control what forks or other people do with it.
+>
+> This "time capsule" of the 2002-2003 game was never meant to compete with the current retail Dark Age
+> of Camelot, which is a very different, modern experience. If that interests you, please visit the
+> official site: [darkageofcamelot.com](https://www.darkageofcamelot.com/).
+>
+> HearthDAoC is likewise a free, non-commercial fork; this repository hosts no game files, and setup takes
+> them from Offline DAoC's own releases.
+
 # Offline DAoC — single-player Dark Age of Camelot with bots
 
 Offline DAoC is a local, single-player Dark Age of Camelot (Classic + Shrouded Isles, 1.65 rules)
@@ -13,19 +31,19 @@ It is a community project built on the open-source [OpenDAoC](https://github.com
 server. The customizations were developed with AI tools (Codex, then Claude) and directed and
 play-tested by the project owner. It is not an official DAoC product and is not for sale.
 
-## Current release: 0.34 "Claude Takeover II"
+## Current release: 0.35 "Claude Takeover III"
 
-0.34 carries on from 0.33 with normal, hard and very hard bounties, bots that parry, block and
-evade like players, smarter class play, steadier camps, raids and RvR, Shrouded Isles reputation
-quests, and for the Sluaghbinder the Dubh Sluagh armor set and the ghastly healer.
-Read [what's new in 0.34](docs/RELEASE-0.34.md), or every change in the [changelog](CHANGELOG.md).
+0.35 carries on from 0.34 with 448 classic quests (red map markers and a period Quest Guide), the
+monster populations of the period, Summoner's Hall and Darkness Falls raid events, keep and relic
+sieges with siege engines, battlegrounds, the classic frontier war map, and smarter gamebots and
+companions. Read [what's new in 0.35](docs/RELEASE-0.35.md), or every change in the [changelog](CHANGELOG.md).
 
 There are two editions. They are the same game, and only the custom class differs:
 
 | Edition | What it is | Download |
 |---|---|---|
-| **0.34b** (recommended) | Includes the custom Hibernian class, the **Sluaghbinder** (a pet-summoning undead binder), for players and bots. | [v0.34b release](https://github.com/shadowofze/OfflineDAoC/releases/tag/v0.34b) |
-| **0.34** | The classic Classic + SI class list only. There are no Sluaghbinder players or bots. | [v0.34 release](https://github.com/shadowofze/OfflineDAoC/releases/tag/v0.34) |
+| **0.35b** (recommended) | Includes the custom Hibernian class, the **Sluaghbinder** (a pet-summoning undead binder), for players and bots. | [v0.35b release](https://github.com/shadowofze/OfflineDAoC/releases/tag/v0.35b) |
+| **0.35** | The classic Classic + SI class list only. There are no Sluaghbinder players or bots. | [v0.35 release](https://github.com/shadowofze/OfflineDAoC/releases/tag/v0.35) |
 
 ## Download and play (no Git or AI needed)
 
@@ -36,7 +54,7 @@ There are two editions. They are the same game, and only the custom class differ
    - The Windows **.NET Framework 3.5** feature turned on. [How to turn it on](docs/PLAY.md#before-you-start).
 2. **Download the helper:** from the release page of the edition you want, download two files into
    the same new, empty folder:
-   - `DOWNLOAD-AND-PLAY-v0.34b.cmd` (or `-v0.34.cmd`)
+   - `DOWNLOAD-AND-PLAY-v0.35b.cmd` (or `-v0.35.cmd`)
    - `Get-OfflineDAoC.ps1`
 3. **Run the helper:** double-click the `.cmd` file. It downloads the game (about 5 GB in parts),
    checks every part, and unpacks it into a new folder. It never overwrites an existing game.
@@ -61,12 +79,14 @@ includes **IMPORT PROGRESS FROM OLD OFFLINE DAOC.cmd**:
 3. Pick your old folder.
 
 The tool never changes your old folder, and it backs up the new one first. It works with v0.3,
-v0.31, v0.31b, v0.32, v0.32b, v0.33, v0.33b and the "new class test" builds. See
+v0.31, v0.31b, v0.32, v0.32b, v0.33, v0.33b, v0.34, v0.34b and the "new class test" builds. See
 [docs/TRANSFER-PROGRESS.md](docs/TRANSFER-PROGRESS.md).
 
 ## Older versions
 
 Every earlier release is still available and unchanged:
+- [v0.34](https://github.com/shadowofze/OfflineDAoC/releases/tag/v0.34) and
+  [v0.34b](https://github.com/shadowofze/OfflineDAoC/releases/tag/v0.34b): "Claude Takeover II".
 - [v0.33](https://github.com/shadowofze/OfflineDAoC/releases/tag/v0.33) and
   [v0.33b](https://github.com/shadowofze/OfflineDAoC/releases/tag/v0.33b): "Claude Takeover".
 - [v0.32](https://github.com/shadowofze/OfflineDAoC/releases/tag/v0.32) and

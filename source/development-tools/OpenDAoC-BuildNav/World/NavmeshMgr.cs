@@ -44,8 +44,6 @@ namespace CEM.World
             using (Zone2Obj exp = new(z))
                 exp.Export();
 
-            VerifiedClassicMeshRepairs.Apply(z, gset);
-
             if (Program.Arguments.ExportObjOnly)
                 return;
 
@@ -58,7 +56,9 @@ namespace CEM.World
             if (ladders.Count > 0 && File.Exists(nav))
             {
                 Log.Normal($"Placing ladder off-mesh links for zone {z} ({ladders.Count} ladder(s))...");
-                LadderLinkPlacer.PlacementResult placement = LadderLinkPlacer.Place(nav, ladders);
+                LadderLinkPlacer.PlacementResult placement = z.ID == 249
+                    ? DarknessFallsClimbLinks.Place(nav, obj, ladders)
+                    : LadderLinkPlacer.Place(nav, ladders);
                 List<LadderLinkPlacer.OffMeshLink> links = placement.Links;
 
                 if (links.Count > 0)
@@ -84,7 +84,7 @@ namespace CEM.World
 
                     int written = GeomSetWriter.AppendOffMeshConnections(
                         gset,
-                        links.Select(l => (l.Start, l.End)));
+                        links.Select(l => (l.Start, l.End)), z.ID == 249 ? 0.9f : 4.1f);
 
                     Log.Normal($"Appended {written} ladder off-mesh connection(s) to {gset}");
 
@@ -121,7 +121,15 @@ namespace CEM.World
             if (File.Exists(nav))
                 File.Delete(nav);
 
-            Process buildnav = Process.Start("RecastDemo.exe", [gset, nav]);
+            var start = new ProcessStartInfo("RecastDemo.exe")
+            {
+                UseShellExecute = false,
+                CreateNoWindow = true,
+                WindowStyle = ProcessWindowStyle.Hidden
+            };
+            start.ArgumentList.Add(gset);
+            start.ArgumentList.Add(nav);
+            Process buildnav = Process.Start(start);
             buildnav.PriorityClass = ProcessPriorityClass.BelowNormal;
             buildnav.WaitForExit();
             if (buildnav.ExitCode > 0)

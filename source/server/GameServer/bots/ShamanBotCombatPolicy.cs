@@ -16,9 +16,17 @@ namespace DOL.GS
         public static bool IsRoot(Spell spell) =>
             spell != null && spell.SpellType == eSpellType.SpeedDecrease && spell.Value >= 99;
 
-        /// <summary>Roots never enter a Shaman's ordinary PvE attack rotation.</summary>
+        /// <summary>
+        /// Every healing class (Shaman, Druid, Healer, Cleric, Friar, Warden, Paladin) keeps its
+        /// roots for adds, like the Shaman always did: solo healers rooted the monster they were
+        /// killing instead of casting damage, and the next hit broke the root anyway.
+        /// </summary>
+        public static bool KeepsRootsForAdds(eCharacterClass characterClass) =>
+            IsHybrid(characterClass) || BotPartyRoles.IsHealingClass(characterClass);
+
+        /// <summary>Roots never enter a healing class's ordinary PvE attack rotation.</summary>
         public static bool AllowsOrdinaryOffense(eCharacterClass characterClass, Spell spell) =>
-            !IsHybrid(characterClass) || !IsRoot(spell);
+            !KeepsRootsForAdds(characterClass) || !IsRoot(spell);
 
         /// <summary>Nukes and bolts first, then the damage over time, then the disease.</summary>
         public static int RotationPriority(Spell spell) => spell?.SpellType switch

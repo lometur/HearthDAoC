@@ -1,6 +1,6 @@
-"""Smoke test a built 0.34 package the way a new player uses it, in a throwaway copy.
+"""Smoke test a built 0.35 package the way a new player uses it, in a throwaway copy.
 
-    python smoke_release_034.py <package folder> <empty test folder> [--edition no-custom-class]
+    python smoke_release_035.py <package folder> <empty test folder> [--edition no-custom-class]
 
 1. copies runtime/server, runtime/data and the launcher into the test folder,
 2. lets the launcher create this install's own account.txt (--prepare-portable-account),
@@ -39,7 +39,7 @@ def main():
     shutil.copytree(runtime / "server", test / "server")
     shutil.copytree(runtime / "data", test / "data")
     if edition == "no-custom-class":
-        shutil.copy2(package / "editions/0.34-no-custom-class/runtime/data/opendaoc.sqlite3.db", test / "data/opendaoc.sqlite3.db")
+        shutil.copy2(package / "editions/0.35-no-custom-class/runtime/data/opendaoc.sqlite3.db", test / "data/opendaoc.sqlite3.db")
     for name in ("OfflineDAoC.exe", "OfflineDAoC.dll", "OfflineDAoC.deps.json", "OfflineDAoC.runtimeconfig.json",
                  "System.Data.SQLite.dll", "SQLite.Interop.dll"):
         shutil.copy2(runtime / name, test / name)

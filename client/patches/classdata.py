@@ -32,14 +32,14 @@ STAT_IDS = {"STR": 0, "CON": 1, "DEX": 2, "QUI": 3, "INT": 4, "PIE": 5, "EMP": 6
 
 # The 47 final classes that the classic client registers for its creation screen (16 Albion,
 # 15 Midgard, 16 Hibernia; game.dll VA 0x5B0031). The cave hides all of them. They are the
-# server's full classes except Sluaghbinder (63), which only the 0.34b edition knows.
+# server's full classes except Sluaghbinder (63), which only the b edition knows.
 FINAL_CLASS_IDS = [
     1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 19, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30,
     31, 32, 33, 34, 39, 40, 41, 42, 43, 44, 45, 46, 47, 48, 49, 50, 55, 56, 58, 59, 60, 61, 62,
 ]
 
 # Name string id and .rdata pointer of each base class's name, from the client's own class-name
-# table (game.dll VA 0x44E769, OfflineDAoC 0.34 classic). The cave reuses them as they are.
+# table (game.dll VA 0x44E769, OfflineDAoC 0.35 classic). The cave reuses them as they are.
 CLIENT_NAMES = {
     14: (0x242, 0x940C7C),  # Fighter
     15: (0x243, 0x940C6C),  # Elementalist
