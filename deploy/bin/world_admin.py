@@ -212,11 +212,11 @@ def _carry_admin_state(conn, old_db):
     return carried, changed
 
 
-def _carry_rvr_state(conn, old_db):
+def _carry_rvr_state(conn, old_db, limit_claims=False):
     """Copy keep, door and relic state, hookpoint items and the capture log from the old world (carry_rvr.py).
     Returns (counts, notes). On an error nothing is changed and it raises AdminError."""
     try:
-        return carry_rvr.carry(conn, old_db)
+        return carry_rvr.carry(conn, old_db, limit_claims=limit_claims)
     except Exception as e:
         raise AdminError(f"carrying the keep, door and relic state failed ({e}); the current world is unchanged") from e
 
@@ -266,7 +266,7 @@ def carry_rvr_from_archive(data, name, log=print):
             s.close()
         c = sqlite3.connect(init_world.world_paths(data)["db"], timeout=30)
         try:
-            counts, notes = _carry_rvr_state(c, copy)
+            counts, notes = _carry_rvr_state(c, copy, limit_claims=True)  # guilds_claim_limit is 1
         finally:
             c.close()
     finally:

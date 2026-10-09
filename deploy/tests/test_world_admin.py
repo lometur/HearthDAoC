@@ -357,6 +357,18 @@ class WorldAdminTests(unittest.TestCase):
                       "or claimed) and carried\nRelics matched: 6, of which 1 away from home and carried\n", report)
 
     @unittest.skipUnless(TEST_WORLD and TOOLS, "needs HDC_TEST_WORLD (clean classic world) and HDC_TOOLS (built CLIs)")
+    def test_upgrade_world_leaves_out_a_table_missing_a_column(self):
+        db, _ = self._real_world()
+        test_carry_rvr.execute(db, "UPDATE Keep SET Realm=2 WHERE KeepID=50", "UPDATE Relic SET Realm=2 WHERE RelicID=30",
+                               "ALTER TABLE Relic DROP COLUMN LastCaptureDate")
+        archive = world_admin.upgrade_world(FakeRelease("0.34b", TEST_WORLD), self.data,
+                                            importer_cmd(self.data), same_version_ok=True, log=QUIET)
+        self.assertEqual(test_carry_rvr.query(db, "SELECT Realm FROM Keep WHERE KeepID=50"), [(2,)])
+        self.assertEqual(test_carry_rvr.query(db, "SELECT Realm FROM Relic WHERE RelicID=30"), [(1,)])
+        with open(os.path.join(archive, "upgrade-report.txt"), encoding="utf-8") as f:
+            self.assertIn("\nRelic not carried: no LastCaptureDate column in the old world's Relic table\n", f.read())
+
+    @unittest.skipUnless(TEST_WORLD and TOOLS, "needs HDC_TEST_WORLD (clean classic world) and HDC_TOOLS (built CLIs)")
     def test_upgrade_stops_with_the_world_unchanged_when_the_carry_fails(self):
         db, meta = self._real_world()
         with open(db, "rb") as f:
@@ -456,6 +468,18 @@ class CarryRvrCommandTests(unittest.TestCase):
         self.assertEqual(counts["Keep"], 0)
         self.assertEqual(notes[1:3], ["Keeps only in the old world, not carried: Caer Gone (region 1)",
                                       "Keeps only in the new world, left as it ships them: Caer Benowyc (region 1)"])
+
+    def test_a_claim_of_a_guild_that_holds_another_keep_here_is_left_out(self):
+        # guilds_claim_limit is 1: Raiders claimed Dun Abermenai after the world was archived.
+        self.archive("world-20261001-090000")
+        test_carry_rvr.execute(self.db, "UPDATE Keep SET Realm=2, ClaimedGuildName='Raiders' WHERE KeepID=33")
+        r = self.run_admin("world-20261001-090000")
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertIn("Claims left out, as the guild holds another keep in this world: Caer Benowyc (region 1, Raiders)",
+                      r.stdout.splitlines())
+        self.assertEqual(test_carry_rvr.query(self.db, "SELECT KeepID, Realm, ClaimedGuildName FROM Keep "
+                                                       "WHERE KeepID IN (33, 50) ORDER BY KeepID"),
+                         [(33, 2, "Raiders"), (50, 2, "")])
 
     def test_a_keep_at_home_in_the_archive_keeps_its_live_state(self):
         # Only keeps in play in the archived world get their state back; a capture since of another keep stays.

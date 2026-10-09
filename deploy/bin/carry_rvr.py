@@ -10,18 +10,23 @@ what the server itself writes while it runs, never a keep's structure (KeepID, B
   the keeps in play in the old world: held by another realm than their own (Realm is not OriginalRealm),
   or claimed. Keeps are matched by Name and Region, not by KeepID, which upstream may renumber. Names are
   compared without case, as the Name column does. A Name and Region found twice in either world is skipped.
-- Door: Health and State, for the doors of the keeps in play. GameKeepDoor.SaveIntoDatabase writes Health
-  and the State setter writes State; nothing writes the other columns of a keep door's row. Health is
-  never raised above the new world's, which is the door's full health there unless it was attacked. A
-  door belongs to the keep whose area holds it, as DoorMgr.LoadDoor decides: same region (that of the
-  zone InternalID / 1000000), and within 4,000 of a portal keep (BaseLevel 100 or more) or 3,000 of
-  another keep (KeepArea.cs), the nearest if two. Doors are matched by InternalID within each pair of
-  keeps; an InternalID found twice in a keep's area is skipped.
+- Door: Health and State, both from the old row, for the doors of the keeps in play. GameKeepDoor
+  writes Health in SaveIntoDatabase and State in the State setter; nothing writes the other columns of a
+  keep door's row. Health is at most the door's full health in the new world at the carried Level
+  (door_full_health), as the new version may change base levels. A door belongs to the keep whose area
+  holds it, as DoorMgr.LoadDoor decides: same region (that of the zone InternalID / 1000000), and within
+  4,000 of a portal keep (BaseLevel 100 or more) or 3,000 of another keep (KeepArea.cs). The server takes
+  the first such area it finds; this takes the nearest keep (no door is in two areas in the 0.34 or 0.35
+  world). Doors are matched by InternalID within each pair of keeps; an InternalID found twice in a
+  keep's area is skipped.
 - Relic: where it is and who holds it (GameRelic.SaveIntoDatabase), for the relics away from home in the
   old world (Realm is not OriginalRealm), matched by RelicID, relicType and OriginalRealm.
 - KeepHookPointItem: the rows of the keeps in play, with the new KeepID, where the hookpoint has no item yet.
 - KeepCaptureLog: the old rows, with new IDs, except those already there.
-Everything runs in one transaction: on an error nothing is changed, and the error is raised.
+A table, or a column one needs, missing in either world (a new version may rename or drop one) leaves that
+table out, with a note. In carry-rvr (limit_claims), a carried claim is left out when its guild holds a
+keep in the live world that the carry does not overwrite (guilds_claim_limit). Everything runs in one
+transaction: on an error nothing is changed, and the error is raised.
 """
 import datetime
 
@@ -32,47 +37,82 @@ DOOR_COLUMNS = ("Health", "State")
 RELIC_KEY = ("RelicID", "relicType", "OriginalRealm")
 RELIC_COLUMNS = ("Region", "X", "Y", "Z", "Heading", "Realm", "LastRealm", "LastCaptureDate")
 HOOKPOINT = ("KeepID", "ComponentID", "HookPointID")
+# The columns each part needs in both worlds.
+NEEDED = {
+    "Keep": ("KeepID", "Name", "Region", "X", "Y", "BaseLevel", "SkinType", "OriginalRealm", "LastTimeRowUpdated")
+            + KEEP_COLUMNS,
+    "Zones": ("ZoneID", "RegionID"),
+    "Door": ("InternalID", "X", "Y", "LastTimeRowUpdated") + DOOR_COLUMNS,
+    "Relic": RELIC_KEY + RELIC_COLUMNS + ("LastTimeRowUpdated",),
+    "KeepHookPointItem": HOOKPOINT,
+    "KeepCaptureLog": ("DateTaken", "KeepName"),
+}
+# Keep door health settings and their defaults (serverproperty/ServerProperties.cs). A relic keep has SkinType 99.
+DOOR_HEALTH_SETTINGS = {"keep_doors_base_health": 200, "keep_doors_health_upgrade_modifier": 1.0,
+                        "relic_doors_health": 180000}
+RELIC_SKIN_TYPE = 99
 # keeps/KeepArea.cs; a keep is a portal keep from this BaseLevel on (AbstractGameKeep.IsPortalKeep).
 PORTAL_KEEP_RADIUS = 4000
 KEEP_RADIUS = 3000
 PORTAL_KEEP_BASE_LEVEL = 100
 
 
-def carry(conn, old_db, now=None):
+def carry(conn, old_db, now=None, limit_claims=False):
     """Copy the RvR state of the world old_db into conn's world. Returns (counts, notes): the rows carried
-    per table, and lines on how many keeps and relics matched, and on the rows that could not be matched."""
+    per table, and lines on how many keeps and relics matched, and on what was not carried. limit_claims:
+    leave out a claim whose guild holds another keep in conn's world (carry-rvr into the live world)."""
     now = now or _now()
     conn.execute("ATTACH DATABASE ? AS old", (old_db,))
     try:
         with conn:
-            return _carry(conn, now)
+            return _carry(conn, now, limit_claims)
     finally:
         conn.execute("DETACH DATABASE old")
 
 
-def _carry(conn, now):
+def _carry(conn, now, limit_claims):
     counts, notes = dict.fromkeys(TABLES, 0), []
-    present = {table: _has(conn, table) for table in TABLES + ("Zones",)}
+    why = {table: _missing(conn, table) for table in NEEDED}
+    why["Door"] = why["Door"] or why["Zones"] or why["Keep"]
+    why["KeepHookPointItem"] = why["KeepHookPointItem"] or why["Keep"]
     pairs = {}
-    if present["Keep"]:
+    if not why["Keep"]:
         matched = _match_keeps(conn, notes)
         in_play = {keep_id for (keep_id,) in conn.execute(f"SELECT KeepID FROM old.Keep WHERE {IN_PLAY}")}
         pairs = {old_id: new_id for old_id, new_id in matched.items() if old_id in in_play}
         notes.insert(0, f"Keeps matched by name and region: {len(matched)}, of which {len(pairs)} in play (held by "
                         "another realm than their own, or claimed) and carried")
-    for old_id, new_id in pairs.items():
-        values = conn.execute(f"SELECT {', '.join(KEEP_COLUMNS)} FROM old.Keep WHERE KeepID=?", (old_id,)).fetchone()
-        _update(conn, "Keep", "KeepID=?", (new_id,), KEEP_COLUMNS, values, now)
-    counts["Keep"] = len(pairs)
-    if pairs and present["Door"] and present["Zones"]:
+        _carry_keeps(conn, pairs, limit_claims, notes, now)
+        counts["Keep"] = len(pairs)
+    if pairs and not why["Door"]:
         counts["Door"] = _carry_doors(conn, pairs, notes, now)
-    if present["Relic"]:
+    if not why["Relic"]:
         counts["Relic"] = _carry_relics(conn, notes, now)
-    if pairs and present["KeepHookPointItem"]:
+    if pairs and not why["KeepHookPointItem"]:
         counts["KeepHookPointItem"] = _carry_hookpoint_items(conn, pairs)
-    if present["KeepCaptureLog"]:
+    if not why["KeepCaptureLog"]:
         counts["KeepCaptureLog"] = _carry_capture_log(conn)
+    notes.extend(f"{table} not carried: {why[table]}" for table in TABLES if why[table])
     return counts, notes
+
+
+def _carry_keeps(conn, pairs, limit_claims, notes, now):
+    held, overwritten = set(), set(pairs.values())
+    if limit_claims:  # the guilds that hold a keep this carry does not overwrite
+        held = {guild.lower() for keep_id, guild in conn.execute(
+            "SELECT KeepID, ClaimedGuildName FROM main.Keep WHERE coalesce(ClaimedGuildName, '') <> ''")
+            if keep_id not in overwritten}
+    left_out = []
+    for old_id, new_id in pairs.items():
+        realm, level, claim = conn.execute(f"SELECT {', '.join(KEEP_COLUMNS)} FROM old.Keep WHERE KeepID=?",
+                                           (old_id,)).fetchone()
+        if claim and claim.lower() in held:
+            name, region = conn.execute("SELECT Name, Region FROM main.Keep WHERE KeepID=?", (new_id,)).fetchone()
+            left_out.append(f"{name} (region {region}, {claim})")
+            claim = ""
+        _update(conn, "Keep", "KeepID=?", (new_id,), KEEP_COLUMNS, (realm, level, claim), now)
+    if left_out:
+        notes.append("Claims left out, as the guild holds another keep in this world: " + ", ".join(left_out))
 
 
 def _match_keeps(conn, notes):
@@ -110,8 +150,13 @@ def _keeps_by_name(conn, schema):
 
 def _carry_doors(conn, pairs, notes, now):
     old, new = _doors_by_keep(conn, "old"), _doors_by_keep(conn, "main")
+    settings = _door_health_settings(conn)
     carried = missed = 0
     for old_id, new_id in pairs.items():
+        (level,) = conn.execute("SELECT Level FROM old.Keep WHERE KeepID=?", (old_id,)).fetchone()
+        base_level, skin_type = conn.execute("SELECT BaseLevel, SkinType FROM main.Keep WHERE KeepID=?",
+                                             (new_id,)).fetchone()
+        full = door_full_health(base_level, skin_type, level, settings)
         new_doors = new.get(new_id, {})
         for internal_id, rows in old.get(old_id, {}).items():
             targets = new_doors.get(internal_id, [])
@@ -119,13 +164,35 @@ def _carry_doors(conn, pairs, notes, now):
                 missed += 1
                 continue
             health, state = conn.execute("SELECT Health, State FROM old.Door WHERE rowid=?", (rows[0],)).fetchone()
-            (new_health,) = conn.execute("SELECT Health FROM main.Door WHERE rowid=?", (targets[0],)).fetchone()
-            _update(conn, "Door", "rowid=?", (targets[0],), DOOR_COLUMNS, (min(health, new_health), state), now)
+            _update(conn, "Door", "rowid=?", (targets[0],), DOOR_COLUMNS, (min(health, full), state), now)
             carried += 1
     if missed:
         notes.append(f"Doors of keeps in play not carried (no single door with their InternalID in the keep's "
                      f"area in both worlds): {missed}")
     return carried
+
+
+def door_full_health(base_level, skin_type, level, settings=DOOR_HEALTH_SETTINGS):
+    """A keep door's full health (propertycalc/MaxHealthCalculator.cs, GameKeepDoor): relic_doors_health at a
+    relic keep; elsewhere BaseLevel x keep_doors_base_health, plus that x (Level - 1) x
+    keep_doors_health_upgrade_modifier, rounded towards zero."""
+    if skin_type == RELIC_SKIN_TYPE:
+        return settings["relic_doors_health"]
+    base = base_level * settings["keep_doors_base_health"]
+    return base + int(base * (level - 1) * settings["keep_doors_health_upgrade_modifier"])
+
+
+def _door_health_settings(conn):
+    """The new world's door health settings; the server's default where a row is missing or not a number."""
+    settings = dict(DOOR_HEALTH_SETTINGS)
+    if _missing_columns(conn, "main", "ServerProperty", ("Key", "Value")) == []:
+        for key, value in conn.execute("SELECT lower(`Key`), Value FROM main.ServerProperty"):
+            if key in settings:
+                try:
+                    settings[key] = type(DOOR_HEALTH_SETTINGS[key])(value)
+                except (TypeError, ValueError):
+                    pass
+    return settings
 
 
 def _doors_by_keep(conn, schema):
@@ -212,10 +279,21 @@ def _shared_columns(conn, table):
     return [r[1] for r in conn.execute(f'PRAGMA old.table_info("{table}")') if r[1] in new]
 
 
-def _has(conn, table):
-    """Whether both worlds have the table."""
-    return all(conn.execute(f"SELECT 1 FROM {schema}.sqlite_master WHERE type='table' AND name=? COLLATE NOCASE",
-                            (table,)).fetchone() for schema in ("main", "old"))
+def _missing(conn, table):
+    """Why a part cannot be carried: its table, or a column it needs, is missing in a world; None if neither."""
+    for schema, world in (("old", "old"), ("main", "new")):
+        gone = _missing_columns(conn, schema, table, NEEDED[table])
+        if gone is None:
+            return f"no {table} table in the {world} world"
+        if gone:
+            return f"no {', '.join(gone)} column in the {world} world's {table} table"
+    return None
+
+
+def _missing_columns(conn, schema, table, columns):
+    """The columns the table lacks, or None when there is no such table."""
+    have = {r[1].lower() for r in conn.execute(f'PRAGMA {schema}.table_info("{table}")')}
+    return [c for c in columns if c.lower() not in have] if have else None
 
 
 def _now():

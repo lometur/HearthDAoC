@@ -28,7 +28,8 @@ SCHEMA = (
     "Region UNSIGNED SMALLINT(5) NOT NULL DEFAULT 0, X INT(11) NOT NULL DEFAULT 0, Y INT(11) NOT NULL DEFAULT 0, "
     "Realm UNSIGNED TINYINT(3) NOT NULL DEFAULT 0, Level UNSIGNED TINYINT(3) NOT NULL DEFAULT 0, "
     "ClaimedGuildName TEXT DEFAULT NULL COLLATE NOCASE, OriginalRealm INT(11) NOT NULL DEFAULT 0, "
-    "BaseLevel UNSIGNED TINYINT(3) NOT NULL DEFAULT 0, CreateInfo VARCHAR(255) NOT NULL DEFAULT '' COLLATE NOCASE, "
+    "BaseLevel UNSIGNED TINYINT(3) NOT NULL DEFAULT 0, SkinType UNSIGNED TINYINT(3) NOT NULL DEFAULT 0, "
+    "CreateInfo VARCHAR(255) NOT NULL DEFAULT '' COLLATE NOCASE, "
     "LastTimeRowUpdated DATETIME NOT NULL DEFAULT '2000-01-01 00:00:00', PRIMARY KEY (KeepID))",
     "CREATE TABLE Door (Name TEXT DEFAULT NULL COLLATE NOCASE, X INT(11) NOT NULL DEFAULT 0, "
     "Y INT(11) NOT NULL DEFAULT 0, InternalID INT(11) NOT NULL DEFAULT 0, Guild TEXT DEFAULT NULL COLLATE NOCASE, Level UNSIGNED TINYINT(3) NOT NULL "
@@ -118,10 +119,10 @@ def execute(path, *statements):
         conn.close()
 
 
-def carry(new_db, old_db):
+def carry(new_db, old_db, limit_claims=False):
     conn = sqlite3.connect(new_db)
     try:
-        return carry_rvr.carry(conn, old_db, NOW)
+        return carry_rvr.carry(conn, old_db, NOW, limit_claims)
     finally:
         conn.close()
 
@@ -252,15 +253,49 @@ class CarryTests(unittest.TestCase):
         self.assertEqual(counts["Door"], 5)
         self.assertEqual(notes, [keeps_line(3, 3), relics_line(2, 0)])
 
-    def test_door_health_is_never_raised_above_the_new_worlds(self):
-        # The new version lowered Caer Benowyc's gate health (a lower base level, say): a full gate stays full.
+    def test_doors_keep_their_old_health_and_state_up_to_full_health_at_the_carried_level(self):
+        # Caer Benowyc (base level 50) is taken: Reset leaves it at level 4, whose gates' full health is 40,000.
+        # Its outer gate still has level 5's 50,000; the new world ships it damaged.
         self.worlds()
-        execute(self.old, "UPDATE Keep SET Realm=2 WHERE KeepID=50", "UPDATE Door SET Health=50000 WHERE Door_ID='d1'",
+        execute(self.old, "UPDATE Keep SET Realm=2, Level=4 WHERE KeepID=50",
+                          "UPDATE Door SET Health=50000, State=1 WHERE Door_ID='d1'",
                           "UPDATE Door SET Health=100, State=0 WHERE Door_ID='d2'")
-        execute(self.new, "UPDATE Door SET Health=40000 WHERE Door_ID='d1'")
+        execute(self.new, "UPDATE Door SET Health=2500, State=0 WHERE Door_ID='d1'")
         carry(self.new, self.old)
         self.assertEqual(query(self.new, "SELECT Door_ID, Health, State FROM Door WHERE Door_ID IN ('d1', 'd2') "
                                          "ORDER BY Door_ID"), [("d1", 40000, 1), ("d2", 100, 0)])
+
+    def test_full_health_follows_the_new_worlds_settings(self):
+        self.worlds()
+        execute(self.new, "CREATE TABLE ServerProperty (`Key` VARCHAR(255), Value TEXT)",
+                ("INSERT INTO ServerProperty VALUES (?, ?)", ("keep_doors_base_health", "100")),
+                ("INSERT INTO ServerProperty VALUES (?, ?)", ("Keep_Doors_Health_Upgrade_Modifier", "0.5")),
+                ("INSERT INTO ServerProperty VALUES (?, ?)", ("relic_doors_health", "90000")),
+                "UPDATE Keep SET SkinType=99 WHERE KeepID=22")  # the portal keep stands in for a relic keep
+        execute(self.old, "UPDATE Keep SET Realm=2, Level=4 WHERE KeepID IN (50, 22)", "UPDATE Door SET Health=200000")
+        carry(self.new, self.old)
+        # 50 x 100 = 5,000, plus 5,000 x 3 x 0.5
+        self.assertEqual(query(self.new, "SELECT Door_ID, Health FROM Door WHERE Door_ID IN ('d1', 'd5') ORDER BY Door_ID"),
+                         [("d1", 12500), ("d5", 90000)])
+
+    def test_door_full_health(self):
+        settings = dict(carry_rvr.DOOR_HEALTH_SETTINGS)
+        self.assertEqual(settings, {"keep_doors_base_health": 200, "keep_doors_health_upgrade_modifier": 1.0,
+                                    "relic_doors_health": 180000})  # ServerProperties.cs defaults
+        self.assertEqual(carry_rvr.door_full_health(50, 0, 1), 10000)
+        self.assertEqual(carry_rvr.door_full_health(50, 0, 4), 40000)
+        self.assertEqual(carry_rvr.door_full_health(19, 0, 1), 3800)
+        self.assertEqual(carry_rvr.door_full_health(60, 99, 10), 180000)
+        settings["keep_doors_health_upgrade_modifier"] = 0.33
+        self.assertEqual(carry_rvr.door_full_health(19, 0, 2, settings), 3800 + 1254)  # (int) 1254.0: rounded down
+
+    def test_a_setting_that_is_not_a_number_keeps_the_default(self):
+        self.worlds()
+        execute(self.new, "CREATE TABLE ServerProperty (`Key` VARCHAR(255), Value TEXT)",
+                "INSERT INTO ServerProperty VALUES ('keep_doors_base_health', 'lots')")
+        execute(self.old, "UPDATE Keep SET Realm=2, Level=1 WHERE KeepID=50", "UPDATE Door SET Health=60000")
+        carry(self.new, self.old)
+        self.assertEqual(query(self.new, "SELECT Health FROM Door WHERE Door_ID='d1'"), [(10000,)])
 
     def test_doors_follow_their_keep_when_the_keep_id_changes(self):
         old_keeps = [dict(k, KeepID=32) if k["KeepID"] == 33 else k for k in KEEPS]
@@ -365,20 +400,67 @@ class CarryTests(unittest.TestCase):
         counts, notes = carry(self.new, self.old)
         self.assertEqual(counts, {"Keep": 3, "Door": 5, "Relic": 0, "KeepHookPointItem": 0, "KeepCaptureLog": 0})
         self.assertEqual(query(self.new, "SELECT DISTINCT Realm FROM Keep"), [(2,)])
-        self.assertEqual(notes, [keeps_line(3, 3)])
+        self.assertEqual(notes, [keeps_line(3, 3), "Relic not carried: no Relic table in the old world",
+                                 "KeepCaptureLog not carried: no KeepCaptureLog table in the old world"])
+
+    def test_a_column_missing_from_a_world_leaves_its_table_out(self):
+        # A new version may rename or drop a column; the rest still carries.
+        self.worlds()
+        execute(self.old, "ALTER TABLE Relic DROP COLUMN LastCaptureDate", "UPDATE Keep SET Realm=2 WHERE KeepID=50",
+                          "UPDATE Relic SET Realm=2 WHERE RelicID=30")
+        counts, notes = carry(self.new, self.old)
+        self.assertEqual((counts["Keep"], counts["Door"], counts["Relic"]), (1, 2, 0))
+        self.assertEqual(notes, [keeps_line(3, 1),
+                                 "Relic not carried: no LastCaptureDate column in the old world's Relic table"])
+        self.assertEqual(query(self.new, "SELECT Realm FROM Relic WHERE RelicID=30"), [(1,)])
+
+    def test_a_keep_column_missing_leaves_out_keeps_doors_and_hookpoint_items(self):
+        self.worlds()
+        execute(self.new, "ALTER TABLE Keep DROP COLUMN SkinType")
+        execute(self.old, "UPDATE Keep SET Realm=2", "UPDATE Door SET Health=1")
+        counts, notes = carry(self.new, self.old)
+        self.assertEqual((counts["Keep"], counts["Door"]), (0, 0))
+        why = "no SkinType column in the new world's Keep table"
+        self.assertEqual(notes, [relics_line(2, 0), f"Keep not carried: {why}", f"Door not carried: {why}",
+                                 f"KeepHookPointItem not carried: {why}"])
+
+    def test_with_limit_claims_a_guild_holding_another_keep_loses_the_carried_claim(self):
+        # carry-rvr into the live world: guilds_claim_limit is 1. Realm and level still carry.
+        self.worlds()
+        execute(self.old, "UPDATE Keep SET Realm=2, Level=5, ClaimedGuildName='Raiders' WHERE KeepID=50",
+                          "UPDATE Keep SET Realm=1, ClaimedGuildName='Wardens' WHERE KeepID=33")
+        execute(self.new, "UPDATE Keep SET ClaimedGuildName='raiders' WHERE KeepID=22",  # held since, kept
+                          "UPDATE Keep SET ClaimedGuildName='Wardens' WHERE KeepID=33")  # this carry overwrites it
+        counts, notes = carry(self.new, self.old, limit_claims=True)
+        self.assertEqual(query(self.new, "SELECT KeepID, Realm, Level, ClaimedGuildName FROM Keep ORDER BY KeepID"),
+                         [(22, 3, 1, "raiders"), (33, 1, 1, "Wardens"), (50, 2, 5, "")])
+        self.assertIn("Claims left out, as the guild holds another keep in this world: Caer Benowyc (region 1, Raiders)",
+                      notes)
+
+    def test_without_limit_claims_every_claim_carries(self):
+        self.worlds()
+        execute(self.old, "UPDATE Keep SET Realm=2, ClaimedGuildName='Raiders' WHERE KeepID=50")
+        execute(self.new, "UPDATE Keep SET ClaimedGuildName='Raiders' WHERE KeepID=22")
+        carry(self.new, self.old)
+        self.assertEqual(query(self.new, "SELECT ClaimedGuildName FROM Keep WHERE KeepID=50"), [("Raiders",)])
 
 
 @unittest.skipUnless(TEST_WORLD, "needs HDC_TEST_WORLD (a clean classic 0.35 world)")
 class RealWorldCarryTests(unittest.TestCase):
     """A copy of the clean 0.35 world, run by the server for a while (world fixes, then captures), carries into
     a fresh copy, as upgrade-world does. Dun Abermenai and Dun Murdaigean swap KeepIDs in the old copy, as
-    between the fork's 0.34 world and upstream's 0.35 one. Four keeps are in play; Caer Sursbrooke is not
+    between the fork's 0.34 world and upstream's 0.35 one. Five keeps are in play; Caer Sursbrooke is not
     (its own realm's, unclaimed), though its level and gate differ from the new world's."""
 
     CAPTURES = (
         "UPDATE Keep SET Realm=2, Level=5, ClaimedGuildName='Hearth Raiders' WHERE Name='Caer Benowyc' AND Region=1",
         "UPDATE Keep SET Realm=1, Level=4, ClaimedGuildName='' WHERE Name='Dun Crauchon' AND Region=200",
         "UPDATE Keep SET Realm=3, Level=4 WHERE Name='Bledmeer Faste' AND Region=100",
+        # A capture (AbstractGameKeep.Reset) leaves the keep at level 4 and its gates at level 4's full health,
+        # 40,000 at base level 50. Upstream ships Bledmeer Faste's gates damaged, Dun nGed's at level 1's 10,000.
+        "UPDATE Door SET Health=40000, State=1 WHERE InternalID IN (115001201, 115001202)",
+        "UPDATE Keep SET Realm=1, Level=4 WHERE Name='Dun nGed' AND Region=200",
+        "UPDATE Door SET Health=40000 WHERE InternalID IN (212006301, 212006302, 212006304, 212006306)",
         "UPDATE Keep SET Realm=2, ClaimedGuildName='Thid Wardens' WHERE Name='Dun Abermenai' AND Region=253",
         "UPDATE Keep SET Level=5 WHERE Name='Caer Sursbrooke' AND Region=1",
         "UPDATE Door SET Health=1200, State=0 WHERE InternalID=15110601",   # Caer Benowyc's gate, broken open
@@ -417,10 +499,10 @@ class RealWorldCarryTests(unittest.TestCase):
         return query(self.new, "SELECT KeepID, Realm, Level, ClaimedGuildName FROM Keep WHERE Name=? AND Region=?",
                      (name, region))[0]
 
-    def test_every_keep_matches_and_four_are_in_play(self):
+    def test_every_keep_matches_and_five_are_in_play(self):
         self.assertEqual(query(TEST_WORLD, "SELECT count(*) FROM Keep"), [(81,)])
-        self.assertEqual(self.notes, [keeps_line(81, 4), relics_line(6, 1)])
-        self.assertEqual(self.counts["Keep"], 4)
+        self.assertEqual(self.notes, [keeps_line(81, 5), relics_line(6, 1)])
+        self.assertEqual(self.counts["Keep"], 5)
 
     def test_captured_keeps_arrive_on_the_right_keeps(self):
         self.assertEqual(self.keep("Caer Benowyc", 1), (50, 2, 5, "Hearth Raiders"))
@@ -442,7 +524,17 @@ class RealWorldCarryTests(unittest.TestCase):
         self.assertEqual(query(self.new, "SELECT InternalID, Health, State FROM Door WHERE InternalID IN "
                                          "(15110601, 253000301, 253000302) ORDER BY InternalID"),
                          [(15110601, 1200, 0), (253000301, 1000, 0), (253000302, 3800, 1)])  # 3,800: the fix's full health
-        self.assertEqual(self.counts["Door"], 18)  # the four keeps' doors: 4, 6, 6 and 2
+        self.assertEqual(self.counts["Door"], 24)  # the five keeps' doors: 4, 6, 6, 2 and 6
+
+    def test_captured_keeps_gates_arrive_full(self):
+        self.assertEqual(query(TEST_WORLD, "SELECT InternalID, Health FROM Door WHERE InternalID IN (115001201, 115001202, "
+                                           "212006301) ORDER BY InternalID"),
+                         [(115001201, 2500), (115001202, 43583), (212006301, 10000)])
+        self.assertEqual(query(self.new, "SELECT InternalID, Health, State FROM Door WHERE InternalID IN (115001201, "
+                                         "115001202, 212006301, 212006302, 212006304, 212006306) ORDER BY InternalID"),
+                         [(115001201, 40000, 1), (115001202, 40000, 1), (212006301, 40000, 1), (212006302, 40000, 1),
+                          (212006304, 40000, 1), (212006306, 40000, 1)])
+        self.assertEqual(self.keep("Dun nGed", 200), (103, 1, 4, ""))
 
     def test_the_relic_stays_where_it_was_taken(self):
         self.assertEqual(query(self.new, "SELECT Region, X, Y, Realm, LastRealm, LastCaptureDate FROM Relic WHERE RelicID=30"),
