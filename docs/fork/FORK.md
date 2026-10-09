@@ -200,7 +200,7 @@ update, even one that changed only the server.
 Merging is releasing (`.github/workflows/server-image.yml`):
 
 1. Every PR runs the full suite (docs-only PRs run nothing).
-2. Every push to `main` runs the full suite on that commit. If files that ship changed since the last
+2. Every push to `main` runs the full suite on that commit (a docs-only merge runs nothing). If files that ship changed since the last
    release (`deploy/release_tag.py next`: what `deploy/Dockerfile` copies and `deploy/build_bundles.sh`
    bundles), the same run then publishes the next `v<upstream-version>-hearth.<n>` from that commit: the
    image, the tag and the GitHub release with both bundles and notes generated from the merged PRs.
