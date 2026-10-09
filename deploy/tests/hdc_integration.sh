@@ -21,6 +21,8 @@ HEARTHDAOC_MEM_LIMIT=4g
 HEARTHDAOC_CPUS=2
 EOF
 hdc() { "$W/hdc" "$@"; }
+# Checks grep hdc's whole output (grep -q X <<<"$(hdc ...)"), not a pipe: grep -q stops reading at its first
+# match, a later write by hdc then meets a closed pipe (SIGPIPE), and pipefail turns that into a failure.
 cleanup() { hdc down >/dev/null 2>&1 || true; docker volume rm -f hearthdaoc-it-data >/dev/null 2>&1 || true; docker rmi "${IMAGE%%:*}:it-update" "${IMAGE%%:*}:it-update2" "${IMAGE%%:*}:it-update3" >/dev/null 2>&1 || true; rm -rf "$W"; }
 trap cleanup EXIT
 fail() { echo "FAIL: $*" >&2; docker logs hearthdaoc-it-server 2>&1 | tail -30 >&2 || true; exit 1; }
@@ -36,11 +38,12 @@ echo "ok - isolation settings applied"
 docker exec hearthdaoc-it-server grep -q "<DBAutosaveInterval>7</DBAutosaveInterval>" /app/server/config/serverconfig.xml \
     || fail "HEARTHDAOC_AUTOSAVE_MINUTES from .env did not reach the server config"
 echo "ok - autosave interval comes from .env"
-hdc status | grep -q "edition .* classic" || fail "status"
+out="$(hdc status 2>&1)" || fail "status exited $?: $out"
+grep -q "edition .* classic" <<<"$out" || fail "status: $out"
 hdc account create Tester1 pw1 >/dev/null || fail "account create"
-hdc account list | grep -q Tester1 || fail "account list"
-hdc add-bots hib 1 1 | grep -q . || fail "add-bots"
-hdc backup | grep -q "/data/backups/world-.*-manual.db" || fail "hdc backup should make a 'manual' backup (not counted in the daily ones)"
+grep -q Tester1 <<<"$(hdc account list)" || fail "account list"
+grep -q . <<<"$(hdc add-bots hib 1 1)" || fail "add-bots"
+grep -q "/data/backups/world-.*-manual.db" <<<"$(hdc backup)" || fail "hdc backup should make a 'manual' backup (not counted in the daily ones)"
 echo "ok - status, accounts, add-bots and backup while running"
 if hdc bot-goals set 50 10 30 60 2>/dev/null; then fail "bot-goals write allowed while running"; fi
 if hdc restore x.db 2>/dev/null; then fail "restore allowed while running"; fi
@@ -48,10 +51,10 @@ if hdc spawns restore 2>/dev/null; then fail "spawns restore allowed while runni
 echo "ok - stopped-only commands refuse while running"
 hdc stop >/dev/null
 docker logs hearthdaoc-it-server > "$W/stop.log" 2>&1; grep -q "| DOL.GS.GameServer | Stopped" "$W/stop.log" || fail "no clean save"
-hdc bot-goals set 50 10 30 60 | grep -q "Saved" || fail "bot-goals set while stopped"
-hdc account plvl Tester1 3 | grep -q "plvl 3" || fail "plvl while stopped"
+grep -q "Saved" <<<"$(hdc bot-goals set 50 10 30 60)" || fail "bot-goals set while stopped"
+grep -q "plvl 3" <<<"$(hdc account plvl Tester1 3)" || fail "plvl while stopped"
 latest="$(hdc backups | awk '/-manual.db/ {print $NF}' | tail -1)"
-hdc restore "$latest" | grep -q "Restored" || fail "restore"
+grep -q "Restored" <<<"$(hdc restore "$latest")" || fail "restore"
 echo "ok - stopped-only commands work when stopped"
 sed -i 's/^HEARTHDAOC_EDITION=classic/HEARTHDAOC_EDITION=b/' "$W/.env"
 if out="$(hdc up 2>&1)"; then fail "hdc up did not report the refused start"; fi
@@ -68,13 +71,13 @@ grep -qi "edition" <<<"$(hdc status)" || fail "hdc status does not explain the r
 hdc stop >/dev/null 2>&1 || true
 sed -i 's/^HEARTHDAOC_EDITION=b/HEARTHDAOC_EDITION=classic/' "$W/.env"
 echo "ok - edition change refused through compose"
-hdc spawns restore --max-level 20 | grep -q "Restored" || fail "spawns restore while stopped"
-hdc spawns status | grep -qE "^enabled +True" || fail "spawns status after restore"
+grep -q "Restored" <<<"$(hdc spawns restore --max-level 20)" || fail "spawns restore while stopped"
+grep -qE "^enabled +True" <<<"$(hdc spawns status)" || fail "spawns status after restore"
 echo "ok - spawns restore works when stopped"
 hdc auto-accounts off >/dev/null; healthy || fail "not healthy after auto-accounts off"
 docker exec hearthdaoc-it-server grep -q "<AutoAccountCreation>False</AutoAccountCreation>" /app/server/config/serverconfig.xml || fail "auto-accounts not off"
 echo "ok - auto-accounts off recreates the server with the new setting"
-hdc spawns status | grep -qE "^restored +[1-9]" || fail "restored spawns missing after restart"
+grep -qE "^restored +[1-9]" <<<"$(hdc spawns status)" || fail "restored spawns missing after restart"
 echo "ok - the server starts healthy with the restored spawns"
 # A crash: kill the game server inside the container (docker kill would count as a manual stop).
 docker exec hearthdaoc-it-server sh -c 'for p in /proc/[0-9]*; do grep -qa "CoreServer[.]dll" "$p/cmdline" 2>/dev/null && kill -9 "${p#/proc/}"; done; true'
@@ -102,7 +105,7 @@ grep -q "^HEARTHDAOC_TAG=it-update$" "$W/.env" || fail "update did not set the t
 grep -q "^HEARTHDAOC_IT_NEW_SETTING=hello$" "$W/.env" || fail "update did not add the new setting"
 grep -q "^HEARTHDAOC_PORT=10392$" "$W/.env" || fail "update lost the owner's settings"
 grep -q "# bundle it-update" "$W/compose.yml" || fail "update did not install the new compose.yml"
-hdc backups | grep -q -- "-pre-update.db" || fail "update made no backup first"
+grep -q -- "-pre-update.db" <<<"$(hdc backups)" || fail "update made no backup first"
 healthy || fail "not healthy after update"
 [[ "$(docker inspect -f '{{.Config.Image}}' hearthdaoc-it-server)" == "${IMAGE%%:*}:it-update" ]] || fail "server not running the new image"
 echo "ok - hdc update backs up, installs the release, keeps settings and restarts"
@@ -129,8 +132,8 @@ grep -q "^Upgrade report (server settings to re-check): docker exec hearthdaoc-i
     || fail "no upgrade report location: $out"
 [[ "$(world_version)" == "$upstream" ]] || fail "the world was not upgraded"
 healthy || fail "not healthy after the world upgrade"
-hdc account list | grep -q Tester1 || fail "accounts lost in the world upgrade"
-hdc backups | grep -q -- "-pre-upgrade.db" || fail "the world upgrade made no backup"
+grep -q Tester1 <<<"$(hdc account list)" || fail "accounts lost in the world upgrade"
+grep -q -- "-pre-upgrade.db" <<<"$(hdc backups)" || fail "the world upgrade made no backup"
 echo "ok - hdc update upgrades a world from another upstream version, then starts"
 python3 - "$W" <<'PY' &
 import http.server, sys, os
