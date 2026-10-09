@@ -152,6 +152,19 @@ public sealed class UT_ClassicQuestsExtra
     }
 
     [Test]
+    public void UpstreamKeywordsThatDifferOnlyInCaseDoNotStopTheLoad()
+    {
+        ClassicQuests.Config merged = ClassicQuests.Merge(
+            Parse("""{ "Chat": { "Omis": { "Stone": "first", "stone": "second" } } }"""),
+            Parse("""{ "Chat": { "Captain Rhodri": { "Hello": "Hi" } } }"""));
+        Assert.Multiple(() =>
+        {
+            Assert.That(merged.Chat["Omis"], Has.Count.EqualTo(1));
+            Assert.That(merged.Chat["Omis"]["STONE"], Is.EqualTo("second"));
+        });
+    }
+
+    [Test]
     public void ANullNpcEntryIsIgnored()
     {
         ClassicQuests.Config merged = MergeChat("""{ "Chat": { "Captain Rhodri": null } }""");

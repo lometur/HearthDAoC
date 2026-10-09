@@ -564,11 +564,17 @@ namespace DOL.GS.Quests
         private static void MergeChat(Config upstream, Dictionary<string, Dictionary<string, string>> extra)
         {
             var merged = new Dictionary<string, Dictionary<string, string>>(StringComparer.OrdinalIgnoreCase);
+            // Copied one by one: two upstream keys that differ only in case must not throw (the whole file would fail to
+            // load); the later one wins.
             if (upstream.Chat != null)
                 foreach (var npc in upstream.Chat)
-                    merged[npc.Key] = npc.Value == null
-                        ? new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
-                        : new Dictionary<string, string>(npc.Value, StringComparer.OrdinalIgnoreCase);
+                {
+                    if (!merged.TryGetValue(npc.Key, out var copy))
+                        merged[npc.Key] = copy = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+                    if (npc.Value != null)
+                        foreach (var line in npc.Value)
+                            copy[line.Key] = line.Value;
+                }
 
             foreach (var npc in extra)
             {
