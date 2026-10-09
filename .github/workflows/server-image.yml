@@ -153,6 +153,7 @@ jobs:
         run: |
           upstream="$(python3 -c 'import json;print(json.load(open("deploy/upstream.lock"))["version"])')"
           gh release create "$TAG" "dist/hearthdaoc-deploy-$TAG.tar.gz" "dist/hearthdaoc-client-$TAG.zip" \
+            "dist/hearthdaoc-client-$TAG.content-id" \
             --target "$GITHUB_SHA" --title "$TAG" --latest --generate-notes \
             --notes "HearthDAoC, an unofficial fork of shadowofze/OfflineDAoC (upstream $upstream). Image: ghcr.io/lometur/hearthdaoc:$TAG.
           Server: \`./hdc update\` (or HANDOFF.md in the deploy bundle). Players: README.md in the client bundle.

@@ -152,6 +152,8 @@ Then the game starts and connects to the server.
 **Linux.** Each time you start the game, `play.sh` asks GitHub for the newest HearthDAoC release. When
 it is newer than yours, it asks: "HearthDAoC <version> is out (you have <version>). Update the client
 now?" From Steam, the question is a window (with `zenity`); in a terminal, answer `y` or `n`.
+A release that changes only the server isn't offered: your client is already the same, and the game
+just starts.
 
 - **Yes** downloads the new `hearthdaoc-client-<version>.zip` (about 27 MB) and runs its `setup.sh`
   with the options you gave `setup.sh` the first time (saved in

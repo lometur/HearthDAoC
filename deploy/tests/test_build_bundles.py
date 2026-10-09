@@ -20,7 +20,7 @@ PWSH = os.environ.get("HDC_PWSH") or shutil.which("pwsh")
 
 TAG = "v0.34b-hearth.99"
 CLIENT_FILES = {
-    "README.md", "VERSION", "setup.sh", "play.sh.in", "odaoc_fetch.py", "upstream.lock",
+    "README.md", "VERSION", "CONTENT_ID", "setup.sh", "play.sh.in", "odaoc_fetch.py", "upstream.lock",
     "patches/classic-creation.json", "patches/apply_patches.py", "patches/patchset.py", "patches/splash.mpk",
     "windows/connect-hearthdaoc.bat", "windows/patch-client.bat", "windows/patch-client.ps1",
     "windows/patches/classic-creation.json", "windows/patches/splash.mpk",
@@ -46,6 +46,18 @@ def read(path):
 
 def sha256(path):
     return hashlib.sha256(read(path)).hexdigest()
+
+
+def content_id(bundle):
+    """The client's content ID, worked out here independently: SHA-256 of sha256sum-style lines for every
+    bundled file but VERSION and CONTENT_ID, in path order."""
+    lines = []
+    for folder, _dirs, names in os.walk(bundle):
+        for name in names:
+            rel = os.path.relpath(os.path.join(folder, name), bundle).replace(os.sep, "/")
+            if rel not in ("VERSION", "CONTENT_ID"):
+                lines.append((rel, f"{sha256(os.path.join(folder, name))}  {rel}\n"))
+    return hashlib.sha256("".join(line for _rel, line in sorted(lines)).encode()).hexdigest()
 
 
 def splash_only(patches):
@@ -98,7 +110,24 @@ class BuildBundlesTests(unittest.TestCase):
             self.assertEqual(z.read(top + "VERSION"), f"{TAG}\n".encode())  # setup.sh saves it; play.sh's updater compares it
             extracted = os.path.join(self.tmp.name, "unzipped")
             z.extractall(extracted)
-        return os.path.join(extracted, top)
+        # The content ID: in the bundle and beside it (a release asset), the same, and of these files.
+        bundle = os.path.join(extracted, top)
+        ident = read(os.path.join(bundle, "CONTENT_ID")).decode()
+        self.assertRegex(ident, r"\A[0-9a-f]{64}\n\Z")
+        self.assertEqual(read(os.path.join(out, f"hearthdaoc-client-{TAG}.content-id")).decode(), ident)
+        self.assertEqual(ident.strip(), content_id(bundle))
+        return bundle
+
+    def test_the_content_id_names_the_client_not_the_release(self):
+        # Two releases of the same client have the same ID (play.sh offers neither over the other); the ID
+        # follows the bundled files (check() recomputes it from them).
+        ids = []
+        for tag in (TAG, "v0.34b-hearth.100"):
+            out = os.path.join(self.tmp.name, tag)
+            r = subprocess.run(["bash", SCRIPT, tag, out], cwd=REPO, capture_output=True, text=True)
+            self.assertEqual(r.returncode, 0, r.stderr)
+            ids.append(read(os.path.join(out, f"hearthdaoc-client-{tag}.content-id")))
+        self.assertEqual(ids[0], ids[1])
 
     def test_relative_output_folder_like_ci(self):
         cwd = self.tmp.name

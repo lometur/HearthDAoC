@@ -195,11 +195,12 @@ class ClientPatchWorkflowTests(unittest.TestCase):
         for s in self.steps(RELEASE_JOB):
             self.assertNotIn("odaoc_fetch", s.get("run", ""))
             self.assertNotIn("init_world", s.get("run", ""))
-        # The release gets the two bundles and nothing else.
+        # The release gets the two bundles and the client's content ID (play.sh compares it), nothing else.
         _, create = self.step(RELEASE_JOB, "gh release create")
         assets = create["run"].split("gh release create", 1)[1].split("--target", 1)[0]
         self.assertEqual(assets.replace("\\\n", " ").split(),
-                         ['"$TAG"', '"dist/hearthdaoc-deploy-$TAG.tar.gz"', '"dist/hearthdaoc-client-$TAG.zip"'])
+                         ['"$TAG"', '"dist/hearthdaoc-deploy-$TAG.tar.gz"', '"dist/hearthdaoc-client-$TAG.zip"',
+                          '"dist/hearthdaoc-client-$TAG.content-id"'])
 
     def test_the_release_job_needs_no_dotnet(self):
         # build_bundles.sh copies the committed splash.mpk: checkout, bundles, release, as before the client patches.

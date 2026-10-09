@@ -3,7 +3,7 @@
 # Usage: deploy/build_bundles.sh <tag> <output dir> [--deploy-only]
 #   (run from the repository root; used by CI and tests). The client bundle carries the committed
 #   client/patches/splash.mpk, only when it has the SHA-256 client/patches/classic-creation.json pins,
-#   and its tag in VERSION.
+#   its tag in VERSION and its content ID in CONTENT_ID (also written beside it, for the release).
 #   --deploy-only builds only the deploy bundle (deploy/tests/hdc_integration.sh).
 set -euo pipefail
 tag="${1:?release tag}"
@@ -48,5 +48,20 @@ echo "$tag" > "$c/VERSION"  # the release: setup.sh saves it, and play.sh offers
 cp "$root"/client/patches/{classic-creation.json,apply_patches.py,patchset.py,splash.mpk} "$c/patches/"
 cp "$root"/client/windows/{connect-hearthdaoc.bat,patch-client.bat,patch-client.ps1} "$c/windows/"
 cp "$root"/client/patches/{classic-creation.json,splash.mpk} "$c/windows/patches/"
+# The client's content ID, in the bundle and beside it on the release: play.sh doesn't offer a newer release with
+# the installed one, since only the server changed. SHA-256 of the bundled files' SHA-256 sums and paths (as
+# sha256sum prints them, in path order), without VERSION, which only names the release.
+python3 - "$c" > "$c/CONTENT_ID" <<'PY'
+import hashlib, os, sys
+top, lines = sys.argv[1], []
+for folder, _dirs, names in os.walk(top):
+    for name in names:
+        rel = os.path.relpath(os.path.join(folder, name), top).replace(os.sep, "/")
+        if rel not in ("VERSION", "CONTENT_ID"):
+            with open(os.path.join(folder, name), "rb") as f:
+                lines.append((rel, f"{hashlib.sha256(f.read()).hexdigest()}  {rel}\n"))
+print(hashlib.sha256("".join(line for _rel, line in sorted(lines)).encode()).hexdigest())
+PY
+cp "$c/CONTENT_ID" "$out/hearthdaoc-client-$tag.content-id"
 (cd "$work/client" && zip -qr "$out/hearthdaoc-client-$tag.zip" "hearthdaoc-client-$tag")
-echo "Built $out/hearthdaoc-deploy-$tag.tar.gz and $out/hearthdaoc-client-$tag.zip"
+echo "Built $out/hearthdaoc-deploy-$tag.tar.gz, $out/hearthdaoc-client-$tag.zip and $out/hearthdaoc-client-$tag.content-id"

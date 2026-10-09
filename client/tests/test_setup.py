@@ -132,7 +132,7 @@ class SetupTests(unittest.TestCase):
             dest, r = self.run_setup(srv)
         self.assertEqual(r.returncode, 0, r.stderr + r.stdout)
         self.assertEqual(saved_settings(dest), {"server": "192.168.1.64:10301", "edition": "classic",
-                                                "base_client": self.base, "tag": ""})
+                                                "base_client": self.base, "tag": "", "content_id": ""})
         self.assertEqual(leftovers(dest), [])
 
     def test_repository_patch_set_refuses_a_foreign_client_and_setup_still_succeeds(self):
@@ -280,13 +280,30 @@ class BundlePatchTests(unittest.TestCase):
         installed_patches(self, dest, self.patches)
         self.assertEqual(read(os.path.join(dest, "client", "game.dll")), self.dll_patched)
 
+    def write_content_id(self, text):
+        with open(os.path.join(self.bundle, "CONTENT_ID"), "w", encoding="utf-8") as f:
+            f.write(text + "\n")  # as deploy/build_bundles.sh writes it
+
     def test_setup_saves_its_settings_and_the_release_for_play_sh(self):
         self.write_version("v0.35b-hearth.2")
+        self.write_content_id("c" * 64)
         dest, r = self.setup_sh()
         self.assertEqual(r.returncode, 0, r.stderr + r.stdout)
         self.assertEqual(saved_settings(dest), {"server": "192.168.1.64:10301", "edition": "classic",
-                                                "base_client": self.base, "tag": "v0.35b-hearth.2"})
+                                                "base_client": self.base, "tag": "v0.35b-hearth.2",
+                                                "content_id": "c" * 64})
         self.assertEqual(leftovers(dest), [])
+
+    def test_a_bundle_without_a_valid_content_id_saves_none(self):
+        # A bundle from before content IDs, or a damaged file: play.sh then offers every newer release.
+        self.write_version("v0.35b-hearth.2")
+        for text in (None, "not an id"):
+            with self.subTest(text=text):
+                if text is not None:
+                    self.write_content_id(text)
+                dest, r = self.setup_sh()
+                self.assertEqual(r.returncode, 0, r.stderr + r.stdout)
+                self.assertEqual(saved_settings(dest)["content_id"], "")
 
     def test_a_relative_base_client_path_with_spaces_is_saved_in_full(self):
         # play.sh runs the next setup.sh from another folder: the saved path must be absolute.

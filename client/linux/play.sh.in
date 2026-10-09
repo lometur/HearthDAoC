@@ -40,6 +40,10 @@ latest_release() {  # GitHub redirects .../releases/latest to .../releases/tag/<
     { curl -fsI --max-time 5 "$RELEASES/latest" 2>/dev/null || true; } | tr -d '\r' |
         sed -n 's|^[Ll]ocation: .*/tag/\([^/]*\)$|\1|p' | tail -n 1
 }
+release_content_id() {  # release_content_id <tag>: the content ID of its client bundle; nothing when there is none
+    { curl -fsL --max-time 5 "$RELEASES/download/$1/hearthdaoc-client-$1.content-id" 2>/dev/null || true; } |
+        head -c 200 | tr -d '\r' | sed -n '1{/^[0-9a-f]\{64\}$/p;}'
+}
 newer() {  # newer <tag> <other tag>: whether <tag> is the later release
     # sort -V puts v0.35b-hearth.1 before v0.35-hearth.1. With "~" (sorted before letters) in place of
     # "-hearth.", it puts 0.35 before 0.35b, in upstream's order.
@@ -113,7 +117,7 @@ update_to() {  # update_to <tag> <installed tag>: 0 when <tag> is installed
     return 1
 }
 offer_update() {  # offer_update: 0 when a newer release was installed
-    local installed latest rc=0
+    local installed latest mine rc=0
     installed="$(conf tag)"
     [[ "$installed" =~ $RELEASE_TAG && -n "$(conf server)" && -n "$(conf edition)" && -n "$(conf base_client)" ]] ||
         return 1
@@ -123,6 +127,13 @@ offer_update() {  # offer_update: 0 when a newer release was installed
         return 1
     fi
     newer "$latest" "$installed" || return 1
+    # A release whose client bundle is the installed one (it changes only the server) isn't offered: each release
+    # names its client's content ID (deploy/build_bundles.sh). Without one to compare, the release is offered.
+    mine="$(conf content_id)"
+    if [[ -n "$mine" && "$(release_content_id "$latest")" == "$mine" ]]; then
+        echo "play.sh: HearthDAoC $latest changes only the server; your client ($installed) is up to date." >&2
+        return 1
+    fi
     ask "HearthDAoC $latest is out (you have $installed). Update the client now?" || rc=$?
     if [[ $rc -eq 2 ]]; then
         tell warning "HearthDAoC $latest is out (you have $installed). To update, run $HERE/play.sh from a terminal," \

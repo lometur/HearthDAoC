@@ -43,6 +43,12 @@ TEMPLATE="$(find_file play.sh.in client/linux/play.sh.in)"
 # This bundle's release (VERSION, from deploy/build_bundles.sh); none from a checkout.
 TAG=""
 if [[ -f "$here/VERSION" ]]; then TAG="$(head -n 1 "$here/VERSION" | tr -d '\r')"; fi
+# Its client's content ID (CONTENT_ID, from deploy/build_bundles.sh): play.sh doesn't offer a newer release
+# with the same one, since only the server changed. None from a checkout, or from an older bundle.
+CONTENT_ID=""
+if [[ -f "$here/CONTENT_ID" ]]; then
+    CONTENT_ID="$(head -n 1 "$here/CONTENT_ID" | tr -d '\r' | sed -n '/^[0-9a-f]\{64\}$/p')"
+fi
 # The client patches (client/patches): installed in $DEST/patches, where play.sh applies them at every launch.
 PATCH_FILES=(apply_patches.py patchset.py classic-creation.json splash.mpk)
 PATCHER="$(find_file patches/apply_patches.py client/patches/apply_patches.py)"  # its own line: set -e sees a failure
@@ -102,7 +108,7 @@ rm -rf "$DEST/client.old" "$DEST/patches.old"
 # Last, once everything worked: the settings and the release that play.sh updates with. play.sh only
 # reads this file, never runs it. Without a release (setup.sh from a checkout), play.sh doesn't look for one.
 printf '%s\n' "# Written by setup.sh: play.sh installs updates with these settings." "server=$SERVER" \
-    "edition=$EDITION" "base_client=$BASE" "tag=$TAG" > "$DEST/hearthdaoc-client.conf.new"
+    "edition=$EDITION" "base_client=$BASE" "tag=$TAG" "content_id=$CONTENT_ID" > "$DEST/hearthdaoc-client.conf.new"
 mv -f "$DEST/hearthdaoc-client.conf.new" "$DEST/hearthdaoc-client.conf"
 checks="it checks the client patches at every launch"
 [[ -z "$TAG" ]] || checks="at every launch it checks the client patches and offers newer HearthDAoC releases"
