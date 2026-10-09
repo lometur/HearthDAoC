@@ -110,8 +110,8 @@ Atlas battleground daily quests (`Quest` rows) are deleted, not archived. If it 
 `Classic battlegrounds: not applied (...)`, the server starts with upstream's battlegrounds, and it tries
 again at the next start. `./hdc new-world` and `./hdc upgrade-world` make a world without that row, so it
 runs again there. A new world starts with the battleground keeps as upstream ships them. An upgraded world
-keeps who holds them and their gates' health (see Upgrading), but a central keep above level 1 goes back to
-level 1, and changes made in game to the guards are not carried over.
+keeps who holds the keeps in play and their gates' health (see Upgrading), but a central keep above level 1
+goes back to level 1, and changes made in game to the guards are not carried over.
 Battleground keep guard levels follow `keep_guard_level_multiplier` (1.6), which also sets the frontier
 keeps' guards. The realm rank caps (1L2, 1L3, 1L5, 1L9) hold on every way in: the frontier porter, the town
 teleporters' [Battlegrounds] choice, and for bots too.
@@ -137,12 +137,16 @@ cd ~/hearthdaoc
 `./hdc update` upgrades the world itself, with the same steps as `./hdc upgrade-world`:
 - it backs up again (`-pre-upgrade`), downloads the new version's clean world (about 30 MB) and moves all
   progress into it, keeping bans and permissions;
-- it keeps the RvR state too: each keep's realm, level and claiming guild, its doors' health and whether
-  they are broken open, where each relic is and which realm holds it, items on keep hookpoints, and the
-  keep capture log. Keeps are matched by name and region, so a keep the new version renumbers keeps its
-  state; a keep only in one of the two worlds stays as the new world ships it;
-- it writes a report of what it carried over (and the keeps it could not match) and of the server settings
-  to re-check, then starts the server and prints how to read the report:
+- it keeps the RvR state that came from play too. A keep in play (held by another realm than its own, or
+  claimed by a guild) keeps its realm, level and claiming guild, its doors' health (never above the new
+  version's) and whether they are broken open, and the items on its hookpoints. A relic away from home
+  stays where it was taken, with the realm that holds it. The keep capture log is kept. Keeps nobody took
+  or claimed, and relics at home, come as the new version ships them, so its own changes to them stay.
+  Keeps are matched by name and region, so a keep the new version renumbers keeps its state; a keep only in
+  one of the two worlds stays as the new world ships it;
+- it writes a report of what it carried over (how many keeps and relics matched and were in play, and the
+  keeps it could not match) and of the server settings to re-check, then starts the server and prints how
+  to read the report:
   `docker exec hearthdaoc-server cat /data/archive/world-pre-upgrade-<time>/upgrade-report.txt`;
 - the first start on the new version downloads the navmeshes that changed (about 570 MB for 0.35b) and
   the new version's server data files. `./hdc logs` shows the progress; report the new
@@ -158,16 +162,16 @@ and `./hdc up`; the first start downloads about 570 MB of changed navmeshes. Fro
 on, `./hdc update` does all of this itself.
 
 **Keep and relic state from an archived world.** An upgrade by a release before this one left every keep,
-gate and relic as the new version ships them. `./hdc carry-rvr` lists the archived worlds (the
+gate and relic as the new version shipped them. `./hdc carry-rvr` lists the archived worlds (the
 `world-pre-upgrade-<time>` one is the world before that upgrade). Then, with the server stopped:
 ```bash
 ./hdc stop && ./hdc carry-rvr world-pre-upgrade-<time> && ./hdc up
 ```
 It backs up the world first (`-pre-carry-rvr` in `./hdc backups`), then copies the same state an upgrade
-keeps from the archived world and prints the same report. It replaces the current keep, door and relic
-state with the archived one, so captures made since that world was archived are undone; hookpoint items
-and capture log entries are added to those already there. The 0.34b world's own Dun Abermenai and Dun
-Murdaigean carry onto 0.35b's.
+keeps from the archived world and prints the same report. The keeps in play and the relics away from home in
+the archived world get the state they had there, so captures of them made since are undone; the other keeps
+and relics stay as they are now. Hookpoint items and capture log entries are added to those already there.
+The 0.34b world's own Dun Abermenai and Dun Murdaigean carry onto 0.35b's.
 
 Without `./hdc update` (a deployment older than it), do it by hand:
 ```bash
