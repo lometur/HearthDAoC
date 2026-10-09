@@ -142,8 +142,12 @@ set.
 
 Linux clients update at launch, after asking the player. Windows players still copy the new files by hand.
 
-- `deploy/build_bundles.sh` writes the release tag into the client bundle's `VERSION`.
-- `setup.sh` saves its options (`--server`, `--edition`, `--base-client`, made absolute) and that tag in
+- `deploy/build_bundles.sh` writes the release tag into the client bundle's `VERSION`, and the client's content
+  ID into `CONTENT_ID` and beside the bundle as the release asset `hearthdaoc-client-<tag>.content-id`: the
+  SHA-256 of the bundled files' `sha256sum` lines in path order, without `VERSION`. Two releases of the same
+  client have the same ID.
+- `setup.sh` saves its options (`--server`, `--edition`, `--base-client`, made absolute), that tag and that
+  content ID (`content_id`, empty from a checkout or an older bundle) in
   `<dest>/hearthdaoc-client.conf`, last and by a rename, so a failed setup keeps the previous release. From a
   checkout there is no `VERSION`, the tag is empty and `play.sh` never checks. It also writes `play.sh` as
   `play.sh.new` and renames it: a running `play.sh` that updates itself goes on reading its own file.
@@ -155,7 +159,9 @@ Linux clients update at launch, after asking the player. Windows players still c
 - At each launch, before the login, `play.sh` reads that file (never sources it) and asks GitHub's releases
   page (`.../releases/latest`, as `hdc update` does) for the newest tag, for 5 seconds at most. For tests,
   `HEARTHDAOC_RELEASES_URL` points `play.sh` (and `hdc`) at a local server instead; players never set it. It
-  offers a newer tag (`sort -V`, with 0.35 before 0.35b) with a zenity or terminal question. Yes downloads
+  offers a newer tag (`sort -V`, with 0.35 before 0.35b) with a zenity or terminal question, unless that
+  release's `.content-id` (fetched for 5 seconds at most) equals the saved `content_id`: a release that changes
+  only the server plays on with one line on stderr. Without an ID to compare, the release is offered. Yes downloads
   `hearthdaoc-client-<tag>.zip` into `<dest>/.update.XXXXXX`, checks its `setup.sh` and that `VERSION` says
   the tag, runs that `setup.sh` with the saved options and `--dest <dest>`, then starts the new `play.sh` with
   `HEARTHDAOC_NO_UPDATE=1`. A failure warns, keeps the saved tag and plays the installed release. Before each

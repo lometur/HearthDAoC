@@ -299,6 +299,7 @@ exit 1
 # The next release's play.sh: it logs how it was started.
 NEW_PLAY = r'''#!/usr/bin/env bash
 printf 'new play.sh pid=%s no_update=%s args=%s\n' "$$" "${HEARTHDAOC_NO_UPDATE:-}" "$*" >> "@CALLS@"
+printf 'preload=%s\n' "${LD_PRELOAD:-}" >> "@CALLS@"
 '''
 
 
@@ -360,6 +361,14 @@ def zip_name(tag):
     return f"{tag}/hearthdaoc-client-{tag}.zip"
 
 
+def content_id_name(tag):
+    """The release's client content ID file, as served by ReleaseServer."""
+    return f"{tag}/hearthdaoc-client-{tag}.content-id"
+
+
+ID_A, ID_B = "a" * 64, "b" * 64
+
+
 def free_port():
     """A local port nothing listens on: connecting is refused at once."""
     with socket.socket() as s:
@@ -388,9 +397,10 @@ class UpdateTestCase(FakeSteamTestCase):
         self.progress = os.path.join(self.tmp.name, "progress.log")
         self.write_conf(OLD)
 
-    def write_conf(self, tag):
+    def write_conf(self, tag, content_id=None):
         write(os.path.join(self.dest, CONF), "# Written by setup.sh: play.sh installs updates with these settings.\n"
-              f"server=192.168.1.64:10301\nedition=classic\nbase_client={BASE}\ntag={tag}\n")
+              f"server=192.168.1.64:10301\nedition=classic\nbase_client={BASE}\ntag={tag}\n"
+              + (f"content_id={content_id}\n" if content_id is not None else ""))
 
     def saved_tag(self):
         with open(os.path.join(self.dest, CONF), encoding="utf-8") as f:
@@ -512,6 +522,47 @@ class UpdateCheckTests(UpdateTestCase):
         self.assertEqual(self.calls_of("zenity"), [])
 
 
+class ClientChangeTests(UpdateTestCase):
+    """A newer release whose client bundle is the installed one (a server-only release) isn't offered."""
+
+    def test_a_release_with_the_same_client_is_not_offered(self):
+        self.write_conf(OLD, ID_A)
+        files = {content_id_name(NEW): (ID_A + "\n").encode(), zip_name(NEW): self.bundle()}
+        with ReleaseServer(NEW, files) as srv:
+            r = self.run_play(HEARTHDAOC_RELEASES_URL=srv.url, **self.zenity(0))
+        self.assert_played_this_release(r)
+        self.assertEqual(srv.requests, [("HEAD", "/releases/latest"), ("GET", "/releases/download/" + content_id_name(NEW))])
+        self.assertEqual(self.calls_of("zenity"), [])
+        self.assertEqual(r.stderr, f"play.sh: HearthDAoC {NEW} changes only the server; your client ({OLD}) is up to date.\n")
+
+    def test_a_release_with_another_client_is_offered(self):
+        self.write_conf(OLD, ID_A)
+        files = {content_id_name(NEW): (ID_B + "\n").encode(), zip_name(NEW): self.bundle()}
+        with ReleaseServer(NEW, files) as srv:
+            r = self.run_play(HEARTHDAOC_RELEASES_URL=srv.url, **self.zenity(1))  # no
+        self.assert_played_this_release(r)
+        self.assertEqual(self.calls_of("zenity --question"),
+                         [f"zenity --question --title=HearthDAoC --text={QUESTION}"])
+
+    def test_without_a_content_id_to_compare_the_release_is_offered(self):
+        # A release from before content IDs (nothing to fetch), an unreadable one, or an install whose settings
+        # have none: offered as before. Without one saved, play.sh doesn't ask for the release's.
+        for saved, served in ((ID_A, None), (ID_A, b"<html>not an id</html>"), (None, ID_A.encode())):
+            with self.subTest(saved=saved, served=served):
+                self.write_conf(OLD, saved)
+                files = {zip_name(NEW): self.bundle()}
+                if served is not None:
+                    files[content_id_name(NEW)] = served
+                with ReleaseServer(NEW, files) as srv:
+                    r = self.run_play(HEARTHDAOC_RELEASES_URL=srv.url, **self.zenity(1))  # no
+                self.assert_played_this_release(r)
+                self.assertEqual(self.calls_of("zenity --question"),
+                                 [f"zenity --question --title=HearthDAoC --text={QUESTION}"])
+                fetched = ("GET", "/releases/download/" + content_id_name(NEW)) in srv.requests
+                self.assertEqual(fetched, saved is not None)
+            os.remove(self.calls)
+
+
 class UpdateTests(UpdateTestCase):
     """A newer release: the player is asked first, and the update replaces play.sh or warns and plays."""
 
@@ -539,6 +590,20 @@ class UpdateTests(UpdateTestCase):
             progress = f.read().splitlines()
         self.assertEqual(progress[0], f"# Downloading HearthDAoC {NEW} ...")
         self.assertIn("# Setting up the client ...", progress)
+
+    def test_steam_overlay_preload_stays_out_of_the_progress_window(self):
+        # Steam sets LD_PRELOAD to its 32- and 64-bit overlay libraries; the loader of each program the update
+        # runs then printed "ERROR: ld.so: object ... cannot be preloaded ... ignored." into the window.
+        preload = os.path.join(self.tmp.name, "ubuntu12_32", "gameoverlayrenderer.so")
+        with ReleaseServer(NEW, {zip_name(NEW): self.bundle()}) as srv:
+            r = self.run_play(HEARTHDAOC_RELEASES_URL=srv.url, LD_PRELOAD=preload, **self.zenity(0))
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertEqual(self.saved_tag(), [NEW])
+        with open(self.progress, encoding="utf-8") as f:
+            progress = f.read()
+        self.assertNotIn("LD_PRELOAD", progress)
+        self.assertIn("# Setting up the client ...", progress.splitlines())
+        self.assertEqual(self.calls_of("preload="), ["preload=" + preload])  # the game still gets the overlay
 
     def test_yes_in_a_terminal_installs_the_release_with_plain_output(self):
         master, slave = pty.openpty()
@@ -661,6 +726,8 @@ class UpdateRoundTripTests(FakeSteamTestCase):
                            capture_output=True, text=True)
         self.assertEqual(r.returncode, 0, r.stderr)
         self.built = os.path.join(out, f"hearthdaoc-client-{NEW}.zip")
+        with open(os.path.join(out, f"hearthdaoc-client-{NEW}.content-id"), encoding="utf-8") as f:
+            self.content_id = f.read().strip()
         parts = fx.RangeServer(t)
         parts.__enter__()
         self.addCleanup(parts.__exit__, None, None, None)
@@ -722,8 +789,27 @@ class UpdateRoundTripTests(FakeSteamTestCase):
         with open(os.path.join(self.dest, CONF), encoding="utf-8") as f:
             settings = dict(line.split("=", 1) for line in f.read().splitlines() if not line.startswith("#"))
         self.assertEqual(settings, {"server": "192.168.1.64:10301", "edition": "classic", "base_client": self.base,
-                                    "tag": NEW})
+                                    "tag": NEW, "content_id": self.content_id})
         self.assert_nothing_left()
+
+    def test_a_release_built_with_the_installed_client_is_not_offered(self):
+        # deploy/build_bundles.sh, setup.sh and play.sh agree on the content ID: the release's asset matches the
+        # ID the installed bundle saved, so play.sh plays without asking.
+        before = self.install()
+        bin_dir = os.path.join(self.tmp.name, "bin")
+        asked = os.path.join(self.tmp.name, "zenity.log")
+        write(os.path.join(bin_dir, "zenity"), f'#!/bin/sh\necho "zenity $*" >> "{asked}"\n', executable=True)
+        with open(self.built[:-len(".zip")] + ".content-id", "rb") as f:
+            asset = f.read()
+        with ReleaseServer(NEW, {content_id_name(NEW): asset, zip_name(NEW): b"never fetched"}) as srv:
+            r = self.run_play(HEARTHDAOC_RELEASES_URL=srv.url, DISPLAY=":99",
+                              PATH=bin_dir + os.pathsep + os.environ["PATH"])
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertIn(f"HearthDAoC {NEW} changes only the server", r.stderr)
+        self.assertNotIn(("GET", "/releases/download/" + zip_name(NEW)), srv.requests)
+        self.assertFalse(os.path.exists(asked))  # no question, no progress window
+        self.assert_launched_once()
+        self.assertEqual(self.install(), before)
 
     def test_an_update_whose_download_stops_leaves_the_installed_client_and_plays_it(self):
         # The new setup.sh has already put the base client back and fetched some OfflineDAoC files when the
