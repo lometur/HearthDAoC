@@ -84,6 +84,9 @@ bash for the container tests.
 
 ### Task 1: Quests pay their final XP and coin
 
+> **Removed after the final review** (commit 5e64422, owner's decision 2026-10-09): `FinishQuest` already pays a
+> standard quest's finishing stage; this task changed only the reward-quest branch, which no quest uses.
+
 `DataQuest.FinishQuest` pays the first entry of `RewardXP`, `RewardRP`, `RewardCLXP`, `RewardBP` and `RewardMoney`;
 upstream's classic quests keep the final reward in the last entry, so it is never paid (spec 1, 3.1 "Final rewards").
 
