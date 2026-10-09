@@ -129,7 +129,8 @@ If the pinned release's classic `game.dll` changes, `build.py` refuses it until 
 the new client keep the standard creation screen. A new upstream section moves `.hdcc` to a new address (0.35
 added `.bounty`): `ORG` in `client/patches/tests/test_cave.py`, the section list in `test_pe.py` and the header
 offsets in `test_build.py` pin it, so update them with it. Players must then update their client: a `game.dll`
-of the old release, patched or not, is unknown to the new patch set (see the CHANGELOG for 0.35).
+of the old release, patched or not, is unknown to the new patch set (see the
+[v0.35b-hearth.1 release notes](https://github.com/lometur/HearthDAoC/releases/tag/v0.35b-hearth.1)).
 
 **Changing the `game.dll` patch later.** Players' clients stay patched by the release they had, and the
 launchers apply the new release's patch set at the next launch. A `game.dll` patched by an older patch set is
@@ -232,3 +233,6 @@ attaches two assets: `hearthdaoc-deploy-<tag>.tar.gz` (compose file, `.env.examp
 `hearthdaoc-client-<tag>.zip` (player scripts, the client patch set with both appliers, our `splash.mpk`, and
 `VERSION`, the tag).
 Neither contains EA game files. The release notes credit OfflineDAoC for the splash art.
+
+The releases are the fork's changelog: each release's notes list the PRs merged since the release before
+(`--generate-notes`), and each PR says what it changes. Upstream's own changes are in `CHANGELOG.md`.
