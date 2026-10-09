@@ -30,4 +30,5 @@ Upstream provides the game; this fork adds only deployment, admin tooling and pl
 | [`docs/fork/`](../docs/fork) | What the fork changes, how it syncs with upstream, design specs and plans |
 
 Everything else is upstream OfflineDAoC, unchanged; see the [upstream README](../README.md).
+What changed in each release: the fork's [releases](https://github.com/lometur/HearthDAoC/releases).
 License: GPL-3.0, like upstream.
