@@ -233,7 +233,7 @@ class ClientPatchWorkflowTests(unittest.TestCase):
 SERVER_UNIT_TESTS = ("dotnet test source/server/Tests/Tests.csproj --nologo --filter "
                      '"FullyQualifiedName~UT_CommandPrivLevelOverrides|FullyQualifiedName~UT_SiStartChoice'
                      '|FullyQualifiedName~UT_ClassicBattlegrounds'
-                     '|FullyQualifiedName~UT_DataQuestDependency|FullyQualifiedName~UT_DataQuestDeliveryItem'
+                     '|FullyQualifiedName~UT_DataQuestDependency|FullyQualifiedName~UT_DataQuestDeliveryItem|FullyQualifiedName~UT_DataQuestOffers'
                      '|FullyQualifiedName~UT_ClassicQuestsExtra'
                      '|FullyQualifiedName~UT_EpicChain"')
 UNIT_TESTS = os.path.join(ROOT, "source", "server", "Tests", "UnitTests")
@@ -254,7 +254,7 @@ class ServerUnitTestWorkflowTests(unittest.TestCase):
     def test_every_name_in_the_filter_is_a_test_class(self):
         names = re.findall(r"FullyQualifiedName~(\w+)", SERVER_UNIT_TESTS)
         self.assertEqual(names, ["UT_CommandPrivLevelOverrides", "UT_SiStartChoice", "UT_ClassicBattlegrounds",
-                                 "UT_DataQuestDependency", "UT_DataQuestDeliveryItem",
+                                 "UT_DataQuestDependency", "UT_DataQuestDeliveryItem", "UT_DataQuestOffers",
                                  "UT_ClassicQuestsExtra",
                                  "UT_EpicChain"])
         for name in names:

@@ -67,6 +67,8 @@ namespace DOL.GS.Quests
 	/// a player who lost it gets a new one (QuestDeliveryItems.ShouldHand).
 	/// HearthDAoC: accepting a quest whose first step is a delivery hands that step's item (QuestDeliveryItems.FirstStepItem);
 	/// upstream never did, so those quests could not be finished.
+	/// HearthDAoC: whispering AcceptText to the giver asks "Do you accept?" first (DataQuestOffers); the quest starts when the
+	/// player accepts, and the NPC says "Come back when you're ready." on a decline.
     /// For Kill and Search steps, StepItemTemplates can include a drop chance behind the template name.  Ex: |some_template_name;50|  
     /// If the item does not drop then the step is not advanced.
 	/// If no items are given to a player at any of the steps then this can be null, otherwise it must have values for each step. 
@@ -2349,6 +2351,23 @@ namespace DOL.GS.Quests
 			{
 				TryTurnTo(living, player);
 
+				// HearthDAoC: the player is asked "Do you accept?" before the quest starts (owner 2026-10-09: never just a
+				// click on a key word); the answer starts it through StartOffered. The prompt needs a GameNPC; any other
+				// giver starts the quest at once, as upstream did.
+				if (living is GameNPC giver)
+					DataQuestOffers.Offer(player, giver, this);
+				else
+					StartOffered(player, living);
+			}
+		}
+
+		/// <summary>
+		/// HearthDAoC: starts this quest for a player who accepted the offer (or whispered to a giver that can't ask).
+		/// Called on the offering instance, whose DBDataQuest describes the quest.
+		/// </summary>
+		public virtual void StartOffered(GamePlayer player, GameLiving living)
+		{
+			{
 				// HearthDAoC: a quest whose first step is a delivery never handed that step's item (nothing "begins" step 1),
 				// so 67 classic quests, among them the level 30 Regal Nobility, could not be finished (owner test 2026-10-09).
 				// Hand it before the quest starts; with no room the quest does not start.
