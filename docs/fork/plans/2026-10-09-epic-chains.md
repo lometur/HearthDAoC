@@ -6,6 +6,11 @@
 "Lord of Deceit", pin every guild line's steps in order, pay every classic quest's final XP and coin, and give GMs an
 `/epic` test command.
 
+> **After execution (2026-10-09):** Task 1 (final rewards) was removed after the final review: upstream's
+> `FinishQuest` already pays a standard quest's finishing stage, so the change did nothing (commit 5e64422). Its
+> text below, the file-table rows for `FinishRewardIndex` and `UT_DataQuestFinishRewards`, and Task 9's FORK.md row
+> for it are history, not instructions. The final review's other fixes are in the ledger and commits 0708049..bb8e062.
+
 **Architecture:** Small changes to upstream's quest engine (`DataQuest.cs`: final rewards, dependency entries by quest
 ID; `ClassicQuests.cs`: a second quest data file) plus a fork GM command (`scripts/hearthdaoc/`), and one world fix
 (`deploy/bin/epic_chains.py` with its data file) run at server start like `battlegrounds.py`. Upstream's quests, texts,
