@@ -82,22 +82,31 @@ class SyntheticTests(unittest.TestCase):
         self.conn.execute("UPDATE DataQuest SET Description='the owner wrote this' WHERE ID=100")
         self.conn.commit()
         self.assertEqual(self.run_fix(self.data()),
-                         ["Quest dialogue: 1 quests rewritten; 1 left as they are (changed since upstream)"])
+                         ["Quest dialogue: 1 quests rewritten; 1 left as they are (their text differs from upstream's and this file's): 100"])
         self.assertEqual(self.row(100, "Description", "LastTimeRowUpdated"), ("the owner wrote this", OLD))
         self.assertEqual(self.row(200, "Description"), ("new B",))
 
-    def test_a_kept_row_is_counted_again_on_every_run_and_nothing_else_is_said(self):
+    def test_kept_rows_are_named_at_every_start_even_when_nothing_is_rewritten(self):
+        # After an upstream upgrade changes a line, its quest keeps upstream's text: the log must say so.
         self.conn.execute("UPDATE DataQuest SET Description='mine' WHERE ID=100")
         self.conn.execute("UPDATE DataQuest SET Description='mine too' WHERE ID=200")
         self.conn.commit()
-        self.assertEqual(self.run_fix(self.data()), [])
+        line = ["Quest dialogue: 2 left as they are (their text differs from upstream's and this file's): 100, 200"]
+        self.assertEqual(self.run_fix(self.data()), line)
+        self.assertEqual(self.run_fix(self.data()), line)
         self.assertEqual(self.row(100, "Description"), ("mine",))
+
+    def test_the_kept_list_is_capped(self):
+        self.assertEqual(qd.summary(0, list(range(1, 13))),
+                         ["Quest dialogue: 12 left as they are (their text differs from upstream's and this file's): "
+                          "1, 2, 3, 4, 5, 6, 7, 8, 9, 10 and 2 more"])
+        self.assertEqual(qd.summary(0, []), [])
 
     def test_a_row_already_at_the_new_text_is_left_alone(self):
         self.conn.execute("UPDATE DataQuest SET Description='new A', FinishText='farewell' WHERE ID=100")
         self.conn.commit()
-        data = self.data(guard={})  # no guard at all: the row at the new text is not "changed since upstream" either
-        self.assertEqual(self.run_fix(data), [])
+        data = self.data(guard={})  # no guard at all: the row at the new text is not kept; only 200 is named
+        self.assertEqual(self.run_fix(data), ["Quest dialogue: 1 left as they are (their text differs from upstream's and this file's): 200"])
         self.assertEqual(self.row(100, "LastTimeRowUpdated"), (OLD,))
 
     def test_an_earlier_version_of_the_text_is_rewritten_by_a_later_one(self):
@@ -141,7 +150,7 @@ class SyntheticTests(unittest.TestCase):
 
     def test_a_list_with_another_number_of_stages_keeps_the_rows_and_is_not_an_error(self):
         before = self.conn.execute("SELECT * FROM DataQuest ORDER BY ID").fetchall()
-        self.assertEqual(self.run_fix(self.data(set={"StepText": ["only one"]})), [])
+        self.assertEqual(self.run_fix(self.data(set={"StepText": ["only one"]})), ["Quest dialogue: 2 left as they are (their text differs from upstream's and this file's): 100, 200"])
         self.assertEqual(self.conn.execute("SELECT * FROM DataQuest ORDER BY ID").fetchall(), before)
 
     def test_one_row_with_another_number_of_stages_is_kept_and_the_other_is_rewritten(self):
@@ -151,7 +160,7 @@ class SyntheticTests(unittest.TestCase):
         data = self.data(set={"Description": {"Alpha": "new A", "Beta": "new B"}, "StepText": ["go", "come back"]},
                          guard={"100": [guard_for("old A", "")], "200": [guard_for("old B", "")]})
         self.assertEqual(self.run_fix(data),
-                         ["Quest dialogue: 1 quests rewritten; 1 left as they are (changed since upstream)"])
+                         ["Quest dialogue: 1 quests rewritten; 1 left as they are (their text differs from upstream's and this file's): 200"])
         self.assertEqual(self.row(100, "Description", "StepText"), ("new A", "go|come back"))
         self.assertEqual(self.row(200, "Description", "StepText", "LastTimeRowUpdated"), ("old B", None, OLD))
 
@@ -456,7 +465,7 @@ class RevisionTests(unittest.TestCase):
         clean = qd.digests(self.clean, self.revision, CHAINS)["7"]
         self.assertEqual(clean, {qid: digests[0] for qid, digests in self.upstream.items()})
         before = held(self.world)
-        self.assertEqual(apply_file(self.world, self.next_revision(clean)), [])
+        self.assertEqual(apply_file(self.world, self.next_revision(clean)), ["Quest dialogue: 2 left as they are (their text differs from upstream's and this file's): 100, 200"])
         self.assertEqual(held(self.world), before)
 
     def test_current_is_an_error_when_a_row_would_keep_another_text(self):

@@ -126,9 +126,11 @@ teleporters' [Battlegrounds] choice, and for bots too.
 empty or filled with walkthrough notes. At every start, `./hdc logs` shows `Quest dialogue: N quests
 rewritten` when the texts of the chain's quests (`deploy/bin/quest_dialogue.json`, every class's version) were
 changed, and nothing when they are up to date. There is no marker: a quest is rewritten only while its texts
-still hold upstream's or an earlier version of this file's, so a quest whose text you changed yourself is kept
-(`; M left as they are (changed since upstream)`), and a later release with revised text reaches a world that
-had the earlier one. If it fails, the start log says `Quest dialogue: not applied (...)`, the quests keep the
+still hold upstream's or an earlier version of this file's, so a quest whose text you changed yourself is kept,
+and a later release with revised text reaches a world that had the earlier one. Kept quests are named at every
+start (`M left as they are (their text differs from upstream's and this file's): 21500, ...`): your own edits,
+or, after an upstream upgrade, quests whose upstream text changed, which keep upstream's text until the file is
+updated. If it fails, the start log says `Quest dialogue: not applied (...)`, the quests keep the
 text they have, and it tries again at the next start. The NPCs' chat lines are in `hearthdaoc-quests.json`
 (`Chat`), which replaces upstream's line for the same NPC and keyword. To revise the text: before changing any
 text, run `python3 deploy/bin/quest_dialogue.py --digests <clean world.db> --current` (the digests of the file's

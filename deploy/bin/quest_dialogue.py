@@ -10,7 +10,9 @@ go on.
 Unlike the other world fixes this one has no marker. It runs at every start and changes a row only while the columns
 it sets still hold a text the file's guard lists: upstream's (as epic_chains.py leaves them) or an earlier version of
 this file's text. So the owner's own edits stay, and a later revision of the text reaches a world that had an earlier
-one. A row that already holds the new text is left alone.
+one. A row that already holds the new text is left alone. Rows left alone for any other reason are named by quest ID
+in the start log at every start, so a quest whose upstream text an upgrade changed (and which therefore keeps
+upstream's text) is seen.
 
 The file:
   {"quests": [{"step": "7", "set": {...}, "guard": {"21500": ["<digest>", ...]}}]}
@@ -20,8 +22,8 @@ The file:
   StepItemTemplates). A value is a string (every class), an object with all five class names, or (for the per-stage
   columns SourceText, StepText, TargetText, AdvanceText, StepItemTemplates) a list with one entry, a string or a
   per-class object, for each stage of the quest row (its StepType split on "|"); the list is joined with "|". No
-  value may contain "|". A quest row with another number of stages than a list has entries is left alone and counted
-  with the rows changed since upstream; the other rows still apply.
+  value may contain "|". A quest row with another number of stages than a list has entries is left alone and named
+  with the other rows left alone; the other rows still apply.
 - guard: for each quest ID, the digests of its `set` columns' values that may be replaced. digest() makes them.
   `quest_dialogue.py --digests WORLD.db` prints the digests of the text WORLD holds (after epic_chains), which is
   upstream's text only on a clean world; with `--current` it applies this file to its copy first, so it prints the
@@ -155,19 +157,19 @@ def apply(conn, now=None, data=None, chains=None):
     try:
         data = data if data is not None else load_data()
         chains = chains if chains is not None else epic_chains.load_data()
-        rewritten = kept = 0
+        rewritten, kept = 0, []
         for qid, columns, values, guard in _plan(conn, data, chains):
             row = conn.execute(f"SELECT {', '.join(columns)} FROM DataQuest WHERE ID=?", (qid,)).fetchone()
             if row is None:
                 continue
             if values is None:  # its stages differ from the file's
-                kept += 1
+                kept.append(qid)
                 continue
             held = [value or "" for value in row]
             if held == values:
                 continue
             if digest(held) not in guard:
-                kept += 1
+                kept.append(qid)
                 continue
             sets = ", ".join(f"{column}=?" for column in columns)
             conn.execute(f"UPDATE DataQuest SET {sets}, LastTimeRowUpdated=? WHERE ID=?", (*values, now, qid))
@@ -177,12 +179,23 @@ def apply(conn, now=None, data=None, chains=None):
         conn.execute(f"RELEASE {SAVEPOINT}")
         return [NOT_APPLIED.format(str(e) or type(e).__name__)]
     conn.execute(f"RELEASE {SAVEPOINT}")
-    if not rewritten:
-        return []
-    line = f"Quest dialogue: {rewritten} quests rewritten"
+    return summary(rewritten, kept)
+
+
+KEPT_SHOWN = 10
+
+
+def summary(rewritten, kept):
+    """The start log's line: what was rewritten, and every start the quests left as they are, by ID, so a quest an
+    upstream upgrade changed (which then keeps upstream's text) is seen. Nothing when all are up to date."""
+    parts = []
+    if rewritten:
+        parts.append(f"{rewritten} quests rewritten")
     if kept:
-        line += f"; {kept} left as they are (changed since upstream)"
-    return [line]
+        ids = ", ".join(str(qid) for qid in kept[:KEPT_SHOWN])
+        more = f" and {len(kept) - KEPT_SHOWN} more" if len(kept) > KEPT_SHOWN else ""
+        parts.append(f"{len(kept)} left as they are (their text differs from upstream's and this file's): {ids}{more}")
+    return ["Quest dialogue: " + "; ".join(parts)] if parts else []
 
 
 def digests(world, data=None, chains=None, current=False):
