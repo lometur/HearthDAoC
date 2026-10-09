@@ -5,10 +5,12 @@ name: server-image
 # (deploy/release_tag.py next): image, tag and GitHub release with both bundles, all from this commit. A run
 # for a commit older than a release publishes nothing, so re-running an old run cannot ship older code.
 on:
+  # Docs-only changes ship nothing (deploy/release_tag.py), so neither their PRs nor their merges run.
   push:
     branches: [main]
+    paths-ignore: ["docs/**", "*.md", ".github/README.md"]
   pull_request:
-    paths-ignore: ["docs/**", "*.md"]
+    paths-ignore: ["docs/**", "*.md", ".github/README.md"]
   workflow_dispatch:  # on main: retry a release; on a branch: test only
 
 # Runs on main wait for each other, so releases are made one at a time; a newer push to a PR cancels its run.

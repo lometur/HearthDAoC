@@ -12,6 +12,9 @@ WORKFLOWS = os.path.join(ROOT, ".github", "workflows")
 sys.path.insert(0, os.path.join(ROOT, "tools", "linux", "tests"))
 import release_fixture as fx  # noqa: E402
 
+sys.path.insert(0, os.path.join(ROOT, "deploy"))
+import release_tag  # noqa: E402
+
 
 def read(name):
     with open(os.path.join(WORKFLOWS, name), encoding="utf-8") as f:
@@ -44,6 +47,14 @@ class MergeIsReleaseTests(unittest.TestCase):
         self.assertIn("workflow_dispatch:", self.on)
         self.assertNotIn("tags:", self.on)
         self.assertNotIn("workflow_run", self.text)
+
+    def test_docs_only_changes_run_nothing(self):
+        """A docs-only PR or merge runs no CI (it ships nothing); the shipped Markdown files still run it."""
+        ignored = re.findall(r"paths-ignore:\s*(\[[^\]]*\])", self.on)
+        self.assertEqual(ignored, ['["docs/**", "*.md", ".github/README.md"]'] * 2)
+        for shipped in release_tag.SHIPPED_DOCS:  # "*.md" matches only top-level files
+            self.assertIn("/", shipped)
+            self.assertFalse(shipped.startswith("docs/"))
 
     def test_main_runs_queue_and_pr_runs_cancel(self):
         self.assertRegex(self.text, r"(?m)^concurrency:\s*\n\s+group:\s*server-image-\$\{\{ github.ref \}\}")
