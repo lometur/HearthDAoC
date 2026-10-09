@@ -124,10 +124,10 @@ public sealed class EpicCommandHandler : AbstractCommandHandler, ICommandHandler
             DisplayMessage(client, $"{target.Name} is at the marker of {active.Name} ({active.ID}) stage {active.Step}.");
             return;
         }
-        EpicQuest next = EpicChain.Steps(chain, ProgressOf(target)).FirstOrDefault(s => s.State == EpicStepState.CanTake)?.Quest;
+        EpicQuest next = EpicChain.Steps(chain, ProgressOf(target)).FirstOrDefault(s => s.State is EpicStepState.CanTake or EpicStepState.Waiting)?.Quest;
         if (next == null)
         {
-            DisplayMessage(client, $"{target.Name} has no step to take now; see /epic.");
+            DisplayMessage(client, $"{target.Name} has no step left to take; see /epic.");
             return;
         }
         DbDataQuest row = GameServer.Database.FindObjectByKey<DbDataQuest>(next.Id);
