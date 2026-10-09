@@ -18,7 +18,7 @@ sys.path.insert(0, PATCHES)
 import mpk  # noqa: E402
 import splash_entry  # noqa: E402
 
-# OfflineDAoC 0.34's pregame/splash.mpk. Upstream keeps a byte-identical copy in the repo.
+# OfflineDAoC 0.35's pregame/splash.mpk (the same file as 0.34's). Upstream keeps a byte-identical copy in the repo.
 UPSTREAM = os.path.join(REPO, "source", "tools", "OfflineDaoc.Launcher", "Assets",
                         "offline-daoc-client-splash.mpk")
 BLACK_TGA = (splash_entry.TGA_HEADER + bytes(splash_entry.WIDTH * splash_entry.HEIGHT * 4)
@@ -124,7 +124,7 @@ class SplashEntryTests(unittest.TestCase):
     def test_unknown_client_splash_is_refused(self):
         with open(os.path.join(self.client, "pregame", "splash.mpk"), "ab") as f:
             f.write(b"\0")
-        with self.assertRaisesRegex(splash_entry.SplashError, "isn't OfflineDAoC 0.34's splash"):
+        with self.assertRaisesRegex(splash_entry.SplashError, "isn't OfflineDAoC 0.35's splash"):
             splash_entry.splash_entry(self.client, self.built)
 
 
@@ -351,7 +351,7 @@ WORLD_DB = os.environ.get("HDC_TEST_WORLD")
 SERVER_SRC = os.path.join(REPO, "source", "server")
 
 
-@unittest.skipUnless(CLIENT and WORLD_DB, "set HDC_CLIENT_FILES to an OfflineDAoC 0.34 classic "
+@unittest.skipUnless(CLIENT and WORLD_DB, "set HDC_CLIENT_FILES to an OfflineDAoC 0.35 classic "
                      "client folder and HDC_TEST_WORLD to a clean classic world database")
 class BuildSplashTests(unittest.TestCase):
     @classmethod

@@ -8,16 +8,19 @@
     <AssemblyName>OfflineDAoC</AssemblyName>
     <Product>Offline DAoC: Classic + Shrouded Isles</Product>
     <AssemblyTitle>Offline DAoC Launcher and Population Monitor</AssemblyTitle>
+    <!-- Windows enlarges fonts for display scaling; UiScale scales the pixel layout to match. -->
+    <ApplicationHighDpiMode>SystemAware</ApplicationHighDpiMode>
   </PropertyGroup>
   <ItemGroup>
     <PackageReference Include="System.Data.SQLite.Core" Version="1.0.119" />
     <Compile Include="../../server/GameServer/bots/autonomous/BotGoalSettings.cs" Link="Configuration/BotGoalSettings.cs" />
     <Compile Include="../../server/GameServer/bots/autonomous/RealmEventRecordStore.cs" Link="Records/RealmEventRecordStore.cs" />
+    <Compile Include="../../server/GameServer/Managers/GameLoop/BotAiDelayReport.cs" Link="Records/BotAiDelayReport.cs" />
   </ItemGroup>
   <ItemGroup>
     <EmbeddedResource Include="Assets\offline-daoc-header.png"
                       LogicalName="OfflineDaoc.Launcher.Assets.offline-daoc-header.png" />
-    <EmbeddedResource Include="Assets\offline-daoc-realm-shield.png"
-                      LogicalName="OfflineDaoc.Launcher.Assets.offline-daoc-realm-shield.png" />
+    <EmbeddedResource Include="Assets\offline-daoc-realm-emblem.png"
+                      LogicalName="OfflineDaoc.Launcher.Assets.offline-daoc-realm-emblem.png" />
   </ItemGroup>
 </Project>

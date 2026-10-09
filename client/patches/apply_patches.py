@@ -24,8 +24,8 @@ import patchset  # noqa: E402
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 DEFAULT_PATCHSET = os.path.join(HERE, "classic-creation.json")
-UNKNOWN = ("Not patched: {path} is not the file this HearthDAoC release supports (for example the 0.34b "
-           "edition or a newer upstream client). The client still works with the standard creation screen.")
+UNKNOWN = ("Not patched: {path} is not the file this HearthDAoC release supports (for example the b "
+           "edition, or an older or newer upstream client). The client still works with the standard creation screen.")
 MISSING = "Not patched: {path} is missing from the client folder."
 CHANGED = ("Not restored: {path} has changed since it was patched (for example a newer client was installed); "
            "the saved original is kept as {backup}.")

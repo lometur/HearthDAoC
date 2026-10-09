@@ -2,7 +2,7 @@
 ;
 ; build.py assembles this file with nasm (-f bin -D HDCC_ORG=<VA of the .hdcc section>) next to
 ; baseclass_data.inc, which it generates from the server's class files and src/base_classes.py.
-; Target: the OfflineDAoC 0.34 classic game.dll, whose character creation code is stock 1.127.
+; Target: the OfflineDAoC 0.35 classic game.dll, whose character creation code is stock 1.127.
 ;
 ; The hook at 0x5B0051 turns "call 0x5B438C" in the creation-registry builder (0x5B0031) into
 ; "call hdc_post". The builder has just pushed the registry (ebx), so hdc_post is stdcall with

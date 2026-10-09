@@ -24,7 +24,8 @@ internal sealed class ExchangeSalesForm : Form
         BackColor = DaocTheme.Panel;
         ForeColor = DaocTheme.GoldLight;
         Font = new Font("Georgia", 9f);
-        AutoScaleMode = AutoScaleMode.Dpi;
+        // Built in 96-DPI pixels and scaled once by UiScale (display scaling and text size).
+        AutoScaleMode = AutoScaleMode.None;
         var layout = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 1, RowCount = 3, Padding = new Padding(10) };
         layout.RowStyles.Add(new RowStyle(SizeType.Absolute, 42));
         layout.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
@@ -65,6 +66,7 @@ internal sealed class ExchangeSalesForm : Form
         layout.Controls.Add(_status, 0, 2);
         Controls.Add(layout);
         Shown += async (_, _) => await RefreshAsync();
+        UiScale.Apply(this);
     }
 
     private void AddColumn(string title, string property, int width) => _grid.Columns.Add(new DataGridViewTextBoxColumn

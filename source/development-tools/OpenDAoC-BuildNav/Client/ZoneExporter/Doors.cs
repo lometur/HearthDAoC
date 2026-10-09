@@ -13,12 +13,22 @@ namespace CEM.Client.ZoneExporter
   {
     private static readonly Regex[] DoorRegex = [new("^door([0-9])+")];
 
+    /// <summary>
+    /// Door leaves that are not numbered server doors: "door L01", "doorR", "door_01:31",
+    /// "door_01_collidee", "door", "doors", "doorPanel"... Trim, arches, doorways and handles
+    /// are not leaves. In a house whose doors the server does not control, players walk
+    /// through these, but they used to be built as solid walls, sealing e.g. every Hibernian
+    /// Celtic hut (merchants and trainers inside unreachable, 2026-10-06 audit).
+    /// </summary>
+    private static readonly Regex[] DoorLeafRegex = [new(@"^doors?(\s*[lr]?\s*\d*|_\d+(_collidee)?|_coll(idee)?|panel|\s+\d+)?(:\d+)?$")];
+
     private void ExtractDoor(NiFile model, Matrix4 worldMatrix, int fixtureid)
     {
       // take everything that is under a doorX node and use it for the hull...
       if (model == null) return;
 
       var doorVertices = new Dictionary<string, List<Vector3>>();
+      var leafVertices = new List<List<Vector3>>();
 
       // find all trimeshs and tristrips
       foreach (var obj in model.ObjectsByRef.Values)
@@ -30,8 +40,9 @@ namespace CEM.Client.ZoneExporter
           continue;
 
         var doorName = FindMatchRegex(avNode, DoorRegex);
+        bool leaf = doorName == string.Empty && FindMatchRegex(avNode, DoorLeafRegex) != string.Empty;
 
-        if (doorName == string.Empty) continue;
+        if (doorName == string.Empty && !leaf) continue;
 
         Vector3[] vertices = null;
         Triangle[] triangles = null;
@@ -46,6 +57,12 @@ namespace CEM.Client.ZoneExporter
         if (vertices == null)
           continue;
 
+        if (leaf)
+        {
+          leafVertices.Add(vertices.ToList());
+          continue;
+        }
+
         if (!doorVertices.ContainsKey(doorName))
         {
           doorVertices.Add(doorName, new List<Vector3>());
@@ -53,6 +70,19 @@ namespace CEM.Client.ZoneExporter
         doorVertices[doorName].AddRange(vertices);
       }
 
+
+      // A door leaf belongs to the nearest numbered door of the same model, so the server's
+      // open/closed state still gates it (keep gates stay closed to bots when closed). Leaves
+      // of a model without numbered doors are simply walkable.
+      foreach (var leafSet in leafVertices)
+      {
+        if (doorVertices.Count == 0) break;
+        Vector3 centre = leafSet.Aggregate(Vector3.Zero, (sum, v) => sum + v) / leafSet.Count;
+        string nearest = doorVertices.Keys.OrderBy(key =>
+          (doorVertices[key].Aggregate(Vector3.Zero, (sum, v) => sum + v) / doorVertices[key].Count - centre).LengthSquared).First();
+        if ((doorVertices[nearest].Aggregate(Vector3.Zero, (sum, v) => sum + v) / doorVertices[nearest].Count - centre).LengthSquared < 400f * 400f)
+          doorVertices[nearest].AddRange(leafSet);
+      }
 
       foreach (var key in doorVertices.Keys)
       {

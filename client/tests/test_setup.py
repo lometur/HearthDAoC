@@ -19,7 +19,7 @@ RELEASE_SPLASH = "runtime/client-opendaoc/app/pregame/splash.mpk"
 SPLASH = b"stock splash"
 SPLASH_NEW = b"HEARTH DAoC splash"
 UNKNOWN_DLL = ("Not patched: game.dll is not the file this HearthDAoC release supports (for example the "
-               "0.34b edition or a newer upstream client). The client still works with the standard "
+               "b edition, or an older or newer upstream client). The client still works with the standard "
                "creation screen.\n")
 WARNING = "Warning: the client was set up without HearthDAoC's patches (see the message above).\n"
 # What setup.sh installs in <dest>/patches, for play.sh to apply at every launch: exactly these.
@@ -98,7 +98,7 @@ class SetupTests(unittest.TestCase):
 
     def test_repository_patch_set_refuses_a_foreign_client_and_setup_still_succeeds(self):
         # From a checkout, setup.sh uses client/patches/. The fixture's game.dll isn't OfflineDAoC
-        # 0.34 classic's, so the applier refuses it (exit 3): a warning, and the client is unchanged.
+        # 0.35 classic's, so the applier refuses it (exit 3): a warning, and the client is unchanged.
         with fx.RangeServer(self.dir) as srv:
             dest, r = self.run_setup(srv)
         self.assertEqual(r.returncode, 0, r.stderr + r.stdout)

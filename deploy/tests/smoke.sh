@@ -35,6 +35,12 @@ docker exec "$NAME" grep -q "<Port>$PORT</Port>" /app/server/config/serverconfig
 docker exec "$NAME" grep -q "<EnableUPnP>False</EnableUPnP>" /app/server/config/serverconfig.xml || fail "UPnP not off"
 docker exec "$NAME" test -f /app/server/config/logconfig.xml || fail "logconfig.xml missing"
 echo "ok - generated config and release config files present"
+# The release's server data files are downloaded into the volume, not baked into the image.
+for f in classic-quests.json classic-quest-guides.json; do
+    [[ "$(docker exec "$NAME" readlink "/app/server/$f")" == "/data/server-files/"*"/$f" ]] || fail "$f is not linked from /data/server-files"
+    docker exec "$NAME" python3 -c 'import json, sys; json.load(open(sys.argv[1]))' "/app/server/$f" || fail "the server cannot read $f"
+done
+logs_have "server data files ready (2 downloaded)" || fail "the first start did not download the server data files"
 [[ "$(docker exec "$NAME" sqlite3 /data/world/opendaoc.sqlite3.db 'SELECT group_concat(DISTINCT Port) FROM Regions')" == "$UDP" ]] \
     || fail "world regions do not tell clients UDP port $UDP"
 echo "ok - world regions tell clients the server's UDP port"
@@ -43,6 +49,8 @@ grep -q "Command - '&tele' .* required plvl:2" "$T/server.log" || fail "/tele is
 grep -q "Command - '&tc' .* required plvl:2" "$T/server.log" || fail "/tc is not GM-only"
 grep -q "Command - '&spawn' .* required plvl:1" "$T/server.log" || fail "/spawn should stay open to players"
 echo "ok - single-player teleports are GM-only, companions stay open"
+grep -q "CLASSIC_QUESTS loaded quests=[1-9]" "$T/server.log" || fail "the server did not load classic-quests.json"
+echo "ok - the server finds its data files (classic-quests.json, classic-quest-guides.json) in /data"
 [[ "$(docker exec "$NAME" sqlite3 /data/world/opendaoc.sqlite3.db "SELECT Value FROM ServerProperty WHERE \`Key\`='disabled_classes'")" == "33;34;39;58-62" ]] \
     || fail "Disciple (20) is still disabled"
 [[ "$(docker exec "$NAME" sqlite3 /data/world/opendaoc.sqlite3.db "SELECT COUNT(*) FROM StartupLocation WHERE ClassID=20 AND RaceID=4")" == 1 ]] \
@@ -57,6 +65,9 @@ run; wait_listen || fail "restart failed"
 docker exec "$NAME" test -L /app/server/realm-event-records.sqlite3 || fail "realm-event ledger not linked after restart"
 docker exec "$NAME" sqlite3 /data/state/realm-event-records.sqlite3 .tables | grep -q smoke_probe || fail "realm-event ledger not kept across restart"
 echo "ok - realm-event ledger kept across restart"
+docker exec "$NAME" test -L /app/server/classic-quests.json || fail "server data files not linked after restart"
+if logs_have "server data files ready"; then fail "the server data files were downloaded again on restart"; fi
+echo "ok - server data files kept across restart"
 docker exec "$NAME" python3 /app/tools/accounts/accounts.py --db "$db" list | grep -q smoketest || fail "data lost on restart"
 echo "ok - restart keeps the data"
 docker rm -f "$NAME" >/dev/null

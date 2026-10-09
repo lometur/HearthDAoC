@@ -99,7 +99,7 @@ public class RealmEventsPresentationTests
         Assert.That(check.Checked, Is.True);
         Assert.That(Rows(grid).Length, Is.EqualTo(3));
         check.Checked = false;
-        Assert.That(Rows(grid).Length, Is.EqualTo(7));
+        Assert.That(Rows(grid).Length, Is.EqualTo(13)); // + Summoner's Hall and Darkness Falls for each realm
         Assert.That(Field<bool>("_eventRequestPending"), Is.False);
     }
 
@@ -111,7 +111,7 @@ public class RealmEventsPresentationTests
         Assert.That(Rows(Field<DataGridView>("_rvrObjectivesGrid")), Is.Empty);
         Assert.That(Field<Button>("_eventStart").Enabled, Is.False);
         Field<CheckBox>("_eventActiveOnly").Checked = false;
-        Assert.That(Rows(Field<DataGridView>("_rvrObjectivesGrid")).Length, Is.EqualTo(6));
+        Assert.That(Rows(Field<DataGridView>("_rvrObjectivesGrid")).Length, Is.EqualTo(12));
     }
 
     [TestCase("Staging", 1800000L, "Staging 30:00")]
@@ -129,9 +129,9 @@ public class RealmEventsPresentationTests
     public void RealmTypeAndParticipantSearchFilterTheCorrectEvents()
     {
         var grid = Field<DataGridView>("_rvrObjectivesGrid");
-        Assert.That(Rows(grid).Length, Is.EqualTo(7));
+        Assert.That(Rows(grid).Length, Is.EqualTo(13));
         Field<ComboBox>("_eventRealm").SelectedItem = "Albion";
-        Assert.That(Rows(grid).Select(r => Value(r,"Id")), Is.EquivalentTo(new[] { "dragon-albion", "epic-albion", "keep-1" }));
+        Assert.That(Rows(grid).Select(r => Value(r,"Id")), Is.EquivalentTo(new[] { "dragon-albion", "epic-albion", "keep-1", "darkness-albion", "summoners-albion" }));
         Field<ComboBox>("_eventKind").SelectedItem = "Dragon";
         Assert.That(Rows(grid).Select(r => Value(r,"Id")), Is.EqualTo(new[] { "dragon-albion" }));
         Field<TextBox>("_eventSearch").Text = "Raider80";

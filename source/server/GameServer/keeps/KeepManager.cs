@@ -343,6 +343,7 @@ namespace DOL.GS.Keeps
 				if (m_frontierRegionsList.Contains(keep.Region) == false && keep.IsPortalKeep == false) continue;
 				DbBattleground bg = GetBattleground(keep.Region);
 				if (bg == null) continue;
+				// HearthDAoC: the classic realm rank caps stay (MaxRealmLevel 0: no cap).
 				if (player.Level >= bg.MinLevel &&
 					player.Level <= bg.MaxLevel &&
 					(bg.MaxRealmLevel == 0 || player.RealmLevel < bg.MaxRealmLevel))
@@ -783,7 +784,7 @@ namespace DOL.GS.Keeps
 			switch (player.Realm)
 			{
 				case eRealm.Albion: location = "Castle Sauvage"; break;
-				case eRealm.Midgard: location = "Svasud Faste"; break;
+				case eRealm.Midgard: location = "Svasud Faste"; break; // The Teleport row is "Svasud Faste"; "Svasudheim Faste" never matched.
 				case eRealm.Hibernia: location = "Druim Ligen"; break;
 			}
 

@@ -10,7 +10,7 @@
 3. The welcome messages players see (motd, starting_msg) name Offline DAoC and describe a world to play
    alone. Replace upstream's texts with HearthDAoC's.
 4. The classic battlegrounds (levels 15 to 35, as in the Shrouded Isles era): battlegrounds.py, once per
-   world (the marker classic-battlegrounds-v1 in fork_world_fixes). It runs last, under its own
+   world (the marker classic-battlegrounds-v2 in fork_world_fixes). It runs last, under its own
    savepoint: if it fails, it undoes only itself and prints why, and the fixes above are still saved.
 
 All of them only apply when needed and leave anything the owner set themselves alone.

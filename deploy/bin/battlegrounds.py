@@ -1,32 +1,36 @@
 """The classic battlegrounds (levels 15 to 35, as in the Shrouded Isles era), in the world data.
 
 world_fixes.py calls apply() inside its transaction, after its own fixes. The fix runs once per world:
-it records the marker classic-battlegrounds-v1 in the fork table fork_world_fixes, and a world with the
+it records the marker classic-battlegrounds-v2 in the fork table fork_world_fixes, and a world with the
 marker is left alone, so changes the owner makes later stay. Every statement, the CREATE TABLE of the
 two fork tables included, runs under one savepoint. If any step fails, the savepoint is rolled back
 (no change, no fork table, no marker, so the next start tries again) and apply() returns only the
 "not applied" line; world_fixes.py still commits its own fixes and the server starts.
 
+v2 is for upstream's 0.35 world. Every world the 0.35 image runs is a fresh 0.35 world (hdc new-world
+and hdc upgrade-world start from upstream's clean world, without the fork tables), so v2 expects 0.35's
+values, not 0.34's (v1). 0.35 ships central keeps of its own in Abermenai and Murdaigean, Dun Abermenai
+(KeepID 33) and Dun Murdaigean (KeepID 32), with their guards; the fork keeps them and only levels them
+for the ranges and adds its wall casters and a hastener.
+
 Each step changes a value only while it still holds upstream's value (the keep Level reset in step 3 is
-the exception, as the spec requires), adds rows only where none of their
-kind are there yet, and adds one line to the result when it changed something:
+the exception, as the spec requires), adds rows only where none of their kind are there yet, and adds
+one line to the result when it changed something:
 1. the Battleground rows get the classic level ranges and realm rank caps;
 2. Caledon is shown as Caledonia, and no battleground keeps a zone XP bonus;
-3. Thidranki Faste and Caer Caledon get base levels for their ranges and keep Level 1, and their gates
-   the matching health;
-4. Abermenai and Murdaigean, which have no guards, get a copy of Thidranki's portal keep guards and
-   hasteners (all four battlegrounds share one map and the same portal keep spots);
-5. they also get a central keep each, Dun Abermenai and Dun Murdaigean, held by renegades. Its guards
-   are Thidranki's Hibernia portal keep guards moved onto the central keep model (moved()), four
-   fighters at its gate (gate_spots()) and a lord. They are added only in the run that adds the keep's
-   Keep row, and only those not there yet. Its doors are closed at full health;
+3. the four central keeps (Dun Abermenai, Thidranki Faste, Dun Murdaigean, Caer Caledon) get base levels
+   for their ranges and keep Level 1, and their gates (closed already) the matching full health;
+4. the portal keeps of Abermenai and Murdaigean, which have no guards, get a copy of Thidranki's portal
+   keep guards and hasteners (all four battlegrounds share one map and the same portal keep spots);
+5. Dun Abermenai and Dun Murdaigean get six casters on their walls and a hastener beside their gate:
+   Thidranki's Hibernia portal keep casters and hastener, moved onto the central keep model (moved());
 6. Atlas's leftovers go: training dummies, Void Merchants and a stray Wizard (archived first in the
    fork table fork_removed_mobs), and saved quests of the deleted battleground daily quest classes.
 """
 import datetime
 import math
 
-FIX_ID = "classic-battlegrounds-v1"
+FIX_ID = "classic-battlegrounds-v2"
 MARKER_TABLE = "fork_world_fixes"
 ARCHIVE_TABLE = "fork_removed_mobs"
 SAVEPOINT = "classic_battlegrounds"
@@ -35,21 +39,27 @@ NOT_APPLIED = "Classic battlegrounds: not applied ({}); the battlegrounds stay a
 NAMES = {253: "Abermenai", 252: "Thidranki", 251: "Murdaigean", 250: "Caledonia"}
 ORDER = (253, 252, 251, 250)
 
-# Step 1, by RegionID: (label, MinLevel, MaxLevel, MaxRealmLevel) as upstream ships it, then classic.
+# Step 1, by RegionID: (label, MinLevel, MaxLevel, MaxRealmLevel) as upstream 0.35 ships it, then classic.
 # MaxRealmLevel means "must be below": 3 is up to 1L2 (under 125 realm points), 4 up to 1L3 (350),
 # 6 up to 1L5 (1,375) and 10 up to 1L9 (7,125).
 BATTLEGROUND_ROWS = {
     253: (("Abermenai (Level 15-19)", 15, 19, 2), ("Abermenai (Level 15-19 - RR1L2)", 15, 19, 3)),
     252: (("Thidranki (Level 20-24 - RR2L0)", 20, 24, 10), ("Thidranki (Level 20-24 - RR1L3)", 20, 24, 4)),
     251: (("Murdaigean (Level 25-29)", 25, 29, 5), ("Murdaigean (Level 25-29 - RR1L5)", 25, 29, 6)),
-    250: (("Caledonia (Level 34-39 - RR3L5)", 30, 34, 25), ("Caledonia (Level 30-35 - RR1L9)", 30, 35, 10)),
+    250: (("Caledonia (Level 34-39 - RR3L5)", 30, 35, 25), ("Caledonia (Level 30-35 - RR1L9)", 30, 35, 10)),
 }
 # Step 2: the zones whose Experience is 50 upstream, in ORDER (251 and 253 are already 0).
 XP_BONUS_ZONES = (252, 250)
-# Step 3, by KeepID: (Region, name, upstream BaseLevel, classic BaseLevel).
-KEEP_LEVELS = {11: (252, "Thidranki Faste", 26, 24), 31: (250, "Caer Caledon", 46, 35)}
-# Their gates, by Door.InternalID: (upstream Health, the new BaseLevel x keep_doors_base_health 200).
-GATE_HEALTH = {252000301: (5200, 4800), 252000302: (5200, 4800), 250000301: (9200, 7000), 250000302: (9200, 7000)}
+# Step 3, by KeepID, in ORDER: (Region, name, upstream BaseLevel, classic BaseLevel). At keep Level 1, with
+# keep_guard_level_multiplier 1.6, the server makes the guards BaseLevel + 2 and the lord
+# BaseLevel + (BaseLevel / 10 + 1) x 2 + 1 (spec 3.4): 21 and 24 in Dun Abermenai, 31 and 36 in Dun Murdaigean.
+KEEP_LEVELS = {33: (253, "Dun Abermenai", 21, 19), 11: (252, "Thidranki Faste", 26, 24),
+               32: (251, "Dun Murdaigean", 31, 29), 31: (250, "Caer Caledon", 46, 35)}
+# Their gates (outer and inner Door.InternalID) go from upstream's full health to the new one, BaseLevel x
+# keep_doors_base_health 200 (4,200 to 3,800 in Dun Abermenai), only once the keep has the new BaseLevel.
+GATES = {33: (253000301, 253000302), 11: (252000301, 252000302), 32: (251000301, 251000302),
+         31: (250000301, 250000302)}
+KEEP_DOORS_BASE_HEALTH = 200
 # Step 6.
 QUEST_CLASSES = (
     "DOL.GS.DailyQuest.Albion.CaleKeepCaptureAlb", "DOL.GS.DailyQuest.Hibernia.CaleKeepCaptureHib",
@@ -65,40 +75,41 @@ STRAY_WIZARD = {"Mob_ID": "caledon-guard-25", "ClassType": "DOL.GS.Keeps.GuardSt
                 "Realm": 1, "Level": 48, "X": 33185, "Y": 37386, "Z": 3722, "Region": 250}
 IN_BATTLEGROUNDS = "Region BETWEEN 250 AND 253"
 
+# The keep areas (keeps/KeepArea.cs): a guard within this radius of a keep's X, Y belongs to that keep. A
+# portal keep is a keep with BaseLevel 100 or more (AbstractGameKeep.IsPortalKeep).
+PORTAL_KEEP_RADIUS = 4000
+KEEP_RADIUS = 3000
 # Step 4: Thidranki's portal keep guards and hasteners are the Mob rows of these classes in this region
-# within the portal keep area's radius (keeps/KeepArea.cs) of these KeepIDs.
-PORTAL_KEEP_SOURCE = (252, (12, 13, 14), 4000)   # region, KeepIDs, radius
+# within the portal keep area of these KeepIDs. They are copied into the regions in PORTAL_KEEP_TARGETS.
+PORTAL_KEEP_SOURCE = (252, (12, 13, 14))   # region, KeepIDs
 KEEP_GUARD_CLASSES = ("DOL.GS.Keeps.FrontierHastener", "DOL.GS.Keeps.GuardFighter", "DOL.GS.Keeps.GuardStaticCaster")
-# Step 5, by region, in the order they are added: the central keep's Name, Keep_ID and BaseLevel (the top
-# of the range). Its KeepID is the first free one from FIRST_KEEP_ID.
-CENTRAL_KEEPS = {253: ("Dun Abermenai", "hdc-bg253-dun-abermenai", 19),
-                 251: ("Dun Murdaigean", "hdc-bg251-dun-murdaigean", 29)}
-FIRST_KEEP_ID = 32
-KEEP_CREATE_INFO = "HearthDAoC classic-battlegrounds-v1"
-PORTAL_KEEP_HIB = 12          # its Keep row is moved to make the central Keep row's X, Y, Z, Heading
-# The Hibernia portal keep's rows that stand on its model, moved onto the central keep: its hastener (on
-# the floor, Z 4320) and its six casters on the walls (Z 4736).
-CENTRAL_SOURCES = ("802a1b0a-f47e-47b9-a688-e401ad33e42f",
-                   "62f874d0-333b-475f-a044-109cb0bd74b6", "be8e2cbf-6569-4c46-a4aa-d84903a902fc",
-                   "3a07da41-d088-4174-980f-1d5ad21fc334", "2fc59f4b-0b0d-4efc-bf3b-93a1b01e681a",
-                   "b05f95a5-9e55-4ddf-93d0-340336bc2e16", "f1f1d987-1b9a-421b-a8a1-9df423f118fe")
-FIGHTER_TEMPLATE = "b67eacce-2719-48a9-8be7-1dbf0c16b7d2"   # a Hibernia portal keep fighter
-LORD_TEMPLATE = "863582fc-af9c-4661-8e60-4d8b2985ad2a"      # Thidranki Faste's lord
-# The central doors, by region: outer and inner Door.InternalID, then Health as upstream ships it and the
-# keep's full health (BaseLevel x keep_doors_base_health 200). Their State goes from 0 (open) to 1 (closed).
-CENTRAL_DOORS = {253: (253000301, 253000302, 2545, 3800), 251: (251000301, 251000302, 2545, 5800)}
+PORTAL_KEEP_TARGETS = (253, 251)
+# Step 5, by region: upstream's central keep (KeepID) that gets the wall casters and the hastener, and its name.
+CENTRAL_KEEPS = {253: (33, "Dun Abermenai"), 251: (32, "Dun Murdaigean")}
+CASTER_CLASS = "DOL.GS.Keeps.GuardStaticCaster"
+HASTENER_CLASS = "DOL.GS.Keeps.FrontierHastener"
+# Thidranki's Hibernia portal keep rows that stand on its model, moved onto a central keep: its six casters on
+# the walls (Z 4736), and its hastener beside the outer gate (on the floor, Z 4320).
+WALL_CASTERS = ("62f874d0-333b-475f-a044-109cb0bd74b6", "be8e2cbf-6569-4c46-a4aa-d84903a902fc",
+                "3a07da41-d088-4174-980f-1d5ad21fc334", "2fc59f4b-0b0d-4efc-bf3b-93a1b01e681a",
+                "b05f95a5-9e55-4ddf-93d0-340336bc2e16", "f1f1d987-1b9a-421b-a8a1-9df423f118fe")
+# Moved, the hastener stands beside the outer gate (33612, 39657 in 253; 32546, 37248 in 251), 60 and 65 units
+# from an upstream gate fighter, as Thidranki Faste's and Caer Caledon's do (210 and 251 from the gate, same side).
+HASTENER = "802a1b0a-f47e-47b9-a688-e401ad33e42f"
+# Each kind is added on its own: only when all its rows are there and the keep's area has no row of its class
+# yet. (class, source Mob_IDs, the result line's word for one, for more)
+CENTRAL_ROWS = ((CASTER_CLASS, WALL_CASTERS, "wall caster", "wall casters"),
+                (HASTENER_CLASS, (HASTENER,), "hastener", "hasteners"))
 
 # Step 5, the move (spec 3.2): a spot on Thidranki's Hibernia portal keep model goes onto a central keep
 # model. P is the portal keep model's origin. By region, C is the central model's origin and the angle
 # (degrees, from +X towards +Y) is how far that model is turned from the portal keep's. The central
-# keep's floor is FLOOR_DROP lower (3720 against 4320, from the door rows).
+# keep's floor is FLOOR_DROP lower (3720 against 4320, from the door rows), so a caster on the portal keep's
+# walls (4736) stands at 4136 on the central keep's, where upstream 0.35 puts its own wall-top guards (4137),
+# and the hastener (4320) at 3720, beside the outer gate, where upstream's gate guards stand at 3719 to 3746.
 P = (18048, 18176)
 FLOOR_DROP = 600
 MOVES = {253: ((33152, 38400), 30), 251: ((33408, 38272), 190)}
-# The four fighters at a central keep's gate stand GATE_SIDE to either side of the line through its two
-# doors: two in the passage between the doors, and two GATE_INSIDE inside the inner door.
-GATE_SIDE = 60
-GATE_INSIDE = 150
 
 
 def apply(conn, now=None):
@@ -146,26 +157,6 @@ def moved(region, x, y, z, heading):
             (heading + round(degrees * 4096 / 360)) % 4096)
 
 
-def facing(frm, to):
-    """The heading (0 to 4095) of something at frm that faces to, as the server reckons headings
-    (world/Point2D.cs GetHeading: 0 towards +Y, turning the same way as the angles in MOVES), rounded."""
-    return round(math.atan2(-(to[0] - frm[0]), to[1] - frm[1]) * 4096 / (2 * math.pi)) % 4096
-
-
-def gate_spots(outer, inner):
-    """The four fighters' spots at a central keep's gate, from its outer and inner door rows (x, y, z): two
-    in the passage between the doors, at its midpoint, then two GATE_INSIDE inside the inner door; each pair
-    GATE_SIDE to either side of the gate's line, at the inner door's height, facing out through the gate."""
-    length = math.hypot(outer[0] - inner[0], outer[1] - inner[1])
-    ux, uy = (outer[0] - inner[0]) / length, (outer[1] - inner[1]) / length
-    sx, sy = -uy * GATE_SIDE, ux * GATE_SIDE
-    mx, my = (outer[0] + inner[0]) / 2, (outer[1] + inner[1]) / 2
-    ix, iy = inner[0] - GATE_INSIDE * ux, inner[1] - GATE_INSIDE * uy
-    heading = facing(inner, outer)
-    return [(round(x), round(y), inner[2], heading)
-            for x, y in ((mx + sx, my + sy), (mx - sx, my - sy), (ix + sx, iy + sy), (ix - sx, iy - sy))]
-
-
 def _step1_battleground_rows(conn, now):
     changed = []
     for region in ORDER:
@@ -207,76 +198,52 @@ def _step3_keep_levels(conn, now):
                         (now, keep_id, region)).rowcount:
             items.append(f"{name} back to level 1")
     gates = 0
-    for door, (old, new) in GATE_HEALTH.items():
-        gates += conn.execute("UPDATE Door SET Health=?, LastTimeRowUpdated=? WHERE InternalID=? AND Health=?",
-                              (new, now, door, old)).rowcount
+    for keep_id, (region, _, old, new) in KEEP_LEVELS.items():
+        gates += conn.execute("UPDATE Door SET Health=?, LastTimeRowUpdated=? WHERE InternalID IN (?, ?) AND Health=? "
+                              "AND EXISTS (SELECT 1 FROM Keep WHERE KeepID=? AND Region=? AND BaseLevel=?)",
+                              (new * KEEP_DOORS_BASE_HEALTH, now, *GATES[keep_id], old * KEEP_DOORS_BASE_HEALTH,
+                               keep_id, region, new)).rowcount
     if gates:
         items.append(_count(gates, "gate's health", "gates' health"))
     return "Battlegrounds: keep levels for the ranges (" + ", ".join(items) + ")" if items else None
 
 
 def _step4_portal_keep_guards(conn, now):
-    source, keeps, radius = PORTAL_KEEP_SOURCE
+    source, keeps = PORTAL_KEEP_SOURCE
+    radius = PORTAL_KEEP_RADIUS * PORTAL_KEEP_RADIUS
     items = []
-    for region in CENTRAL_KEEPS:
-        if conn.execute("SELECT 1 FROM Mob WHERE Region=? AND ClassType LIKE 'DOL.GS.Keeps.%'", (region,)).fetchone():
-            continue  # it has keep guards already: the owner's, or an earlier run's
+    for region in PORTAL_KEEP_TARGETS:
+        # Only the portal keeps' areas count: upstream 0.35's central keep guards are DOL.GS.Keeps.* rows too.
+        if conn.execute("SELECT 1 FROM Mob m JOIN Keep k ON k.Region=m.Region AND k.BaseLevel>=100 AND "
+                        "(m.X-k.X)*(m.X-k.X) + (m.Y-k.Y)*(m.Y-k.Y) <= ? "
+                        "WHERE m.Region=? AND m.ClassType LIKE 'DOL.GS.Keeps.%'", (radius, region)).fetchone():
+            continue  # a portal keep has keep guards already: the owner's, or an earlier run's
         added = _copy_mobs(conn, {"Region": ("?", region), "Mob_ID": ("? || m.Mob_ID", f"hdc-bg{region}-pk-"),
                                   "LastTimeRowUpdated": ("?", now)},
                            "m.Region=? AND m.ClassType IN (?, ?, ?) AND EXISTS (SELECT 1 FROM Keep k WHERE "
                            "k.Region=m.Region AND k.KeepID IN (?, ?, ?) AND "
                            "(m.X-k.X)*(m.X-k.X) + (m.Y-k.Y)*(m.Y-k.Y) <= ?) "
                            "AND NOT EXISTS (SELECT 1 FROM Mob x WHERE x.Mob_ID = ? || m.Mob_ID)",
-                           (source, *KEEP_GUARD_CLASSES, *keeps, radius * radius, f"hdc-bg{region}-pk-"))
+                           (source, *KEEP_GUARD_CLASSES, *keeps, radius, f"hdc-bg{region}-pk-"))
         if added:
             items.append(f"{NAMES[region]} ({added})")
     return "Battlegrounds: portal keep guards and hasteners for " + ", ".join(items) if items else None
 
 
-def _step5_central_keeps(conn, now):
-    keeps, doors = [], 0
-    for region, (name, keep_key, base_level) in CENTRAL_KEEPS.items():
-        outer, inner, old_health, new_health = CENTRAL_DOORS[region]
-        portal_keep = conn.execute("SELECT X, Y, Z, Heading FROM Keep WHERE KeepID=?", (PORTAL_KEEP_HIB,)).fetchone()
-        spots = {door: conn.execute("SELECT X, Y, Z FROM Door WHERE InternalID=?", (door,)).fetchone()
-                 for door in (outer, inner)}
-        sources = {mob_id: conn.execute("SELECT X, Y, Z, Heading FROM Mob WHERE Mob_ID=?", (mob_id,)).fetchone()
-                   for mob_id in CENTRAL_SOURCES + (FIGHTER_TEMPLATE, LORD_TEMPLATE)}
-        if portal_keep is None or None in spots.values() or None in sources.values():
-            continue  # a row the keep is made from is missing: leave this region as it is
-        if not conn.execute("SELECT 1 FROM Keep WHERE (Region=? AND BaseLevel<100) OR Keep_ID=?",
-                            (region, keep_key)).fetchone():
-            keep_id = FIRST_KEEP_ID
-            while conn.execute("SELECT 1 FROM Keep WHERE KeepID=?", (keep_id,)).fetchone():
-                keep_id += 1
-            x, y, z, heading = moved(region, *portal_keep)
-            conn.execute("INSERT INTO Keep (KeepID, Name, Region, X, Y, Z, Heading, Realm, Level, ClaimedGuildName, "
-                         "AlbionDifficultyLevel, MidgardDifficultyLevel, HiberniaDifficultyLevel, OriginalRealm, "
-                         "KeepType, BaseLevel, SkinType, CreateInfo, LastTimeRowUpdated, Keep_ID) "
-                         "VALUES (?, ?, ?, ?, ?, ?, ?, 0, 1, '', 1, 1, 1, 0, 0, ?, 0, ?, ?, ?)",
-                         (keep_id, name, region, x, y, z, heading, base_level, KEEP_CREATE_INFO, now, keep_key))
-            gate = gate_spots(spots[outer], spots[inner])
-            rows = [(f"hdc-bg{region}-ck-{mob_id}", mob_id, moved(region, *sources[mob_id]))
-                    for mob_id in CENTRAL_SOURCES]
-            rows += [(f"hdc-bg{region}-ck-fighter-{n}", FIGHTER_TEMPLATE, spot) for n, spot in enumerate(gate, 1)]
-            rows.append((f"hdc-bg{region}-ck-lord", LORD_TEMPLATE, (x, y, z, gate[0][3])))  # facing the gate
-            guards = 0
-            for new_id, template, (gx, gy, gz, gh) in rows:
-                guards += _copy_mobs(conn, {"Region": ("?", region), "Mob_ID": ("?", new_id),
-                                            "LastTimeRowUpdated": ("?", now), "X": ("?", gx), "Y": ("?", gy),
-                                            "Z": ("?", gz), "Heading": ("?", gh)},
-                                     "m.Mob_ID=? AND NOT EXISTS (SELECT 1 FROM Mob WHERE Mob_ID=?)", (template, new_id))
-            keeps.append(f"{name} (keep {keep_id}, {_count(guards, 'guard', 'guards')})")
-        doors += conn.execute("UPDATE Door SET Health=CASE WHEN Health=? THEN ? ELSE Health END, "
-                              "State=CASE WHEN State=0 THEN 1 ELSE State END, LastTimeRowUpdated=? "
-                              "WHERE InternalID IN (?, ?) AND (Health=? OR State=0)",
-                              (old_health, new_health, now, outer, inner, old_health)).rowcount
-    parts = []
-    if keeps:
-        parts.append(("central keep " if len(keeps) == 1 else "central keeps ") + ", ".join(keeps))
-    if doors:
-        parts.append(_count(doors, "central door", "central doors") + " closed at full health")
-    return "Battlegrounds: " + "; ".join(parts) if parts else None
+def _step5_central_keep_guards(conn, now):
+    items = []
+    for region, (keep_id, name) in CENTRAL_KEEPS.items():
+        keep = conn.execute("SELECT X, Y FROM Keep WHERE KeepID=? AND Region=?", (keep_id, region)).fetchone()
+        if keep is None:
+            continue  # the keep is missing: leave this region as it is
+        added = []
+        for class_type, sources, one, many in CENTRAL_ROWS:
+            n = _move_onto_central_keep(conn, now, region, keep, class_type, sources)
+            if n:
+                added.append(_count(n, one, many))
+        if added:
+            items.append(f"{name} (" + ", ".join(added) + ")")
+    return "Battlegrounds: central keep guards for " + ", ".join(items) if items else None
 
 
 def _step6_atlas_leftovers(conn, now):
@@ -301,7 +268,7 @@ def _step6_atlas_leftovers(conn, now):
 
 
 STEPS = (_step1_battleground_rows, _step2_names_and_xp, _step3_keep_levels, _step4_portal_keep_guards,
-         _step5_central_keeps, _step6_atlas_leftovers)
+         _step5_central_keep_guards, _step6_atlas_leftovers)
 
 
 def _archive(conn, now, where, params):
@@ -311,6 +278,28 @@ def _archive(conn, now, where, params):
     conn.execute(f"INSERT INTO {ARCHIVE_TABLE} ({names}, FixId, RemovedUtc) "
                  f"SELECT {names}, ?, ? FROM Mob WHERE {where}", (FIX_ID, now, *params))
     return conn.execute(f"DELETE FROM Mob WHERE {where}", params).rowcount
+
+
+def _move_onto_central_keep(conn, now, region, keep, class_type, sources):
+    """Add a copy of each source row (all of class_type), moved onto region's central keep model, whose Keep row
+    stands at keep (X, Y). Adds nothing when a source row is missing or the keep's area has a class_type row
+    already (the owner's, or an earlier run's), and each copy only if its Mob_ID is free. Returns how many."""
+    spots = {mob_id: conn.execute("SELECT X, Y, Z, Heading FROM Mob WHERE Mob_ID=?", (mob_id,)).fetchone()
+             for mob_id in sources}
+    if None in spots.values():
+        return 0
+    if conn.execute("SELECT 1 FROM Mob WHERE Region=? AND ClassType=? AND (X-?)*(X-?) + (Y-?)*(Y-?) <= ?",
+                    (region, class_type, keep[0], keep[0], keep[1], keep[1], KEEP_RADIUS * KEEP_RADIUS)).fetchone():
+        return 0
+    added = 0
+    for mob_id, spot in spots.items():
+        new_id = f"hdc-bg{region}-ck-{mob_id}"
+        x, y, z, heading = moved(region, *spot)
+        added += _copy_mobs(conn, {"Region": ("?", region), "Mob_ID": ("?", new_id),
+                                   "LastTimeRowUpdated": ("?", now), "X": ("?", x), "Y": ("?", y),
+                                   "Z": ("?", z), "Heading": ("?", heading)},
+                            "m.Mob_ID=? AND NOT EXISTS (SELECT 1 FROM Mob WHERE Mob_ID=?)", (mob_id, new_id))
+    return added
 
 
 def _copy_mobs(conn, replace, where, params):

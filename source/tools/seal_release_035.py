@@ -1,12 +1,12 @@
-"""Seal an assembled 0.34 package into verified, split release assets.
+"""Seal an assembled 0.35 package into verified, split release assets.
 
-    python seal_release_034.py --package <staging>/OfflineDAoC-v0.34b --out <assets folder>
+    python seal_release_035.py --package <staging>/OfflineDAoC-v0.35b --out <assets folder>
 
-Writes PACKAGE MANIFEST.sha256 into the package, zips it (root folder OfflineDAoC-v0.34b/),
+Writes PACKAGE MANIFEST.sha256 into the package, zips it (root folder OfflineDAoC-v0.35b/),
 re-reads every zip entry against the manifest, splits the archive into parts below GitHub's 2 GB
 limit, and writes the download manifests Get-OfflineDAoC.ps1 reads:
-  <out>/v0.34b/  OfflineDAoC-v0.34b.zip.001… , download-manifest.json, SHA256SUMS.txt
-  <out>/v0.34/   download-manifest.json (edition swap of the same parts), SHA256SUMS.txt
+  <out>/v0.35b/  OfflineDAoC-v0.35b.zip.001… , download-manifest.json, SHA256SUMS.txt
+  <out>/v0.35/   download-manifest.json (edition swap of the same parts), SHA256SUMS.txt
 """
 from __future__ import annotations
 
@@ -19,8 +19,8 @@ from pathlib import Path
 
 PART_BYTES = 1_900_000_000
 SEVEN_ZIP = Path(r"C:\Program Files\7-Zip\7z.exe")
-VERSION = "0.34"
-NAME = "Claude Takeover II"
+VERSION = "0.35"
+NAME = "Claude Takeover III"
 EDITION_FOLDER = f"{VERSION}-no-custom-class"
 EDITION_FILES = ("runtime\\data\\opendaoc.sqlite3.db", "runtime\\client-opendaoc\\app\\game.dll")
 

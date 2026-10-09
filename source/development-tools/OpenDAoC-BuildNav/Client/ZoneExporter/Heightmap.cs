@@ -81,18 +81,18 @@ namespace CEM.Client.ZoneExporter
                             {
                                 if (sy == 7 && y == (yVectors - 1))
                                 {
-                                    z = heightmap[sx * 32 + (x - 1), sy * 32 + (y - 1)];
+                                    z = EdgeHeight(256, 256, heightmap[sx * 32 + (x - 1), sy * 32 + (y - 1)]);
                                     waterZ = _waterMap [sx * 32 + (x - 1), sy * 32 + (y - 1)];
                                 }
                                 else
                                 {
-                                    z = heightmap[sx * 32 + (x - 1), sy * 32 + y];
+                                    z = EdgeHeight(256, sy * 32 + y, heightmap[sx * 32 + (x - 1), sy * 32 + y]);
                                     waterZ = _waterMap [sx * 32 + (x - 1), sy * 32 + y];
                                 }
                             }
                             else if (sy == 7 && y == (yVectors - 1))
                             {
-                                z = heightmap[sx * 32 + x, sy * 32 + (y - 1)];
+                                z = EdgeHeight(sx * 32 + x, 256, heightmap[sx * 32 + x, sy * 32 + (y - 1)]);
                                 waterZ = _waterMap [sx * 32 + x, sy * 32 + (y - 1)];
                             }
                             else
@@ -130,6 +130,35 @@ namespace CEM.Client.ZoneExporter
                     }
                 }
             }
+        }
+
+        private static readonly Dictionary<ushort, int[,]> NeighbourHeights = new();
+
+        /// <summary>
+        /// Height of the far-edge vertex (cell index 256) of this zone's terrain grid. The grid
+        /// has 256 cells, so the last row and column have no value of their own; they used to
+        /// repeat the second-to-last one, leaving a flat 256-unit strip on every zone's east and
+        /// north edge and a step against the next zone's real slope (Cornwall to Dartmoor: about
+        /// 140 units, more than the 128 a bot may cross at a seam). The game blends into the next
+        /// zone's first row, so use that zone's height at the same spot when there is one.
+        /// </summary>
+        private int EdgeHeight(int cellX, int cellY, int fallback)
+        {
+            var point = new Vector3(Zone.XOffset + cellX * 256f, Zone.YOffset + cellY * 256f, 0);
+            CEM.World.Zone2 neighbour = Zone.Region?.Values.FirstOrDefault(other => other != Zone && other.HasHeightmap &&
+                other.ProxyZone == 0 && other.Contains(point));
+            if (neighbour == null)
+                return fallback;
+            int[,] heights;
+            lock (NeighbourHeights)
+            {
+                if (!NeighbourHeights.TryGetValue(neighbour.ID, out heights))
+                    NeighbourHeights[neighbour.ID] = heights = neighbour.Heightmap.ToIntArray();
+            }
+            int size = heights.GetLength(0);
+            int nx = Math.Clamp((int)((point.X - neighbour.XOffset) * size / neighbour.Width), 0, size - 1);
+            int ny = Math.Clamp((int)((point.Y - neighbour.YOffset) * size / neighbour.Height), 0, size - 1);
+            return heights[nx, ny];
         }
 
         private float GetWaterLevelAt(float x, float y)

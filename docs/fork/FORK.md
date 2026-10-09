@@ -15,10 +15,13 @@ old names (`odc`, `OFFLINEDAOC_*`, `offlinedaoc-*`) as written at the time.
 | Fork banner | `README.md` (top lines), `.github/README.md` | `README.md` |
 | Container deployment | `deploy/`, `.dockerignore`, `.github/workflows/server-image.yml` | none |
 | Linux admin CLIs | `tools/linux/` (link upstream sources; see each project file) | none |
+| Bot goals with upstream's Battlegrounds column (`hdc bot-goals`) | `tools/linux/bot-goals/Program.cs`, `deploy/hdc` | none: `set` takes Battlegrounds as an optional fourth number and keeps it when left out; the owner's split is in `deploy/HANDOFF.md` (Bot goals), set by hand, not by default |
+| Server data files from the release (`classic-quests.json`, `classic-quest-guides.json`) | `deploy/upstream.lock` (`server_prefix`, `server_files`), `deploy/bin/init_world.py`, `deploy/entrypoint.sh` | none: not in the image. The first start of an upstream version downloads them, checked against the release manifest, into `/data/server-files/<upstream version>/`, and every start links them into `/app/server`. `classic-otd.json` is left out: nothing reads it |
+| World upgrade in `hdc update` | `deploy/hdc`, `deploy/bin/world_admin.py` | none: a release for another upstream version runs `./hdc upgrade-world` (the new release's own) before it starts the server |
 | Player setup | `client/` | none |
 | Classic character creation and splash (client patch set) | `client/patches/`, `client/windows/patch-client.*` | none: patches each player's own client files (see Client patches) |
 | Leveling spawns (owner's choice) | `deploy/bin/spawns.py`, `hdc spawns` | none: restores rows upstream's setup archived in `offline_classic165_removed_mobs` |
-| Classic battlegrounds 15-35, world data (once per world) | `deploy/bin/battlegrounds.py` (run by `deploy/bin/world_fixes.py`) | none |
+| Classic battlegrounds 15-35, world data (once per world, marker `classic-battlegrounds-v2`) | `deploy/bin/battlegrounds.py` (run by `deploy/bin/world_fixes.py`) | none: on the 0.35 world it levels all four central keeps (upstream's Dun Abermenai and Dun Murdaigean included) and their gates, adds the portal keep guards, and six wall casters and a hastener in each of upstream's two keeps, and removes the Atlas leftovers ([spec](specs/2026-10-07-classic-battlegrounds-design.md), section 7) |
 | Design docs | `docs/fork/` | none |
 
 Server code under `source/server` was unchanged in sub-project 1. Every later server-code change is
@@ -28,11 +31,11 @@ listed here, so upstream syncs can account for it:
 |---|---|---|---|
 | `command_plvl_overrides` server property (e.g. `/tele=2;/tc=2`) | `GameServer/gameutils/ScriptMgr.cs` (`CommandPrivLevel`, applied in `LoadCommands`), `GameServer/serverproperty/ServerProperties.cs`, test `Tests/UnitTests/UT_CommandPrivLevelOverrides.cs` | Makes single-player teleports GM-only on a shared server (#38); set from `HEARTHDAOC_GM_ONLY_COMMANDS` | Candidate: generic, off by default |
 | Shrouded Isles start choice: `si_start_choice` server property | `GameServer/scripts/hearthdaoc/SiStartChoice.cs` (the decisions), `GameServer/scripts/hearthdaoc/SiStartChoiceScript.cs` (the property and the game wiring), test `Tests/UnitTests/UT_SiStartChoice.cs`. Upstream files touched: none | A new character of a classic race is asked once, a few seconds after its first entry into the world, whether to begin in its realm's Shrouded Isles town (#40, [spec](specs/2026-10-06-shrouded-isles-start-choice-design.md)); set from `HEARTHDAOC_SI_START_CHOICE` (default on) | Candidate: off by default |
-| Classic battlegrounds: porter levels and caps, over-limit moves, keep level after a capture | `GameServer/scripts/hearthdaoc/ClassicBattlegrounds.cs` (the decisions), `GameServer/scripts/hearthdaoc/ClassicBattlegroundsScript.cs` (the porter hook and the game wiring), test `Tests/UnitTests/UT_ClassicBattlegrounds.cs`, source checks `deploy/tests/test_battlegrounds.py`. Upstream files touched: `GameServer/scripts/teleporters/OFTeleporters.cs` (three blocks), `GameServer/keeps/KeepManager.cs` (one word), and the twelve battleground quest files in `GameServer/scripts/quests/BattlegroundQuests/` (Thidranki and Caledonia), deleted | The four classic battlegrounds for levels 15-35 with their realm rank caps, the porter's reasons, over-limit characters at their bind point, no Atlas daily quests (#76, [spec](specs/2026-10-07-classic-battlegrounds-design.md)) | Candidate: the "Svasud Faste" fix; the rest is fork-only |
+| Classic battlegrounds: porter levels and caps, realm rank caps on every way in (players and bots), over-limit moves, keep level after a capture | `GameServer/scripts/hearthdaoc/ClassicBattlegrounds.cs` (the decisions), `GameServer/scripts/hearthdaoc/ClassicBattlegroundsScript.cs` (the hooks and the game wiring), test `Tests/UnitTests/UT_ClassicBattlegrounds.cs`, source checks `deploy/tests/test_battlegrounds.py`. Upstream files touched, each hook marked `// HearthDAoC:` (in `OFTeleporters.cs`, by the `HearthDAoC.` namespace in the call, since the source check wants each block to be the call and `break;` only): `GameServer/scripts/teleporters/OFTeleporters.cs` (three blocks: the frontier porter), `GameServer/scripts/teleporters/BattlegroundTeleportOptions.cs` (one block: the town teleporters' [Battlegrounds] choice), `GameServer/keeps/KeepManager.cs` (the cap in `GetBGPK`), `GameServer/bots/autonomous/AutonomousBotGoalPolicy.cs` (one: `ReconcileSavedAssignment`, the new goal for a saved record), `GameServer/bots/autonomous/AutonomousObjectiveAssignments.cs` (two: `CanTakeBattleground`, `Assign`), `GameServer/bots/autonomous/AutonomousWorldBotController.Battleground.cs` (one: `ExecuteBattleground`), `GameServer/bots/autonomous/AutonomousWorldBotController.cs` (two: the camp offer in `SelectCamp`, `TravelAcrossRegions`; both check every member of a shared party), and the twelve battleground quest files in `GameServer/scripts/quests/BattlegroundQuests/` (Thidranki and Caledonia), deleted (nothing left to mark; the source check finds no class of theirs) | The four classic battlegrounds for levels 15-35 with their realm rank caps, the porter's reasons, over-limit characters at their bind point, no Atlas daily quests (#76, [spec](specs/2026-10-07-classic-battlegrounds-design.md)). Since upstream 0.35 (#50), the caps hold on every way in: the frontier porter, the town teleporters' [Battlegrounds] choice (the porter's refusal text; game masters are exempt, as from upstream's level check) and `GetBGPK`. A gamebot at or over a battleground's cap gets no battleground goal for it and is never sent in; one already inside stays until it leaves or dies. Upstream's `BattlegroundBrackets` still says level is the only limit: the fork adds the caps | Fork-only. The "Svasud Faste" fix that was a candidate is upstream's own since 0.35 |
 
 ## Client patches
 
-The patch set `client/patches/classic-creation.json` gives the OfflineDAoC 0.34 classic client a classic
+The patch set `client/patches/classic-creation.json` gives the OfflineDAoC 0.35 classic client a classic
 character creation screen and the HearthDAoC loading splash (sub-project 2, see
 [its spec](specs/2026-10-06-classic-character-creation-design.md)). It holds only SHA-256 hashes, byte and text edits
 and our own code, never an EA file. The launchers apply it at every launch, just before the game starts, so
@@ -48,8 +51,8 @@ files that something put back (a repair, OfflineDAoC's own launcher) are patched
 An already patched client is only read. Exit 3 (a client file the patch set doesn't know) starts the game with
 the standard creation screen; any other failure warns and still starts it. Without the installed patches
 (`<dest>/patches`, or `patch-client.ps1` next to the .bat) the launchers don't patch: that is how a player opts
-out, after a restore. Both appliers refuse any other client file, such as the b edition's `game.dll`, and then
-change nothing. Both keep each original as `<file>.hearthdaoc-orig` and put it back with `--restore` /
+out, after a restore. Both appliers refuse any other client file, such as the b edition's `game.dll` or an older
+or newer upstream client's, and then change nothing. Both keep each original as `<file>.hearthdaoc-orig` and put it back with `--restore` /
 `-Restore`, but only over the patched file: when a file has changed since it was patched (for example a newer
 upstream client), the restore says so and changes nothing.
 
@@ -58,7 +61,7 @@ upstream client), the restore says so and changes nothing.
 | Auto-assign stops after its reset: race base stats and 30 points to place (P1) | `game.dll`, VA `0x59C0B2` | Classic stat points (#39) |
 | Continue checks unspent points for new characters too (P2) | `game.dll`, VA `0x59A853` (28 bytes) | Creation can't finish until all 30 are placed (#39) |
 | The attributes window starts open (P3) | `game.dll`, VA `0x59C574` | The points are placed right away (#39) |
-| A hook calls our code cave after class registration | `game.dll`, VA `0x5B0051`; a new last section `.hdcc` (with the section count, `SizeOfCode`, `SizeOfImage` and checksum) | The cave hides the full classes and the races after Shrouded Isles, and registers the 15 base classes with their descriptions (#55) |
+| A hook calls our code cave after class registration | `game.dll`, VA `0x5B0051`; a new last section `.hdcc` (with the section count, `SizeOfCode`, `SizeOfImage` and checksum), after upstream's `.bounty` in 0.35, at VA `0x248C000` | The cave hides the full classes and the races after Shrouded Isles, and registers the 15 base classes with their descriptions (#55) |
 | The Optimize button is removed | `pregame/character_customize_stats.xml` (ControlId 1021) | No auto-assign (#39) |
 | The loading splash is replaced by our `splash.mpk` | `pregame/splash.mpk` | HEARTH DAoC lettering (#54) |
 
@@ -102,10 +105,10 @@ committed `splash.mpk`. From the repository root:
 
 ```bash
 c="$(mktemp -d)"  # EA files from the pinned release, verified; never commit or share them
-python3 tools/linux/odaoc_fetch.py --lock deploy/upstream.lock extract editions/0.34-no-custom-class/runtime/client-opendaoc/app/game.dll "$c/game.dll"
+python3 tools/linux/odaoc_fetch.py --lock deploy/upstream.lock extract editions/0.35-no-custom-class/runtime/client-opendaoc/app/game.dll "$c/game.dll"
 python3 tools/linux/odaoc_fetch.py --lock deploy/upstream.lock extract runtime/client-opendaoc/app/pregame/character_customize_stats.xml "$c/pregame/character_customize_stats.xml"
 python3 tools/linux/odaoc_fetch.py --lock deploy/upstream.lock extract runtime/client-opendaoc/app/pregame/splash.mpk "$c/pregame/splash.mpk"
-python3 tools/linux/odaoc_fetch.py --lock deploy/upstream.lock extract editions/0.34-no-custom-class/runtime/data/opendaoc.sqlite3.db "$c/world.db"
+python3 tools/linux/odaoc_fetch.py --lock deploy/upstream.lock extract editions/0.35-no-custom-class/runtime/data/opendaoc.sqlite3.db "$c/world.db"
 python3 client/patches/build.py --client "$c" --world-db "$c/world.db" --server-src source/server \
   --splash-mpk client/patches/splash.mpk --out client/patches/classic-creation.json
 HDC_CLIENT_FILES="$c" HDC_TEST_WORLD="$c/world.db" python3 -m unittest discover -s client/patches/tests -t client/patches
@@ -121,7 +124,10 @@ ruby) keep the workflow that way. `setup.sh` run from a checkout installs `clien
 
 If the pinned release's classic `game.dll` changes, `build.py` refuses it until the patch sites in `build.py`,
 `classdata.py` and `src/baseclass.asm` are found again in the new file. Until then CI fails and players with
-the new client keep the standard creation screen.
+the new client keep the standard creation screen. A new upstream section moves `.hdcc` to a new address (0.35
+added `.bounty`): `ORG` in `client/patches/tests/test_cave.py`, the section list in `test_pe.py` and the header
+offsets in `test_build.py` pin it, so update them with it. Players must then update their client: a `game.dll`
+of the old release, patched or not, is unknown to the new patch set (see the CHANGELOG for 0.35).
 
 **Changing the `game.dll` patch later.** Players' clients stay patched by the release they had, and the
 launchers apply the new release's patch set at the next launch. A `game.dll` patched by an older patch set is
@@ -134,15 +140,28 @@ set.
 ## Syncing with upstream
 
 1. Sync through a PR, not GitHub's **Sync fork** button: that commits straight to `main`, and merging is
-   releasing (below), so it would publish before `deploy/upstream.lock` is updated.
-   `git fetch upstream && git switch -c sync/<version> origin/main && git merge upstream/main`
+   releasing (below), so it would publish before `deploy/upstream.lock` is updated. Merge the release tag,
+   not `upstream/main`: upstream's `main` can be behind its release (for 0.35b it was 33 commits behind), and
+   the code must be the release's code, the commit the lock pins.
+   `git fetch upstream --tags && git switch -c sync/<version> origin/main && git merge v<version>`
 2. If upstream published a new release, update `deploy/upstream.lock` (version, tag, commit, part
-   sizes and hashes, manifest SHA-256, edition paths) from the new release's `download-manifest.json`
-   and `PACKAGE MANIFEST.sha256`, on the same branch.
+   sizes and hashes, manifest SHA-256, edition paths, `server_files`) from the new release's
+   `download-manifest.json` and `PACKAGE MANIFEST.sha256`, on the same branch. `ServerFilesLockTests`
+   (`deploy/tests/test_init_world.py`) fails when the server source names a `classic-*.json` file that the
+   lock does not list, or the other way round.
 3. Rebuild the client patch set (see Client patches above) and commit it on the same branch if it changed.
-4. Push and open a PR; its CI builds and tests the image.
-5. Merging it releases `v<upstream-version>-hearth.<n>` (a new upstream version restarts at `.1`).
-6. On the server, back up, then follow `deploy/HANDOFF.md` → "Upgrading".
+4. Check the fork's world fixes and hooks against the new release. Run the tests with `HDC_TEST_WORLD` set
+   to the new clean classic world: `battlegrounds.py` changes a row only while it holds the value it
+   expects, so a changed row fails the real-data tests, and the fix then needs a new version and marker.
+   The source checks in `deploy/tests/test_battlegrounds.py` list every fork hook in upstream files and
+   every `TravelToBattleground` caller (the bots' only way in); a new one fails them until it is reviewed.
+   Update the counts `deploy/HANDOFF.md` expects (navmeshes, restored spawns).
+5. Push and open a PR; its CI builds and tests the image.
+6. Merging it releases `v<upstream-version>-hearth.<n>` (a new upstream version restarts at `.1`).
+7. On the server: `./hdc update` (`deploy/HANDOFF.md` → "Upgrading"). It backs up first, and for a release
+   of another upstream version it upgrades the world itself. The `hdc` of the release before runs that
+   update, so this starts with the update after 0.35b; from 0.34b to 0.35b, run `./hdc upgrade-world` and
+   `./hdc up` by hand.
 
 ## Releases
 

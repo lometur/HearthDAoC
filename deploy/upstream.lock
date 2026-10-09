@@ -1,29 +1,31 @@
 {
   "upstream_repo": "shadowofze/OfflineDAoC",
-  "version": "0.34b",
-  "tag": "v0.34b",
-  "commit": "169c9b79066d8818f3ddb0ba8b49551801a3319e",
-  "root_folder": "OfflineDAoC-v0.34b/",
+  "version": "0.35b",
+  "tag": "v0.35b",
+  "commit": "d337d184034f4c84e1e1748fda7f5b2deef135b8",
+  "root_folder": "OfflineDAoC-v0.35b/",
   "parts": [
-    {"url": "https://github.com/shadowofze/OfflineDAoC/releases/download/v0.34b/OfflineDAoC-v0.34b.zip.001", "size": 1900000000, "sha256": "5d1b8321ac7be484814ec28cea0f2d93c5658bf3dbbfa19e013e15fba9174f31"},
-    {"url": "https://github.com/shadowofze/OfflineDAoC/releases/download/v0.34b/OfflineDAoC-v0.34b.zip.002", "size": 1900000000, "sha256": "449946e57d41080f8745fbf6a60d2575d89cfd9ee22116871ce00d8d703dffc5"},
-    {"url": "https://github.com/shadowofze/OfflineDAoC/releases/download/v0.34b/OfflineDAoC-v0.34b.zip.003", "size": 1267511073, "sha256": "71429d76e3c19b45d60f2f87a81228b87aeec5fa04f483f6d1e515b7e8db1698"}
+    {"url": "https://github.com/shadowofze/OfflineDAoC/releases/download/v0.35b/OfflineDAoC-v0.35b.zip.001", "size": 1900000000, "sha256": "02fcffc21ac66e7cbd714e698927fb28be289df4c9c159164e24db9aabd2109d"},
+    {"url": "https://github.com/shadowofze/OfflineDAoC/releases/download/v0.35b/OfflineDAoC-v0.35b.zip.002", "size": 1900000000, "sha256": "4710e99c73a58e82129bc10a3e0d358b4365b8d2521212b0ba9267d7d06d4241"},
+    {"url": "https://github.com/shadowofze/OfflineDAoC/releases/download/v0.35b/OfflineDAoC-v0.35b.zip.003", "size": 1299005010, "sha256": "95f11848419a150d65b4e3b7c853449d4f0b29e9b67a58ec2769365aa7d61bf7"}
   ],
-  "archive_sha256": "2589196f2d6d7207f38389d7b4f5591bd61e2d9acf5f9662a02e54f17f211a7a",
+  "archive_sha256": "5a1d77df4168dbe286f4161ca93e608422a9cd91ebd693d1cf1e88767234e7b6",
   "manifest_path": "PACKAGE MANIFEST.sha256",
-  "manifest_sha256": "af2b2efa21af82a2625b72aacd45edbf9cdf4c591cfdb11901c38650e1f01611",
+  "manifest_sha256": "ff0294a76145357517acefa7250bf6952e49d04d4f0368b4a48622a25c993ebb",
   "client_prefix": "runtime/client-opendaoc/app/",
   "navmesh_prefix": "runtime/server/navmesh/",
   "config_prefix": "runtime/server/config/",
   "config_files": ["logconfig.xml", "invalidnames.txt", "MailConfig.xml"],
+  "server_prefix": "runtime/server/",
+  "server_files": ["classic-quests.json", "classic-quest-guides.json"],
   "editions": {
     "b": {
       "world_db": "runtime/data/opendaoc.sqlite3.db",
       "game_dll": "runtime/client-opendaoc/app/game.dll"
     },
     "classic": {
-      "world_db": "editions/0.34-no-custom-class/runtime/data/opendaoc.sqlite3.db",
-      "game_dll": "editions/0.34-no-custom-class/runtime/client-opendaoc/app/game.dll"
+      "world_db": "editions/0.35-no-custom-class/runtime/data/opendaoc.sqlite3.db",
+      "game_dll": "editions/0.35-no-custom-class/runtime/client-opendaoc/app/game.dll"
     }
   }
 }

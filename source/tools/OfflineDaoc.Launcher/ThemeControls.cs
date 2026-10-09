@@ -192,12 +192,15 @@ internal sealed class FantasyBanner : Panel
     }
 }
 
+// Inspired by the classic Camelot knot (the game client's effects/camknot.tga): the dragon
+// in the triquetra with the Hibernia tree, Midgard hammer and Albion grail, in gold, red and
+// the realm colours.
 internal sealed class RealmShieldPicture : PictureBox
 {
     private static readonly Lazy<Image?> Shield = new(() =>
     {
         using Stream? stream = Assembly.GetExecutingAssembly()
-            .GetManifestResourceStream("OfflineDaoc.Launcher.Assets.offline-daoc-realm-shield.png");
+            .GetManifestResourceStream("OfflineDaoc.Launcher.Assets.offline-daoc-realm-emblem.png");
         if (stream == null)
             return null;
         using var loaded = new Bitmap(stream);

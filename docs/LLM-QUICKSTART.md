@@ -7,7 +7,7 @@ don't need the author's permission to fork it.
 
 1. **Fork it:** click **Fork** on this GitHub page, then clone your fork, or use **Code > Download
    ZIP**.
-2. **Get a playable folder:** download the matching playable release (0.34 or 0.34b) as described
+2. **Get a playable folder:** download the matching playable release (0.35 or 0.35b) as described
    in [PLAY.md](PLAY.md). The source alone isn't the playable game.
 3. **Keep two folders:** the source checkout, where you edit code, and a separate playable folder,
    where you test builds.

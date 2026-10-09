@@ -22,26 +22,26 @@ If the game window never appears after ENTER REALM, this feature is the usual ca
 
 | Edition | Choose it if… |
 |---|---|
-| **0.34b** | You want the custom Hibernian **Sluaghbinder** class, for you and the bots. |
-| **0.34** | You want only the original Classic + Shrouded Isles classes. |
+| **0.35b** | You want the custom Hibernian **Sluaghbinder** class, for you and the bots. |
+| **0.35** | You want only the original Classic + Shrouded Isles classes. |
 
-Both are the same game otherwise. If you're unsure, pick 0.34b. The Sluaghbinder is just one more
+Both are the same game otherwise. If you're unsure, pick 0.35b. The Sluaghbinder is just one more
 Hibernian choice, and you don't have to play it.
 
 ## 2. Download
 
 1. Make a new, empty folder, for example `C:\Games\OfflineDAoC`.
 2. From your edition's release page, download both of these files into that folder:
-   - [v0.34b](https://github.com/shadowofze/OfflineDAoC/releases/tag/v0.34b):
-     `DOWNLOAD-AND-PLAY-v0.34b.cmd` and `Get-OfflineDAoC.ps1`
-   - [v0.34](https://github.com/shadowofze/OfflineDAoC/releases/tag/v0.34):
-     `DOWNLOAD-AND-PLAY-v0.34.cmd` and `Get-OfflineDAoC.ps1`
+   - [v0.35b](https://github.com/shadowofze/OfflineDAoC/releases/tag/v0.35b):
+     `DOWNLOAD-AND-PLAY-v0.35b.cmd` and `Get-OfflineDAoC.ps1`
+   - [v0.35](https://github.com/shadowofze/OfflineDAoC/releases/tag/v0.35):
+     `DOWNLOAD-AND-PLAY-v0.35.cmd` and `Get-OfflineDAoC.ps1`
 3. Double-click the `.cmd` file. If Windows asks whether to run it, choose **Run anyway**.
 
 The helper:
 1. downloads the game in parts, about 5 GB in total
 2. checks each part against its published fingerprint (SHA-256)
-3. unpacks the game into a new folder next to the helper (`playable-v0.34b` or `playable-v0.34`)
+3. unpacks the game into a new folder next to the helper (`playable-v0.35b` or `playable-v0.35`)
 
 It never overwrites an existing game and never starts anything by itself. If a download is
 interrupted, run the helper again: finished parts are kept and only the missing ones are fetched.
@@ -100,7 +100,7 @@ in `ALL SERVER COMMANDS.txt`.
 ## Moving from an older version
 
 Your old game keeps working and isn't changed. To bring your progress (account, characters, items,
-money, houses and bots) into 0.34, follow [TRANSFER-PROGRESS.md](TRANSFER-PROGRESS.md).
+money, houses and bots) into 0.35, follow [TRANSFER-PROGRESS.md](TRANSFER-PROGRESS.md).
 In short:
 1. Stop both games.
 2. Run **IMPORT PROGRESS FROM OLD OFFLINE DAOC.cmd** in the new folder.

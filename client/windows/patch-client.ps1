@@ -51,8 +51,8 @@ $OpFields = @{
 }
 $Latin1 = [Text.Encoding]::GetEncoding(28591)
 $Usage = 'Usage: patch-client.ps1 [-Client DIR] [-PatchSet FILE] [-Bundle DIR] [-Restore | -Check]'
-$UnknownMessage = 'Not patched: {0} is not the file this HearthDAoC release supports (for example the 0.34b ' +
-    'edition or a newer upstream client). The client still works with the standard creation screen.'
+$UnknownMessage = 'Not patched: {0} is not the file this HearthDAoC release supports (for example the b ' +
+    'edition, or an older or newer upstream client). The client still works with the standard creation screen.'
 $MissingMessage = 'Not patched: {0} is missing from the client folder.'
 $ChangedMessage = 'Not restored: {0} has changed since it was patched (for example a newer client was installed); ' +
     'the saved original is kept as {0}{1}.'

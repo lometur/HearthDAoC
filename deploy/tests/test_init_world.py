@@ -1,5 +1,7 @@
 import json
 import os
+import re
+import shutil
 import sys
 import tempfile
 import unittest
@@ -174,6 +176,114 @@ class InitWorldTests(unittest.TestCase):
                 a = int(rng[6:].split("-")[0]) + starts[part]
                 self.assertNotIn(a, nav_offsets, "a navmesh local header was downloaded despite the seed")
         self.assertTrue(self.meta()["navmesh"])
+
+    # Server data files: the lock's server_files, which the server reads from its own folder.
+
+    def server_file(self, name, version="test"):
+        return os.path.join(init_world.server_files_dir(self.data, version), name)
+
+    def test_new_world_fetches_the_server_files(self):
+        with fx.RangeServer(self.dir) as srv:
+            init_world.init(self.release(srv), self.data, "classic", skip_navmesh=True, log=QUIET)
+        for name in ("classic-quests.json", "classic-quest-guides.json"):
+            self.assertEqual(self.read(self.server_file(name)), self.files["runtime/server/" + name])
+
+    def test_existing_world_fetches_missing_server_files_once(self):
+        # A world made before server_files existed (or by another upstream version) gets them at its next
+        # start; the start after that needs no network.
+        with fx.RangeServer(self.dir) as srv:
+            init_world.init(self.release(srv), self.data, "classic", skip_navmesh=True, log=QUIET)
+            shutil.rmtree(os.path.join(self.data, "server-files"))
+            self.assertEqual(init_world.init(self.release(srv), self.data, "classic", skip_navmesh=True, log=QUIET), 0)
+            self.assertTrue(os.path.isfile(self.server_file("classic-quests.json")))
+            before = len(srv.requests)
+            self.assertEqual(init_world.init(self.release(srv), self.data, "classic", skip_navmesh=True, log=QUIET), 0)
+            self.assertEqual(len(srv.requests), before)
+
+    def test_bad_server_file_is_refused_and_not_kept(self):
+        self.lock, self.files = fx.build(self.dir, tamper={"runtime/server/classic-quests.json": "0" * 64})
+        with fx.RangeServer(self.dir) as srv:
+            with self.assertRaises(FetchError):
+                init_world.init(self.release(srv), self.data, "classic", skip_navmesh=True, log=QUIET)
+        self.assertFalse(os.path.exists(self.server_file("classic-quests.json")))
+        self.assertFalse(os.path.exists(os.path.join(self.data, "world.json")))  # the next start tries again
+
+    def test_world_from_another_version_gets_no_server_files(self):
+        with fx.RangeServer(self.dir) as srv:
+            init_world.init(self.release(srv), self.data, "classic", skip_navmesh=True, log=QUIET)
+            meta = self.meta()
+            meta["version"] = "0.33b"
+            init_world.write_meta(os.path.join(self.data, "world.json"), meta)
+            shutil.rmtree(os.path.join(self.data, "server-files"))
+            self.assertEqual(init_world.init(self.release(srv), self.data, "classic", log=QUIET), init_world.EXIT_VERSION)
+        self.assertFalse(os.path.exists(os.path.join(self.data, "server-files")))
+
+    def main_with_server_dir(self, srv, server_dir):
+        lock_path = os.path.join(self.dir, "upstream.lock")
+        with open(lock_path, "w", encoding="utf-8") as f:
+            json.dump(srv.lock(self.lock), f)
+        import contextlib, io
+        with contextlib.redirect_stdout(io.StringIO()):
+            return init_world.main(["--lock", lock_path, "--data", self.data, "--edition", "classic",
+                                    "--skip-navmesh", "--server-dir", server_dir])
+
+    def test_start_links_the_server_files_into_the_server_folder(self):
+        server = os.path.join(self.dir, "app-server")
+        os.makedirs(server)
+        with open(os.path.join(server, "classic-quests.json"), "w") as f:
+            f.write("an older copy")  # a file in the server folder is replaced by the link
+        os.symlink("/nonexistent/old", os.path.join(server, "classic-quest-guides.json"))  # a stale link too
+        with fx.RangeServer(self.dir) as srv:
+            self.assertEqual(self.main_with_server_dir(srv, server), 0)
+        for name in ("classic-quests.json", "classic-quest-guides.json"):
+            link = os.path.join(server, name)
+            self.assertTrue(os.path.islink(link), name)
+            self.assertEqual(os.readlink(link), self.server_file(name))
+            self.assertEqual(self.read(link), self.files["runtime/server/" + name])
+
+    def test_a_missing_server_file_gets_no_link(self):
+        # .NET treats a dangling link as an existing file.
+        server = os.path.join(self.dir, "app-server")
+        os.makedirs(server)
+        with fx.RangeServer(self.dir) as srv:
+            self.assertEqual(self.main_with_server_dir(srv, server), 0)
+            os.remove(self.server_file("classic-quests.json"))
+            init_world.link_server_files(self.release(srv), self.data, server)
+        self.assertFalse(os.path.lexists(os.path.join(server, "classic-quests.json")))
+        self.assertTrue(os.path.islink(os.path.join(server, "classic-quest-guides.json")))
+
+    def test_start_on_a_new_version_replaces_the_old_versions_server_files(self):
+        # After upgrade-world: the old version's files are in the volume, the world is on the new version.
+        old = self.server_file("classic-quests.json", version="0.33b")
+        os.makedirs(os.path.dirname(old))
+        with open(old, "w") as f:
+            f.write("0.33b quests")
+        server = os.path.join(self.dir, "app-server")
+        os.makedirs(server)
+        with fx.RangeServer(self.dir) as srv:
+            self.assertEqual(self.main_with_server_dir(srv, server), 0)
+        self.assertEqual(os.listdir(os.path.join(self.data, "server-files")), ["test"])
+        self.assertEqual(self.read(os.path.join(server, "classic-quests.json")),
+                         self.files["runtime/server/classic-quests.json"])
+
+
+class ServerFilesLockTests(unittest.TestCase):
+    """deploy/upstream.lock's server_files are the release files the server reads from its own folder."""
+
+    def setUp(self):
+        with open(os.path.join(REPO, "deploy", "upstream.lock"), encoding="utf-8") as f:
+            self.lock = json.load(f)
+
+    def test_lock_lists_the_classic_data_files_the_server_reads(self):
+        named = set()
+        for root, _, names in os.walk(os.path.join(REPO, "source", "server", "GameServer")):
+            for name in names:
+                if name.endswith(".cs"):
+                    with open(os.path.join(root, name), encoding="utf-8-sig", errors="replace") as f:
+                        named |= set(re.findall(r'"(classic-[\w-]+\.json)"', f.read()))
+        # classic-otd.json is in the release too, but the server never reads it.
+        self.assertEqual(sorted(named), sorted(self.lock["server_files"]))
+        self.assertEqual(self.lock["server_prefix"], "runtime/server/")
 
 
 if __name__ == "__main__":

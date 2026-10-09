@@ -1,7 +1,7 @@
 param(
     [string]$Destination = (Join-Path $PSScriptRoot 'playable'),
     [ValidatePattern('^\d+\.\d+(b)?$')]
-    [string]$ReleaseVersion = '0.34b',
+    [string]$ReleaseVersion = '0.35b',
     # Testing only: read release assets from <folder><version>\ instead of GitHub.
     [string]$LocalAssets = ''
 )
@@ -322,11 +322,11 @@ if ($manifest.Mode -eq 'delta') {
     exit 0
 }
 
-# 0.33 and 0.34 "no custom class" are the same complete 0.33b / 0.34b game plus two verified
-# swap-in files (world database with the Sluaghbinder switched off, and the normal v0.32
-# game.dll). One download serves both editions; the edition files ship inside the "b" package.
+# 0.33, 0.34 and 0.35 "no custom class" are the same complete 0.33b / 0.34b / 0.35b game plus two
+# verified swap-in files (world database with the Sluaghbinder switched off, and a game.dll without
+# the Sluaghbinder class). One download serves both editions; the edition files ship inside the "b" package.
 if ($manifest.Mode -eq 'edition') {
-    if ($ReleaseVersion -notin @('0.33','0.34') -or $manifest.BaseVersion -ne ($ReleaseVersion + 'b') -or
+    if ($ReleaseVersion -notin @('0.33','0.34','0.35') -or $manifest.BaseVersion -ne ($ReleaseVersion + 'b') -or
         $manifest.EditionFolder -ne ($ReleaseVersion + '-no-custom-class') -or !$manifest.EditionFiles) {
         throw "Unexpected v$ReleaseVersion edition manifest."
     }
