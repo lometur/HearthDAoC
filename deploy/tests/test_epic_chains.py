@@ -55,5 +55,44 @@ class ExtraQuestFileTests(unittest.TestCase):
         self.assertIn("COPY deploy/hearthdaoc-quests.json /app/server/hearthdaoc-quests.json\n", read(DOCKERFILE))
 
 
+# Each level-50 quest looks its NPC up at a spot and creates it at another when none is found there, so a copy a GM
+# saved shows up as a second NPC at every start (spec 3.3). (file, NPC name, variable the quest creates it in)
+LOOKUPS = (
+    ("scripts/quests/Albion/epic/Academy50.cs", "Master Ferowl", "Ferowl"),
+    ("scripts/quests/Hibernia/epic/Essence50.cs", "Brigit", "Brigit"),
+    ("scripts/quests/Midgard/epic/Mystic50.cs", "Danica", "Danica"),
+    ("scripts/quests/Midgard/epic/Viking50.cs", "Elizabeth", "Elizabeth"),
+)
+
+
+def lookup_and_creation(text, name, var):
+    """((lookup X, Y), (creation X, Y)) of the NPC's block in a level-50 quest."""
+    block = text[text.index(f'GetNPCsByName("{name}"'):]
+    found = re.search(r"npc\.X == (\d+) && npc\.Y == (\d+)", block)
+    x = re.search(rf"\b{var}\.X = (\d+);", block)
+    y = re.search(rf"\b{var}\.Y = (\d+);", block)
+    return (found.group(1), found.group(2)), (x.group(1), y.group(1))
+
+
+class EpicSourceTests(unittest.TestCase):
+    def test_the_defenders_copy_of_shadows_50_is_gone(self):
+        self.assertFalse(os.path.exists(os.path.join(GAME_SERVER, "scripts", "quests", "Albion", "epic", "Shadows50.cs")))
+        for path in pathlib.Path(GAME_SERVER).rglob("*.cs"):
+            self.assertNotIn("class Shadows_50", read(str(path)), str(path))
+
+    def test_each_level_50_quest_finds_its_npc_where_it_creates_it(self):
+        for rel, name, var in LOOKUPS:
+            with self.subTest(rel):
+                found, made = lookup_and_creation(read(os.path.join(GAME_SERVER, rel)), name, var)
+                self.assertEqual(found, made)
+
+    def test_the_four_files_keep_their_crlf_endings(self):
+        for rel, _name, _var in LOOKUPS:
+            with open(os.path.join(GAME_SERVER, rel), "rb") as f:
+                raw = f.read()
+            self.assertEqual(raw.count(b"\r\n"), raw.count(b"\n"), rel)
+            self.assertFalse(raw.startswith(b"\xef\xbb\xbf"), rel)
+
+
 if __name__ == "__main__":
     unittest.main()

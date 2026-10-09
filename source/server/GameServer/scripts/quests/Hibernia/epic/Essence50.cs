@@ -115,7 +115,7 @@ namespace DOL.GS.Quests.Hibernia
 
 			if (npcs.Length > 0)
 				foreach (GameNPC npc in npcs)
-					if (npc.CurrentRegionID == 201 && npc.X == 32927 && npc.Y == 32743)
+					if (npc.CurrentRegionID == 201 && npc.X == 33105 && npc.Y == 32909 /* HearthDAoC: where the quest creates it */)
 					{
 						Brigit = npc;
 						break;
