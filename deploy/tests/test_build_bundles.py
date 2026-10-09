@@ -20,7 +20,7 @@ PWSH = os.environ.get("HDC_PWSH") or shutil.which("pwsh")
 
 TAG = "v0.34b-hearth.99"
 CLIENT_FILES = {
-    "README.md", "setup.sh", "play.sh.in", "odaoc_fetch.py", "upstream.lock",
+    "README.md", "VERSION", "setup.sh", "play.sh.in", "odaoc_fetch.py", "upstream.lock",
     "patches/classic-creation.json", "patches/apply_patches.py", "patches/patchset.py", "patches/splash.mpk",
     "windows/connect-hearthdaoc.bat", "windows/patch-client.bat", "windows/patch-client.ps1",
     "windows/patches/classic-creation.json", "windows/patches/splash.mpk",
@@ -95,6 +95,7 @@ class BuildBundlesTests(unittest.TestCase):
                 self.assertTrue((files[name].external_attr >> 16) & 0o100, name)
             for name, src in FROM_REPO.items():
                 self.assertEqual(z.read(top + name), read(os.path.join(REPO, src)), name)
+            self.assertEqual(z.read(top + "VERSION"), f"{TAG}\n".encode())  # setup.sh saves it; play.sh's updater compares it
             extracted = os.path.join(self.tmp.name, "unzipped")
             z.extractall(extracted)
         return os.path.join(extracted, top)
