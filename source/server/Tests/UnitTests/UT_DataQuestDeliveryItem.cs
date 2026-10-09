@@ -6,7 +6,9 @@ namespace DOL.GS.Tests;
 
 // HearthDAoC: a Deliver or DeliverFinish step's item is handed when the step begins only if the player doesn't carry
 // it and the step just finishing isn't handing it ("Traveler's Way -- Supply Run" gave two bundles of supplies at
-// Thol Dunnin; 77 classic quests, owner test 2026-10-09).
+// Thol Dunnin; 77 classic quests, owner test 2026-10-09). A quest whose first step is a delivery hands that step's item
+// when it is accepted, which upstream never did (67 classic quests could not be finished, among them the level 30
+// Regal Nobility).
 [TestFixture]
 public sealed class UT_DataQuestDeliveryItem
 {
@@ -56,4 +58,35 @@ public sealed class UT_DataQuestDeliveryItem
     [Test]
     public void NullListsAreEmpty()
         => Assert.That(QuestDeliveryItems.ShouldHand("cq_supplies", null, null), Is.True);
+
+    [Test]
+    public void AFirstDeliveryStepHandsItsItem()
+        => Assert.That(QuestDeliveryItems.FirstStepItem(true, new[] { "cq_document", "", "" }, Nothing), Is.EqualTo("cq_document"));
+
+    [Test]
+    public void TheFirstStepItemIsReturnedTrimmed()
+        => Assert.That(QuestDeliveryItems.FirstStepItem(true, new[] { " cq_document " }, Nothing), Is.EqualTo("cq_document"));
+
+    [Test]
+    public void OnlyTheFirstEntryCounts()
+        => Assert.That(QuestDeliveryItems.FirstStepItem(true, new[] { "", "cq_document" }, Nothing), Is.Null);
+
+    [Test]
+    public void AFirstStepThatIsNotADeliveryHandsNothing()
+        => Assert.That(QuestDeliveryItems.FirstStepItem(false, new[] { "cq_document" }, Nothing), Is.Null);
+
+    [Test]
+    public void AFirstStepItemAlreadyCarriedIsNotHandedAgain()
+        => Assert.That(QuestDeliveryItems.FirstStepItem(true, new[] { "cq_document" }, new[] { "CQ_Document" }), Is.Null);
+
+    [Test]
+    public void NoStepItemsHandNothing()
+    {
+        Assert.Multiple(() =>
+        {
+            Assert.That(QuestDeliveryItems.FirstStepItem(true, null, Nothing), Is.Null);
+            Assert.That(QuestDeliveryItems.FirstStepItem(true, Array.Empty<string>(), Nothing), Is.Null);
+            Assert.That(QuestDeliveryItems.FirstStepItem(true, new string[] { null }, Nothing), Is.Null);
+        });
+    }
 }

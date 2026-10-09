@@ -65,6 +65,8 @@ namespace DOL.GS.Quests
 	/// Delivery step then the item is given at the beginning of the step and accepted by a target to end the step.
 	/// HearthDAoC: but not when the player already carries that item in the backpack, or the step just finishing gives it;
 	/// a player who lost it gets a new one (QuestDeliveryItems.ShouldHand).
+	/// HearthDAoC: accepting a quest whose first step is a delivery hands that step's item (QuestDeliveryItems.FirstStepItem);
+	/// upstream never did, so those quests could not be finished.
     /// For Kill and Search steps, StepItemTemplates can include a drop chance behind the template name.  Ex: |some_template_name;50|  
     /// If the item does not drop then the step is not advanced.
 	/// If no items are given to a player at any of the steps then this can be null, otherwise it must have values for each step. 
@@ -2347,10 +2349,42 @@ namespace DOL.GS.Quests
 			{
 				TryTurnTo(living, player);
 
+				// HearthDAoC: a quest whose first step is a delivery never handed that step's item (nothing "begins" step 1),
+				// so 67 classic quests, among them the level 30 Regal Nobility, could not be finished (owner test 2026-10-09).
+				// Hand it before the quest starts; with no room the quest does not start.
+				DbItemTemplate firstItem = null;
+				bool firstStepIsDelivery = m_stepTypes.Count > 0 && (m_stepTypes[0] == eStepType.Deliver || m_stepTypes[0] == eStepType.DeliverFinish);
+				if (firstStepIsDelivery)
+				{
+					List<string> carried;
+					lock (player.Inventory.Lock)
+					{
+						carried = player.Inventory.AllItems
+							.Where(i => i.SlotPosition >= (int)eInventorySlot.FirstBackpack && i.SlotPosition <= (int)eInventorySlot.LastBackpack)
+							.Select(i => i.Id_nb).ToList();
+					}
+
+					string firstTemplate = QuestDeliveryItems.FirstStepItem(true, m_stepItemTemplates, carried);
+					if (firstTemplate != null)
+					{
+						if (!player.Inventory.IsSlotsFree(1, eInventorySlot.FirstBackpack, eInventorySlot.LastBackpack))
+						{
+							player.Out.SendMessage("You don't have enough inventory space to start this quest.  You need 1 free slot!", eChatType.CT_System, eChatLoc.CL_SystemWindow);
+							return;
+						}
+
+						firstItem = GameServer.Database.FindObjectByKey<DbItemTemplate>(firstTemplate);
+						if (firstItem == null)
+							log.Error("DataQuest [" + ID + "] " + Name + ": StepItemTemplate " + firstTemplate + " of step 1 not found in DB, the quest starts without it");
+					}
+				}
+
 				DbCharacterXDataQuest charQuest = GetCharacterQuest(player, ID, true);
 				DataQuest dq = new DataQuest(player, living, DBDataQuest, charQuest);
 				dq.Step = 1;
 				player.AddQuest(dq);
+				if (firstItem != null)
+					GiveItem(living, player, firstItem, false);
 				if (m_sourceTexts.Count > 0)
 				{
 					SendMessage(player, m_sourceTexts[0], 0, eChatType.CT_System, eChatLoc.CL_PopupWindow);

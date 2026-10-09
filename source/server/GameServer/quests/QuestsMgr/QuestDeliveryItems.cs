@@ -8,6 +8,8 @@ namespace DOL.GS.Quests
     /// Upstream always did, so a quest that had already given the item (an earlier step, or the step just finishing)
     /// gave a second copy ("Traveler's Way -- Supply Run" gave two bundles of supplies; 77 classic quests do this).
     /// Item template ids compare without case, as <c>DataQuest.OnPlayerGiveItem</c> compares them.
+    /// Accepting a quest whose first step is a delivery hands that step's item too (<see cref="FirstStepItem"/>): upstream
+    /// never did, because nothing "begins" step 1, so 67 classic quests could not be finished.
     /// </summary>
     public static class QuestDeliveryItems
     {
@@ -21,6 +23,18 @@ namespace DOL.GS.Quests
                 return false;
 
             return !Contains(carried, wanted) && !Contains(beingHanded, wanted);
+        }
+
+        /// <summary>The item template accepting a quest should hand for its first step, or null for none: the first step is
+        /// a delivery (<paramref name="firstStepIsDelivery"/>), the quest's StepItemTemplates have an entry for it, and
+        /// <see cref="ShouldHand"/> agrees (the player doesn't carry one). The template is returned trimmed.</summary>
+        public static string FirstStepItem(bool firstStepIsDelivery, IReadOnlyList<string> stepItemTemplates, IEnumerable<string> carried)
+        {
+            if (!firstStepIsDelivery || stepItemTemplates == null || stepItemTemplates.Count == 0)
+                return null;
+
+            string template = stepItemTemplates[0]?.Trim();
+            return ShouldHand(template, carried, null) ? template : null;
         }
 
         private static bool Contains(IEnumerable<string> ids, string wanted)
