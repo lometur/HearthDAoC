@@ -3,8 +3,10 @@
 The synthetic tests use a tiny DataQuest table and data passed in. The tests of the real data file run world_fixes on a
 copy of a clean classic world (HDC_TEST_WORLD).
 """
+import json
 import os
 import pathlib
+import re
 import shutil
 import sqlite3
 import sys
@@ -281,6 +283,24 @@ class RealDialogueTests(unittest.TestCase):
             if accept and accept.lower() in (description or "").lower():
                 with self.subTest(quest=qid):
                     self.assertIn(f"[{accept}]", description)
+
+    def test_every_quest_can_be_accepted_from_what_its_giver_says(self):
+        # The giver's Description offers [keywords]; one is the AcceptText, or leads to it through our Chat replies
+        # (level 25: [matter] -> [dispatch] -> [supporting]; level 43: [interested] -> [profitable]).
+        with open(os.path.join(HERE, "..", "hearthdaoc-quests.json"), encoding="utf-8") as f:
+            chat = json.load(f).get("Chat", {})
+        for qid in self.rows:
+            accept, description, giver = self.conn.execute(
+                "SELECT AcceptText, Description, StartName FROM DataQuest WHERE ID=?", (qid,)).fetchone()
+            replies = {k.lower(): v for k, v in chat.get(giver, {}).items()}
+            offered, todo = set(), re.findall(r"\[([^\]]+)\]", description or "")
+            while todo:
+                keyword = todo.pop()
+                if keyword not in offered:
+                    offered.add(keyword)
+                    todo.extend(re.findall(r"\[([^\]]+)\]", replies.get(keyword.lower(), "")))
+            with self.subTest(quest=qid, giver=giver):
+                self.assertIn(accept, offered)
 
     def test_every_whisper_steps_advance_text_is_a_bracketed_keyword_in_its_target_text(self):
         for qid, (_accept, _desc, _source, step_types, _steps, targets, advances, _finish) in self.rows.items():

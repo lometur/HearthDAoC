@@ -1,0 +1,686 @@
+{
+ "_about": "The Guild of Shadows chain's dialogue (owner 2026-10-09: upstream offered \"[Traveler's]\" and said nothing else). deploy/bin/quest_dialogue.py writes it into the DataQuest rows at every start; \"step\" is a key of epic_chains_data.json \"steps\" (one quest ID per class); a value is one text for every class, an object by class, or a list with one entry per stage. \"guard\": the digests of the values a row may hold for the fix to change it (upstream's after epic-chains-v1, then each earlier version of this file). Chat lines are in deploy/hearthdaoc-quests.json.",
+ "quests": [
+  {
+   "step": "7",
+   "set": {
+    "AcceptText": "errand",
+    "Description": {
+     "Infiltrator": "<Player>. You move more quietly than when you first came to us. I have noticed. The Guild keeps friends along the roads to the frontier, and one of them is running short. A bundle of supplies waits in Humberton, and it must reach them without anyone asking what is in it. It is a small [errand], but small errands are how the Guild learns whom it can trust.",
+     "Mercenary": "<Player>. A strong arm earns coin, but the Guild pays best for those it can trust. We keep friends along the roads to the frontier, and one of them is running short. A bundle of supplies waits in Humberton, and it must reach them without anyone asking what is in it. It's a small [errand]. Do it well, and there will be bigger ones.",
+     "Cabalist": "<Player>. Not every problem is solved with a construct, however well made. The Guild keeps friends along the roads to the frontier, and one of them is running short. A bundle of supplies waits in Humberton, and it must reach them without anyone asking what is in it. It is a small [errand], but small errands are how the Guild learns whom it can trust.",
+     "Necromancer": "<Player>. The Temple has friends in places that would rather not be known as ours, and one of them, out on the frontier, is running short. A bundle of supplies waits in Humberton, and it must reach them without anyone asking what is in it. It is a small [errand], but Arawn watches how his servants carry small things before he trusts them with great ones.",
+     "Reaver": "<Player>. Your flail will have its day, but today the Temple needs a courier, not a killer. We keep friends on the frontier who would rather not be known as ours, and one of them is running short. A bundle of supplies waits in Humberton, and it must reach them without anyone asking what is in it. A small [errand], but the Temple remembers who can be trusted with small things."
+    },
+    "SourceText": [
+     "Good. Go to Humberton and find Bline; he waits near the bindstone. Tell him Camelot sent you. He will give you the supplies and tell you where to take them. Do not open them, and do not linger on the road.",
+     "Where they go from here, I don't know, and I'd rather not. That's for Thol Dunnin to say. She's the smith at Snowdonia Station, up in the Black Mountains. Take them to her.",
+     "These are for Ley Manton, who sells blades to the garrison at Swanton Keep, north of here. Hand them to Ley and no one else. If anyone stops you on the road, you're carrying horseshoes."
+    ],
+    "StepText": [
+     "Collect the supplies from Bline, who waits near the bindstone in Humberton.",
+     "Talk to the smith Thol Dunnin at Snowdonia Station.",
+     "Deliver the supplies to Ley Manton at Swanton Keep."
+    ],
+    "TargetText": [
+     "Camelot sent you? Then you'll be wanting these. I've stood by this stone half the day with them. Bundled and sealed, just as they came to me. Keep them out of sight until you're well clear of Humberton.",
+     "From Bline? Let me see the knot... still sealed. Good. Most new couriers can't resist a look inside.",
+     "Thol sent you? Then you have something for me. Hand it over, quickly now."
+    ],
+    "FinishText": "All here, and the seal unbroken. Our friends in Camelot keep their word, and so, it seems, do you. Take this for your trouble, <Player>, and tell your master the stores at Swanton will last the season."
+   },
+   "guard": {
+    "21500": [
+     "2104b99c7599b52dc223eb7be8a8355d6213985fc99769f653a74f32d610393f"
+    ],
+    "21498": [
+     "2104b99c7599b52dc223eb7be8a8355d6213985fc99769f653a74f32d610393f"
+    ],
+    "21499": [
+     "2104b99c7599b52dc223eb7be8a8355d6213985fc99769f653a74f32d610393f"
+    ],
+    "20497": [
+     "2104b99c7599b52dc223eb7be8a8355d6213985fc99769f653a74f32d610393f"
+    ],
+    "21501": [
+     "2104b99c7599b52dc223eb7be8a8355d6213985fc99769f653a74f32d610393f"
+    ]
+   }
+  },
+  {
+   "step": "7si",
+   "set": {
+    "AcceptText": "strange",
+    "Description": "<Player>, you are new to these isles, and new eyes see what old ones miss. Strange things have been coming up out of the water near Aanniogel, and the folk there are frightened. Tage knows more of it than I do. Will you look into these [strange] happenings for us?",
+    "SourceText": [
+     "Then speak with Tage. He stands beneath the stones, just beside me.",
+     "Kimmy Glaze sells bolts in Aanniogel, north of here. She has seen these creatures with her own eyes. Go to her.",
+     "They come up in the shallows south-east of here. Destroy two of them, and perhaps the rest will keep to the deep.",
+     "One more, and the shallows should be quiet.",
+     "Adam Glaze, the shield merchant inside the gates of Caer Gothwaite, keeps watch for Carys. He will want to know."
+    ],
+    "StepText": [
+     "Speak to Tage, beneath the stones beside Carys in Caer Gothwaite.",
+     "Find Kimmy Glaze, the bolt merchant in Aanniogel.",
+     "Destroy two lesser water elementals in the shallows south-east of Aanniogel. (1/2)",
+     "Destroy two lesser water elementals in the shallows south-east of Aanniogel. (2/2)",
+     "Report to Adam Glaze, the shield merchant inside the gates of Caer Gothwaite."
+    ],
+    "TargetText": [
+     "Carys sent you? Then listen. Something has been coming up out of the water near Aanniogel. The fisherfolk call them strange beings, and no two of them tell the same tale.",
+     "You've come about the things in the water? Thank the gods. They're water elementals, small ones, but they've torn two nets to pieces and nearly drowned a boy.",
+     "The lesser water elemental collapses into a spray of cold, foul water.",
+     "The second elemental spills away into the shallows and does not rise again.",
+     ""
+    ],
+    "FinishText": "Two of them, back into the water for good? Carys chose well. Those creatures don't rise on their own; something stirs them, and we will learn what in time. Take this, with Carys's thanks."
+   },
+   "guard": {
+    "20478": [
+     "cd8a1a344e831d629d5cb1f9b5eb7d6d0054a47761ce7d7b8419810d5a352f66"
+    ],
+    "20476": [
+     "cd8a1a344e831d629d5cb1f9b5eb7d6d0054a47761ce7d7b8419810d5a352f66"
+    ],
+    "20477": [
+     "cd8a1a344e831d629d5cb1f9b5eb7d6d0054a47761ce7d7b8419810d5a352f66"
+    ],
+    "20480": [
+     "cd8a1a344e831d629d5cb1f9b5eb7d6d0054a47761ce7d7b8419810d5a352f66"
+    ],
+    "20479": [
+     "cd8a1a344e831d629d5cb1f9b5eb7d6d0054a47761ce7d7b8419810d5a352f66"
+    ]
+   }
+  },
+  {
+   "step": "11",
+   "set": {
+    "AcceptText": "Captain Dillon",
+    "Description": {
+     "Infiltrator": "<Player>. Word of your first errand has come back to me, and it was good. Captain Dillon, who keeps the guard tower near Ludlow, has a problem he would rather the Guild solve quietly than the Defenders solve loudly. Will you go to [Captain Dillon]?",
+     "Mercenary": "<Player>. Word is you can be trusted with an errand. Now let's see you trusted with a sword. Captain Dillon, who keeps the guard tower near Ludlow, has deserters to deal with, and he doesn't want the Defenders crowing about it. Will you go to [Captain Dillon]?",
+     "Cabalist": "<Player>. You have shown you can be trusted. Captain Dillon, who keeps the guard tower near Ludlow, has lost something old and valuable, and he would rather the Guild recover it quietly than the Defenders recover it loudly. Will you go to [Captain Dillon]?",
+     "Necromancer": "<Player>. You were swift and silent; our friends noticed. Now the Temple has a debt to collect. Captain Dillon, who keeps the guard tower near Ludlow, needs help he cannot ask of the Defenders, and a soldier who owes the Temple a favour is worth more than gold. Will you go to [Captain Dillon]?",
+     "Reaver": "<Player>. You've run your errands; now you get to swing that flail. Captain Dillon, who keeps the guard tower near Ludlow, has deserters loose in the Black Mountains and needs them dealt with quietly. A soldier who owes the Temple a favour is worth more than gold. Will you go to [Captain Dillon]?"
+    },
+    "SourceText": [
+     "Then go to the guard tower near Ludlow. Mind your manners; he is a soldier, and soldiers don't love our kind.",
+     "Frund was seen heading west along the road; Agisthil went north. Bring back the crediac. What happens to the deserters is your affair, and I won't ask.",
+     "Agisthil went north. He can't be far.",
+     "A ward-stone should not be this dull. Omis, the vendor at Swanton Keep, is said to know old stones.",
+     "Ah. Someone has cut it loose from its ward; that is why it sleeps. I'll wake it and send it home to Dillon by my own courier. But mark this: when I held it, it warmed toward the south. A crediac remembers the hand that paid for its theft, and that will be Brodic, the brigand who haunts the southern Black Mountains.",
+     "Captain Dillon will want to hear of it."
+    ],
+    "StepText": [
+     "Speak with Captain Dillon in the guard tower near Ludlow.",
+     "Find the deserter Frund, who fled west from Captain Dillon's tower.",
+     "Find the deserter Agisthil, who fled north from Captain Dillon's tower.",
+     "Take the Crediac to Omis at Swanton Keep.",
+     "Slay Brodic, who paid the guards to steal the Crediac.",
+     "Return to Captain Dillon."
+    ],
+    "TargetText": [
+     "So they send me a <Class>. Fine; I'm in no position to be choosy. Three nights ago two of my guards, Frund and Agisthil, deserted, and they took the tower's crediac with them: an old ward-stone this tower has kept since before Ludlow had walls.",
+     "Frund falls. He has nothing of the tower's on him; Agisthil must have the crediac.",
+     "Agisthil falls, and you pull the Crediac from his belt: a smooth grey stone, cold and dull.",
+     "Is that a crediac? I can feel it from here. Let me see it.",
+     "Brodic falls. Among his things is a purse of silver: the deserters' price, never paid.",
+     ""
+    ],
+    "StepItemTemplates": [
+     "",
+     "",
+     "",
+     "cq_crediac",
+     "",
+     ""
+    ],
+    "FinishText": {
+     "Infiltrator": "Frund, Agisthil and Brodic, and Omis tells me the crediac is on its way home. I didn't think the Guild would see it done so cleanly. Take this, <Class>, and tell your master that Dillon pays his debts.",
+     "Mercenary": "Frund, Agisthil and Brodic, and Omis tells me the crediac is on its way home. I didn't think the Guild would see it done so cleanly. Take this, <Class>, and tell your master that Dillon pays his debts.",
+     "Cabalist": "Frund, Agisthil and Brodic, and Omis tells me the crediac is on its way home. I didn't think the Guild would see it done so cleanly. Take this, <Class>, and tell your master that Dillon pays his debts.",
+     "Necromancer": "Frund, Agisthil and Brodic, and Omis tells me the crediac is on its way home. I didn't think the Temple would see it done so cleanly. Take this, <Class>, and tell your master that Dillon pays his debts.",
+     "Reaver": "Frund, Agisthil and Brodic, and Omis tells me the crediac is on its way home. I didn't think the Temple would see it done so cleanly. Take this, <Class>, and tell your master that Dillon pays his debts."
+    }
+   },
+   "guard": {
+    "20157": [
+     "9d99d3b39c93ac39098ab44880e787522ec755fa47857266b80281b46bc13038"
+    ],
+    "20155": [
+     "9d99d3b39c93ac39098ab44880e787522ec755fa47857266b80281b46bc13038"
+    ],
+    "20156": [
+     "9d99d3b39c93ac39098ab44880e787522ec755fa47857266b80281b46bc13038"
+    ],
+    "20159": [
+     "9d99d3b39c93ac39098ab44880e787522ec755fa47857266b80281b46bc13038"
+    ],
+    "20158": [
+     "9d99d3b39c93ac39098ab44880e787522ec755fa47857266b80281b46bc13038"
+    ]
+   }
+  },
+  {
+   "step": "11si",
+   "set": {
+    "AcceptText": "shadows",
+    "Description": "<Player>. Word of you has reached even these isles. I have a task that needs a quiet hand. A man named Martley has been selling what he hears in Caer Gothwaite to whoever pays, and he has fled to a camp in the wilds. Adam Glaze has what you need. Will you work in the [shadows] for us?",
+    "SourceText": [
+     "Then go to Adam Glaze, the shield merchant inside the gates. He will give you a cloak and tell you where Martley hides.",
+     "He hides at the camp with a single tent, north-west of here, among the Nypholites. Wear the cloak; it may buy you a few steps before they know you for a stranger.",
+     "Take Martley's body back to Adam Glaze in Caer Gothwaite.",
+     "That's the end of him. Take this package to Tage, beneath the stones by Carys. He'll know what to do with it, and he'll see you're rewarded."
+    ],
+    "StepText": [
+     "Speak to Adam Glaze, the shield merchant inside the gates of Caer Gothwaite.",
+     "Slay Martley at the single-tent camp north-west of Caer Gothwaite.",
+     "Bring Martley's body to Adam Glaze.",
+     "Take Adam Glaze's package to Tage."
+    ],
+    "TargetText": [
+     "Carys sent you about Martley? Good. Take this cloak; it's the colour of the tents in his camp. Wear it, and his guards may take you for one of their own until it's too late.",
+     "Martley falls. You wrap his body in the cloak; Adam Glaze will want proof.",
+     "Is that Martley? Give him here; there are people who need to see that he's gone.",
+     "Adam sent something for me? Hand it over."
+    ],
+    "FinishText": "Martley's ledger, his letters, and the names of the ones who paid him. Well done, <Player>. Carys will be pleased, and so am I. Take this."
+   },
+   "guard": {
+    "20469": [
+     "e3a10e54a3f1adb8626d7daca0987ef97165ba8c96335fedd79380318eab02dd"
+    ],
+    "20467": [
+     "e3a10e54a3f1adb8626d7daca0987ef97165ba8c96335fedd79380318eab02dd"
+    ],
+    "20468": [
+     "e3a10e54a3f1adb8626d7daca0987ef97165ba8c96335fedd79380318eab02dd"
+    ],
+    "20471": [
+     "e3a10e54a3f1adb8626d7daca0987ef97165ba8c96335fedd79380318eab02dd"
+    ],
+    "20470": [
+     "e3a10e54a3f1adb8626d7daca0987ef97165ba8c96335fedd79380318eab02dd"
+    ]
+   }
+  },
+  {
+   "step": "15",
+   "set": {
+    "AcceptText": "Captain Rhodri",
+    "Description": {
+     "Infiltrator": "<Player>. Your name is starting to be spoken in the right rooms. Now a greater man has asked for us: Sir Bors, who holds the Black Mountains for the King. His man at Snowdonia, Captain Rhodri, needs eyes and ears in places soldiers can't go. That is what we are for. Will you go to [Captain Rhodri]?",
+     "Mercenary": "<Player>. Word is you don't waste time, which is the best thing anyone can say of a soldier. Sir Bors, who holds the Black Mountains for the King, has asked the Guild for help, and his man at Snowdonia, Captain Rhodri, will tell you the rest. Will you go to [Captain Rhodri]?",
+     "Cabalist": "<Player>. You have impressed people who are not easily impressed. Sir Bors, who holds the Black Mountains for the King, has asked the Guild for a quiet hand, and his man at Snowdonia, Captain Rhodri, will explain. Will you go to [Captain Rhodri]?",
+     "Necromancer": "<Player>. Sir Bors, who holds the Black Mountains for the King, has asked for help, and his man at Snowdonia, Captain Rhodri, will explain. You may hear talk of Arawnites. They are not of the Temple: they are zealots who wear our Lord's name and do none of his will. Will you go to [Captain Rhodri]?",
+     "Reaver": "<Player>. Sir Bors, who holds the Black Mountains for the King, has asked for help, and his man at Snowdonia, Captain Rhodri, will tell you what. You may hear talk of Arawnites. They are not of the Temple: they are zealots who wear our Lord's name and do none of his will. The Temple will not weep for them. Will you go to [Captain Rhodri]?"
+    },
+    "SourceText": [
+     "Captain Rhodri keeps the border keep in Snowdonia Fortress, at the north end of the Black Mountains. Go to him.",
+     "Before we court them, we must know them. Elrigh drifts from inn to inn in these mountains, and he hears everything; last I heard he was drinking at Snowdonia Station. Find him and ask him about the locals of Barfog.",
+     "The Barfog folk are proud, and they hate Camelot, but they'd hate the renegades more if they knew the half of it: a tower full of King's guards who stopped answering to the King, out on the edge of the lake. Andri knows more. He used to serve with them, and now he drinks in the taverns of Camelot.",
+     "I served at that tower before it turned. Sir Dillus leads them now; he took the tower and half the garrison with it. They say he takes his orders from someone in the north. I didn't stay to find out who."
+    ],
+    "StepText": [
+     "Seek out Captain Rhodri at the Snowdonia border keep.",
+     "Find Elrigh in the inns of the Black Mountains and ask about the locals of Llyn Barfog. (whisper: locals)",
+     "Find Andri in the taverns of Camelot and ask about the renegade guards. (whisper: renegade)",
+     "Tell Captain Rhodri of the renegades and Sir Dillus. (whisper: Sir Dillus)"
+    ],
+    "TargetText": [
+     "So you're the one Camelot sent. Good; I need someone the locals won't know for one of mine. West of here lies Llyn Barfog. Its people keep to themselves and to the old ways, and Sir Bors would have them as friends rather than enemies before this border gets any hotter.",
+     "Another traveler with an empty cup. What'll it be, then? Gossip about the [locals] of Barfog? It's always Barfog these days.",
+     "Leave me to my drink. Unless... you've come about Barfog? Everyone wants to hear about the [renegade] guards these days.",
+     "You're back. What did you learn? Who leads the renegades? Tell me it isn't [Sir Dillus]."
+    ],
+    "FinishText": "Dillus. I served beside him once. If he has turned, this is worse than Sir Bors feared. You have done well, <Player>. Take this, and come back to me when you're ready for harder work; there will be plenty."
+   },
+   "guard": {
+    "20188": [
+     "6e7dd8ce005d0f55f4f6e8be4f3553eae80f5ac54e2496dd7336382d41fbfb85"
+    ],
+    "20186": [
+     "6e7dd8ce005d0f55f4f6e8be4f3553eae80f5ac54e2496dd7336382d41fbfb85"
+    ],
+    "20187": [
+     "6e7dd8ce005d0f55f4f6e8be4f3553eae80f5ac54e2496dd7336382d41fbfb85"
+    ],
+    "20190": [
+     "6e7dd8ce005d0f55f4f6e8be4f3553eae80f5ac54e2496dd7336382d41fbfb85"
+    ],
+    "20189": [
+     "6e7dd8ce005d0f55f4f6e8be4f3553eae80f5ac54e2496dd7336382d41fbfb85"
+    ]
+   }
+  },
+  {
+   "step": "20",
+   "set": {
+    "AcceptText": "renegades",
+    "Description": "<Player>. Sir Bors cannot move against Sir Dillus on the word of a drunk in a Camelot tavern. We need proof. Will you go into Llyn Barfog under cover of darkness and learn what the [renegades] are hiding?",
+    "SourceText": [
+     "Their tower stands in Llyn Barfog, on your left as you come down from the North Black Mountains. Subdue one of the renegade guards and take whatever he carries. Don't linger; the guards walk in pairs, and Dillus comes out with more if you get too close. The moment you learn something, come back to me.",
+     "Captain Rhodri will want to read it.",
+     "'The messenger comes through the pass at the turn of the moon, with word from the north.' The north. Arawnites, if I'm any judge. Find that messenger in the pass to Llyn Barfog and take his orders from him, by whatever means you must.",
+     "You can't read a word of it. Omis, the vendor at Swanton Keep, is said to know old scripts.",
+     "Arawnite cipher, and an old one. There; I've written what it says between the lines. Take it to your captain, and don't tell anyone where you had it read."
+    ],
+    "StepText": [
+     "Slay a renegade guard in Llyn Barfog and learn of their treason.",
+     "Bring the guard's diary to Captain Rhodri.",
+     "Find the Arawnite messenger in the pass to Llyn Barfog and take his orders.",
+     "Have Omis at Swanton Keep decipher the Arawnite orders.",
+     "Return the deciphered orders to Captain Rhodri."
+    ],
+    "TargetText": [
+     "The renegade guard falls. Tucked inside his tunic is a battered diary.",
+     "You have something from the tower? Let me see it.",
+     "The Arawnite messenger falls. In his satchel are orders, sealed and written in a crabbed, ciphered hand.",
+     "Orders, is it? Let me have a look.",
+     "Omis could read it? Give it here."
+    ],
+    "FinishText": "'Dillus holds the tower. When the border falls, the lake falls with it.' So it's true: Dillus sold the King's tower to the Arawnites. You've given Sir Bors his proof, <Player>. Take this, and come back when you're ready. We will have to answer this."
+   },
+   "guard": {
+    "20455": [
+     "0e8c2188dc7eba85a4011270ba33e94827263077e64f435c9bdf7d92f3987308"
+    ],
+    "20453": [
+     "0e8c2188dc7eba85a4011270ba33e94827263077e64f435c9bdf7d92f3987308"
+    ],
+    "20454": [
+     "0e8c2188dc7eba85a4011270ba33e94827263077e64f435c9bdf7d92f3987308"
+    ],
+    "20457": [
+     "0e8c2188dc7eba85a4011270ba33e94827263077e64f435c9bdf7d92f3987308"
+    ],
+    "20456": [
+     "0e8c2188dc7eba85a4011270ba33e94827263077e64f435c9bdf7d92f3987308"
+    ]
+   }
+  },
+  {
+   "step": "25",
+   "set": {
+    "AcceptText": "supporting",
+    "Description": "<Player>, it is good to see you alive and whole. Sir Bors has asked me to see that this [matter] of the renegades is finished, once and for all.",
+    "SourceText": [
+     "Sir Dillus first, and his officers with him. Then go to Twr ap Alsig at the outpost in Llyn Barfog; whatever Dillus carries may be the proof Twr needs.",
+     "Twr ap Alsig will want to see this.",
+     "Heavens. This is Dillus's own hand, and the Arawnites' seal. I scarcely believe my eyes. Still, a paper is only a paper, and I must be certain where your loyalties lie. The undead cythraul roam this land. Destroy one and bring me its skull, and Barfog will give you the support you seek.",
+     "Bring the skull to Twr ap Alsig."
+    ],
+    "StepText": [
+     "Slay Sir Dillus and his renegade officers.",
+     "Speak to Twr ap Alsig at the outpost in Llyn Barfog, and give him the Arawnite orders as proof of Sir Dillus' betrayal.",
+     "Slay a cythraul in Llyn Barfog and bring its skull as proof.",
+     "Give Twr ap Alsig the cythraul skull."
+    ],
+    "TargetText": [
+     "Sir Dillus falls. Sealed inside his gauntlet is his own copy of the Arawnite orders, signed in his hand.",
+     "Yes, <Race>? What do you want? Support, from us? Your kind forgot the old ways long ago; the light of that Camelot has blinded you. We know you killed Dillus, and it has not won you a friend here. If you have proof of anything, give it to me now, before my people lose their patience.",
+     "The cythraul crumbles. Its skull rolls free, still cold.",
+     "I still seek proof of your deeds. Do you have something for me?"
+    ],
+    "FinishText": "You have done well, <Race>. Barfog will support your cause and welcome you always. Take this, as a token of trust between our people."
+   },
+   "guard": {
+    "21306": [
+     "b3bed1fc5ee4c0af84aa3c71521e4bad2d5ea2cfeb331cd3c0aad8d346a7c15b"
+    ],
+    "21304": [
+     "b3bed1fc5ee4c0af84aa3c71521e4bad2d5ea2cfeb331cd3c0aad8d346a7c15b"
+    ],
+    "21305": [
+     "b3bed1fc5ee4c0af84aa3c71521e4bad2d5ea2cfeb331cd3c0aad8d346a7c15b"
+    ],
+    "21308": [
+     "b3bed1fc5ee4c0af84aa3c71521e4bad2d5ea2cfeb331cd3c0aad8d346a7c15b"
+    ],
+    "21307": [
+     "b3bed1fc5ee4c0af84aa3c71521e4bad2d5ea2cfeb331cd3c0aad8d346a7c15b"
+    ]
+   }
+  },
+  {
+   "step": "30",
+   "set": {
+    "AcceptText": "intentions",
+    "Description": "Ah, <Player>! You've returned, and just in time. Twr ap Alsig has kept his word: Barfog will stand with us. Sir Bors means to put the alliance before the King, and Scribe Veral in Camelot must enter it in the rolls before anyone can undo it. Will you carry the document and our [intentions] to him?",
+    "SourceText": [
+     "Here it is, sealed with Sir Bors' own mark. Scribe Veral keeps his desk in Camelot. Put it into no one's hands but his.",
+     "Barfog's support, entered in the rolls; it is done. But you have not heard? There is news that Sir Bors is to be assassinated, and soon; the report doesn't say by whom. I will take your case before King Constantine myself. You must return to Snowdonia with all haste and stop this!",
+     "Captain Rhodri will want to know the danger has passed."
+    ],
+    "StepText": [
+     "Take the document to Scribe Veral in Camelot.",
+     "Search the Snowdonia border keep for the assassin and slay him.",
+     "Speak to Captain Rhodri."
+    ],
+    "TargetText": [
+     "Hail, traveler. How may I be of service? You come from Sir Bors? Then give me what you carry.",
+     "The Arawnite assassin falls, his blade still clean.",
+     ""
+    ],
+    "FinishText": {
+     "Infiltrator": "<Player>! You have done us the greatest of services. These Arawnites have caused us nothing but trouble since you dispatched Sir Dillus, and Sir Bors can offer nothing that would fully repay what he owes you today. Let this reward be the start of what little we have to offer. In time we will find a greater one, and when that time comes we will call once more upon the Guild of Shadows and its most cunning <Class>!",
+     "Mercenary": "<Player>! You have done us the greatest of services. These Arawnites have caused us nothing but trouble since you dispatched Sir Dillus, and Sir Bors can offer nothing that would fully repay what he owes you today. Let this reward be the start of what little we have to offer. In time we will find a greater one, and when that time comes we will call once more upon the Guild of Shadows and its most cunning <Class>!",
+     "Cabalist": "<Player>! You have done us the greatest of services. These Arawnites have caused us nothing but trouble since you dispatched Sir Dillus, and Sir Bors can offer nothing that would fully repay what he owes you today. Let this reward be the start of what little we have to offer. In time we will find a greater one, and when that time comes we will call once more upon the Guild of Shadows and its most cunning <Class>!",
+     "Necromancer": "<Player>! You have done us the greatest of services. These Arawnites have caused us nothing but trouble since you dispatched Sir Dillus, and Sir Bors can offer nothing that would fully repay what he owes you today. Let this reward be the start of what little we have to offer. In time we will find a greater one, and when that time comes we will call once more upon the Temple of Arawn and its most cunning <Class>!",
+     "Reaver": "<Player>! You have done us the greatest of services. These Arawnites have caused us nothing but trouble since you dispatched Sir Dillus, and Sir Bors can offer nothing that would fully repay what he owes you today. Let this reward be the start of what little we have to offer. In time we will find a greater one, and when that time comes we will call once more upon the Temple of Arawn and its most cunning <Class>!"
+    }
+   },
+   "guard": {
+    "21491": [
+     "29a17e932c518cfbacba0fc6f7f702fa344d094ca58db3ba0055bd65f865a6bc"
+    ],
+    "21489": [
+     "29a17e932c518cfbacba0fc6f7f702fa344d094ca58db3ba0055bd65f865a6bc"
+    ],
+    "21490": [
+     "29a17e932c518cfbacba0fc6f7f702fa344d094ca58db3ba0055bd65f865a6bc"
+    ],
+    "21493": [
+     "29a17e932c518cfbacba0fc6f7f702fa344d094ca58db3ba0055bd65f865a6bc"
+    ],
+    "21492": [
+     "29a17e932c518cfbacba0fc6f7f702fa344d094ca58db3ba0055bd65f865a6bc"
+    ]
+   }
+  },
+  {
+   "step": "40",
+   "set": {
+    "AcceptText": "Snowdonia",
+    "Description": {
+     "Infiltrator": "<Player>. There is trouble in Snowdonia again. Captain Rhodri calls it routine, but Rhodri does not send for the Guild over routine. I have my doubts, and I would rather you had them too. Will you go back to [Snowdonia]?",
+     "Mercenary": "<Player>. Rhodri's asking for us again. Says it's routine border trouble. If it were routine, he'd send his own men. Watch your back. Will you go back to [Snowdonia]?",
+     "Cabalist": "<Player>. Captain Rhodri writes of trouble in Snowdonia, which he calls routine. I have read a great many letters, and this one was written by a frightened man. Will you go back to [Snowdonia]?",
+     "Necromancer": "<Player>. Captain Rhodri has sent for us again. He calls it routine, but the dead do not whisper of routine things. Something stirs at the border. Will you go back to [Snowdonia]?",
+     "Reaver": "<Player>. Rhodri's asking for us again. He calls it routine. Routine doesn't need a Reaver. Will you go back to [Snowdonia]?"
+    },
+    "SourceText": [
+     "Go to Captain Rhodri at the Snowdonia border keep. Listen to everything he says, and to what he doesn't.",
+     "Here is a note for him. Kuebler commands the watch at Castle Sauvage; you'll find him upstairs. He won't like being asked questions by anyone outside his chain of command, so let the note do the asking.",
+     "Rhodri's lackey, sent all this way to ask whether anything is amiss at Sauvage. Nothing is amiss. Go back to Snowdonia and tell him so.",
+     "Then we go around him. Sir Bors has sent a gift for Twr ap Alsig of Barfog: this chest. Give it to him, and ask him about the goblins. There is talk of an uprising, and Barfog sees more of the goblins than we do.",
+     "A generous gift; Sir Bors learns. You ask about the goblins. Yes, they have a new order among them, and it did not come from goblins. There is a tunnel in Tepok's Mine that links to the borderlands. Find a Savant there, one of their clever ones, and learn what you can. You may have to kill him and search his belongings.",
+     "It speaks of an attack on the folk of Llyn Barfog. Twr ap Alsig must be warned.",
+     "An attack on Barfog! Then it is true. We will not be caught sleeping, and I will write to Sir Bors myself. Go to your captain and tell him what you found.",
+     {
+      "Infiltrator": "You have done well, and Sir Bors would see you rewarded. Choose what you will have: [Crackling Impaler], [Death's Touch], [Death Dancer], or [Spark of Midnight].",
+      "Mercenary": "You have done well, and Sir Bors would see you rewarded. Choose what you will have: [Crackling Impaler], [Death's Touch], [Glitter], [Spark], [Dazzle], or [Arcing Bludgeoner].",
+      "Cabalist": "You have done well, and Sir Bors would see you rewarded. Choose what you will have: [Staff of Eternal Lifeforce], [Staff of Earth Channeling], or [Staff of Spirit Consumption].",
+      "Necromancer": "You have done well, and Sir Bors would see you rewarded. Choose what you will have: [Staff of Cursed Bondage], [Staff of Clouded Vision], or [Staff of Ceaseless Agony].",
+      "Reaver": "You have done well, and Sir Bors would see you rewarded. Choose what you will have: [Blood Encrusted Whip], [Sap of Lost Will], [Bloodletter], or [Flail of Fallen Graces]."
+     }
+    ],
+    "StepText": [
+     "Seek out Captain Rhodri at the Snowdonia border keep. (whisper: speak with Lieutenant Kuebler)",
+     "Deliver Rhodri's note to Lieutenant Kuebler in Castle Sauvage.",
+     "Return to Captain Rhodri.",
+     "Take Sir Bors' chest to Twr ap Alsig in Llyn Barfog, and ask him about the goblin uprising.",
+     "Find the goblin Savant in Tepok's Mine and search his belongings.",
+     "Warn Twr ap Alsig with the dwarven dispatch.",
+     "Return to Captain Rhodri.",
+     {
+      "Infiltrator": "Choose your reward: whisper Captain Rhodri the name of the item you want (Crackling Impaler, Death's Touch, Death Dancer, Spark of Midnight).",
+      "Mercenary": "Choose your reward: whisper Captain Rhodri the name of the item you want (Crackling Impaler, Death's Touch, Glitter, Spark, Dazzle, Arcing Bludgeoner).",
+      "Cabalist": "Choose your reward: whisper Captain Rhodri the name of the item you want (Staff of Eternal Lifeforce, Staff of Earth Channeling, Staff of Spirit Consumption).",
+      "Necromancer": "Choose your reward: whisper Captain Rhodri the name of the item you want (Staff of Cursed Bondage, Staff of Clouded Vision, Staff of Ceaseless Agony).",
+      "Reaver": "Choose your reward: whisper Captain Rhodri the name of the item you want (Blood Encrusted Whip, Sap of Lost Will, Bloodletter, Flail of Fallen Graces)."
+     }
+    ],
+    "TargetText": [
+     "Good, you came. Let's get down to business. The Arawnites have gone quiet along the border at Sauvage, and quiet worries me more than noise. I need you to [speak with Lieutenant Kuebler] at Castle Sauvage.",
+     "What do you want? A note from Rhodri? Give it here, then.",
+     "Back from Sauvage already? And Kuebler sent you away with nothing. Of course he did.",
+     "<Race>. Again. What is it you carry this time?",
+     "The Savant shrieks as he falls: 'My pets shall put you in your place!' Among his belongings is a dispatch written in a dwarven hand.",
+     "You return in haste. What have you found?",
+     "This is a great day, <Player>! I shall go and meet with Twr ap Alsig and his people myself. Perhaps between us we can at last be one realm. Well, we can hope.",
+     {
+      "Infiltrator": "Have you decided? [Crackling Impaler], [Death's Touch], [Death Dancer], or [Spark of Midnight]?",
+      "Mercenary": "Have you decided? [Crackling Impaler], [Death's Touch], [Glitter], [Spark], [Dazzle], or [Arcing Bludgeoner]?",
+      "Cabalist": "Have you decided? [Staff of Eternal Lifeforce], [Staff of Earth Channeling], or [Staff of Spirit Consumption]?",
+      "Necromancer": "Have you decided? [Staff of Cursed Bondage], [Staff of Clouded Vision], or [Staff of Ceaseless Agony]?",
+      "Reaver": "Have you decided? [Blood Encrusted Whip], [Sap of Lost Will], [Bloodletter], or [Flail of Fallen Graces]?"
+     }
+    ],
+    "FinishText": "A fine choice. Carry it well, <Player>; Sir Bors will not forget what you have done for this border."
+   },
+   "guard": {
+    "20171": [
+     "2c9aa7ec90fef48d9f9fae8145f405468a1155c3186ae8bcad220bd0c69858d1"
+    ],
+    "20169": [
+     "c7019a4145857b9ab64b81fcfbb94ca2038761d79391e44def38ad62271a6712"
+    ],
+    "20170": [
+     "28b110274cfb260b9f248126cba7db1b5200d61ca9b7e189b7895d4f6adc8dfa"
+    ],
+    "20173": [
+     "f0d968f25eb4290130802a8a42dec043062cd634598adf443640d4d2ff57c940"
+    ],
+    "20172": [
+     "fd990c084a2e82837a2f86803d7dbd846bbaec4b56ffe5b161d915f7ca4997f2"
+    ]
+   }
+  },
+  {
+   "step": "43",
+   "set": {
+    "AcceptText": "profitable",
+    "Description": "Hail! I trust you are well? I have a mission for you, should you be [interested].",
+    "SourceText": [
+     "Then go to Captain Rhodri at the Snowdonia border keep. He is expecting you, though perhaps not so soon.",
+     "Good. Twr ap Alsig believes the dwarves have been sending Tepok's goblins money and supplies. I doubt dwarves could stomach such company, but we cannot ignore our newest allies, and that mine has been a thorn for too long. Sir Bors wants you to go down into Tepok's Mine and slay Overseer Tepok himself. He carries a sack of his most precious things; bring it back, for it may tell us who has been helping him.",
+     "Captain Rhodri will want to see what is inside.",
+     "This is what we've been looking for! Twr ap Alsig has been deceived; I knew the dwarves had nothing to do with this. This letter speaks of supplies from the Pennine Mountains, sent by a people who make their home there. Take this dispatch to Twr ap Alsig so he knows where to look. We would be wise to turn our eyes north.",
+     "From Pennine? Not the dwarves at all... I was wrong, and I do not say that often. Tell your captain that Barfog will watch the north.",
+     "Very well! While you were away, Sir Bors had his scouts search the borderlands. The goblins had tunnelled under the pass wall to bring in supplies from the north, but our scouts were spotted before they could follow, and the tunnel was destroyed. So we go to the source. Begin with the Tylwyth Teg: their courier Delfina carries reports to and from their homelands. Find her in the Pennine Mountains, slay her, and bring me her reports. Our time is short; do not toy with her guards.",
+     "You cannot read them, but Twr ap Alsig might.",
+     "There. I have written it plain beneath their script. Take it to your captain; it is his business, not mine."
+    ],
+    "StepText": [
+     "Seek out Captain Rhodri at the Snowdonia border keep. (whisper: assist us)",
+     "Descend into Tepok's Mine, slay Overseer Tepok and take his sack.",
+     "Bring Tepok's sack to Captain Rhodri.",
+     "Deliver the dispatch to Twr ap Alsig in Llyn Barfog.",
+     "Tell Captain Rhodri your work is done. (whisper: work is done)",
+     "Infiltrate the Tylwyth Teg camp in the Pennine Mountains and slay the courier Delfina.",
+     "Have Twr ap Alsig translate Delfina's reports.",
+     "Return the translated reports to Captain Rhodri."
+    ],
+    "TargetText": [
+     "I had not expected you so soon; give me a moment to gather my thoughts. It is good to see you in such health. Sir Bors will be pleased it was you who answered his call. We need your skill, and what you know of the folk of Barfog, and you will be well rewarded. Are you still willing to [assist us]?",
+     "Overseer Tepok falls. Clutched in his claws is a heavy leather sack.",
+     "Ah! Were you able to retrieve Tepok's precious sack? Give it here.",
+     "<Race>. Rhodri sends you again. What is it now?",
+     "Back again! Did Twr ap Alsig take the dispatch? Then tell me your [work is done], and we can move on.",
+     "Delfina falls. Her satchel holds a bundle of reports in the Tylwyth Teg script.",
+     "You bring me elvish writing? Give it here; I will read it for you.",
+     "Once again your swiftness is impressive! Do you have Delfina's reports?"
+    ],
+    "FinishText": "This does not bode well. I see no mention of goblins here; our scribes will have to go over them more closely. You have done well, <Class>! We will need you again once we understand what Delfina was carrying. Return to your master in Camelot, and wait for word."
+   },
+   "guard": {
+    "20435": [
+     "6ae6f40018cfe4b49b0ee66b97eecdb465def0e7a8cd92d388905a94b3ac24bb"
+    ],
+    "20433": [
+     "6ae6f40018cfe4b49b0ee66b97eecdb465def0e7a8cd92d388905a94b3ac24bb"
+    ],
+    "20434": [
+     "6ae6f40018cfe4b49b0ee66b97eecdb465def0e7a8cd92d388905a94b3ac24bb"
+    ],
+    "20437": [
+     "6ae6f40018cfe4b49b0ee66b97eecdb465def0e7a8cd92d388905a94b3ac24bb"
+    ],
+    "20436": [
+     "6ae6f40018cfe4b49b0ee66b97eecdb465def0e7a8cd92d388905a94b3ac24bb"
+    ]
+   }
+  },
+  {
+   "step": "45",
+   "set": {
+    "AcceptText": "deceit",
+    "Description": {
+     "Infiltrator": "<Player>. Rhodri's scribes have finished with Delfina's reports, and he has sent for you by name. Whatever is in them, it frightened him. Someone is lying to all of us. Will you find the source of this [deceit]?",
+     "Mercenary": "<Player>. Rhodri's sent for you again, by name this time. His scribes read Delfina's reports, and he didn't like what they found. Someone's playing us all for fools. Will you find the source of this [deceit]?",
+     "Cabalist": "<Player>. Captain Rhodri's scribes have read Delfina's reports, and he has asked for you by name. Some mind is playing Barfog, the goblins and the elves against one another. Will you find the source of this [deceit]?",
+     "Necromancer": "<Player>. Rhodri asks for you by name. His scribes have read Delfina's reports, and the shadows I consult are uneasy. Someone weaves lies across the whole border. Will you find the source of this [deceit]?",
+     "Reaver": "<Player>. Rhodri wants you, by name. Someone has been lying to the whole border, and the Temple wants that someone found. Will you find the source of this [deceit]?"
+    },
+    "SourceText": [
+     "Go to Captain Rhodri at the Snowdonia border keep. When it is done, come back to me; I want to hear it from you.",
+     "Their courier travels the Pennine Mountains, south-east of here. Slay him and bring me whatever he carries.",
+     "Captain Rhodri will want these.",
+     "Names, payments... and this: 'The Ravenclan will hold their tongues so long as their Book of Lore is safe.' The giants are in it too. Lieutenant Kuebler at Castle Sauvage knows the Ravenclan better than anyone. Ask him about this book, and be patient with him.",
+     "Belgrik keeps it, a Ravenclan giant with more sense than most of his kin, which isn't saying much. He camps in the Pennine Mountains, north of here. If you want the book, you'll have to take it from him, and I wish you luck.",
+     "Captain Rhodri must see this.",
+     {
+      "Infiltrator": "It's all here: who paid the giants, who paid the goblins, and in whose name. I'll send it to Sir Bors at once. Go back to Master Edric in Camelot and report what you have seen. This is bigger than the border now.",
+      "Mercenary": "It's all here: who paid the giants, who paid the goblins, and in whose name. I'll send it to Sir Bors at once. Go back to Master Arenis in Camelot and report what you have seen. This is bigger than the border now.",
+      "Cabalist": "It's all here: who paid the giants, who paid the goblins, and in whose name. I'll send it to Sir Bors at once. Go back to Magus Isen in Camelot and report what you have seen. This is bigger than the border now.",
+      "Necromancer": "It's all here: who paid the giants, who paid the goblins, and in whose name. I'll send it to Sir Bors at once. Go back to Yulia in Camelot and report what you have seen. This is bigger than the border now.",
+      "Reaver": "It's all here: who paid the giants, who paid the goblins, and in whose name. I'll send it to Sir Bors at once. Go back to Peze in Camelot and report what you have seen. This is bigger than the border now."
+     }
+    ],
+    "StepText": [
+     "Seek out Captain Rhodri at the Snowdonia border keep.",
+     "Slay the isolationist courier in the Pennine Mountains and take his documents.",
+     "Return the documents to Captain Rhodri.",
+     "Speak with Lieutenant Kuebler at Castle Sauvage about the Ravenclan giants' Book of Lore.",
+     "Slay the Ravenclan giant Belgrik in the Pennine Mountains and take the Book of Lore.",
+     "Return the Book of Lore to Captain Rhodri.",
+     {
+      "Infiltrator": "Report to Master Edric in Camelot.",
+      "Mercenary": "Report to Master Arenis in Camelot.",
+      "Cabalist": "Report to Magus Isen in Camelot.",
+      "Necromancer": "Report to Yulia in Camelot.",
+      "Reaver": "Report to Peze in Camelot."
+     }
+    ],
+    "TargetText": [
+     "<Player>. Delfina's reports speak of isolationists: elves who would cut the Tylwyth Teg off from every other people, and who pay others to keep this border burning.",
+     "The isolationist courier falls. His documents are wrapped in oilcloth, as if they were worth more than he was.",
+     "You have the courier's documents? Let me see.",
+     "You again. Rhodri's lackey. What is it now? The Ravenclan's Book of Lore? ...Fine.",
+     "Belgrik falls with a sound like a landslide. Beneath him lies a great iron-bound Book of Lore.",
+     "Is that the Ravenclan's Book of Lore? Give it here, carefully.",
+     ""
+    ],
+    "FinishText": {
+     "Infiltrator": "Rhodri's letter arrived before you did. The goblins, the elves, the giants, all paid by the same hand. You have done the Guild proud, <Player>. Take this, and rest while you can. When the name behind it all comes to light, you will be the first I send for.",
+     "Mercenary": "Rhodri's letter beat you here. Goblins, elves and giants, all bought and paid for out of the same purse. You've earned this, <Player>. Get some rest; when we know whose purse it is, you'll be the first I call.",
+     "Cabalist": "Captain Rhodri's letter arrived this morning. Goblins, elves, giants, all moved by the same hand, like pieces on a board. You have done the Guild proud, <Player>. Take this. When we learn whose hand it is, I will send for you first.",
+     "Necromancer": "Rhodri's letter came before you. Goblins, elves, giants, all bought by one master. Arawn sees all debts, <Player>, and this one will be paid. Take this, and rest. When the master's name is known, I will send for you first.",
+     "Reaver": "Rhodri's letter got here first. Goblins, elves, giants, all bought by one master. Good work, <Player>. Take this. When we know who that master is, you'll be the first I send."
+    }
+   },
+   "guard": {
+    "21297": [
+     "df8afe5353c4edf4a769399f77db7a915063134d21ccdb69b7f4dae6db61d393"
+    ],
+    "21295": [
+     "df8afe5353c4edf4a769399f77db7a915063134d21ccdb69b7f4dae6db61d393"
+    ],
+    "21296": [
+     "df8afe5353c4edf4a769399f77db7a915063134d21ccdb69b7f4dae6db61d393"
+    ],
+    "21299": [
+     "df8afe5353c4edf4a769399f77db7a915063134d21ccdb69b7f4dae6db61d393"
+    ],
+    "21298": [
+     "df8afe5353c4edf4a769399f77db7a915063134d21ccdb69b7f4dae6db61d393"
+    ]
+   }
+  },
+  {
+   "step": "48",
+   "set": {
+    "AcceptText": "Sir Tilian",
+    "Description": {
+     "Infiltrator": "<Player>. Sir Tilian, at Castle Sauvage, believes he has found the hand behind it all: the goblins, the elves, the giants. He asked for the Guild's best, and I told him I would send you. Will you go to [Sir Tilian]?",
+     "Mercenary": "<Player>. Sir Tilian at Castle Sauvage thinks he knows who's been paying for all of this. He asked for our best. That's you. Will you go to [Sir Tilian]?",
+     "Cabalist": "<Player>. Sir Tilian, at Castle Sauvage, has a theory about the hand behind all of this, and he has asked for the Guild's best to test it. Will you go to [Sir Tilian]?",
+     "Necromancer": "<Player>. Sir Tilian, at Castle Sauvage, believes he has found the master behind the border's troubles. The dead have been whispering the same. Will you go to [Sir Tilian]?",
+     "Reaver": "<Player>. Sir Tilian, at Castle Sauvage, says he knows who's behind it all. He wants our best. Will you go to [Sir Tilian]?"
+    },
+    "SourceText": [
+     "Sir Tilian waits at Castle Sauvage. Hear him out.",
+     "Go into the Ellyll villages of the Pennine Mountains and slay one of their seers. Bring his journal to Captain Rhodri at Snowdonia; he will know what to do with it. I'll send my notes to him by rider.",
+     "Captain Rhodri must see this journal."
+    ],
+    "StepText": [
+     "Talk to Sir Tilian at Castle Sauvage.",
+     "Slay an Ellyll seer in the villages of the Pennine Mountains and take his journal.",
+     "Give the journal to Captain Rhodri, upstairs in Snowdonia Fortress."
+    ],
+    "TargetText": [
+     "So you are the one who found the Book of Lore. Good. Everything I have read points to the Ellyll: their seers keep journals of every bargain they strike, and someone has been striking a great many.",
+     "The Ellyll seer falls. His journal is full of bargains, and one name appears on every page.",
+     "Sir Tilian's rider arrived an hour ago. Do you have the seer's journal?"
+    ],
+    "FinishText": "Lord Elidyn. The same name, on every page. Sir Tilian was right. Rest tonight, <Player>; tomorrow we decide what to do about him."
+   },
+   "guard": {
+    "21482": [
+     "db1bf6acd31e1e9a50e8a601dd21a0f4e8ffa921cc2cb243378357abec4eaea7"
+    ],
+    "21480": [
+     "db1bf6acd31e1e9a50e8a601dd21a0f4e8ffa921cc2cb243378357abec4eaea7"
+    ],
+    "21481": [
+     "db1bf6acd31e1e9a50e8a601dd21a0f4e8ffa921cc2cb243378357abec4eaea7"
+    ],
+    "21484": [
+     "db1bf6acd31e1e9a50e8a601dd21a0f4e8ffa921cc2cb243378357abec4eaea7"
+    ],
+    "21483": [
+     "db1bf6acd31e1e9a50e8a601dd21a0f4e8ffa921cc2cb243378357abec4eaea7"
+    ]
+   }
+  },
+  {
+   "step": "50",
+   "set": {
+    "SourceText": [
+     "Elidyn holds the old Ellyll ruins on the hill in the Pennine Mountains, and he will not be alone. Take friends, go carefully, and come back to me.",
+     "Captain Rhodri is waiting at the Snowdonia border keep."
+    ],
+    "TargetText": [
+     "Lord Elidyn falls, and with him every lie he spun across the border.",
+     ""
+    ],
+    "FinishText": {
+     "Infiltrator": "Lord Elidyn is dead, and his lies with him. Sir Bors will hear of this before nightfall. Take this armour, <Class>; the Guild of Shadows makes it only for its finest.",
+     "Mercenary": "Lord Elidyn is dead, and his lies with him. Sir Bors will hear of this before nightfall. Take this armour, <Class>; the Guild of Shadows makes it only for its finest.",
+     "Cabalist": "Lord Elidyn is dead, and his lies with him. Sir Bors will hear of this before nightfall. Take this armour, <Class>; the Guild of Shadows makes it only for its finest.",
+     "Necromancer": "Lord Elidyn is dead, and his lies with him. Sir Bors will hear of this before nightfall. Take this armour, <Class>; the Temple of Arawn makes it only for its finest.",
+     "Reaver": "Lord Elidyn is dead, and his lies with him. Sir Bors will hear of this before nightfall. Take this armour, <Class>; the Temple of Arawn makes it only for its finest."
+    }
+   },
+   "guard": {
+    "990509": [
+     "660c4bc82f8467263ea396c6637013e2895f7e122dfd866b72d863fd5715a9ec"
+    ],
+    "990511": [
+     "660c4bc82f8467263ea396c6637013e2895f7e122dfd866b72d863fd5715a9ec"
+    ],
+    "990513": [
+     "660c4bc82f8467263ea396c6637013e2895f7e122dfd866b72d863fd5715a9ec"
+    ],
+    "990512": [
+     "660c4bc82f8467263ea396c6637013e2895f7e122dfd866b72d863fd5715a9ec"
+    ],
+    "990519": [
+     "660c4bc82f8467263ea396c6637013e2895f7e122dfd866b72d863fd5715a9ec"
+    ]
+   }
+  }
+ ]
+}

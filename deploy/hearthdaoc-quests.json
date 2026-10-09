@@ -1,5 +1,5 @@
 {
-  "_about": "HearthDAoC's additions to upstream's classic-quests.json; ClassicQuests reads both. The Guild of Shadows level-50 \"Lord of Deceit\" quests (one per class, added by deploy/bin/epic_chains.py): stage 1 kill Lord Elidyn, stage 2 back to Captain Rhodri; Lord Elidyn is a quest monster gamebots leave alone. Spec: docs/fork/specs/2026-10-09-epic-chains-design.md, section 3.2.",
+  "_about": "HearthDAoC's additions to upstream's classic-quests.json; ClassicQuests reads both. The Guild of Shadows level-50 \"Lord of Deceit\" quests (one per class, added by deploy/bin/epic_chains.py): stage 1 kill Lord Elidyn, stage 2 back to Captain Rhodri; Lord Elidyn is a quest monster gamebots leave alone. \"Chat\": NPC replies to whispered keywords that replace upstream's, keyword by keyword (an empty reply silences one): the chain's dialogue, with deploy/bin/quest_dialogue.json. Spec: docs/fork/specs/2026-10-09-epic-chains-design.md, section 3.2.",
   "Quests": {
     "990509": {"Steps": [null, {"Marker": {"Region": 1, "X": 568158, "Y": 404718, "Z": 5032}}, {"Marker": {"Region": 1, "X": 528239, "Y": 359818, "Z": 9088}}]},
     "990511": {"Steps": [null, {"Marker": {"Region": 1, "X": 568158, "Y": 404718, "Z": 5032}}, {"Marker": {"Region": 1, "X": 528239, "Y": 359818, "Z": 9088}}]},
@@ -7,5 +7,25 @@
     "990512": {"Steps": [null, {"Marker": {"Region": 1, "X": 568158, "Y": 404718, "Z": 5032}}, {"Marker": {"Region": 1, "X": 528239, "Y": 359818, "Z": 9088}}]},
     "990519": {"Steps": [null, {"Marker": {"Region": 1, "X": 568158, "Y": 404718, "Z": 5032}}, {"Marker": {"Region": 1, "X": 528239, "Y": 359818, "Z": 9088}}]}
   },
-  "QuestMonsterIds": ["1f005bc1-27ae-40b0-bc42-1ec407a4aa34"]
+  "QuestMonsterIds": ["1f005bc1-27ae-40b0-bc42-1ec407a4aa34"],
+  "Chat": {
+    "Captain Rhodri": {
+      "matter": "Sir Bors wants the folk of Llyn Barfog on our side, and nothing would win their trust faster than seeing the renegades gone. Your task is to go back to the renegade tower and [dispatch] the traitors.",
+      "dispatch": "See that justice finds Sir Dillus, and every one of the officers [supporting] him. Then go to the outpost in Llyn Barfog and speak with Twr ap Alsig. If he will stand with us, the rest of Barfog will follow.",
+      "assist us": "",
+      "scouts were spotted": "",
+      "venture into the camps": "",
+      "willing to assist": ""
+    },
+    "Magus Agyfen": {
+      "interested": "Many in Camelot have begun to speak of your missions for Sir Bors. It seems you have succeeded where many others failed, and some of them resent it; I would watch my back around them. That is why I hesitate to give you this message from Captain Rhodri. I do not know what it says, only that I was told it would be very [profitable]. May whatever god you worship watch over you. Safe travels!"
+    },
+    "Twr ap Alsig": {
+      "certain": "The undead cythraul roam this land. Destroy one and bring me its skull, and Barfog will give you the support you seek.",
+      "Step#4": ""
+    },
+    "Scribe Veral": {
+      "local report": "There is news that Sir Bors is to be assassinated, and soon; the report doesn't say by whom. Return to Snowdonia with all haste!"
+    }
+  }
 }

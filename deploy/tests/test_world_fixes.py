@@ -185,6 +185,7 @@ class FixesTests(unittest.TestCase):
             "Epic chains: Guild of Shadows 60 links, 60 XP and coin, 4 Supply Runs closed, 2 rewards and 7 texts "
             "fixed; 87 other links; 41 items added, 36 item fixes; 5 level-50 quests, Lord Elidyn's camp 17 restored; "
             "Shadows_50: 0 finished carried, 0 removed, 0 epic vests recharged",
+            "Quest dialogue: 65 quests rewritten",
         ])
         self.assertEqual(self.q("SELECT Mob_ID FROM fork_removed_mobs WHERE FixId='duplicate-townspeople' ORDER BY Mob_ID"),
                          [("231313cf-eb6a-408f-9811-f697c705ffb7",), ("cc83cc14-e5ff-4eb1-b35c-8ad140793909",)])
