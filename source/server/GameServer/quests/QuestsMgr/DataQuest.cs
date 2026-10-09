@@ -1,5 +1,6 @@
 ﻿using System;
 using System.Collections.Generic;
+using System.Linq;
 using System.Reflection;
 using DOL.AI.Brain;
 using DOL.Database;
@@ -62,6 +63,8 @@ namespace DOL.GS.Quests
 	/// StepItemTemplates - Any items that need to be given to the player for a step.  Every step can give an item to a player. All
 	/// steps give an item at the completion of the step except Delivery and DeliveryFinish.  If StepItemTemplates are defined for a 
 	/// Delivery step then the item is given at the beginning of the step and accepted by a target to end the step.
+	/// HearthDAoC: but not when the player already carries that item in the backpack, or the step just finishing gives it;
+	/// a player who lost it gets a new one (QuestDeliveryItems.ShouldHand).
     /// For Kill and Search steps, StepItemTemplates can include a drop chance behind the template name.  Ex: |some_template_name;50|  
     /// If the item does not drop then the step is not advanced.
 	/// If no items are given to a player at any of the steps then this can be null, otherwise it must have values for each step. 
@@ -1621,9 +1624,22 @@ namespace DOL.GS.Quests
 					{
 						// Allow StepItemTemplate to be empty, assume quest player received item in a previous step or outside of the quest
 
-						if (!string.IsNullOrEmpty(m_stepItemTemplates[Step].Trim()))
+						// HearthDAoC: ... but not a second copy of an item the player already carries or that the step just
+						// finishing hands over. "Traveler's Way -- Supply Run" (and 76 more classic quests) gave the supplies
+						// at the first step and again at Thol Dunnin, and Ley Manton takes only one (owner test 2026-10-09).
+						// A player who lost the item still gets a new one.
+						List<string> carried;
+						lock (QuestPlayer.Inventory.Lock)
 						{
-							stepTemplates.Add(m_stepItemTemplates[Step].Trim());
+							carried = QuestPlayer.Inventory.AllItems
+								.Where(i => i.SlotPosition >= (int)eInventorySlot.FirstBackpack && i.SlotPosition <= (int)eInventorySlot.LastBackpack)
+								.Select(i => i.Id_nb).ToList();
+						}
+
+						string deliveryItem = m_stepItemTemplates[Step].Trim();
+						if (QuestDeliveryItems.ShouldHand(deliveryItem, carried, stepTemplates))
+						{
+							stepTemplates.Add(deliveryItem);
 						}
 					}
 
