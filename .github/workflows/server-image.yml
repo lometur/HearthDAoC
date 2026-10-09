@@ -112,7 +112,7 @@ jobs:
         run: |
           # The server build copies config/serverconfig.xml; use the same loopback placeholder as the image build.
           cp deploy/serverconfig.build.xml source/server/CoreServer/config/serverconfig.xml
-          dotnet test source/server/Tests/Tests.csproj --nologo --filter "FullyQualifiedName~UT_CommandPrivLevelOverrides|FullyQualifiedName~UT_SiStartChoice|FullyQualifiedName~UT_ClassicBattlegrounds"
+          dotnet test source/server/Tests/Tests.csproj --nologo --filter "FullyQualifiedName~UT_CommandPrivLevelOverrides|FullyQualifiedName~UT_SiStartChoice|FullyQualifiedName~UT_ClassicBattlegrounds|FullyQualifiedName~UT_DataQuestDependency|FullyQualifiedName~UT_ClassicQuestsExtra|FullyQualifiedName~UT_EpicChain"
 
       - name: CLI integration tests
         env:

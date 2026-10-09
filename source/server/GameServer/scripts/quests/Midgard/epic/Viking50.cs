@@ -166,7 +166,7 @@ namespace DOL.GS.Quests.Midgard
 
 			if (npcs.Length > 0)
 				foreach (GameNPC npc in npcs)
-					if (npc.CurrentRegionID == 100 && npc.X == 802597 && npc.Y == 727896)
+					if (npc.CurrentRegionID == 100 && Math.Abs(npc.X - 802808) <= 2000 && Math.Abs(npc.Y - 727114) <= 2000 /* HearthDAoC: near where the quest creates it, so a world copy is used, not doubled */)
 					{
 						Elizabeth = npc;
 						break;

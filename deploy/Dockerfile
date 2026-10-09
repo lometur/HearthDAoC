@@ -35,6 +35,7 @@ RUN apt-get update \
  && rm -rf /var/lib/apt/lists/*
 # The .NET 10 images are Ubuntu 24.04 and already have uid/gid 1000 ("ubuntu"); the server runs by number.
 COPY --from=build /src/source/server/Release /app/server
+COPY deploy/hearthdaoc-quests.json /app/server/hearthdaoc-quests.json
 COPY --from=build /out/tools /app/tools
 COPY tools/linux/accounts /app/tools/accounts
 COPY tools/linux/odaoc_fetch.py /app/bin/odaoc_fetch.py

@@ -1,0 +1,11 @@
+{
+  "_about": "HearthDAoC's additions to upstream's classic-quests.json; ClassicQuests reads both. The Guild of Shadows level-50 \"Lord of Deceit\" quests (one per class, added by deploy/bin/epic_chains.py): stage 1 kill Lord Elidyn, stage 2 back to Captain Rhodri; Lord Elidyn is a quest monster gamebots leave alone. Spec: docs/fork/specs/2026-10-09-epic-chains-design.md, section 3.2.",
+  "Quests": {
+    "990509": {"Steps": [null, {"Marker": {"Region": 1, "X": 568158, "Y": 404718, "Z": 5032}}, {"Marker": {"Region": 1, "X": 528239, "Y": 359818, "Z": 9088}}]},
+    "990511": {"Steps": [null, {"Marker": {"Region": 1, "X": 568158, "Y": 404718, "Z": 5032}}, {"Marker": {"Region": 1, "X": 528239, "Y": 359818, "Z": 9088}}]},
+    "990513": {"Steps": [null, {"Marker": {"Region": 1, "X": 568158, "Y": 404718, "Z": 5032}}, {"Marker": {"Region": 1, "X": 528239, "Y": 359818, "Z": 9088}}]},
+    "990512": {"Steps": [null, {"Marker": {"Region": 1, "X": 568158, "Y": 404718, "Z": 5032}}, {"Marker": {"Region": 1, "X": 528239, "Y": 359818, "Z": 9088}}]},
+    "990519": {"Steps": [null, {"Marker": {"Region": 1, "X": 568158, "Y": 404718, "Z": 5032}}, {"Marker": {"Region": 1, "X": 528239, "Y": 359818, "Z": 9088}}]}
+  },
+  "QuestMonsterIds": ["1f005bc1-27ae-40b0-bc42-1ec407a4aa34"]
+}

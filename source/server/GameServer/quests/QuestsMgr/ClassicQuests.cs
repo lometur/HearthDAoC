@@ -31,6 +31,8 @@ namespace DOL.GS.Quests
         public const uint MarkerId = 0xFFFE0004;
         public const string EventSpawnProperty = "ClassicQuestEventFor";
         private const string FileName = "classic-quests.json";
+        /// <summary>HearthDAoC: the fork's additions (the Guild of Shadows level-50 quests), read beside FileName.</summary>
+        private const string ExtraFileName = "hearthdaoc-quests.json";
         private const int RefreshMilliseconds = 5000;
         private static readonly Logger Log = LoggerManager.Create(typeof(ClassicQuests));
         /// <summary>Markers on each player's map: quest id -> (step, point). Each quest has its own marker id.</summary>
@@ -43,6 +45,7 @@ namespace DOL.GS.Quests
         private static Timer _timer;
         private static Config _config = new();
         private static DateTime _loadedWrite;
+        private static DateTime _loadedExtraWrite; // HearthDAoC
 
         public sealed record Point(ushort Region, int X, int Y, int Z);
 
@@ -493,13 +496,18 @@ namespace DOL.GS.Quests
                 string path = Path.Combine(AppContext.BaseDirectory, FileName);
                 if (!File.Exists(path)) return;
                 DateTime write = File.GetLastWriteTimeUtc(path);
-                if (write == _loadedWrite) return;
-                Config config = JsonSerializer.Deserialize<Config>(File.ReadAllText(path),
-                    new JsonSerializerOptions { PropertyNameCaseInsensitive = true });
+                // HearthDAoC: hearthdaoc-quests.json is read too; a change to either file reloads both.
+                string extraPath = Path.Combine(AppContext.BaseDirectory, ExtraFileName);
+                DateTime extraWrite = File.Exists(extraPath) ? File.GetLastWriteTimeUtc(extraPath) : DateTime.MinValue;
+                if (write == _loadedWrite && extraWrite == _loadedExtraWrite) return;
+                var options = new JsonSerializerOptions { PropertyNameCaseInsensitive = true };
+                Config config = JsonSerializer.Deserialize<Config>(File.ReadAllText(path), options);
                 if (config == null) return;
                 config.QuestMonsterIds = new HashSet<string>(config.QuestMonsterIds ?? new(), StringComparer.Ordinal);
+                config = Merge(config, ReadExtra(extraPath, options));
                 _config = config;
                 _loadedWrite = write;
+                _loadedExtraWrite = extraWrite;
                 if (Log.IsInfoEnabled)
                     Log.Info($"CLASSIC_QUESTS loaded quests={config.Quests.Count} questMonsters={config.QuestMonsterIds.Count}");
             }
@@ -508,6 +516,44 @@ namespace DOL.GS.Quests
                 Log.Error("Could not load classic-quests.json; classic quest markers and event spawns are off", ex);
             }
         }
+
+        /// <summary>HearthDAoC: the fork's additions, or null (said once) when the file is missing or unreadable.</summary>
+        private static Config ReadExtra(string path, JsonSerializerOptions options)
+        {
+            try
+            {
+                if (File.Exists(path))
+                    return JsonSerializer.Deserialize<Config>(File.ReadAllText(path), options);
+                Log.Warn($"{ExtraFileName} not found; HearthDAoC's quest additions are off");
+            }
+            catch (Exception ex)
+            {
+                Log.Warn($"Could not read {ExtraFileName}; HearthDAoC's quest additions are off", ex);
+            }
+            return null;
+        }
+
+        /// <summary>
+        /// HearthDAoC: adds the extra file's quests where upstream's file has no entry for the ID (upstream's entry wins),
+        /// and its quest monsters; returns <paramref name="upstream"/>. A null extra file changes nothing.
+        /// </summary>
+        public static Config Merge(Config upstream, Config extra)
+        {
+            if (extra == null) return upstream;
+            if (extra.Quests != null)
+                foreach (KeyValuePair<int, QuestInfo> quest in extra.Quests)
+                    upstream.Quests.TryAdd(quest.Key, quest.Value);
+            if (extra.QuestMonsterIds != null)
+                foreach (string mob in extra.QuestMonsterIds)
+                    upstream.QuestMonsterIds.Add(mob);
+            return upstream;
+        }
+
+        /// <summary>HearthDAoC: the map marker of a quest's stage (either file), or null. The GM's /epic goto uses it.</summary>
+        public static Point MarkerFor(int questId, int step) =>
+            _config.Quests.TryGetValue(questId, out QuestInfo info) && info.Steps != null && step > 0 && step < info.Steps.Count
+                ? info.Steps[step]?.Marker
+                : null;
 
         private static void Refresh(object state)
         {

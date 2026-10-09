@@ -48,6 +48,7 @@ docker exec "$NAME" cat /data/logs/server.log > "$T/server.log"
 grep -q "Command - '&tele' .* required plvl:2" "$T/server.log" || fail "/tele is not GM-only"
 grep -q "Command - '&tc' .* required plvl:2" "$T/server.log" || fail "/tc is not GM-only"
 grep -q "Command - '&spawn' .* required plvl:1" "$T/server.log" || fail "/spawn should stay open to players"
+grep -q "Command - '&epic' .* required plvl:2" "$T/server.log" || fail "/epic is not GM-only"
 echo "ok - single-player teleports are GM-only, companions stay open"
 grep -q "CLASSIC_QUESTS loaded quests=[1-9]" "$T/server.log" || fail "the server did not load classic-quests.json"
 echo "ok - the server finds its data files (classic-quests.json, classic-quest-guides.json) in /data"
@@ -56,6 +57,13 @@ echo "ok - the server finds its data files (classic-quests.json, classic-quest-g
 [[ "$(docker exec "$NAME" sqlite3 /data/world/opendaoc.sqlite3.db "SELECT COUNT(*) FROM StartupLocation WHERE ClassID=20 AND RaceID=4")" == 1 ]] \
     || fail "Saracen Disciples have no starting location"
 echo "ok - Disciple enabled and Saracen Disciples have a starting location"
+logs_have "Epic chains: Guild of Shadows 60 links" || fail "the epic chains world fix did not run"
+if docker exec "$NAME" sh -c 'grep -qE "is not valid and is never met|hearthdaoc-quests.json not found|Could not read hearthdaoc-quests.json" /data/logs/*.log'; then
+    fail "a quest dependency or hearthdaoc-quests.json failed to load"
+fi
+[[ "$(docker exec "$NAME" sqlite3 "$db" "SELECT COUNT(*) FROM DataQuest WHERE ID IN (990509, 990511, 990512, 990513, 990519)")" == 5 ]] \
+    || fail "the level-50 Lord of Deceit quests are missing"
+echo "ok - the epic chains world fix ran (level-50 quests in the world)"
 docker exec "$NAME" python3 /app/tools/accounts/accounts.py --db "$db" create smoketest Sm0keTest >/dev/null || fail "account create"
 docker stop -t 120 "$NAME" >/dev/null
 logs_have "| DOL.GS.GameServer | Stopped" || fail "no clean save on docker stop"
