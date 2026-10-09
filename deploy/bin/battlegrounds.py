@@ -13,13 +13,16 @@ values, not 0.34's (v1). 0.35 ships central keeps of its own in Abermenai and Mu
 (KeepID 33) and Dun Murdaigean (KeepID 32), with their guards; the fork keeps them and only levels them
 for the ranges and adds its wall casters and a hastener.
 
-Each step changes a value only while it still holds upstream's value (the keep Level reset in step 3 is
-the exception, as the spec requires), adds rows only where none of their kind are there yet, and adds
-one line to the result when it changed something:
+Each step changes a value only while it still holds upstream's value (the keep Level reset in step 3, and
+its gates, are the exception, as the spec requires), adds rows only where none of their kind are there
+yet, and adds one line to the result when it changed something:
 1. the Battleground rows get the classic level ranges and realm rank caps;
 2. Caledon is shown as Caledonia, and no battleground keeps a zone XP bonus;
 3. the four central keeps (Dun Abermenai, Thidranki Faste, Dun Murdaigean, Caer Caledon) get base levels
-   for their ranges and keep Level 1, and their gates (closed already) the matching full health;
+   for their ranges and keep Level 1, and their gates (closed already) the matching full health. A keep
+   put back to Level 1 (a capture, or an upgrade that carried its state, left it higher) has its gates
+   lowered to Level 1's full health where they are higher, as the server does after a capture
+   (ClassicBattlegroundsScript.OnKeepTaken);
 4. the portal keeps of Abermenai and Murdaigean, which have no guards, get a copy of Thidranki's portal
    keep guards and hasteners (all four battlegrounds share one map and the same portal keep spots);
 5. Dun Abermenai and Dun Murdaigean get six casters on their walls and a hastener beside their gate:
@@ -193,11 +196,16 @@ def _step3_keep_levels(conn, now):
         if conn.execute("UPDATE Keep SET BaseLevel=?, LastTimeRowUpdated=? WHERE KeepID=? AND Region=? AND BaseLevel=?",
                         (new, now, keep_id, region, old)).rowcount:
             items.append(f"{name} base level {new}")
+    gates = 0
     for keep_id, (region, name, _, _) in KEEP_LEVELS.items():  # a capture on this world left it higher
         if conn.execute("UPDATE Keep SET Level=1, LastTimeRowUpdated=? WHERE KeepID=? AND Region=? AND Level>1",
                         (now, keep_id, region)).rowcount:
             items.append(f"{name} back to level 1")
-    gates = 0
+            (base_level,) = conn.execute("SELECT BaseLevel FROM Keep WHERE KeepID=? AND Region=?",
+                                         (keep_id, region)).fetchone()
+            full = base_level * KEEP_DOORS_BASE_HEALTH
+            gates += conn.execute("UPDATE Door SET Health=?, LastTimeRowUpdated=? WHERE InternalID IN (?, ?) AND Health>?",
+                                  (full, now, *GATES[keep_id], full)).rowcount
     for keep_id, (region, _, old, new) in KEEP_LEVELS.items():
         gates += conn.execute("UPDATE Door SET Health=?, LastTimeRowUpdated=? WHERE InternalID IN (?, ?) AND Health=? "
                               "AND EXISTS (SELECT 1 FROM Keep WHERE KeepID=? AND Region=? AND BaseLevel=?)",

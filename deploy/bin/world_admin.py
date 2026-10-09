@@ -1,8 +1,9 @@
 #!/usr/bin/env python3
 """World lifecycle for the central server: status, restore a backup, start a new world, and upgrade
-to a new upstream version with upstream's progress importer. Everything except status and fetch-clean
-expects the server to be stopped (deploy/hdc enforces that) and keeps the previous world first: restore
-takes a backup, new-world and upgrade-world move the whole old world into /data/archive."""
+to a new upstream version with upstream's progress importer, and carry the RvR state of an archived world
+into the live one. Everything except status, fetch-clean and listing archived worlds expects the server to
+be stopped (deploy/hdc enforces that) and keeps the previous world first: restore and carry-rvr take a
+backup, new-world and upgrade-world move the whole old world into /data/archive."""
 import argparse
 import datetime
 import json
@@ -17,6 +18,7 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path[:0] = [HERE, os.path.join(HERE, "..", "..", "tools", "linux")]
 
 import backup  # noqa: E402
+import carry_rvr  # noqa: E402
 import init_world  # noqa: E402
 import spawns  # noqa: E402
 from odaoc_fetch import FetchError, Release  # noqa: E402
@@ -210,6 +212,74 @@ def _carry_admin_state(conn, old_db):
     return carried, changed
 
 
+def _carry_rvr_state(conn, old_db, limit_claims=False):
+    """Copy keep, door and relic state, hookpoint items and the capture log from the old world (carry_rvr.py).
+    Returns (counts, notes). On an error nothing is changed and it raises AdminError."""
+    try:
+        return carry_rvr.carry(conn, old_db, limit_claims=limit_claims)
+    except Exception as e:
+        raise AdminError(f"carrying the keep, door and relic state failed ({e}); the current world is unchanged") from e
+
+
+def archived_worlds(data):
+    """The archived worlds carry-rvr can copy from, oldest first: (name, upstream version or None)."""
+    root = os.path.join(data, "archive")
+    found = []
+    for name in os.listdir(root) if os.path.isdir(root) else []:
+        if not os.path.isfile(_archived_db(data, name)):
+            continue
+        try:
+            with open(os.path.join(root, name, "world.json"), encoding="utf-8") as f:
+                version = json.load(f).get("version")
+        except (OSError, ValueError):
+            version = None
+        found.append((name, version))
+    return sorted(found, key=lambda world: world[0][-15:])  # _archive_world's names end in _ts(), YYYYmmdd-HHMMSS
+
+
+def _archived_db(data, name):
+    return os.path.join(data, "archive", name, "world", os.path.basename(init_world.world_paths(data)["db"]))
+
+
+def carry_rvr_from_archive(data, name, log=print):
+    """Bring back, in the live world, the state of the keeps in play and the relics away from home in an archived
+    world (see carry_rvr.py), after a backup: captures of them made since are undone. Returns (counts, notes)."""
+    meta = _meta(data)
+    src = name if os.path.isabs(name) else _archived_db(data, name)
+    if not os.path.isfile(src):
+        raise AdminError(f"archived world not found: {src} (./hdc carry-rvr lists them)")
+    if not _integrity_ok(src):
+        raise AdminError("that archived world failed its integrity check; nothing was changed")
+    edition = world_edition(src)
+    if edition and edition != meta["edition"]:
+        raise AdminError(f"that is an edition '{edition}' world, but this world is '{meta['edition']}'; "
+                         "nothing was changed")
+    saved = backup.create(data, label="pre-carry-rvr")
+    copy = os.path.join(data, f"carry-rvr-{_ts()}.db")
+    try:
+        # Read a copy, so the archive is never written to (and a WAL-mode archive brings its last writes along).
+        s, d = sqlite3.connect(f"file:{src}?mode=ro", uri=True), sqlite3.connect(copy)
+        try:
+            s.backup(d)
+        finally:
+            d.close()
+            s.close()
+        c = sqlite3.connect(init_world.world_paths(data)["db"], timeout=30)
+        try:
+            counts, notes = _carry_rvr_state(c, copy, limit_claims=True)  # guilds_claim_limit is 1
+        finally:
+            c.close()
+    finally:
+        _remove_sidecars(copy)
+        if os.path.exists(copy):
+            os.remove(copy)
+    log(f"Carried over from {name}: {counts}")
+    for line in notes:
+        log(line)
+    log(f"The state before was backed up as {os.path.basename(saved)}.")
+    return counts, notes
+
+
 def fetch_clean(release, data, log=print):
     """Download (verified, resumable) this release's clean world for the world's edition. Kept separate
     from upgrade_world so the download can run with the network and the import without it."""
@@ -266,6 +336,8 @@ def upgrade_world(release, data, importer_cmd, clean_world=None, same_version_ok
         with c:  # the importer resets every account to plvl 1; restore GM/admin rights
             c.executemany("UPDATE Account SET PrivLevel=? WHERE Name=?", [(v, k) for k, v in plvls.items()])
         carried, changed = _carry_admin_state(c, old_db)
+        rvr, rvr_notes = _carry_rvr_state(c, old_db)  # upstream's importer leaves keeps and relics as it ships them
+        carried.update(rvr)
         counts_new = {t: c.execute(f"SELECT count(*) FROM {t}").fetchone()[0] for t in counts_old}
         ok = c.execute("PRAGMA integrity_check").fetchone()[0] == "ok"
     finally:
@@ -274,7 +346,9 @@ def upgrade_world(release, data, importer_cmd, clean_world=None, same_version_ok
         raise AdminError(f"verification failed (before {counts_old}, after {counts_new}); the current world is unchanged")
     staged_report = os.path.join(stage, "upgrade-report.txt")  # written before the swap, moved after it
     with open(staged_report, "w", encoding="utf-8") as f:
-        f.write(f"Upgrade to upstream {release.version}\nCarried over: {carried}\n\n")
+        f.write(f"Upgrade to upstream {release.version}\nCarried over: {carried}\n")
+        f.writelines(f"{line}\n" for line in rvr_notes)
+        f.write("\n")
         f.write("Server settings that differ from the new world (not carried; re-apply any you changed on purpose):\n")
         f.writelines(f"  {k}: yours={old!r} new={new!r}\n" for k, old, new in changed)
     archive = _archive_world(data, "world-pre-upgrade")
@@ -320,6 +394,8 @@ def main(argv=None):
     u.add_argument("--importer", required=True, help='e.g. "dotnet /app/tools/progress-import/progress-import.dll"')
     u.add_argument("--clean-world", help="an already-downloaded clean world (from fetch-clean); removed on success")
     u.add_argument("--same-version", action="store_true", help="re-import into a fresh copy of the same version")
+    c = sub.add_parser("carry-rvr", help="copy keep, door and relic state from an archived world (lists them without one)")
+    c.add_argument("archive", nargs="?", help="a name from the list, or an absolute path to a world database")
     a = ap.parse_args(argv)
     try:
         if a.cmd == "status":
@@ -334,6 +410,14 @@ def main(argv=None):
             new_world(Release.from_lock_file(a.lock), a.data, a.edition, a.skip_navmesh)
         elif a.cmd == "fetch-clean":
             fetch_clean(Release.from_lock_file(a.lock), a.data)
+        elif a.cmd == "carry-rvr" and not a.archive:
+            worlds = archived_worlds(a.data)
+            for name, version in worlds:
+                print(f"{name:40} upstream {version or '?'}")
+            if not worlds:
+                print(f"No archived worlds in {os.path.join(a.data, 'archive')}.")
+        elif a.cmd == "carry-rvr":
+            carry_rvr_from_archive(a.data, a.archive)
         else:
             upgrade_world(Release.from_lock_file(a.lock), a.data, shlex.split(a.importer), a.clean_world, a.same_version)
             if a.clean_world and os.path.exists(a.clean_world):
