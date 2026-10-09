@@ -2784,8 +2784,7 @@ Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
 - Modify: `docs/fork/FORK.md` (the second change table; a "World fixes" mention if the file has one)
 - Create: `docs/fork/verification/sub4-test-guide.md`
 
-`docs/fork/CHANGELOG.md` is not changed: since v0.34b-hearth.6 it points to the releases page for later releases (the
-spec's mention of it predates that).
+No changelog file is changed: the GitHub releases are the fork's changelog (PR #88 removed `docs/fork/CHANGELOG.md`).
 
 - [ ] **Step 1: FORK.md**
 

@@ -451,7 +451,7 @@ tracker #49, and ask the owner before opening anything.
 
 - `docs/fork/FORK.md`: the dependency forms, `hearthdaoc-quests.json`, `/epic`, the world fix, the upstream files
   touched or deleted.
-- `docs/fork/CHANGELOG.md`: the release entry.
+- The release notes: generated from the merged PR (the GitHub releases are the fork's changelog; PR #88).
 - `docs/fork/verification/sub4-test-guide.md` (section 5.4).
 
 ## 8. Risks
