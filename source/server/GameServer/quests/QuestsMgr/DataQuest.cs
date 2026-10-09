@@ -64,7 +64,8 @@ namespace DOL.GS.Quests
 	/// steps give an item at the completion of the step except Delivery and DeliveryFinish.  If StepItemTemplates are defined for a 
 	/// Delivery step then the item is given at the beginning of the step and accepted by a target to end the step.
 	/// HearthDAoC: but not when the player already carries that item in the backpack, or the step just finishing gives it;
-	/// a player who lost it gets a new one (QuestDeliveryItems.ShouldHand).
+	/// a player who lost it gets a new one (QuestDeliveryItems.ShouldHand). The copy being handed over to finish the step
+	/// doesn't count as carried, so a step that hands the same item back still hands it.
 	/// HearthDAoC: accepting a quest whose first step is a delivery hands that step's item (QuestDeliveryItems.FirstStepItem);
 	/// upstream never did, so those quests could not be finished. A first delivery back to the giver hands nothing.
 	/// HearthDAoC: whispering AcceptText to the giver asks "Do you accept?" first (DataQuestOffers); the quest starts when the
@@ -247,6 +248,8 @@ namespace DOL.GS.Quests
 		protected List<byte> m_allowedClasses = new List<byte>();
 		string m_classType = string.Empty;
 		string m_additionalData = string.Empty;
+		// HearthDAoC: the item the player is handing over while its step advances (null otherwise); it doesn't count as carried.
+		DbInventoryItem m_handingOver;
 
 		#region Construction
 
@@ -1631,15 +1634,10 @@ namespace DOL.GS.Quests
 						// HearthDAoC: ... but not a second copy of an item the player already carries or that the step just
 						// finishing hands over. "Traveler's Way -- Supply Run" (and 76 more classic quests) gave the supplies
 						// at the first step and again at Thol Dunnin, and Ley Manton takes only one (owner test 2026-10-09).
-						// A player who lost the item still gets a new one.
-						List<string> carried;
-						lock (QuestPlayer.Inventory.Lock)
-						{
-							carried = QuestPlayer.Inventory.AllItems
-								.Where(i => i.SlotPosition >= (int)eInventorySlot.FirstBackpack && i.SlotPosition <= (int)eInventorySlot.LastBackpack)
-								.Select(i => i.Id_nb).ToList();
-						}
-
+						// A player who lost the item still gets a new one. The item being handed over to finish this step is
+						// still in the backpack here and doesn't count: a step that hands it back (Omis writes between the
+						// lines of the Arawnite orders, "Path of the Renegade") hands a copy.
+						List<string> carried = CarriedItemIds(QuestPlayer);
 						string deliveryItem = m_stepItemTemplates[Step].Trim();
 						if (QuestDeliveryItems.ShouldHand(deliveryItem, carried, stepTemplates))
 						{
@@ -1768,6 +1766,38 @@ namespace DOL.GS.Quests
 			}
 
 			return false;
+		}
+
+		/// <summary>
+		/// HearthDAoC: advances the step for an item the player hands over. GamePlayerEvent.GiveItem fires while the item
+		/// is still in the backpack and it is removed only after the step advanced, so it is marked as being handed over
+		/// for AdvanceQuestStep (CarriedItemIds leaves it out).
+		/// </summary>
+		protected bool AdvanceQuestStepHandingOver(GameObject obj, DbInventoryItem item)
+		{
+			m_handingOver = item;
+			try
+			{
+				return AdvanceQuestStep(obj);
+			}
+			finally
+			{
+				m_handingOver = null;
+			}
+		}
+
+		/// <summary>
+		/// HearthDAoC: the item ids that count as carried in the player's backpack (QuestDeliveryItems.CarriedIds): every
+		/// item but the one being handed over. OnPlayerGiveItem's RemoveItem takes that whole item, so all its copies go.
+		/// </summary>
+		protected List<string> CarriedItemIds(GamePlayer player)
+		{
+			lock (player.Inventory.Lock)
+			{
+				return QuestDeliveryItems.CarriedIds(player.Inventory.AllItems
+					.Where(i => i.SlotPosition >= (int)eInventorySlot.FirstBackpack && i.SlotPosition <= (int)eInventorySlot.LastBackpack)
+					.Select(i => (i.Id_nb, i.Count, ReferenceEquals(i, m_handingOver) ? Math.Max(i.Count, 1) : 0)));
+			}
 		}
 
 
@@ -2376,14 +2406,7 @@ namespace DOL.GS.Quests
 				bool firstStepIsDelivery = m_stepTypes.Count > 0 && (m_stepTypes[0] == eStepType.Deliver || m_stepTypes[0] == eStepType.DeliverFinish);
 				if (firstStepIsDelivery)
 				{
-					List<string> carried;
-					lock (player.Inventory.Lock)
-					{
-						carried = player.Inventory.AllItems
-							.Where(i => i.SlotPosition >= (int)eInventorySlot.FirstBackpack && i.SlotPosition <= (int)eInventorySlot.LastBackpack)
-							.Select(i => i.Id_nb).ToList();
-					}
-
+					List<string> carried = CarriedItemIds(player);
 					string firstTarget = m_targetNames.Count > 0 ? m_targetNames[0] : null;
 					string firstTemplate = QuestDeliveryItems.FirstStepItem(true, m_stepItemTemplates, carried, firstTarget, living?.Name);
 					if (firstTemplate != null)
@@ -2529,7 +2552,8 @@ namespace DOL.GS.Quests
 									}
 								}
 
-								if (AdvanceQuestStep(obj))
+								// HearthDAoC: the item handed over doesn't count as carried while the step advances.
+								if (AdvanceQuestStepHandingOver(obj, item))
 								{
 									RemoveItem(obj, player, item, true);
 								}
@@ -2570,7 +2594,8 @@ namespace DOL.GS.Quests
 							}
 						}
 
-						if (AdvanceQuestStep(obj))
+						// HearthDAoC: the item handed over doesn't count as carried while the step advances.
+						if (AdvanceQuestStepHandingOver(obj, item))
 						{
 							RemoveItem(obj, player, item, true);
 						}

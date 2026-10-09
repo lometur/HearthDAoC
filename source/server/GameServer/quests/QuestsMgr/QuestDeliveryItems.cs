@@ -15,8 +15,9 @@ namespace DOL.GS.Quests
     public static class QuestDeliveryItems
     {
         /// <summary>True when the player should be handed <paramref name="template"/> now: it is not empty, none is among
-        /// the backpack's item ids (<paramref name="carried"/>), and the step just finishing isn't handing it
-        /// (<paramref name="beingHanded"/>). A player who lost or destroyed it gets a new one.</summary>
+        /// the carried item ids (<paramref name="carried"/>, from <see cref="CarriedIds"/>: the copy being handed over
+        /// doesn't count), and the step just finishing isn't handing it (<paramref name="beingHanded"/>). A player who
+        /// lost or destroyed it gets a new one.</summary>
         public static bool ShouldHand(string template, IEnumerable<string> carried, IEnumerable<string> beingHanded)
         {
             string wanted = template?.Trim();
@@ -24,6 +25,28 @@ namespace DOL.GS.Quests
                 return false;
 
             return !Contains(carried, wanted) && !Contains(beingHanded, wanted);
+        }
+
+        /// <summary>The ids of the backpack's items that count as carried while a step advances, from (id, count, copies
+        /// being handed over) entries: an item counts unless the hand-over takes all its copies. The item a player hands
+        /// over is still in the backpack while its step advances (<c>GamePlayerEvent.GiveItem</c> fires before the move,
+        /// and <c>DataQuest.OnPlayerGiveItem</c> removes it after); counting it made a step that hands the same item
+        /// back hand nothing, so the player had none ("Path of the Renegade": Omis writes between the lines of the
+        /// Arawnite orders and gives them back; 62 classic quests). <c>OnPlayerGiveItem</c> removes the whole item, so
+        /// it passes the item's count as handed over.</summary>
+        public static List<string> CarriedIds(IEnumerable<(string Id, int Count, int HandedOver)> backpack)
+        {
+            List<string> ids = new();
+            if (backpack == null)
+                return ids;
+
+            foreach ((string id, int count, int handedOver) in backpack)
+            {
+                if (handedOver <= 0 || count > handedOver)
+                    ids.Add(id);
+            }
+
+            return ids;
         }
 
         /// <summary>The item template accepting a quest should hand for its first step, or null for none: the first step is
