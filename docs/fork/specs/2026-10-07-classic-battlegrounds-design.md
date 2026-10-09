@@ -712,6 +712,7 @@ On a 0.35 world, v1 would have skipped Caledonia's limits (its row no longer mat
 | Caps | The classic realm rank caps hold on every way into a battleground: the frontier porter, upstream's new [Battlegrounds] choice on the town teleporters (same refusal text as the porter), and `KeepManager.GetBGPK`. |
 | Bots | A gamebot at or over a battleground's cap gets no battleground goal for it and is never sent in. |
 | Central keeps of Abermenai and Murdaigean | Upstream's keeps 33 and 32, their doors and their guards, levelled to the fork's levels (guards about 21 and 31, lords about 24 and 36), plus the fork's six wall casters per keep and its capture fixes. |
+| Hastener in those keeps (2026-10-09) | Add one to each, as v1 did: Thidranki's Hibernia portal keep hastener, moved onto the central keep model. |
 | Monsters | Upstream's battleground monsters stay. |
 
 The caps and bots are server code (section 3.3 and `docs/fork/FORK.md`). The rest is world data, below.
@@ -729,11 +730,12 @@ this fix with a "not applied" line, and the next start tries again. The marker i
 | 2. Names and XP | As v1. |
 | 3. Keep levels and gates | Now all four central keeps: Dun Abermenai 21 → 19, Thidranki Faste 26 → 24, Dun Murdaigean 31 → 29, Caer Caledon 46 → 35, and Level → 1 where a capture left it higher. Each keep's two gates go from the old full health to the new one (BaseLevel × 200): 4,200 → 3,800, 5,200 → 4,800, 6,200 → 5,800, 9,200 → 7,000. New: a gate changes only while its keep has the new BaseLevel, so a keep the owner levelled keeps gates that match. |
 | 4. Portal keep guards | As v1 (34 rows copied into each of 251 and 253), but the precondition looks only inside the portal keeps' areas (4,000 around a keep with BaseLevel 100 or more). |
-| 5. Wall casters | New. Dun Abermenai and Dun Murdaigean each get Thidranki's Hibernia portal keep's six wall casters, moved onto the central keep model as in section 3.2 ("The move"). Mob_IDs `hdc-bg<region>-ck-<source Mob_ID>`. Added only when the keep's Keep row (KeepID and region) and all six sources are there, and the keep has no `GuardStaticCaster` in its area yet; each only if its Mob_ID is free. |
+| 5. Wall casters and hastener | New. Dun Abermenai and Dun Murdaigean each get Thidranki's Hibernia portal keep's six wall casters and its hastener (`802a1b0a-…`), moved onto the central keep model as in section 3.2 ("The move"). Mob_IDs `hdc-bg<region>-ck-<source Mob_ID>`. Each kind is added on its own, only when the keep's Keep row (KeepID and region) and all its sources are there, and the keep has no row of its class (`GuardStaticCaster`, `FrontierHastener`) in its area yet; each row only if its Mob_ID is free. So a keep the owner gave casters still gets its hastener, and the other way round. |
 | 6. Atlas leftovers | As v1: 15 dummies, 3 Void Merchants and the stray Wizard. |
 
-Gone from v1: the fork's own Keep rows, the moved hastener, the four gate fighters and the lord (and
-`gate_spots`). Upstream's keeps have their own guards and lord.
+Gone from v1: the fork's own Keep rows, the four gate fighters and the lord (and `gate_spots`). Upstream's
+keeps have their own guards and lord. v1's moved hastener is back (owner, 2026-10-09), on v1's spots
+(section 3.2's table).
 
 **Levels.** The level code is unchanged in 0.35, so section 3.4 holds: at keep Level 1 and
 `keep_guard_level_multiplier` 1.6, BaseLevel 19 gives guards (fighters, archers, commanders and the casters)
@@ -752,6 +754,25 @@ land on the same spots as in v1 (section 3.2's table), at Z 4136. Upstream's gua
 
 The in-game check of section 4 (casters on the walls, neither floating nor inside a wall) still applies.
 
+**The hastener stands beside the gate.** The move puts it at 33612, 39657, 3720 (heading 3888) in Dun
+Abermenai and 32546, 37248, 3720 (heading 1613) in Dun Murdaigean, inside its keep's area (1,481 and 1,158
+from the Keep row) and in no other.
+- It stands where the other central keeps have theirs. Measured from the outer gate door (`000301`), along the
+  line from the inner gate door (`000302`) out through it and across that line: Dun Abermenai's at −28 and 241,
+  Dun Murdaigean's at −15 and 260, Thidranki Faste's at 44 and 206, Caer Caledon's at −93 and 233, all on the
+  same side. The Keep rows cannot show this: the four share one spot and heading.
+- It is not in the courtyard. It stands outside, beside the outer gate, where upstream put its gate guards (Z
+  3719 to 3746 on that line). Upstream's courtyard guards stand behind the inner gate door.
+- One of those gate fighters stands 60 units from it in Dun Abermenai and 65 in Dun Murdaigean. Upstream's own
+  guards at the same height stand at least 152 apart. The two do not overlap, but the in-game check should
+  look at that spot.
+- Realm. The copies keep the source's `Realm` column, 0, the same as upstream's guards. It does not matter: a
+  keep guard takes its keep's realm when it loads and when it respawns (`GameKeepGuard.SetRealm`,
+  `keeps/Gameobjects/Guards/GameKeepGuard.cs:761-780`, through `RefreshTemplate`, `:486` and `:376`). Keeps
+  load before mobs (`GameServer.cs:447` and `:462`). The hastener hastes only players of its keep's realm
+  (`keeps/Gameobjects/Guards/Hastener.cs:87`), so in a renegade keep it hastes no one, as in Thidranki
+  Faste and Caer Caledon. After a capture it hastes the new owners.
+
 **Capture fixes.** The `KeepTaken` handler (3.3) goes by region and portal keep, not by KeepID, so it covers
 upstream's keeps 33 and 32 (v1's own keeps were 32 and 33 the other way round). After a capture the keep goes
 back to Level 1 and its gates to full health (3,800 and 5,800).
@@ -765,8 +786,8 @@ world. If it did run one, every v2 step's precondition would fail (v1's values a
 
 - Dun Abermenai and Dun Murdaigean are upstream's keeps: 26 and 27 renegade guards and a "Renegade
   Chieftain", plus six casters on the walls. Their levels are as in 2.1.
-- The central keeps of Abermenai and Murdaigean have no hastener (Thidranki Faste and Caer Caledon keep
-  theirs).
+- Each central keep of Abermenai and Murdaigean has a hastener beside its outer gate, as Thidranki Faste and
+  Caer Caledon do. It hastes only the realm that holds the keep, so none while renegades hold it.
 - Monsters roam the battlegrounds (upstream's), and Siege Masters stand at most portal keeps.
 
 ### 7.5 Tests
@@ -774,6 +795,7 @@ world. If it did run one, every v2 step's precondition would fail (v1's values a
 `deploy/tests/test_battlegrounds.py`: the scratch world now holds 0.35's rows (upstream's central keeps, two
 of their guards each, the 0.35 gates). The real-data tests run on the 0.35 world: the values before, every
 row after, a second run that changes nothing, the guard levels from the Keep rows, every new and upstream
-guard in exactly one keep area, the door check, and the two caster checks above. Each step has an injected
-failure on its last statement, and the owner's values (a keep's BaseLevel, a gate, a portal keep guard, a
-caster) stay.
+guard in exactly one keep area, the door check, the two caster checks above, and the hastener's spot beside
+the gate in all four central keeps. Each step has an injected failure on its last statement, and the owner's
+values (a keep's BaseLevel, a gate, a portal keep guard, a caster, a hastener) stay. Without its source row,
+a kind of step 5 row is not added, and the other kind still is.

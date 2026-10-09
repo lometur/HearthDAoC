@@ -16,9 +16,10 @@ The first release on upstream OfflineDAoC v0.35b "Claude Takeover III" (#50).
 - feat(server): bots follow the same caps: a bot at or over a battleground's cap gets no battleground goal
   and is not sent in; one already inside may stay until it leaves or dies
 - feat(deploy): Dun Abermenai and Dun Murdaigean are upstream's new central keeps, with their 26 and 27
-  renegade guards, levelled as before (guards 21 and 31, lords 24 and 36), plus six wall casters each; after
-  a capture the keep goes back to level 1 and its gates to full health. They have no hastener. Upstream's
-  battleground monsters and Siege Masters stay (world fix `classic-battlegrounds-v2`)
+  renegade guards, levelled as before (guards 21 and 31, lords 24 and 36), plus six wall casters and a
+  hastener each; after a capture the keep goes back to level 1 and its gates to full health. The hastener
+  stands beside the outer gate and hastes only the realm that holds the keep. Upstream's battleground
+  monsters and Siege Masters stay (world fix `classic-battlegrounds-v2`)
 - feat(deploy): upstream's quest data files (`classic-quests.json`, `classic-quest-guides.json`) are
   downloaded from the release at the first start of a new upstream version, checked, and kept in the data
   volume, so quest markers, the Quest Guide and quest event monsters work on the server
