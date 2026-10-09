@@ -277,12 +277,13 @@ class LaunchPatchTests(FakeSteamTestCase):
         self.assertEqual(sorted(os.listdir(self.client)), ["game.dll", "paths.dat", "pregame"])
 
 
-# A stand-in for the next release's setup.sh: it logs its arguments, one per line, and installs its
-# play.sh and its release in the settings, as setup.sh does (both renamed into place).
+# A stand-in for the next release's setup.sh: it logs its arguments, one per line, and the folder it runs
+# from, and installs its play.sh and its release in the settings, as setup.sh does (both renamed into place).
 FAKE_SETUP = r'''#!/usr/bin/env bash
 set -euo pipefail
 printf '%s\n' "$@" > "@ARGS@"
 here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+echo "$here" > "@ARGS@.where"
 while [[ $# -gt 0 ]]; do if [[ "$1" == --dest ]]; then dest="$2"; fi; shift; done
 echo "Setting up the client ..."
 cp "$here/new-play.sh" "$dest/play.sh.new"
@@ -364,6 +365,17 @@ def free_port():
     with socket.socket() as s:
         s.bind(("127.0.0.1", 0))
         return s.getsockname()[1]
+
+
+def path_without(folder, *names):
+    """A PATH folder with a link to every command on PATH except names: a computer without them."""
+    os.makedirs(folder)
+    for d in os.environ["PATH"].split(os.pathsep):
+        for name in os.listdir(d) if os.path.isdir(d) else ():
+            target, link = os.path.join(d, name), os.path.join(folder, name)
+            if name not in names and not os.path.lexists(link) and os.path.isfile(target) and os.access(target, os.X_OK):
+                os.symlink(target, link)
+    return folder
 
 
 class UpdateTestCase(FakeSteamTestCase):
@@ -464,7 +476,7 @@ class UpdateCheckTests(UpdateTestCase):
             start = time.monotonic()
             r = self.run_play(HEARTHDAOC_RELEASES_URL=f"http://127.0.0.1:{silent.getsockname()[1]}/releases")
             elapsed = time.monotonic() - start
-        self.assertLess(elapsed, 8)
+        self.assertLess(elapsed, 6.5)  # 5 s, and play.sh's own work
         self.assert_played_this_release(r)
         self.assertEqual(r.stderr, NO_CHECK)
 
@@ -511,6 +523,8 @@ class UpdateTests(UpdateTestCase):
         with open(self.setup_args, encoding="utf-8") as f:
             self.assertEqual(f.read().splitlines(), ["--server", "192.168.1.64:10301", "--edition", "classic",
                                                      "--base-client", BASE, "--dest", self.dest])
+        with open(self.setup_args + ".where", encoding="utf-8") as f:  # unpacked in the install folder
+            self.assertTrue(f.read().startswith(os.path.join(self.dest, ".update.")))
         # The new play.sh replaced this one in the same process, with the same arguments, and won't check again.
         self.assertEqual(self.calls_of("new play.sh"),
                          [f"new play.sh pid={r.pid} no_update=1 args=--launch-option two words"])
@@ -543,29 +557,43 @@ class UpdateTests(UpdateTestCase):
         self.assertEqual(self.saved_tag(), [NEW])
 
     def test_no_plays_this_release_and_asks_again_next_time(self):
-        for answer, env in (("zenity", self.zenity(1)), ("terminal", {})):
+        # In a terminal, Enter alone means no.
+        for answer, typed, env in (("zenity", None, self.zenity(1)), ("n", b"n\n", {}), ("Enter", b"\n", {})):
             with self.subTest(answer), ReleaseServer(NEW, {zip_name(NEW): self.bundle()}) as srv:
                 master, slave = pty.openpty()
                 try:
-                    os.write(master, b"n\n")
-                    r = self.run_play(stdin=slave if answer == "terminal" else subprocess.DEVNULL,
-                                      HEARTHDAOC_RELEASES_URL=srv.url, **env)
+                    if typed:
+                        os.write(master, typed)
+                    r = self.run_play(stdin=slave if typed else subprocess.DEVNULL, HEARTHDAOC_RELEASES_URL=srv.url,
+                                      **env)
                 finally:
                     os.close(slave)
                     os.close(master)
                 self.assert_played_this_release(r)
+                if typed:
+                    self.assertIn(QUESTION + " [y/N] ", r.stderr)
                 self.assertTrue(srv.latest_only(), srv.requests)
                 self.assertFalse(os.path.exists(self.setup_args))
             os.remove(self.calls)
 
     def test_without_a_way_to_ask_it_warns_and_plays_this_release(self):
-        # No terminal, and no display (or no zenity): nobody to say yes.
-        with ReleaseServer(NEW, {zip_name(NEW): self.bundle()}) as srv:
-            r = self.run_play(HEARTHDAOC_RELEASES_URL=srv.url)
-        self.assert_played_this_release(r)
-        self.assertTrue(srv.latest_only(), srv.requests)
-        self.assertEqual(r.stderr, f"play.sh: HearthDAoC {NEW} is out (you have {OLD}). To update, run {self.play} "
-                                   "from a terminal, or run setup.sh from the new release's client bundle.\n")
+        # No terminal, and no display or no zenity: nobody to say yes. From Steam (a display), the warning is
+        # also a notification.
+        bin_dir = os.path.join(self.tmp.name, "bin")
+        write(os.path.join(bin_dir, "notify-send"), f'#!/bin/sh\nprintf "notify-send %s\\n" "$*" >> "{self.calls}"\n',
+              executable=True)
+        no_zenity = bin_dir + os.pathsep + path_without(os.path.join(self.tmp.name, "no-zenity"), "zenity", "notify-send")
+        warning = (f"HearthDAoC {NEW} is out (you have {OLD}). To update, run {self.play} from a terminal, "
+                   "or run setup.sh from the new release's client bundle.")
+        for name, env, notes in (("no display", {}, []),
+                                 ("no zenity", {"DISPLAY": ":99", "PATH": no_zenity}, [f"notify-send HearthDAoC {warning}"])):
+            with self.subTest(name), ReleaseServer(NEW, {zip_name(NEW): self.bundle()}) as srv:
+                r = self.run_play(HEARTHDAOC_RELEASES_URL=srv.url, **env)
+                self.assert_played_this_release(r)
+                self.assertTrue(srv.latest_only(), srv.requests)
+                self.assertEqual(r.stderr, f"play.sh: {warning}\n")
+                self.assertEqual(self.calls_of("notify-send"), notes)
+            os.remove(self.calls)
 
     def test_the_next_update_removes_a_folder_left_by_one_cut_short(self):
         # A power cut during an update leaves its folder in the install folder, with the download in it.
