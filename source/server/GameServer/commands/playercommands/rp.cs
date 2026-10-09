@@ -40,11 +40,8 @@ namespace DOL.GS.Commands
 				return;
 
 
-			if (client.Player.Level < 40)
-			{
-				DisplayMessage(client, "This command is only available to players above level 39.");
-				return;
-			}
+			// HearthDAoC: any level (OpenDAoC allowed it from level 40 only), so a player under a battleground's
+			// realm point cap can stop gaining realm points and stay in (owner 2026-10-09).
 
 			switch (args[1].ToLower())
 			{
