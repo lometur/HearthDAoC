@@ -569,6 +569,13 @@ class EpicCharacterTests(unittest.TestCase):
         charges = dict(self.conn.execute("SELECT Inventory_ID, Charges FROM Inventory WHERE Inventory_ID IN ('i1','i2','i3')"))
         self.assertEqual(charges, {"i1": 3, "i2": 2, "i3": 0})
 
+    def test_a_vest_whose_template_the_owner_changed_keeps_its_charges(self):
+        self.conn.execute("UPDATE ItemTemplate SET SpellID=999, Charges=1, MaxCharges=1 WHERE Id_nb='ReaverEpicVest'")
+        self.conn.commit()
+        epic_chains.apply(self.conn, NOW)
+        charges = dict(self.conn.execute("SELECT Inventory_ID, Charges FROM Inventory WHERE Inventory_ID='i1'"))
+        self.assertEqual(charges, {"i1": 0})
+
     def test_a_camp_row_already_back_is_not_copied_twice(self):
         columns = ", ".join(f'"{name}"' for _, name, *_ in self.conn.execute('PRAGMA table_info("Mob")'))
         self.conn.execute(f"INSERT INTO Mob ({columns}) SELECT {columns} FROM offline_classic165_removed_mobs WHERE Mob_ID=?",

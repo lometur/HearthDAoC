@@ -25,7 +25,8 @@ epic_chains_data.json, beside this file.
 8. The five level-50 quests ("Lord of Deceit", given by Captain Rhodri after the class's 48), and Lord Elidyn's camp
    copied back from upstream's archive (offline_classic165_removed_mobs), Mob_IDs kept.
 9. Old Shadows_50 progress: a finished one becomes the character's finished level-50 step (no second armour set),
-   any other is removed; epic vests in inventories with no charges get the template's.
+   any other is removed; epic vests in inventories with no charges get their template's charges (where the
+   template has the vest spell).
 """
 import datetime
 import json
@@ -301,10 +302,12 @@ def _old_shadows_50(conn, now, data):
             removed += 1
         conn.execute("DELETE FROM Quest WHERE Quest_ID=?", (quest_id,))
     vests = data["vests"]
+    template = "(SELECT t.{} FROM ItemTemplate t WHERE t.Id_nb = Inventory.ITemplate_Id)"
     recharged = conn.execute(
-        f"UPDATE Inventory SET Charges=?, LastTimeRowUpdated=? "
-        f"WHERE ITemplate_Id IN ({', '.join('?' * len(vests['ids']))}) AND Charges=0",
-        (vests["Charges"], now, *vests["ids"])).rowcount
+        f"UPDATE Inventory SET Charges={template.format('MaxCharges')}, LastTimeRowUpdated=? "
+        f"WHERE ITemplate_Id IN ({', '.join('?' * len(vests['ids']))}) AND Charges=0 "
+        f"AND {template.format('SpellID')}=? AND {template.format('MaxCharges')} > 0",
+        (now, *vests["ids"], vests["SpellID"])).rowcount
     return {"carried": carried, "removed": removed, "vests": recharged}
 
 
