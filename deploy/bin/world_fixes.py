@@ -18,6 +18,9 @@
 6. The epic chains (sub-project 4): epic_chains.py, once per world (the marker epic-chains-v1), after the
    battlegrounds and under its own savepoint like them: upstream's Guild of Shadows chain in order and complete, the
    real level-50 "Lord of Deceit", and every guild line's steps in order.
+7. The Guild of Shadows chain's dialogue (levels 7 to 50): quest_dialogue.py, right after the epic chains, under its
+   own savepoint like them. It has no marker: at every start it rewrites the texts of a quest that still hold
+   upstream's text or an earlier version of its own, and leaves the owner's own edits alone.
 
 All of them only apply when needed and leave anything the owner set themselves alone.
 """
@@ -29,6 +32,7 @@ import sys
 
 import battlegrounds
 import epic_chains
+import quest_dialogue
 
 DISCIPLE, SARACEN, INCONNU = 20, 4, 13
 
@@ -131,6 +135,7 @@ def apply(db):
                 changes.append("Duplicate townspeople removed, archived in %s: %s" % (ARCHIVE_TABLE, ", ".join(removed)))
             changes.extend(battlegrounds.apply(conn, _now()))
             changes.extend(epic_chains.apply(conn, _now()))
+            changes.extend(quest_dialogue.apply(conn, _now()))
     finally:
         conn.close()
     return changes

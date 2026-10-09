@@ -122,6 +122,17 @@ Battleground keep guard levels follow `keep_guard_level_multiplier` (1.6), which
 keeps' guards. The realm rank caps (1L2, 1L3, 1L5, 1L9) hold on every way in: the frontier porter, the town
 teleporters' [Battlegrounds] choice, and for bots too.
 
+**Guild of Shadows dialogue.** Upstream left most of the Guild of Shadows chain's dialogue (levels 7 to 50)
+empty or filled with walkthrough notes. At every start, `./hdc logs` shows `Quest dialogue: N quests
+rewritten` when the texts of the chain's quests (`deploy/bin/quest_dialogue.json`, every class's version) were
+changed, and nothing when they are up to date. There is no marker: a quest is rewritten only while its texts
+still hold upstream's or an earlier version of this file's, so a quest whose text you changed yourself is kept
+(`; M left as they are (changed since upstream)`), and a later release with revised text reaches a world that
+had the earlier one. If it fails, the start log says `Quest dialogue: not applied (...)`, the quests keep the
+text they have, and it tries again at the next start. The NPCs' chat lines are in `hearthdaoc-quests.json`
+(`Chat`), which replaces upstream's line for the same NPC and keyword. To make the digests that guard a new
+revision: `python3 deploy/bin/quest_dialogue.py --digests <world.db>`.
+
 ## Rollback
 
 `./hdc down` stops and removes the container; the world stays in the `hearthdaoc-data` volume.
