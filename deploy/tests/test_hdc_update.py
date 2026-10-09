@@ -157,7 +157,8 @@ class HdcUpdateTests(unittest.TestCase):
         self.assertIn("--network", upgrade)
         self.assertEqual(upgrade[upgrade.index("--network") + 1], "none")  # the import runs without a network
         self.assertIn("Updated to v0.36b-hearth.1.", r.stdout)
-        self.assertIn("docker exec hearthdaoc-server cat /data/archive/world-pre-upgrade-x/upgrade-report.txt", r.stdout)
+        self.assertIn("Upgrade report (what carried over, and server settings to re-check): docker exec hearthdaoc-server "
+                      "cat /data/archive/world-pre-upgrade-x/upgrade-report.txt", r.stdout)
         self.assertIn("navmeshes", r.stdout)
 
     def test_failed_upgrade_leaves_the_server_stopped_and_says_how_to_retry_or_go_back(self):

@@ -159,7 +159,7 @@ update() {
     "$here/hdc" up
     echo "Updated to $tag."
     if [[ -n "$report" ]]; then
-        echo "Upgrade report (server settings to re-check): docker exec $CONTAINER cat $report"
+        echo "Upgrade report (what carried over, and server settings to re-check): docker exec $CONTAINER cat $report"
         echo "This first start on upstream $new_version downloads the changed navmeshes; ./hdc logs shows the progress."
     fi
 }

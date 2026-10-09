@@ -138,7 +138,7 @@ KEEP="FROM Keep WHERE Name='Caer Benowyc' AND Region=1"
 world_sql "UPDATE Keep SET Realm=2, ClaimedGuildName='HearthIT' WHERE Name='Caer Benowyc' AND Region=1" >/dev/null
 [[ "$(world_sql "SELECT Realm, ClaimedGuildName $KEEP")" == "2|HearthIT" ]] || fail "could not capture a keep"
 out="$(hdc update --bundle "$(make_bundle it-update3 "$upstream")")" || fail "hdc update with a world upgrade failed: $out"
-grep -q "^Upgrade report (server settings to re-check): docker exec hearthdaoc-it-server cat /data/archive/world-pre-upgrade-.*/upgrade-report.txt$" <<<"$out" \
+grep -q "^Upgrade report (what carried over, and server settings to re-check): docker exec hearthdaoc-it-server cat /data/archive/world-pre-upgrade-.*/upgrade-report.txt$" <<<"$out" \
     || fail "no upgrade report location: $out"
 [[ "$(world_version)" == "$upstream" ]] || fail "the world was not upgraded"
 healthy || fail "not healthy after the world upgrade"
@@ -147,7 +147,7 @@ grep -q -- "-pre-upgrade.db" <<<"$(hdc backups)" || fail "the world upgrade made
 echo "ok - hdc update upgrades a world from another upstream version, then starts"
 keep="$(world_sql "SELECT Realm, ClaimedGuildName $KEEP")"
 [[ "$keep" == "2|HearthIT" ]] || fail "the world upgrade did not carry the keep's realm and claim: $keep"
-report="$(sed -n 's/^Upgrade report (server settings to re-check): docker exec hearthdaoc-it-server cat //p' <<<"$out")"
+report="$(sed -n 's/^Upgrade report (what carried over, and server settings to re-check): docker exec hearthdaoc-it-server cat //p' <<<"$out")"
 grep -q "'Keep': [1-9]" <<<"$(docker exec hearthdaoc-it-server cat "$report")" || fail "the upgrade report has no carried keeps"
 echo "ok - the world upgrade carries the keeps' realm and claim"
 python3 - "$W" <<'PY' &
