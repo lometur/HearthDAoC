@@ -24,6 +24,7 @@ UNKNOWN_DLL = ("Not patched: game.dll is not the file this HearthDAoC release su
 WARNING = "Warning: the client was set up without HearthDAoC's patches (see the message above).\n"
 # What setup.sh installs in <dest>/patches, for play.sh to apply at every launch: exactly these.
 PATCH_FILES = ["apply_patches.py", "classic-creation.json", "patchset.py", "splash.mpk"]
+CONF = "hearthdaoc-client.conf"
 
 
 def sha(data):
@@ -43,6 +44,17 @@ def installed_patches(test, dest, source):
         test.assertEqual(read(os.path.join(installed, name)), read(os.path.join(source, name)), name)
 
 
+def saved_settings(dest):
+    """The key=value lines of <dest>/hearthdaoc-client.conf, which play.sh reads to install updates."""
+    with open(os.path.join(dest, CONF), encoding="utf-8") as f:
+        return dict(line.split("=", 1) for line in f.read().splitlines() if line and not line.startswith("#"))
+
+
+def leftovers(dest):
+    """Files setup.sh writes before renaming them into place: none may stay."""
+    return [name for name in os.listdir(dest) if name.endswith(".new")]
+
+
 def make_base(directory, files):
     """A fake 1.127 base client folder, as the player's OpenDAoC install would be."""
     base = os.path.join(directory, "base")
@@ -54,7 +66,7 @@ def make_base(directory, files):
     return base
 
 
-def run_setup(script, directory, base, lock, *extra):
+def run_setup(script, directory, base, lock, *extra, cwd=None):
     """Run setup.sh with lock (part URLs pointing at a RangeServer); return (dest, result)."""
     lock_path = os.path.join(directory, "upstream.lock")
     with open(lock_path, "w") as f:
@@ -62,7 +74,7 @@ def run_setup(script, directory, base, lock, *extra):
     dest = os.path.join(directory, "dest")
     args = ["bash", script, "--server", "192.168.1.64:10301", "--edition", "classic",
             "--base-client", base, "--dest", dest, "--lock", lock_path, *extra]
-    return dest, subprocess.run(args, capture_output=True, text=True)
+    return dest, subprocess.run(args, capture_output=True, text=True, cwd=cwd)
 
 
 class SetupTests(unittest.TestCase):
@@ -95,6 +107,15 @@ class SetupTests(unittest.TestCase):
         self.assertIn('SERVER="${HEARTHDAOC_SERVER:-192.168.1.64:10301}"', text)
         self.assertNotIn("@SERVER@", text)
         self.assertEqual(subprocess.run(["bash", "-n", play]).returncode, 0)
+
+    def test_setup_from_a_checkout_saves_its_settings_without_a_release(self):
+        # No VERSION next to setup.sh: nothing for play.sh to compare a release with, so it never checks.
+        with fx.RangeServer(self.dir) as srv:
+            dest, r = self.run_setup(srv)
+        self.assertEqual(r.returncode, 0, r.stderr + r.stdout)
+        self.assertEqual(saved_settings(dest), {"server": "192.168.1.64:10301", "edition": "classic",
+                                                "base_client": self.base, "tag": ""})
+        self.assertEqual(leftovers(dest), [])
 
     def test_repository_patch_set_refuses_a_foreign_client_and_setup_still_succeeds(self):
         # From a checkout, setup.sh uses client/patches/. The fixture's game.dll isn't OfflineDAoC
@@ -164,9 +185,14 @@ class BundlePatchTests(unittest.TestCase):
         with open(os.path.join(self.patches, "classic-creation.json"), "w", encoding="utf-8") as f:
             json.dump(data, f, indent=1)
 
-    def setup_sh(self):
+    def setup_sh(self, base=None, cwd=None):
         with fx.RangeServer(self.dir) as srv:
-            return run_setup(os.path.join(self.bundle, "setup.sh"), self.dir, self.base, srv.lock(self.lock))
+            return run_setup(os.path.join(self.bundle, "setup.sh"), self.dir, base or self.base, srv.lock(self.lock),
+                             cwd=cwd)
+
+    def write_version(self, tag):
+        with open(os.path.join(self.bundle, "VERSION"), "w", encoding="utf-8") as f:
+            f.write(tag + "\n")  # as deploy/build_bundles.sh writes it
 
     def test_setup_patches_the_new_client(self):
         dest, r = self.setup_sh()
@@ -227,6 +253,57 @@ class BundlePatchTests(unittest.TestCase):
         installed_patches(self, dest, self.patches)
         self.assertEqual(read(os.path.join(dest, "client", "game.dll")), self.dll_patched)
 
+    def test_setup_saves_its_settings_and_the_release_for_play_sh(self):
+        self.write_version("v0.35b-hearth.2")
+        dest, r = self.setup_sh()
+        self.assertEqual(r.returncode, 0, r.stderr + r.stdout)
+        self.assertEqual(saved_settings(dest), {"server": "192.168.1.64:10301", "edition": "classic",
+                                                "base_client": self.base, "tag": "v0.35b-hearth.2"})
+        self.assertEqual(leftovers(dest), [])
+
+    def test_a_relative_base_client_path_with_spaces_is_saved_in_full(self):
+        # play.sh runs the next setup.sh from another folder: the saved path must be absolute.
+        games = os.path.join(self.dir, "my games")
+        shutil.copytree(self.base, os.path.join(games, "1.127 client"))
+        self.write_version("v0.35b-hearth.2")
+        dest, r = self.setup_sh(base="1.127 client", cwd=games)
+        self.assertEqual(r.returncode, 0, r.stderr + r.stdout)
+        self.assertEqual(saved_settings(dest)["base_client"], os.path.join(games, "1.127 client"))
+
+    def test_running_setup_again_replaces_play_sh_by_rename(self):
+        # A running play.sh that updates itself runs the next setup.sh: bash goes on reading its own
+        # file, so the new play.sh must be a new file, not the old one written over.
+        self.write_version("v0.35b-hearth.2")
+        dest, r = self.setup_sh()
+        self.assertEqual(r.returncode, 0, r.stderr + r.stdout)
+        play = os.path.join(dest, "play.sh")
+        with open(play, "rb") as running:
+            old = running.read()
+            inode = os.fstat(running.fileno()).st_ino
+            self.write_version("v0.35b-hearth.3")
+            dest, r = self.setup_sh()
+            self.assertEqual(r.returncode, 0, r.stderr + r.stdout)
+            running.seek(0)
+            self.assertEqual(running.read(), old)  # what the running play.sh still reads
+        self.assertNotEqual(os.stat(play).st_ino, inode)
+        self.assertTrue(os.stat(play).st_mode & stat.S_IXUSR)
+        self.assertEqual(saved_settings(dest)["tag"], "v0.35b-hearth.3")
+        self.assertEqual(leftovers(dest), [])
+
+    def test_a_failed_setup_keeps_the_saved_release(self):
+        # play.sh then offers the update again at the next launch.
+        self.write_version("v0.35b-hearth.2")
+        dest, r = self.setup_sh()
+        self.assertEqual(r.returncode, 0, r.stderr + r.stdout)
+        play_inode = os.stat(os.path.join(dest, "play.sh")).st_ino
+        self.write_version("v0.35b-hearth.3")
+        with open(os.path.join(self.patches, "classic-creation.json"), "w", encoding="utf-8") as f:
+            json.dump({"format": 2}, f)  # the patch step fails
+        dest, r = self.setup_sh()
+        self.assertEqual(r.returncode, 1, r.stderr + r.stdout)
+        self.assertEqual(saved_settings(dest)["tag"], "v0.35b-hearth.2")
+        self.assertEqual(os.stat(os.path.join(dest, "play.sh")).st_ino, play_inode)
+
     def test_a_failed_patch_fails_setup(self):
         # An invalid patch set (exit 2). The message names the installed copy: setup.sh applies
         # <dest>/patches, the files play.sh applies at every launch, not the bundle's.
@@ -239,6 +316,7 @@ class BundlePatchTests(unittest.TestCase):
         self.assertIn("Patching the client failed (apply_patches.py exit 2, see the message above).", r.stderr)
         self.assertEqual(read(os.path.join(dest, "client", "game.dll")), self.dll)
         self.assertFalse(os.path.exists(os.path.join(dest, "play.sh")))
+        self.assertFalse(os.path.exists(os.path.join(dest, CONF)))
 
     def test_a_bundle_missing_a_patch_file_is_refused_before_anything_is_copied(self):
         aside = os.path.join(self.dir, "aside")

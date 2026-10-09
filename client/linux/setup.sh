@@ -31,6 +31,7 @@ done
 [[ "$EDITION" == classic || "$EDITION" == b ]] || { echo "--edition must be classic or b" >&2; exit 2; }
 [[ -f "$BASE/connect.exe" && -f "$BASE/game1127.dll" ]] || {
     echo "$BASE doesn't look like a 1.127 client (connect.exe and game1127.dll not found)." >&2; exit 2; }
+BASE="$(CDPATH='' cd -- "$BASE" && pwd)"  # absolute: it is saved for the next release's setup.sh (below)
 
 find_file() {  # find_file <bundle name> <repo path>
     for p in "$here/$1" "$here/../../$2"; do [[ -f "$p" ]] && { echo "$p"; return; }; done
@@ -39,6 +40,9 @@ find_file() {  # find_file <bundle name> <repo path>
 FETCH="$(find_file odaoc_fetch.py tools/linux/odaoc_fetch.py)"
 [[ -n "$LOCK" ]] || LOCK="$(find_file upstream.lock deploy/upstream.lock)"
 TEMPLATE="$(find_file play.sh.in client/linux/play.sh.in)"
+# This bundle's release (VERSION, from deploy/build_bundles.sh); none from a checkout.
+TAG=""
+if [[ -f "$here/VERSION" ]]; then TAG="$(head -n 1 "$here/VERSION" | tr -d '\r')"; fi
 # The client patches (client/patches): installed in $DEST/patches, where play.sh applies them at every launch.
 PATCH_FILES=(apply_patches.py patchset.py classic-creation.json splash.mpk)
 PATCHER="$(find_file patches/apply_patches.py client/patches/apply_patches.py)"  # its own line: set -e sees a failure
@@ -69,11 +73,23 @@ if [[ $rc -eq 3 ]]; then
 elif [[ $rc -ne 0 ]]; then
     echo "Patching the client failed (apply_patches.py exit $rc, see the message above)." >&2; exit 1
 fi
-sed -e "s|@SERVER@|$SERVER|g" -e "s|@EDITION@|$EDITION|g" "$TEMPLATE" > "$DEST/play.sh"
-chmod +x "$DEST/play.sh"
+# A new file renamed over play.sh: a running play.sh (one that is updating itself) goes on reading its own file.
+sed -e "s|@SERVER@|$SERVER|g" -e "s|@EDITION@|$EDITION|g" "$TEMPLATE" > "$DEST/play.sh.new"
+chmod +x "$DEST/play.sh.new"
+mv -f "$DEST/play.sh.new" "$DEST/play.sh"
+# Last, once everything worked: the settings and the release that play.sh updates with. play.sh only
+# reads this file, never runs it. Without a release (setup.sh from a checkout), play.sh doesn't look for one.
+printf '%s\n' "# Written by setup.sh: play.sh installs updates with these settings." "server=$SERVER" \
+    "edition=$EDITION" "base_client=$BASE" "tag=$TAG" > "$DEST/hearthdaoc-client.conf.new"
+mv -f "$DEST/hearthdaoc-client.conf.new" "$DEST/hearthdaoc-client.conf"
+checks="it checks the client patches at every launch"
+[[ -z "$TAG" ]] || checks="at every launch it checks the client patches and offers newer HearthDAoC releases"
 cat <<EOF
 
-Done. Play with: $DEST/play.sh (it checks the client patches at every launch)
+Done. Play with: $DEST/play.sh ($checks)
 Add it to Steam: Games > Add a Non-Steam Game > Browse > $DEST/play.sh, and leave
 "Force the use of a specific Steam Play compatibility tool" unchecked.
 EOF
+if [[ -n "$TAG" ]] && ! command -v curl >/dev/null; then
+    echo "play.sh needs curl to look for newer releases: please install curl."
+fi
