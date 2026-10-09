@@ -20,6 +20,7 @@ import release_fixture as fx  # noqa: E402
 import spawns  # noqa: E402
 import world_admin  # noqa: E402
 from odaoc_fetch import Release  # noqa: E402
+from tests import test_carry_rvr  # noqa: E402
 
 QUIET = lambda *a, **k: None  # noqa: E731
 TEST_WORLD = os.environ.get("HDC_TEST_WORLD")
@@ -323,6 +324,49 @@ class WorldAdminTests(unittest.TestCase):
         self.make_sqlite_world(version="0.34b")
         with self.assertRaisesRegex(world_admin.AdminError, "already"):
             world_admin.upgrade_world(FakeRelease("0.34b", "/nonexistent"), self.data, ["true"], log=QUIET)
+
+    def _real_world(self):
+        db = init_world.world_paths(self.data)["db"]
+        os.makedirs(os.path.dirname(db))
+        shutil.copyfile(TEST_WORLD, db)
+        os.chmod(db, 0o644)
+        meta = {"version": "0.34b", "edition": "classic", "navmesh": False, "created_utc": "x"}
+        init_world.write_meta(init_world.world_paths(self.data)["meta"], meta)
+        return db, meta
+
+    @unittest.skipUnless(TEST_WORLD and TOOLS, "needs HDC_TEST_WORLD (clean classic world) and HDC_TOOLS (built CLIs)")
+    def test_upgrade_world_carries_keep_door_and_relic_state(self):
+        db, _ = self._real_world()
+        test_carry_rvr.execute(db, "UPDATE Keep SET Realm=2, ClaimedGuildName='Hearth Raiders' WHERE KeepID=50",
+                               "UPDATE Door SET Health=1200, State=0 WHERE InternalID=15110601",
+                               "UPDATE Relic SET Region=100, X=772136, Y=626640, Realm=2, LastRealm=2 WHERE RelicID=30",
+                               "INSERT INTO KeepCaptureLog (DateTaken, KeepName, CapturedBy) "
+                               "VALUES ('2026-10-08 21:00:00', 'Caer Benowyc', 'Midgard')")
+        archive = world_admin.upgrade_world(FakeRelease("0.34b", TEST_WORLD), self.data,
+                                            importer_cmd(self.data), same_version_ok=True, log=QUIET)
+        q = lambda sql: test_carry_rvr.query(db, sql)  # noqa: E731
+        self.assertEqual(q("SELECT Realm, ClaimedGuildName FROM Keep WHERE KeepID=50"), [(2, "Hearth Raiders")])
+        self.assertEqual(q("SELECT Health, State FROM Door WHERE InternalID=15110601"), [(1200, 0)])
+        self.assertEqual(q("SELECT Region, Realm FROM Relic WHERE RelicID=30"), [(100, 2)])
+        self.assertEqual(q("SELECT KeepName, CapturedBy FROM KeepCaptureLog"), [("Caer Benowyc", "Midgard")])
+        with open(os.path.join(archive, "upgrade-report.txt"), encoding="utf-8") as f:
+            report = f.read()
+        self.assertIn("'Keep': 81, 'Door': 219, 'Relic': 6, 'KeepHookPointItem': 0, 'KeepCaptureLog': 1}", report)
+
+    @unittest.skipUnless(TEST_WORLD and TOOLS, "needs HDC_TEST_WORLD (clean classic world) and HDC_TOOLS (built CLIs)")
+    def test_upgrade_stops_with_the_world_unchanged_when_the_carry_fails(self):
+        db, meta = self._real_world()
+        with open(db, "rb") as f:
+            before = f.read()
+        with mock.patch.object(world_admin.carry_rvr, "_carry_relics", side_effect=sqlite3.OperationalError("disk full")):
+            with self.assertRaisesRegex(world_admin.AdminError, "keep, door and relic state failed .*disk full.*unchanged"):
+                world_admin.upgrade_world(FakeRelease("0.34b", TEST_WORLD), self.data,
+                                          importer_cmd(self.data), same_version_ok=True, log=QUIET)
+        with open(db, "rb") as f:
+            self.assertEqual(f.read(), before)
+        with open(init_world.world_paths(self.data)["meta"], encoding="utf-8") as f:
+            self.assertEqual(json.load(f), meta)
+        self.assertFalse(os.path.exists(os.path.join(self.data, "archive")))
 
 
 if __name__ == "__main__":

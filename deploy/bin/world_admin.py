@@ -17,6 +17,7 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path[:0] = [HERE, os.path.join(HERE, "..", "..", "tools", "linux")]
 
 import backup  # noqa: E402
+import carry_rvr  # noqa: E402
 import init_world  # noqa: E402
 import spawns  # noqa: E402
 from odaoc_fetch import FetchError, Release  # noqa: E402
@@ -210,6 +211,15 @@ def _carry_admin_state(conn, old_db):
     return carried, changed
 
 
+def _carry_rvr_state(conn, old_db):
+    """Copy keep, door and relic state, hookpoint items and the capture log from the old world (carry_rvr.py).
+    Returns (counts, notes). On an error nothing is changed and it raises AdminError."""
+    try:
+        return carry_rvr.carry(conn, old_db)
+    except Exception as e:
+        raise AdminError(f"carrying the keep, door and relic state failed ({e}); the current world is unchanged") from e
+
+
 def fetch_clean(release, data, log=print):
     """Download (verified, resumable) this release's clean world for the world's edition. Kept separate
     from upgrade_world so the download can run with the network and the import without it."""
@@ -266,6 +276,8 @@ def upgrade_world(release, data, importer_cmd, clean_world=None, same_version_ok
         with c:  # the importer resets every account to plvl 1; restore GM/admin rights
             c.executemany("UPDATE Account SET PrivLevel=? WHERE Name=?", [(v, k) for k, v in plvls.items()])
         carried, changed = _carry_admin_state(c, old_db)
+        rvr, rvr_notes = _carry_rvr_state(c, old_db)  # upstream's importer leaves keeps and relics as it ships them
+        carried.update(rvr)
         counts_new = {t: c.execute(f"SELECT count(*) FROM {t}").fetchone()[0] for t in counts_old}
         ok = c.execute("PRAGMA integrity_check").fetchone()[0] == "ok"
     finally:
@@ -274,7 +286,9 @@ def upgrade_world(release, data, importer_cmd, clean_world=None, same_version_ok
         raise AdminError(f"verification failed (before {counts_old}, after {counts_new}); the current world is unchanged")
     staged_report = os.path.join(stage, "upgrade-report.txt")  # written before the swap, moved after it
     with open(staged_report, "w", encoding="utf-8") as f:
-        f.write(f"Upgrade to upstream {release.version}\nCarried over: {carried}\n\n")
+        f.write(f"Upgrade to upstream {release.version}\nCarried over: {carried}\n")
+        f.writelines(f"{line}\n" for line in rvr_notes)
+        f.write("\n")
         f.write("Server settings that differ from the new world (not carried; re-apply any you changed on purpose):\n")
         f.writelines(f"  {k}: yours={old!r} new={new!r}\n" for k, old, new in changed)
     archive = _archive_world(data, "world-pre-upgrade")
