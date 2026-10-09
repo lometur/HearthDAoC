@@ -49,6 +49,7 @@ steps go in order.
 | XP | A quarter of a level for 7 and 11 (both versions), a tenth of a level from 15 on, none at 50 (section 2.3). |
 | Coin | What the sources give (7 SI: 7 silver; 11 SI: 6 silver twice; 43: none); every other step its level in silver. |
 | Final rewards | Fixed in the quest engine for every quest (owner, 2026-10-09): finishing pays the finishing stage's entries (section 3.1). |
+| Items | Every Guild of Shadows reward and weapon is locked to its class, as on live, and upstream's broken rewards are fixed (owner, 2026-10-09; section 4.5). Values from the item pages, cross-checked against the live Camelot Herald where it still has the item. |
 | Existing characters | Finished steps stay finished. A finished old `Shadows_50` counts as the finished 50 step (no second armour set). |
 | Testing | CI tests, and an in-game test guide with GM commands, including a GM-only `/epic`. |
 | Upstream | Nothing is sent upstream now. After the chain is implemented and tested in game, and if upstream hasn't fixed it meanwhile, the owner may offer it upstream; ask first. The upstream-able parts are separate commits (section 6). |
@@ -59,7 +60,8 @@ steps go in order.
   few fixes in section 3.4 and the new level-50 texts (section 2.4).
 - Changing upstream's givers: one Camelot trainer per class (Master Edric, Master Arenis, Magus Isen, Yulia, Peze),
   Carys in Caer Gothwaite for both Shrouded Isles steps, Magus Agyfen for 43 and Captain Rhodri for 20, 25 and 30.
-- Changing upstream's encounters, monsters, quest items, map markers, or the rewards upstream already has.
+- Changing upstream's encounters, monsters, quest items or map markers. Upstream's existing rewards change only where
+  section 4.5 says.
 - The one-time level-40 weapon swap, and the froglords Lord Elidyn turns into heroes (old spec).
 - Kiss of Death (no stats in any source) and the Blood Encrusted Flail (Heretic era).
 - The other lines' missing rewards and level-50 quests.
@@ -259,13 +261,13 @@ what an upstream PR would turn into SQL.
 | 4 | XP and coin (section 2.3). | 60 |
 | 5 | Rewards: Necromancer 11 (classic: Flayed Skin Necklace; SI: Arawn's Beads). | 2 |
 | 6 | Texts: Reaver 40 (20172) without Kiss of Death and Blood Encrusted Flail in its step text and Rhodri's list; the 30 step's finish speech (21489–21494) fills upstream's leftover source tags: "(reward)" → "reward", "(prof name)" → "the Guild of Shadows", "(class name)" → "<Class>". | 7 |
-| 7 | Items: the 30 rewards and 11 weapons of section 4, inserted where the `Id_nb` is missing; the armour fixes of section 4.4 where the row still has the old value. | 41 + 9 |
+| 7 | Items: the 30 rewards and 11 weapons of section 4, inserted where the `Id_nb` is missing; the item fixes of sections 4.4 and 4.5 (one entry per row) where the row still has the old value. | 41 + 36 |
 | 8 | The five 50 rows (section 2.4) and Lord Elidyn's camp (17 rows copied from the archive into `Mob`, left in the archive). A camp row already back in `Mob` is skipped. | 5 + 17 |
 | 9 | Old `Shadows_50` (`Quest` rows named `DOL.GS.Quests.Albion.Shadows_50`): a finished one (Step -2) becomes a `CharacterXDataQuest` row for the character's class's 50 ID (Step 0, Count 1) unless one exists, and is deleted; an unfinished one is deleted. Epic vests in inventories with 0 charges get the template's charges. | 0 on the clean world |
 
 The start log gets one line; on the clean world:
 `Epic chains: Guild of Shadows 60 links, 60 XP and coin, 4 Supply Runs closed, 2 rewards and 7 texts fixed; 87 other
-links; 41 items added, 9 armour fixes; 5 level-50 quests, Lord Elidyn's camp 17 restored; Shadows_50: 0 finished
+links; 41 items added, 36 item fixes; 5 level-50 quests, Lord Elidyn's camp 17 restored; Shadows_50: 0 finished
 carried, 0 removed, 0 epic vests recharged`. Each count is what the fix changed.
 
 Notes:
@@ -282,11 +284,19 @@ Notes:
   source when they agree. The rulings below settle known conflicts.
 - **Unknowns:** filled by analogy with sibling items; each one is listed in the plan.
 - **Rows:** like upstream's existing rewards (`cq_alb_ring_of_shadowy_embers`): upstream's `Id_nb`, Realm 1,
-  `AllowedClasses` 0, droppable, not tradable, price 0, quality 100, condition and durability 50000, `Description`
+  `AllowedClasses` the item's class (below), droppable, not tradable, price 0, quality 100, condition and durability 50000, `Description`
   "Classic quest reward (<quest name>)", and `PackageID` "HearthDAoC" so ours can be told apart. Level: the page's
   level, or the step's. Model and colour: from the page, otherwise an existing row of the same kind and look. Procs
   and charges: existing `Spell` rows with the same effect, type and value; no new spells. The plan lists every model
   and spell ID.
+
+- **Class lock:** `AllowedClasses` (a `;`-separated list) is the classes on the item page ("Requires Class", or the
+  Herald's "Usable By") together with the classes whose quest gives the item, so nobody gets an item they can't use.
+  Two items are for two classes (Spark of Midnight and Death's Touch: Infiltrator and Mercenary); the rest have one.
+  Game masters skip the lock (`GamePlayerInventory.CheckItemClassRestriction`).
+- **Live cross-check:** the Camelot Herald (tools.camelotherald.com) still has 14 of the 41 and 8 of upstream's 27; its
+  item icon is the model. Where it has the item, its model, bonus level (when the page shows none), charges and reuse
+  time are used.
 
 ### 4.2 The 30 missing class rewards
 
@@ -377,6 +387,24 @@ Deathsight or Painworking focus 43 with the other two at 33, Hits 100. Rulings:
 | MercenaryEpicArms | Con 15, Dex 16 | Con 16, Dex 15 | Allakhazam and bdo agree |
 | InfiltratorEpicGloves | Envenom +3 | Envenom +4 | Allakhazam and bdo agree |
 | CabalistEpicBoots | Matter +3 | Matter +4 | Allakhazam and bdo agree |
+
+### 4.5 Upstream's existing rewards
+
+Upstream's 27 existing Guild of Shadows rewards and level-40 weapons keep their values except:
+
+- every one is locked to its class (section 4.1);
+- Choker of Dark Deeds gets its bonuses (it has none): Int 4, Body 1%, Death Servant +2, Power 3;
+- Boneshaper's Ring gets Body +2, Int 4, Crush 1%, Power 4 and Bookworm's Ring its missing Matter +1 (the page and
+  live agree); Bracer of Strength stays as the page has it;
+- the Blood Encrusted Whip and the Flail of Fallen Graces become flexible weapons (the whip slashing) and Boots of the
+  Fallen chain boots (AF 44), with Albion models (today: a loot bag's model, a Midgard boot model);
+- Boneshaper's Spine gets the page's focus (Matter 18, Body 18, Spirit 22), Power 8 and weapon damage (7.8 DPS,
+  4.4 s; today 0);
+- the seven level-40 weapons get the 77-damage proc their pages show;
+- Darkstone, the Falconheaded Cloak Pin and the Gem of Shadowy Intentions take the live model;
+- bonus levels from the pages (or the Herald) where the row has 0.
+
+The plan lists every value. Each fix applies only while the row still has upstream's value.
 
 ## 5. Testing
 
