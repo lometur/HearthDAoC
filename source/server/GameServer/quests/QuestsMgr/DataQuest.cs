@@ -110,6 +110,8 @@ namespace DOL.GS.Quests
 	public class DataQuest : AbstractQuest
 	{
 		private static readonly Logging.Logger log = Logging.LoggerManager.Create(MethodBase.GetCurrentMethod().DeclaringType);
+		// HearthDAoC: quests whose malformed dependency entry was already logged.
+		private static readonly System.Collections.Concurrent.ConcurrentDictionary<int, bool> s_badDependencyLogged = new();
 
 		protected int m_step = 1;
 		protected DbDataQuest m_dataQuest = null;
@@ -556,6 +558,9 @@ namespace DOL.GS.Quests
 						if (str != string.Empty)
 						{
 							m_questDependencies.Add(str);
+							// HearthDAoC: an ID entry that doesn't parse is never met; say so once per quest.
+							if (!QuestDependencies.IsValid(str) && s_badDependencyLogged.TryAdd(m_dataQuest.ID, true))
+								log.Error($"DataQuest [{m_dataQuest.ID}] {m_dataQuest.Name}: dependency \"{str}\" is not valid and is never met");
 						}
 					}
 				}
@@ -1019,23 +1024,28 @@ namespace DOL.GS.Quests
 			}
 
 			// check to see if this quest requires another to be done first
+			// HearthDAoC: an entry is a quest name or a quest ID form (QuestDependencies: "#id", "#a/b", "!#a/b").
 			if (m_questDependencies.Count > 0)
 			{
-				int numFound = 0;
-
-				foreach (string str in m_questDependencies)
+				var finishedNames = new List<string>();
+				var finishedIds = new HashSet<int>();
+				foreach (AbstractQuest quest in finishedQuests)
 				{
-					foreach (AbstractQuest quest in finishedQuests)
+					if (quest is DataQuest dataQuest)
 					{
-						if (quest is DataQuest dataQuest && dataQuest.Name.ToLower() == str.ToLower())
-						{
-							numFound++;
-							break;
-						}
+						finishedNames.Add(dataQuest.Name);
+						finishedIds.Add(dataQuest.ID);
 					}
 				}
 
-				if (numFound < m_questDependencies.Count)
+				var activeIds = new HashSet<int>();
+				foreach (AbstractQuest quest in player.QuestList.Keys)
+				{
+					if (quest is DataQuest dataQuest)
+						activeIds.Add(dataQuest.ID);
+				}
+
+				if (!QuestDependencies.AreMet(m_questDependencies, finishedNames, finishedIds, activeIds))
 					return false;
 			}
 
