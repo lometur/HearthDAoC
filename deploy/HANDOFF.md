@@ -37,12 +37,12 @@ hearthdaoc → Package settings → visibility Public) and wait.
 - **Shortcut (preferred):** ask the owner to copy their navmeshes over, by running this on THEIR PC:
   `rsync -a ~/Games/OfflineDAoC/runtime/server/navmesh/ <user>@<this machine>:hearthdaoc/seed-navmesh/`
   then: `./hdc init --seed-navmesh ~/hearthdaoc/seed-navmesh` (verifies every file; downloads only the
-  world database, ~30 MB). Afterwards `rm -rf ~/hearthdaoc/seed-navmesh`.
+  world database and the server data files, ~33 MB). Afterwards `rm -rf ~/hearthdaoc/seed-navmesh`.
 - **Download:** `./hdc init` (about 600 MB from GitHub, verified, resumable).
 
 Then bring back the leveling monsters upstream archived (the owner chose levels 1-20, OpenDAoC's
 density; takes a few seconds and is re-applied automatically by new-world and upgrade-world):
-`./hdc spawns restore --max-level 20` and check `./hdc spawns status` (expect `restored` about 12,600).
+`./hdc spawns restore --max-level 20` and check `./hdc spawns status` (expect `restored` about 12,900).
 
 ## 4. Start and firewall
 
@@ -102,7 +102,7 @@ way, then `./hdc up`.
 
 **Classic battlegrounds.** At its first start, a world gets the classic battlegrounds (Abermenai 15-19,
 Thidranki 20-24, Murdaigean 25-29, Caledonia 30-35); `./hdc logs` shows each change on a line starting
-`Battlegrounds:`. This runs once per world: the row `classic-battlegrounds-v1` in the world's
+`Battlegrounds:`. This runs once per world: the row `classic-battlegrounds-v2` in the world's
 `fork_world_fixes` table records it, so later changes to the battlegrounds stay. Deleting that row makes
 it run again at the next start, and the parts whose results are still there change nothing. The `Mob`
 rows it removes (training dummies, Void Merchants, a stray Wizard) are kept in `fork_removed_mobs`; saved
@@ -111,7 +111,8 @@ Atlas battleground daily quests (`Quest` rows) are deleted, not archived. If it 
 again at the next start. `./hdc new-world` and `./hdc upgrade-world` make a world without that row, so it
 runs again there, and changes made in game to battleground keeps and guards are not carried over.
 Battleground keep guard levels follow `keep_guard_level_multiplier` (1.6), which also sets the frontier
-keeps' guards.
+keeps' guards. The realm rank caps (1L2, 1L3, 1L5, 1L9) hold on every way in: the frontier porter, the town
+teleporters' [Battlegrounds] choice, and for bots too.
 
 ## Rollback
 
