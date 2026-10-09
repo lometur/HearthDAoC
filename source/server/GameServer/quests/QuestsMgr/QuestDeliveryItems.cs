@@ -32,8 +32,12 @@ namespace DOL.GS.Quests
         /// over is still in the backpack while its step advances (<c>GamePlayerEvent.GiveItem</c> fires before the move,
         /// and <c>DataQuest.OnPlayerGiveItem</c> removes it after); counting it made a step that hands the same item
         /// back hand nothing, so the player had none ("Path of the Renegade": Omis writes between the lines of the
-        /// Arawnite orders and gives them back; 62 classic quests). <c>OnPlayerGiveItem</c> removes the whole item, so
-        /// it passes the item's count as handed over.</summary>
+        /// Arawnite orders and gives them back; 62 classic quests). An item counts for the copies that stay after the
+        /// hand-over, and for a data quest none stay: <c>OnPlayerGiveItem</c> takes the whole item with
+        /// <c>AbstractQuest.RemoveItem(GameObject, GamePlayer, DbInventoryItem, bool)</c> (a stack goes whole), so it
+        /// passes the item's count as handed over and the handed-over entry is never carried, whatever its count. A
+        /// stack can't even reach it from an NPC: <c>PlayerMoveItemRequestHandler</c> fires GiveItem for an NPC only
+        /// when the item's count is 1.</summary>
         public static List<string> CarriedIds(IEnumerable<(string Id, int Count, int HandedOver)> backpack)
         {
             List<string> ids = new();

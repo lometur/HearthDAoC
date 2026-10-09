@@ -84,10 +84,12 @@ public sealed class UT_DataQuestDeliveryItem
     public void TheItemHandedOverIsNotCarried()
         => Assert.That(QuestDeliveryItems.CarriedIds(new[] { ("cq_orders", 1, 1), ("cq_letter", 1, 0) }), Is.EqualTo(new[] { "cq_letter" }));
 
+    // DataQuest hands a stack over whole (RemoveItem takes the item), so it passes the whole count: no copy is carried.
     [Test]
     public void AStackHandedOverWholeIsNotCarried()
         => Assert.That(QuestDeliveryItems.CarriedIds(new[] { ("cq_orders", 3, 3) }), Is.Empty);
 
+    // Only a partial hand-over, which DataQuest never makes, leaves copies that count.
     [Test]
     public void TheCopiesLeftOfAStackAreCarried()
         => Assert.That(QuestDeliveryItems.CarriedIds(new[] { ("cq_orders", 3, 1) }), Is.EqualTo(new[] { "cq_orders" }));
