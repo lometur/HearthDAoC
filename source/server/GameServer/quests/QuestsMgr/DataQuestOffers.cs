@@ -3,6 +3,7 @@ using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.Linq;
 using DOL.Events;
+using DOL.GS.PacketHandler;
 
 namespace DOL.GS.Quests
 {
@@ -37,14 +38,14 @@ namespace DOL.GS.Quests
 
         public static bool IsExpired(DateTime offeredAt, DateTime now) => now - offeredAt > OfferLifetime;
 
-        private sealed class Offer
+        private sealed class PendingOffer
         {
             public DataQuest Quest;
             public GameNPC Npc;
             public DateTime OfferedAt;
         }
 
-        private static readonly ConcurrentDictionary<GamePlayer, Offer> s_pending = new();
+        private static readonly ConcurrentDictionary<GamePlayer, PendingOffer> s_pending = new();
 
         /// <summary>Asks <paramref name="player"/> whether to start <paramref name="quest"/> from <paramref name="npc"/>.
         /// A newer offer replaces an older one.</summary>
@@ -52,13 +53,13 @@ namespace DOL.GS.Quests
         {
             DateTime now = DateTime.UtcNow;
             Prune(now);
-            s_pending[player] = new Offer { Quest = quest, Npc = npc, OfferedAt = now };
+            s_pending[player] = new PendingOffer { Quest = quest, Npc = npc, OfferedAt = now };
             player.Out.SendQuestSubscribeCommand(npc, OfferQuestId, PromptText(npc.GetName(0, true), quest.Name));
         }
 
         private static void Prune(DateTime now)
         {
-            foreach (KeyValuePair<GamePlayer, Offer> pair in s_pending.ToArray())
+            foreach (KeyValuePair<GamePlayer, PendingOffer> pair in s_pending.ToArray())
             {
                 if (IsExpired(pair.Value.OfferedAt, now))
                     s_pending.TryRemove(pair);
@@ -89,10 +90,10 @@ namespace DOL.GS.Quests
         }
 
         /// <summary>The player's pending offer when <paramref name="answer"/> belongs to it, else null.</summary>
-        private static Offer Find(QuestEventArgs answer, bool ignoreAge)
+        private static PendingOffer Find(QuestEventArgs answer, bool ignoreAge)
         {
             GamePlayer player = answer?.Player;
-            if (player == null || answer.QuestID != OfferQuestId || !s_pending.TryGetValue(player, out Offer offer))
+            if (player == null || answer.QuestID != OfferQuestId || !s_pending.TryGetValue(player, out PendingOffer offer))
                 return null;
 
             DateTime now = DateTime.UtcNow;
@@ -105,10 +106,10 @@ namespace DOL.GS.Quests
             if (args is not QuestEventArgs answer)
                 return;
 
-            Offer offer = Find(answer, false);
+            PendingOffer offer = Find(answer, false);
 
             // Removing the very offer found is the one step that wins when two answers arrive in one tick (issue #92).
-            if (offer == null || !s_pending.TryRemove(new KeyValuePair<GamePlayer, Offer>(answer.Player, offer)))
+            if (offer == null || !s_pending.TryRemove(new KeyValuePair<GamePlayer, PendingOffer>(answer.Player, offer)))
                 return;
 
             GamePlayer player = answer.Player;
@@ -124,8 +125,8 @@ namespace DOL.GS.Quests
                 return;
 
             // A decline drops the offer even when it is old; the NPC speaks only if there was an offer to drop.
-            Offer offer = Find(answer, true);
-            if (offer == null || !s_pending.TryRemove(new KeyValuePair<GamePlayer, Offer>(answer.Player, offer)))
+            PendingOffer offer = Find(answer, true);
+            if (offer == null || !s_pending.TryRemove(new KeyValuePair<GamePlayer, PendingOffer>(answer.Player, offer)))
                 return;
 
             offer.Npc.SayTo(answer.Player, eChatLoc.CL_PopupWindow, DeclineText);
