@@ -93,6 +93,8 @@ HASTENER_CLASS = "DOL.GS.Keeps.FrontierHastener"
 WALL_CASTERS = ("62f874d0-333b-475f-a044-109cb0bd74b6", "be8e2cbf-6569-4c46-a4aa-d84903a902fc",
                 "3a07da41-d088-4174-980f-1d5ad21fc334", "2fc59f4b-0b0d-4efc-bf3b-93a1b01e681a",
                 "b05f95a5-9e55-4ddf-93d0-340336bc2e16", "f1f1d987-1b9a-421b-a8a1-9df423f118fe")
+# Moved, the hastener stands beside the outer gate (33612, 39657 in 253; 32546, 37248 in 251), 60 and 65 units
+# from an upstream gate fighter, as Thidranki Faste's and Caer Caledon's do (210 and 251 from the gate, same side).
 HASTENER = "802a1b0a-f47e-47b9-a688-e401ad33e42f"
 # Each kind is added on its own: only when all its rows are there and the keep's area has no row of its class
 # yet. (class, source Mob_IDs, the result line's word for one, for more)
