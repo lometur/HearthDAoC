@@ -53,6 +53,29 @@ class ExtraQuestFileTests(unittest.TestCase):
             self.assertEqual(steps[2]["Marker"], {"Region": 1, "X": 528239, "Y": 359818, "Z": 9088})
         self.assertEqual(self.extra["QuestMonsterIds"], [LORD_ELIDYN])
 
+    def test_an_optional_chat_section_replaces_upstreams_npc_replies(self):
+        # NPC name -> keyword -> reply; an empty reply silences upstream's line (ClassicQuests.Merge)
+        chat = self.extra.get("Chat", {})
+        self.assertIsInstance(chat, dict)
+        for npc, lines in chat.items():
+            self.assertIsInstance(npc, str)
+            self.assertIsInstance(lines, dict, npc)
+            for keyword, reply in lines.items():
+                self.assertIsInstance(keyword, str, npc)
+                self.assertTrue(keyword.strip(), npc)
+                self.assertIsInstance(reply, str, f"{npc}: {keyword}")
+
+    @unittest.skipUnless(TEST_WORLD, "needs HDC_TEST_WORLD (a clean classic world database)")
+    def test_every_chat_npc_is_in_the_world(self):
+        conn = sqlite3.connect(f"file:{TEST_WORLD}?mode=ro", uri=True)
+        try:
+            for npc in self.extra.get("Chat", {}):
+                with self.subTest(npc=npc):
+                    count = conn.execute("SELECT COUNT(*) FROM Mob WHERE Name=? COLLATE NOCASE", (npc,)).fetchone()[0]
+                    self.assertGreater(count, 0)
+        finally:
+            conn.close()
+
     def test_the_image_puts_it_next_to_the_server(self):
         self.assertIn("COPY deploy/hearthdaoc-quests.json /app/server/hearthdaoc-quests.json\n", read(DOCKERFILE))
 

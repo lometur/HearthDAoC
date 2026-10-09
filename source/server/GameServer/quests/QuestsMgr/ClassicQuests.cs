@@ -25,6 +25,8 @@ namespace DOL.GS.Quests
     /// then it not being there for the player").</item>
     /// </list>
     /// Quest givers keep the normal yellow quest indicator over their heads. Without the file nothing happens.
+    /// HearthDAoC: hearthdaoc-quests.json (beside it) adds quests and quest monsters, and its <c>Chat</c> replaces
+    /// upstream's NPC replies keyword by keyword (an empty reply silences one).
     /// </summary>
     public static class ClassicQuests
     {
@@ -535,7 +537,8 @@ namespace DOL.GS.Quests
 
         /// <summary>
         /// HearthDAoC: adds the extra file's quests where upstream's file has no entry for the ID (upstream's entry wins),
-        /// and its quest monsters; returns <paramref name="upstream"/>. A null extra file changes nothing.
+        /// and its quest monsters; its <c>Chat</c> replies replace upstream's (see <see cref="MergeChat"/>). Returns
+        /// <paramref name="upstream"/>. A null extra file changes nothing.
         /// </summary>
         public static Config Merge(Config upstream, Config extra)
         {
@@ -546,7 +549,37 @@ namespace DOL.GS.Quests
             if (extra.QuestMonsterIds != null)
                 foreach (string mob in extra.QuestMonsterIds)
                     upstream.QuestMonsterIds.Add(mob);
+            if (extra.Chat != null)
+                MergeChat(upstream, extra.Chat);
             return upstream;
+        }
+
+        /// <summary>
+        /// HearthDAoC: for each NPC and keyword of <paramref name="extra"/>, our reply replaces upstream's and adds the NPC
+        /// or keyword when upstream has none; an empty reply therefore silences upstream's line (OnWhisper sends nothing
+        /// for it). Upstream had several broken replies in the Guild of Shadows chain (every class called "Cabalist",
+        /// walkthrough notes like "[Step#3] loc=51921"). NPC names and keywords compare without case, and our keywords
+        /// are trimmed of trailing <c>.!?</c> as OnWhisper trims what the player says. The merged lookups ignore case.
+        /// </summary>
+        private static void MergeChat(Config upstream, Dictionary<string, Dictionary<string, string>> extra)
+        {
+            var merged = new Dictionary<string, Dictionary<string, string>>(StringComparer.OrdinalIgnoreCase);
+            if (upstream.Chat != null)
+                foreach (var npc in upstream.Chat)
+                    merged[npc.Key] = npc.Value == null
+                        ? new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
+                        : new Dictionary<string, string>(npc.Value, StringComparer.OrdinalIgnoreCase);
+
+            foreach (var npc in extra)
+            {
+                if (npc.Value == null) continue;
+                if (!merged.TryGetValue(npc.Key, out var lines))
+                    merged[npc.Key] = lines = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+                foreach (var line in npc.Value)
+                    lines[(line.Key ?? string.Empty).Trim().TrimEnd('.', '!', '?')] = line.Value ?? string.Empty;
+            }
+
+            upstream.Chat = merged;
         }
 
         /// <summary>HearthDAoC: the map marker of a quest's stage (either file), or null. The GM's /epic goto uses it.</summary>
