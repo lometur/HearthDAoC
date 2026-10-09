@@ -60,6 +60,8 @@ hdc - HearthDAoC server
   restore <backup file name> [--force]   (server stopped; --force allows another edition)
   new-world [--edition classic|b]   archive the current world and start a fresh one (server stopped)
   upgrade-world [--same-version]    move progress into the clean world of this image's upstream version (server stopped)
+  carry-rvr [<archive>]          copy keep, gate and relic state from an archived world into this one (server
+                                 stopped; undoes captures made since); without <archive>, list the archived worlds
   auto-accounts on|off           allow or stop account creation at first login (recreates the server)
   spawns restore [--max-level N] | undo | status
                                  bring back the leveling monsters upstream archived (default levels 1-20; server stopped)
@@ -240,6 +242,13 @@ case "$cmd" in
             "${ADMIN[@]:1}" fetch-clean
         offline --entrypoint python3 "$(image)" "${ADMIN[@]:1}" upgrade-world --clean-world /data/upgrade-clean-world.db \
             --importer "dotnet /app/tools/progress-import/progress-import.dll" "$@" ;;
+    carry-rvr)
+        if [[ $# -eq 0 ]]; then
+            tool "${ADMIN[@]}" carry-rvr
+        else
+            need_stopped
+            offline --entrypoint python3 "$(image)" "${ADMIN[@]:1}" carry-rvr "$@"
+        fi ;;
     auto-accounts)
         case "${1:-}" in on) v=True ;; off) v=False ;; *) echo "usage: hdc auto-accounts on|off" >&2; exit 2 ;; esac
         if grep -q '^HEARTHDAOC_AUTO_ACCOUNTS=' "$here/.env"; then

@@ -369,5 +369,106 @@ class WorldAdminTests(unittest.TestCase):
         self.assertFalse(os.path.exists(os.path.join(self.data, "archive")))
 
 
+class CarryRvrCommandTests(unittest.TestCase):
+    """world_admin.py carry-rvr: list the archived worlds, or carry one's keep, door and relic state into the live world."""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.data = os.path.join(self.tmp.name, "data")
+        self.db = init_world.world_paths(self.data)["db"]
+        os.makedirs(os.path.dirname(self.db))
+        test_carry_rvr.make_world(self.db)
+        init_world.write_meta(init_world.world_paths(self.data)["meta"],
+                              {"version": "0.35b", "edition": "classic", "navmesh": False, "created_utc": "x"})
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    def archive(self, name, version="0.34b"):
+        """An archived world as _archive_world leaves it, with Caer Benowyc held by Midgard; returns its database."""
+        db = os.path.join(self.data, "archive", name, "world", "opendaoc.sqlite3.db")
+        os.makedirs(os.path.dirname(db))
+        test_carry_rvr.make_world(db)
+        test_carry_rvr.execute(db, "UPDATE Keep SET Realm=2, ClaimedGuildName='Raiders' WHERE KeepID=50",
+                               "UPDATE Door SET Health=1000, State=0 WHERE Door_ID='d1'")
+        init_world.write_meta(os.path.join(self.data, "archive", name, "world.json"),
+                              {"version": version, "edition": "classic", "navmesh": True, "created_utc": "x"})
+        return db
+
+    def run_admin(self, *args):
+        return subprocess.run([sys.executable, os.path.join(REPO, "deploy", "bin", "world_admin.py"), "--data", self.data,
+                               "--lock", "/nonexistent.lock", "carry-rvr", *args], capture_output=True, text=True)
+
+    def test_without_an_archive_it_lists_them_oldest_first(self):
+        self.archive("world-pre-upgrade-20261008-120000", "0.35b")
+        self.archive("world-20261001-090000")
+        os.makedirs(os.path.join(self.data, "archive", "world-20261005-100000"))  # no world database in it
+        self.assertEqual(world_admin.archived_worlds(self.data),
+                         [("world-20261001-090000", "0.34b"), ("world-pre-upgrade-20261008-120000", "0.35b")])
+        r = self.run_admin()
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertEqual(r.stdout.splitlines(), ["world-20261001-090000                    upstream 0.34b",
+                                                 "world-pre-upgrade-20261008-120000        upstream 0.35b"])
+        self.assertEqual(test_carry_rvr.query(self.db, "SELECT Realm FROM Keep WHERE KeepID=50"), [(1,)])
+
+    def test_without_archives_it_says_so(self):
+        r = self.run_admin()
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertIn("No archived worlds", r.stdout)
+
+    def test_it_backs_up_then_carries_and_reports(self):
+        archived = self.archive("world-pre-upgrade-20261008-120000")
+        with open(archived, "rb") as f:
+            archived_before = f.read()
+        r = self.run_admin("world-pre-upgrade-20261008-120000")
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertEqual(r.stdout.splitlines()[0], "Carried over from world-pre-upgrade-20261008-120000: {'Keep': 3, "
+                                                   "'Door': 5, 'Relic': 2, 'KeepHookPointItem': 0, 'KeepCaptureLog': 0}")
+        self.assertRegex(r.stdout, r"The state before was backed up as world-.*-pre-carry-rvr\.db\.")
+        self.assertEqual(test_carry_rvr.query(self.db, "SELECT Realm, ClaimedGuildName FROM Keep WHERE KeepID=50"),
+                         [(2, "Raiders")])
+        self.assertEqual(test_carry_rvr.query(self.db, "SELECT Health, State FROM Door WHERE Door_ID='d1'"), [(1000, 0)])
+        saved = [f for f in os.listdir(backup.backups_dir(self.data)) if f.endswith("-pre-carry-rvr.db")]
+        self.assertEqual(len(saved), 1)
+        self.assertEqual(test_carry_rvr.query(os.path.join(backup.backups_dir(self.data), saved[0]),
+                                              "SELECT Realm FROM Keep WHERE KeepID=50"), [(1,)])
+        with open(archived, "rb") as f:
+            self.assertEqual(f.read(), archived_before)
+        self.assertEqual(sorted(os.listdir(self.data)), ["archive", "backups", "world", "world.json"])  # no copy left
+
+    def test_the_report_names_what_was_not_carried(self):
+        archived = self.archive("world-20261001-090000")
+        test_carry_rvr.execute(archived, "UPDATE Keep SET Name='Caer Gone' WHERE KeepID=50")
+        counts, notes = world_admin.carry_rvr_from_archive(self.data, "world-20261001-090000", log=QUIET)
+        self.assertEqual(counts["Keep"], 2)
+        self.assertEqual(notes, ["Keeps only in the old world, not carried: Caer Gone (region 1)",
+                                 "Keeps only in the new world, left as it ships them: Caer Benowyc (region 1)"])
+
+    def test_an_unknown_archive_changes_nothing(self):
+        r = self.run_admin("world-19990101-000000")
+        self.assertEqual(r.returncode, 1)
+        self.assertIn("archived world not found", r.stderr)
+        self.assertFalse(os.path.exists(backup.backups_dir(self.data)))
+
+    def test_an_archive_of_another_edition_changes_nothing(self):
+        archived = self.archive("world-20261001-090000")
+        test_carry_rvr.execute(archived, "CREATE TABLE ServerProperty (`Key` TEXT, Value TEXT)",
+                               "INSERT INTO ServerProperty VALUES ('enable_sluaghbinder', 'True')")
+        with self.assertRaisesRegex(world_admin.AdminError, "edition 'b'.*nothing was changed"):
+            world_admin.carry_rvr_from_archive(self.data, "world-20261001-090000", log=QUIET)
+        self.assertEqual(test_carry_rvr.query(self.db, "SELECT Realm FROM Keep WHERE KeepID=50"), [(1,)])
+
+    def test_a_failure_leaves_the_live_world_unchanged(self):
+        self.archive("world-20261001-090000")
+        with open(self.db, "rb") as f:
+            before = f.read()
+        with mock.patch.object(world_admin.carry_rvr, "_carry_relics", side_effect=sqlite3.OperationalError("disk full")):
+            with self.assertRaisesRegex(world_admin.AdminError, "disk full.*the current world is unchanged"):
+                world_admin.carry_rvr_from_archive(self.data, "world-20261001-090000", log=QUIET)
+        with open(self.db, "rb") as f:
+            self.assertEqual(f.read(), before)
+        self.assertEqual(sorted(os.listdir(self.data)), ["archive", "backups", "world", "world.json"])
+
+
 if __name__ == "__main__":
     unittest.main()

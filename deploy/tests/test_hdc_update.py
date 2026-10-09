@@ -15,6 +15,7 @@ DEPLOY = os.path.abspath(os.path.join(HERE, ".."))
 # Stands in for docker. It logs every call to $FAKE_DIR/calls.jsonl and answers from $FAKE_DIR:
 # world.json (the volume's world; absent = no world yet) and the FAKE_UPGRADE setting:
 # ok | fail (before the swap: the world is unchanged) | fail-after-swap (the world was upgraded).
+# The server is stopped, unless FAKE_RUNNING is set.
 FAKE_DOCKER = r'''#!/usr/bin/env python3
 import json, os, sys
 d = os.environ["FAKE_DIR"]
@@ -32,7 +33,7 @@ if args[:1] == ["inspect"]:
     elif "Health" in fmt:
         print("healthy")
     else:
-        print("false")  # .State.Running: the server is stopped
+        print("true" if os.environ.get("FAKE_RUNNING") else "false")  # .State.Running
 elif args[:1] == ["run"]:
     if "cat" in args and "/data/world.json" in args:
         if not os.path.exists(world):
@@ -185,6 +186,55 @@ class HdcUpdateTests(unittest.TestCase):
         self.assertNotIn("upgrade-world", self.steps())
         self.assertEqual(self.steps()[-1], "compose up")
         self.assertIn("Updated to v0.36b-hearth.1.", r.stdout)
+
+
+class HdcCarryRvrTests(unittest.TestCase):
+    """hdc carry-rvr lists the archived worlds whether the server runs or not; it carries one only with the
+    server stopped, in a container without a network, like the other world-changing commands."""
+
+    setUp, tearDown, calls = HdcUpdateTests.setUp, HdcUpdateTests.tearDown, HdcUpdateTests.calls
+
+    def hdc(self, *args, running=False):
+        env = dict(os.environ, PATH=self.bin + os.pathsep + os.environ["PATH"], FAKE_DIR=self.fake)
+        if running:
+            env["FAKE_RUNNING"] = "1"
+        return subprocess.run(["bash", os.path.join(self.here, "hdc"), *args], capture_output=True, text=True,
+                              env=env, timeout=60)
+
+    def admin_call(self):
+        return next(a for a in self.calls() if "/app/bin/world_admin.py" in a)
+
+    def test_without_an_archive_it_lists_them_in_a_container_when_stopped(self):
+        r = self.hdc("carry-rvr")
+        self.assertEqual(r.returncode, 0, r.stderr)
+        call = self.admin_call()
+        self.assertEqual(call[:1], ["run"])
+        self.assertEqual(call[call.index("--network") + 1], "none")
+        self.assertEqual(call[-1], "carry-rvr")
+
+    def test_without_an_archive_it_lists_them_in_the_running_server(self):
+        r = self.hdc("carry-rvr", running=True)
+        self.assertEqual(r.returncode, 0, r.stderr)
+        call = self.admin_call()
+        self.assertEqual(call[:3], ["exec", "-i", "hearthdaoc-server"])
+        self.assertEqual(call[-1], "carry-rvr")
+
+    def test_with_an_archive_it_carries_in_a_container_without_a_network(self):
+        r = self.hdc("carry-rvr", "world-pre-upgrade-20261008-120000")
+        self.assertEqual(r.returncode, 0, r.stderr)
+        call = self.admin_call()
+        self.assertEqual(call[:1], ["run"])
+        self.assertEqual(call[call.index("--network") + 1], "none")
+        self.assertEqual(call[-2:], ["carry-rvr", "world-pre-upgrade-20261008-120000"])
+
+    def test_with_an_archive_it_refuses_while_the_server_runs(self):
+        r = self.hdc("carry-rvr", "world-pre-upgrade-20261008-120000", running=True)
+        self.assertEqual(r.returncode, 1)
+        self.assertIn("Stop it first", r.stderr)
+        self.assertEqual([a for a in self.calls() if "/app/bin/world_admin.py" in a], [])
+
+    def test_the_usage_names_it(self):
+        self.assertIn("carry-rvr [<archive>]", self.hdc("help").stdout)
 
 
 if __name__ == "__main__":
