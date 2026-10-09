@@ -144,8 +144,8 @@ start type 0, `MaxCount` 1, levels 50–50, given by Captain Rhodri, region 1).
 - Rewards: the six armour pieces, 50 silver, no XP. Dependency: the class's 48 step (section 3.1).
 - These three texts are new (written in the style of upstream's lines). Nothing else in the chain is reworded.
 - **Lord Elidyn's camp** comes back from upstream's archive `offline_classic165_removed_mobs`: every archived row in
-  region 1 within 3,000 units of his spot (568158, 404718) named Lord Elidyn, Ellyll guard, ellyll guard, ellyll
-  champion or ellyl hero (18 rows on the clean world: Lord Elidyn, 14 guards, 1 champion, 2 heroes), with their
+  region 1 within 1,500 units of his spot (568158, 404718) named Lord Elidyn, Ellyll guard or ellyl hero, any case
+  (17 rows on the clean world: Lord Elidyn, 14 guards, 2 heroes; the nearest other Ellyll stand 3,000 units away), with their
   Mob_IDs. Lord Elidyn (template 60163397, level 59) is a group fight, as on live. He respawns like any named
   monster. The map shows markers for both stages, and bots leave him alone (section 3.2).
 
@@ -253,18 +253,20 @@ what an upstream PR would turn into SQL.
 
 | Step | Change | Rows (clean world) |
 |---|---|---|
-| 1 | Guild of Shadows dependencies, five classes (section 2.1): 7: `!#<7 SI>`; 7 SI: `!#<7>/<closed 7>`; 11: `#<7>/<closed 7>/<7 SI>` and `!#<11 SI>`; 11 SI: `#<7>/<closed 7>/<7 SI>` and `!#<11>`; 15: `#<11>/<11 SI>`; 20 to 50: `#<previous step>`. | 60 |
+| 1 | Guild of Shadows dependencies, five classes (section 2.1): 7: `!#<7 SI>/<closed 7>`; 7 SI: `!#<7>/<closed 7>`; 11: `#<7>/<closed 7>/<7 SI>` and `!#<11 SI>`; 11 SI: `#<7>/<closed 7>/<7 SI>` and `!#<11>`; 15: `#<11>/<11 SI>`; 20 to 50: `#<previous step>`. | 60 |
 | 2 | Every other line (section 2.5). | 87 |
-| 3 | The closed Supply Runs: `MaxLevel` 0, so their level check fails for everyone. | 4 |
+| 3 | The closed Supply Runs: `QuestDependency` `#<its own ID>`. A quest that needs itself finished is offered to no one, and only offers read dependencies, so a character halfway through one can finish it. (`MaxLevel` 0 would not do: `DataQuest` also checks the level when an item is handed over mid-quest.) | 4 |
 | 4 | XP and coin (section 2.3). | 60 |
 | 5 | Rewards: Necromancer 11 (classic: Flayed Skin Necklace; SI: Arawn's Beads). | 2 |
 | 6 | Texts: Reaver 40 (20172) without Kiss of Death and Blood Encrusted Flail in its step text and Rhodri's list; the 30 step's finish speech (21489–21494) fills upstream's leftover source tags: "(reward)" → "reward", "(prof name)" → "the Guild of Shadows", "(class name)" → "<Class>". | 7 |
-| 7 | Items: the 30 rewards and 11 weapons of section 4, inserted where the `Id_nb` is missing; the armour fixes of section 4.4 where the row still has the old value. | 41 + 5 |
-| 8 | The five 50 rows (section 2.4) and Lord Elidyn's camp (18 rows copied from the archive into `Mob`, left in the archive). A camp row already back in `Mob` is skipped. | 5 + 18 |
+| 7 | Items: the 30 rewards and 11 weapons of section 4, inserted where the `Id_nb` is missing; the armour fixes of section 4.4 where the row still has the old value. | 41 + 9 |
+| 8 | The five 50 rows (section 2.4) and Lord Elidyn's camp (17 rows copied from the archive into `Mob`, left in the archive). A camp row already back in `Mob` is skipped. | 5 + 17 |
 | 9 | Old `Shadows_50` (`Quest` rows named `DOL.GS.Quests.Albion.Shadows_50`): a finished one (Step -2) becomes a `CharacterXDataQuest` row for the character's class's 50 ID (Step 0, Count 1) unless one exists, and is deleted; an unfinished one is deleted. Epic vests in inventories with 0 charges get the template's charges. | 0 on the clean world |
 
-The start log gets one line, for example: `Epic chains: Guild of Shadows 60 links, 87 other links, 41 items added, 5
-armour fixes, 5 level-50 quests, Lord Elidyn's camp 18 restored, Shadows_50: 0 finished carried, 0 unfinished removed`.
+The start log gets one line; on the clean world:
+`Epic chains: Guild of Shadows 60 links, 60 XP and coin, 4 Supply Runs closed, 2 rewards and 7 texts fixed; 87 other
+links; 41 items added, 9 armour fixes; 5 level-50 quests, Lord Elidyn's camp 17 restored; Shadows_50: 0 finished
+carried, 0 removed, 0 epic vests recharged`. Each count is what the fix changed.
 
 Notes:
 - Restored camp rows aren't recorded in `fork_restored_mobs`, so `hdc spawns undo` leaves them.
@@ -401,7 +403,7 @@ Added to the CI filter.
   its 45; no other row's dependency changed.
 - **Items:** every Guild of Shadows reward and every weapon choice resolves to an `ItemTemplate`; the 41 rows inserted
   have the fields of section 4.1 and the bonuses of sections 4.2 and 4.3; the armour fixes.
-- **Level 50:** the five rows; Lord Elidyn's camp (18 rows, Mob_IDs equal to the archive's); `hearthdaoc-quests.json`
+- **Level 50:** the five rows; Lord Elidyn's camp (17 rows, Mob_IDs equal to the archive's); `hearthdaoc-quests.json`
   names the five IDs and Lord Elidyn's Mob_ID.
 - **Old `Shadows_50`:** synthetic rows (finished carried to the right class's 50 ID, an existing 50 row kept, unfinished
   removed); vest charges on a synthetic inventory row.
@@ -443,8 +445,8 @@ tracker #49, and ask the owner before opening anything.
    the data file. The 50 IDs are ours and don't move.
 2. **The generic order rule.** It reads every line's names; a line where upstream meant "any of these" would become
    stricter. The 87 rows are listed by the test, and the in-game check covers one other line.
-3. **Closed by level.** The closed Supply Runs rely on DataQuest checking levels only when offering; the plan confirms
-   that a character on one can finish it.
-4. **Lord Elidyn's camp.** 18 restored monsters, up to level 60, on the old frontier where bots roam; bots skip Lord
+3. **Closed by a dependency on itself.** The closed Supply Runs rely on DataQuest reading dependencies only when it
+   offers a quest; a source test pins where `DataQuest.cs` reads them.
+4. **Lord Elidyn's camp.** 17 restored monsters, up to level 60, on the old frontier where bots roam; bots skip Lord
    Elidyn but may fight his guards.
 5. **New text.** Only the level-50 offer, journal and finish lines are new.
