@@ -3,6 +3,24 @@
 > It is **not** the original OfflineDAoC project. For the official game, releases and support, go to
 > [shadowofze/OfflineDAoC](https://github.com/shadowofze/OfflineDAoC). Fork details: [docs/fork/FORK.md](docs/fork/FORK.md).
 
+> **Disclaimer.** Dark Age of Camelot is the intellectual property of Electronic Arts and Broadsword
+> Online Games. Offline DAoC is not affiliated with, endorsed by, or connected to either company. The
+> game client, textures, models and other assets it uses belong to them, and this project is built on
+> top of that copyrighted work.
+>
+> This is a free, non-commercial fan project. It is not a product and it is not for sale. No donations
+> are accepted, and the project owner has not made, and will not make, any money from it. The client
+> files are the same publicly available ones every free shard uses; the work original to this
+> repository is the bot system and the server customizations. Because the code is open source, the
+> owner cannot control what forks or other people do with it.
+>
+> This "time capsule" of the 2002-2003 game was never meant to compete with the current retail Dark Age
+> of Camelot, which is a very different, modern experience. If that interests you, please visit the
+> official site: [darkageofcamelot.com](https://www.darkageofcamelot.com/).
+>
+> HearthDAoC is likewise a free, non-commercial fork; this repository hosts no game files, and setup takes
+> them from Offline DAoC's own releases.
+
 # Offline DAoC — single-player Dark Age of Camelot with bots
 
 Offline DAoC is a local, single-player Dark Age of Camelot (Classic + Shrouded Isles, 1.65 rules)
