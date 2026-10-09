@@ -58,6 +58,9 @@ echo "ok - the server finds its data files (classic-quests.json, classic-quest-g
     || fail "Saracen Disciples have no starting location"
 echo "ok - Disciple enabled and Saracen Disciples have a starting location"
 logs_have "Epic chains: Guild of Shadows 60 links" || fail "the epic chains world fix did not run"
+if docker exec "$NAME" sh -c 'grep -qE "is not valid and is never met|hearthdaoc-quests.json not found|Could not read hearthdaoc-quests.json" /data/logs/*.log'; then
+    fail "a quest dependency or hearthdaoc-quests.json failed to load"
+fi
 [[ "$(docker exec "$NAME" sqlite3 "$db" "SELECT COUNT(*) FROM DataQuest WHERE ID IN (990509, 990511, 990512, 990513, 990519)")" == 5 ]] \
     || fail "the level-50 Lord of Deceit quests are missing"
 echo "ok - the epic chains world fix ran (level-50 quests in the world)"
