@@ -130,8 +130,11 @@ still hold upstream's or an earlier version of this file's, so a quest whose tex
 (`; M left as they are (changed since upstream)`), and a later release with revised text reaches a world that
 had the earlier one. If it fails, the start log says `Quest dialogue: not applied (...)`, the quests keep the
 text they have, and it tries again at the next start. The NPCs' chat lines are in `hearthdaoc-quests.json`
-(`Chat`), which replaces upstream's line for the same NPC and keyword. To make the digests that guard a new
-revision: `python3 deploy/bin/quest_dialogue.py --digests <world.db>`.
+(`Chat`), which replaces upstream's line for the same NPC and keyword. To revise the text: before changing any
+text, run `python3 deploy/bin/quest_dialogue.py --digests <clean world.db> --current` (the digests of the file's
+own text) and append each digest to its quest's guard list in `quest_dialogue.json`; then change the text, keeping
+each entry's `set` columns. Without `--current` it prints the digests of the text a world holds, which is
+upstream's text only on a clean world.
 
 ## Rollback
 

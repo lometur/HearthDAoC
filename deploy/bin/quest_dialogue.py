@@ -22,8 +22,15 @@ The file:
   per-class object, for each stage of the quest row (its StepType split on "|"); the list is joined with "|". No
   value may contain "|". A quest row with another number of stages than a list has entries is left alone and counted
   with the rows changed since upstream; the other rows still apply.
-- guard: for each quest ID, the digests of its `set` columns' values that may be replaced. digest() makes them;
-  `quest_dialogue.py --digests WORLD.db` prints them for upstream's text (after epic_chains) of every entry.
+- guard: for each quest ID, the digests of its `set` columns' values that may be replaced. digest() makes them.
+  `quest_dialogue.py --digests WORLD.db` prints the digests of the text WORLD holds (after epic_chains), which is
+  upstream's text only on a clean world; with `--current` it applies this file to its copy first, so it prints the
+  digests of the file's own text.
+
+To revise the text: before changing any text, run
+  python3 deploy/bin/quest_dialogue.py --digests <clean world.db> --current
+and append each digest to its quest's guard list; then change the text. Keep each entry's `set` columns: the digests
+cover exactly those columns.
 """
 import argparse
 import datetime
@@ -178,9 +185,11 @@ def apply(conn, now=None, data=None, chains=None):
     return [line]
 
 
-def digests(world, data=None, chains=None):
-    """{step: {quest id: digest}} of upstream's text of every entry's `set` columns, read from a copy of the world
-    that has had epic_chains applied (when it lacks the marker); the world itself is not changed."""
+def digests(world, data=None, chains=None, current=False):
+    """{step: {quest id: digest}} of the text every entry's `set` columns hold, read from a copy of the world that
+    has had epic_chains applied (when it lacks the marker): upstream's text on a clean world. With `current`, this fix
+    is applied to the copy too, so these are the digests of the file's own text, which the next revision's guard lists
+    need; a row the fix leaves with another text is an error, not a wrong digest. The world itself is not changed."""
     data = data if data is not None else load_data()
     chains = chains if chains is not None else epic_chains.load_data()
     out = {}
@@ -193,6 +202,8 @@ def digests(world, data=None, chains=None):
                 for line in epic_chains.apply(conn):
                     if line.startswith("Epic chains: not applied"):
                         raise RuntimeError(line)
+            if current:
+                _apply_on_copy(conn, data, chains)
             for entry in data.get("quests", []):
                 columns = sorted(entry["set"])
                 ids = [qid for qid in chains["steps"][entry["step"]]["ids"] if qid is not None]
@@ -206,6 +217,19 @@ def digests(world, data=None, chains=None):
     return out
 
 
+def _apply_on_copy(conn, data, chains):
+    """Applies the file to the copy `digests` reads, and checks that every row now holds the file's text."""
+    with conn:
+        for line in apply(conn, data=data, chains=chains):
+            if line.startswith("Quest dialogue: not applied"):
+                raise RuntimeError(line)
+    for qid, columns, values, _guard in _plan(conn, data, chains):
+        row = conn.execute(f"SELECT {', '.join(columns)} FROM DataQuest WHERE ID=?", (qid,)).fetchone()
+        if row is not None and [value or "" for value in row] != values:
+            raise RuntimeError(f"quest {qid} does not hold the file's text after the fix (its guard lacks the digest "
+                               "of the world's text, or its stages differ from the file's)")
+
+
 def _now():
     return datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%d %H:%M:%S")
 
@@ -213,9 +237,13 @@ def _now():
 def main(argv=None):
     ap = argparse.ArgumentParser(description="The Guild of Shadows chain's dialogue: print the guard digests.")
     ap.add_argument("--digests", metavar="WORLD.db", required=True,
-                    help="print {step: {quest id: digest}} of upstream's text of each entry's set columns")
+                    help="print {step: {quest id: digest}} of the text each entry's set columns hold in the world, after "
+                         "the epic chains (upstream's text on a clean world)")
+    ap.add_argument("--current", action="store_true",
+                    help="apply this file to the copy first: print the digests of the file's own text, for the guard "
+                         "lists of the next revision")
     a = ap.parse_args(argv)
-    print(json.dumps(digests(a.digests), indent=2))
+    print(json.dumps(digests(a.digests, current=a.current), indent=2))
     return 0
 
 

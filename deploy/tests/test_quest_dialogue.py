@@ -3,6 +3,8 @@
 The synthetic tests use a tiny DataQuest table and data passed in. The tests of the real data file run world_fixes on a
 copy of a clean classic world (HDC_TEST_WORLD).
 """
+import contextlib
+import io
 import json
 import os
 import pathlib
@@ -336,7 +338,8 @@ class RealDialogueTests(unittest.TestCase):
 
 @unittest.skipUnless(TEST_WORLD, "needs HDC_TEST_WORLD (a clean classic world database)")
 class DigestCommandTests(unittest.TestCase):
-    """--digests prints upstream's text's digests, as the guard lists must hold them. Waits for the data file."""
+    """--digests on a clean world prints upstream's text's digests, as the guard lists hold them; with --current, the
+    digests of the file's own text."""
 
     def test_the_digests_are_those_of_the_worlds_rows_after_the_epic_chains(self):
         data, chains = real_data()
@@ -357,6 +360,20 @@ class DigestCommandTests(unittest.TestCase):
         self.assertTrue(all(d in entry["guard"][qid] for entry in data["quests"]
                             for qid, d in out[entry["step"]].items()))
 
+    def test_current_prints_the_digests_of_the_files_own_text(self):
+        data, chains = real_data()
+        out = qd.digests(TEST_WORLD, data, chains, current=True)
+        printed = {int(qid): d for step in out.values() for qid, d in step.items()}
+        with tempfile.TemporaryDirectory() as tmp:
+            copy = os.path.join(tmp, "world.db")
+            shutil.copyfile(TEST_WORLD, copy)
+            conn = sqlite3.connect(copy)
+            with conn:
+                epic_chains.apply(conn)
+            planned = {qid: qd.digest(values) for qid, _columns, values, _guard in qd._plan(conn, data, chains)}
+            conn.close()
+        self.assertEqual(printed, planned)
+
 
 class DigestCliTests(unittest.TestCase):
     """The --digests command on a synthetic world, with a data file of its own."""
@@ -374,6 +391,88 @@ class DigestCliTests(unittest.TestCase):
             out = qd.digests(db, data, CHAINS)
             self.assertEqual(pathlib.Path(db).read_bytes(), before)
         self.assertEqual(out, {"7": {"100": qd.digest(["old A", "bye"])}, "9": {"300": qd.digest([""])}})
+
+
+def apply_file(db, data):
+    conn = sqlite3.connect(db)
+    try:
+        with conn:
+            return qd.apply(conn, NOW, data, CHAINS)
+    finally:
+        conn.close()
+
+
+def held(db):
+    conn = sqlite3.connect(db)
+    try:
+        return conn.execute("SELECT ID, Description, FinishText FROM DataQuest ORDER BY ID").fetchall()
+    finally:
+        conn.close()
+
+
+class RevisionTests(unittest.TestCase):
+    """The documented revision procedure: before changing the text, `--digests <clean world> --current`, and each
+    digest appended to its quest's guard list; then the new text. A world at the earlier revision gets the new one."""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.clean = os.path.join(self.tmp.name, "clean.db")
+        conn = sqlite3.connect(self.clean)
+        with conn:
+            conn.execute(SCHEMA)
+            conn.execute("INSERT INTO DataQuest (ID, StepType, Description, FinishText) VALUES (100, '2|3', 'old A', 'bye')")
+            conn.execute("INSERT INTO DataQuest (ID, StepType, Description, FinishText) VALUES (200, '2|3', 'old B', 'bye')")
+        conn.close()
+        self.upstream = {"100": [guard_for("old A", "bye")], "200": [guard_for("old B", "bye")]}
+        self.revision = {"quests": [{"step": "7", "set": {"Description": {"Alpha": "new A", "Beta": "new B"},
+                                                          "FinishText": "farewell"},
+                                     "guard": self.upstream}]}
+        self.world = os.path.join(self.tmp.name, "world.db")  # a world that had this revision
+        shutil.copyfile(self.clean, self.world)
+        self.assertEqual(apply_file(self.world, self.revision), ["Quest dialogue: 2 quests rewritten"])
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    def next_revision(self, added):
+        guard = {qid: digests + [added[qid]] for qid, digests in self.upstream.items()}
+        return {"quests": [{"step": "7", "set": {"Description": {"Alpha": "newer A", "Beta": "newer B"},
+                                                 "FinishText": "farewell"},
+                            "guard": guard}]}
+
+    def test_current_prints_the_digests_of_the_files_own_text_and_leaves_the_world_alone(self):
+        before = pathlib.Path(self.clean).read_bytes()
+        out = qd.digests(self.clean, self.revision, CHAINS, current=True)
+        self.assertEqual(pathlib.Path(self.clean).read_bytes(), before)
+        self.assertEqual(out, {"7": {"100": guard_for("new A", "farewell"), "200": guard_for("new B", "farewell")}})
+
+    def test_a_revision_guarded_by_the_current_digests_rewrites_every_row(self):
+        current = qd.digests(self.clean, self.revision, CHAINS, current=True)["7"]
+        self.assertEqual(apply_file(self.world, self.next_revision(current)), ["Quest dialogue: 2 quests rewritten"])
+        self.assertEqual(held(self.world), [(100, "newer A", "farewell"), (200, "newer B", "farewell")])
+
+    def test_a_revision_guarded_by_the_clean_worlds_digests_alone_keeps_every_row(self):
+        # Without --current, a clean world gives upstream's digests again: the earlier revision's text stays.
+        clean = qd.digests(self.clean, self.revision, CHAINS)["7"]
+        self.assertEqual(clean, {qid: digests[0] for qid, digests in self.upstream.items()})
+        before = held(self.world)
+        self.assertEqual(apply_file(self.world, self.next_revision(clean)), [])
+        self.assertEqual(held(self.world), before)
+
+    def test_current_is_an_error_when_a_row_would_keep_another_text(self):
+        unguarded = json.loads(json.dumps(self.revision))
+        unguarded["quests"][0]["guard"]["200"] = []
+        with self.assertRaisesRegex(RuntimeError, "quest 200 does not hold the file's text"):
+            qd.digests(self.clean, unguarded, CHAINS, current=True)
+
+    def test_the_command_takes_current(self):
+        out = io.StringIO()
+        with unittest.mock.patch.object(qd, "load_data", return_value=self.revision), \
+                unittest.mock.patch.object(epic_chains, "load_data", return_value=CHAINS), \
+                contextlib.redirect_stdout(out):
+            self.assertEqual(qd.main(["--digests", self.clean, "--current"]), 0)
+        self.assertEqual(json.loads(out.getvalue()),
+                         {"7": {"100": guard_for("new A", "farewell"), "200": guard_for("new B", "farewell")}})
 
 
 if __name__ == "__main__":
