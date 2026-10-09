@@ -106,10 +106,10 @@
     },
     "SourceText": [
      "Then go to the guard tower near Ludlow. Mind your manners; he is a soldier, and soldiers don't love our kind.",
-     "Frund was seen heading west along the road; Agisthil went north. Bring back the crediac. What happens to the deserters is your affair, and I won't ask.",
+     "Frund was seen heading west along the road; Agisthil went north. Bring back the crediac, and quickly: without it, what this tower was built to keep down won't stay down. What happens to the deserters is your affair, and I won't ask.",
      "Agisthil went north. He can't be far.",
      "A ward-stone should not be this dull. Omis, the vendor at Swanton Keep, is said to know old stones.",
-     "Ah. Someone has cut it loose from its ward; that is why it sleeps. I'll wake it and send it home to Dillon by my own courier. But mark this: when I held it, it warmed toward the south. A crediac remembers the hand that paid for its theft, and that will be Brodic, the brigand who haunts the southern Black Mountains.",
+     "Ah. Someone has cut it loose from its ward; that is why it sleeps. There, polished and awake again; I'll send it home to Dillon by my own courier. But mark this: when it woke, it warmed toward the south. A crediac remembers what it was made to hold down. Brodic, a dead warrior laid to rest under that ward long ago, walks the southern Black Mountains again. Put him back in the ground.",
      "Captain Dillon will want to hear of it."
     ],
     "StepText": [
@@ -117,7 +117,7 @@
      "Find the deserter Frund, who fled west from Captain Dillon's tower.",
      "Find the deserter Agisthil, who fled north from Captain Dillon's tower.",
      "Take the Crediac to Omis at Swanton Keep.",
-     "Slay Brodic, who paid the guards to steal the Crediac.",
+     "Lay Brodic, the dead warrior the Crediac held down, to rest in the southern Black Mountains.",
      "Return to Captain Dillon."
     ],
     "TargetText": [
@@ -125,7 +125,7 @@
      "Frund falls. He has nothing of the tower's on him; Agisthil must have the crediac.",
      "Agisthil falls, and you pull the Crediac from his belt: a smooth grey stone, cold and dull.",
      "Is that a crediac? I can feel it from here. Let me see it.",
-     "Brodic falls. Among his things is a purse of silver: the deserters' price, never paid.",
+     "Brodic's bones fall still, and the cold that followed him lifts.",
      ""
     ],
     "StepItemTemplates": [
@@ -137,11 +137,11 @@
      ""
     ],
     "FinishText": {
-     "Infiltrator": "Frund, Agisthil and Brodic, and Omis tells me the crediac is on its way home. I didn't think the Guild would see it done so cleanly. Take this, <Class>, and tell your master that Dillon pays his debts.",
-     "Mercenary": "Frund, Agisthil and Brodic, and Omis tells me the crediac is on its way home. I didn't think the Guild would see it done so cleanly. Take this, <Class>, and tell your master that Dillon pays his debts.",
-     "Cabalist": "Frund, Agisthil and Brodic, and Omis tells me the crediac is on its way home. I didn't think the Guild would see it done so cleanly. Take this, <Class>, and tell your master that Dillon pays his debts.",
-     "Necromancer": "Frund, Agisthil and Brodic, and Omis tells me the crediac is on its way home. I didn't think the Temple would see it done so cleanly. Take this, <Class>, and tell your master that Dillon pays his debts.",
-     "Reaver": "Frund, Agisthil and Brodic, and Omis tells me the crediac is on its way home. I didn't think the Temple would see it done so cleanly. Take this, <Class>, and tell your master that Dillon pays his debts."
+     "Infiltrator": "The deserters dealt with, Brodic back in his grave, and Omis tells me the crediac is on its way home. I didn't think the Guild would see it done so cleanly. Take this, <Class>, and tell your master that Dillon pays his debts.",
+     "Mercenary": "The deserters dealt with, Brodic back in his grave, and Omis tells me the crediac is on its way home. I didn't think the Guild would see it done so cleanly. Take this, <Class>, and tell your master that Dillon pays his debts.",
+     "Cabalist": "The deserters dealt with, Brodic back in his grave, and Omis tells me the crediac is on its way home. I didn't think the Guild would see it done so cleanly. Take this, <Class>, and tell your master that Dillon pays his debts.",
+     "Necromancer": "The deserters dealt with, Brodic back in his grave, and Omis tells me the crediac is on its way home. I didn't think the Temple would see it done so cleanly. Take this, <Class>, and tell your master that Dillon pays his debts.",
+     "Reaver": "The deserters dealt with, Brodic back in his grave, and Omis tells me the crediac is on its way home. I didn't think the Temple would see it done so cleanly. Take this, <Class>, and tell your master that Dillon pays his debts."
     }
    },
    "guard": {
@@ -351,7 +351,7 @@
     "SourceText": [
      "Here it is, sealed with Sir Bors' own mark. Scribe Veral keeps his desk in Camelot. Put it into no one's hands but his.",
      "Barfog's support, entered in the rolls; it is done. But you have not heard? There is news that Sir Bors is to be assassinated, and soon; the report doesn't say by whom. I will take your case before King Constantine myself. You must return to Snowdonia with all haste and stop this!",
-     "Captain Rhodri will want to know the danger has passed."
+     "He was never after Sir Bors. He was waiting for you. Captain Rhodri will want to know."
     ],
     "StepText": [
      "Take the document to Scribe Veral in Camelot.",
@@ -360,7 +360,7 @@
     ],
     "TargetText": [
      "Hail, traveler. How may I be of service? You come from Sir Bors? Then give me what you carry.",
-     "The Arawnite assassin falls, his blade still clean.",
+     "The assassin gasps as he falls: \"I thank thee for the help into the darkness of death. My endurance of life has been paid in full! Peace beckons!\"",
      ""
     ],
     "FinishText": {
