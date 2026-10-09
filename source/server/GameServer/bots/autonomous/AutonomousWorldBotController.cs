@@ -807,8 +807,9 @@ namespace DOL.GS
                     AbandonCamp(bot, $"{camp.ZoneName} is outside this bot's battleground level bracket");
                     return true;
                 }
-                // HearthDAoC: nor at or over its realm rank cap.
-                if (HearthDAoC.ClassicBattlegroundsScript.BotOverCap(bot, bracket.RegionId) is string overCap)
+                // HearthDAoC: nor at or over its realm rank cap (the bot, or any member of a shared party).
+                if (HearthDAoC.ClassicBattlegroundsScript.PartyOverCap(bot, _groupDirective?.IsDynamic == true,
+                        bracket.RegionId) is string overCap)
                 {
                     AbandonCamp(bot, overCap);
                     return true;

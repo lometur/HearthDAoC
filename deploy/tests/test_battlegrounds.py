@@ -142,10 +142,12 @@ class ClassicBattlegroundSourceTests(unittest.TestCase):
         offer = between(controller, "campBattleground = AutonomousTownTeleporters.IsEnabled",
                         "reachableRegions.Add(campBattleground.RegionId);")
         self.assertIn("HearthDAoC.ClassicBattlegroundsScript.PartyFits(bot, sharedGroup, campBattleground.RegionId)", offer)
-        # ... and a camp chosen before the bot reached the cap is given up instead of travelled to.
+        # ... and a camp chosen before the bot (or a member of its shared party) reached the cap is given up
+        # instead of travelled to. The check runs on every travel turn, so also on the turn of the port.
         travel = between(controller, "private bool TravelAcrossRegions(GameBot bot)", "FindNextCrossing(")
-        self.assertIn("HearthDAoC.ClassicBattlegroundsScript.BotOverCap(bot, bracket.RegionId) is string overCap", travel)
-        self.assertLess(travel.index("BotOverCap("), travel.index("TravelToBattleground("))
+        self.assertIn("HearthDAoC.ClassicBattlegroundsScript.PartyOverCap(bot, _groupDirective?.IsDynamic == true,\n"
+                      "                        bracket.RegionId) is string overCap", travel)
+        self.assertLess(travel.index("PartyOverCap("), travel.index("TravelToBattleground("))
 
     def test_saved_records_get_no_battleground_goal_over_the_cap(self):
         # ReconcileSavedAssignment re-rolls a disabled saved goal before the bot enters the world, without Assign.

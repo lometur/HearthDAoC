@@ -14,7 +14,7 @@ namespace DOL.GS.HearthDAoC;
 // HearthDAoC: the game wiring of the classic battlegrounds. The frontier porter (OFTeleporter) asks
 // PorterDestination where a character wearing the battlegrounds medallion goes, and the realm teleporters'
 // [Battlegrounds] choice asks RealmRankRefusal; the gamebots ask BotFits, PartyFits, BotOverCap,
-// BotFitsItsBattleground and RecordFitsItsBattleground before a battleground goal or trip;
+// PartyOverCap, BotFitsItsBattleground and RecordFitsItsBattleground before a battleground goal or trip;
 // a character over its battleground's limit is moved out at logout and, after a link death or a crash, a
 // moment after its next login; and a captured central keep goes back to level 1. ClassicBattlegrounds
 // makes every decision; this class reads the battleground rows and the character's state and carries out
@@ -105,11 +105,21 @@ public static class ClassicBattlegroundsScript
         return BotOverCap(bot, region) == null;
     }
 
-    // BotFits for the bot and, when it plans for its whole party (a shared group camp), every member.
+    // BotOverCap for the bot and, when it plans for its whole party (a shared group camp), every member: the
+    // first reason found, or null when they all may go in.
+    public static string PartyOverCap(GameBot bot, bool wholeParty, ushort region)
+    {
+        string reason = BotOverCap(bot, region);
+        if (reason != null || !wholeParty || bot.Group == null)
+            return reason;
+
+        return bot.Group.GetMembersInTheGroup().Select(member => BotOverCap(member, region))
+            .FirstOrDefault(memberReason => memberReason != null);
+    }
+
     public static bool PartyFits(GameBot bot, bool wholeParty, ushort region)
     {
-        return BotFits(bot, region)
-            && (!wholeParty || bot.Group == null || bot.Group.GetMembersInTheGroup().All(member => BotFits(member, region)));
+        return PartyOverCap(bot, wholeParty, region) == null;
     }
 
     // Whether a gamebot may be given the battleground goal: under the cap of the battleground for its level
