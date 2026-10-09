@@ -241,3 +241,15 @@ Neither contains EA game files. The release notes credit OfflineDAoC for the spl
 
 The releases are the fork's changelog: each release's notes list the PRs merged since the release before
 (`--generate-notes`), and each PR says what it changes. Upstream's own changes are in `CHANGELOG.md`.
+
+Each release's notes also say what to do to update, in a "To update" section just before "What's Changed":
+
+- **Owner:** `./hdc update`, plus anything else the release needs: a new `.env` setting, a world fix to check
+  in the log, a command to run once.
+- **Players:** what they do, if anything: run `setup.sh` again, accept the update `play.sh` offers, or copy
+  the new Windows files.
+
+Each PR that ships files has its own "To update" section. CI publishes the release with the generated notes
+only, so after it does, add the merged PRs' sections to the release notes
+(`gh release edit <tag> --notes-file <file>`). For an example with more than the usual steps, see
+v0.35b-hearth.1.

@@ -40,4 +40,4 @@ The owner reported the checks together as "all looks good, but i did not verify 
 
 The realm point cap was not tested in game. The decision behind it is covered by `UT_ClassicBattlegrounds` in CI: the porter's destination and refusal text at each cap, and the over-the-limit rule. The owner chose to move on without the in-game check. No failure goes back to a task.
 
-During testing, the owner found that `/door kill` throws a NullReferenceException on a keep gate. The command only handles ordinary doors (`GameDoor`) and leaves its door empty for a `GameKeepDoor`. This is an upstream bug that predates this sub-project. It is not tracked yet, by the owner's choice.
+During testing, the owner found that `/door kill` throws a NullReferenceException on a keep gate. The command only handles ordinary doors (`GameDoor`) and leaves its door empty for a `GameKeepDoor`. This is an upstream bug that predates this sub-project. It is tracked in #97.
