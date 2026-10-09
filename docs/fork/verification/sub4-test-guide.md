@@ -40,7 +40,6 @@ is closed. At 11, Shades and Shadows from Carys, then 15 from your Camelot train
 
 ## 3. Other checks
 
-- Final XP of other quests: finish any classic quest that isn't an epic step; its last stage now gives XP.
 - With `/xp off`, a quest that gives XP can't be finished (upstream's rule): "Your XP is turned off, you must turn it
   on to complete this quest!".
 - Another line: a Defenders of Albion character (Armsman, Scout, Friar or Theurgist) at 48 with only 43 finished
