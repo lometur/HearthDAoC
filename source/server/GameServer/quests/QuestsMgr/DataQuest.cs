@@ -2831,6 +2831,20 @@ namespace DOL.GS.Quests
 
 
 		/// <summary>
+		/// HearthDAoC: the entry of a reward list (RewardXP, RewardRP, RewardCLXP, RewardBP, RewardMoney) that finishing
+		/// the quest at <paramref name="step"/> pays: the finishing stage's own entry, the last entry when the list is
+		/// shorter (a single value pays that value), the first for a quest with no stage, and -1 for an empty list.
+		/// Upstream paid the first entry, so the classic quests, which keep the final reward in the last entry, never
+		/// paid it.
+		/// </summary>
+		public static int FinishRewardIndex(int step, int entries)
+		{
+			if (entries <= 0)
+				return -1;
+			return Math.Min(Math.Max(step, 1), entries) - 1;
+		}
+
+		/// <summary>
 		/// Finish the quest and update the player quest list
 		/// </summary>
 		/// <summary>
@@ -2957,12 +2971,12 @@ namespace DOL.GS.Quests
 					{
 						if (m_rewardXPs.Count > 0)
 						{
-							rewardXP = m_rewardXPs[0];
+							rewardXP = m_rewardXPs[FinishRewardIndex(lastStep, m_rewardXPs.Count)]; // HearthDAoC: the finishing stage's entry
 						}
 	
 						if (m_rewardRPs.Count > 0)
 						{
-							rewardRP = m_rewardRPs[0];
+							rewardRP = m_rewardRPs[FinishRewardIndex(lastStep, m_rewardRPs.Count)]; // HearthDAoC: the finishing stage's entry
 						}					
 	
 						if (rewardXP > 0)
@@ -3010,7 +3024,7 @@ namespace DOL.GS.Quests
 	
 						if (m_rewardCLXPs.Count > 0)
 						{
-							rewardCLXP = m_rewardCLXPs[0];
+							rewardCLXP = m_rewardCLXPs[FinishRewardIndex(lastStep, m_rewardCLXPs.Count)]; // HearthDAoC: the finishing stage's entry
 							if (rewardCLXP > 0)
 							{
 								m_questPlayer.GainChampionExperience(rewardCLXP, eXPSource.Quest);
@@ -3019,7 +3033,7 @@ namespace DOL.GS.Quests
 						
 						if (m_rewardBPs.Count > 0)
 						{
-							rewardBP = m_rewardBPs[0];
+							rewardBP = m_rewardBPs[FinishRewardIndex(lastStep, m_rewardBPs.Count)]; // HearthDAoC: the finishing stage's entry
 							if (rewardBP > 0)
 							{
 								m_questPlayer.GainBountyPoints(rewardBP);
@@ -3028,7 +3042,7 @@ namespace DOL.GS.Quests
 						
 						if (m_rewardMoneys.Count > 0)
 						{
-							rewardMoney = m_rewardMoneys[0];
+							rewardMoney = m_rewardMoneys[FinishRewardIndex(lastStep, m_rewardMoneys.Count)]; // HearthDAoC: the finishing stage's entry
 							if (rewardMoney > 0)
 							{
 								m_questPlayer.AddMoney(rewardMoney, "You are awarded {0}!");
