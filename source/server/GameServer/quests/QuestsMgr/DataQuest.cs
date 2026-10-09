@@ -66,7 +66,7 @@ namespace DOL.GS.Quests
 	/// HearthDAoC: but not when the player already carries that item in the backpack, or the step just finishing gives it;
 	/// a player who lost it gets a new one (QuestDeliveryItems.ShouldHand).
 	/// HearthDAoC: accepting a quest whose first step is a delivery hands that step's item (QuestDeliveryItems.FirstStepItem);
-	/// upstream never did, so those quests could not be finished.
+	/// upstream never did, so those quests could not be finished. A first delivery back to the giver hands nothing.
 	/// HearthDAoC: whispering AcceptText to the giver asks "Do you accept?" first (DataQuestOffers); the quest starts when the
 	/// player accepts, and the NPC says "Come back when you're ready." on a decline.
     /// For Kill and Search steps, StepItemTemplates can include a drop chance behind the template name.  Ex: |some_template_name;50|  
@@ -2369,8 +2369,9 @@ namespace DOL.GS.Quests
 		{
 			{
 				// HearthDAoC: a quest whose first step is a delivery never handed that step's item (nothing "begins" step 1),
-				// so 67 classic quests, among them the level 30 Regal Nobility, could not be finished (owner test 2026-10-09).
-				// Hand it before the quest starts; with no room the quest does not start.
+				// so 56 classic quests, among them the level 30 Regal Nobility, could not be finished (owner test 2026-10-09).
+				// Hand it before the quest starts; with no room the quest does not start. A first delivery back to the giver
+				// hands nothing: the giver wants the player to bring it (11 classic quests).
 				DbItemTemplate firstItem = null;
 				bool firstStepIsDelivery = m_stepTypes.Count > 0 && (m_stepTypes[0] == eStepType.Deliver || m_stepTypes[0] == eStepType.DeliverFinish);
 				if (firstStepIsDelivery)
@@ -2383,7 +2384,8 @@ namespace DOL.GS.Quests
 							.Select(i => i.Id_nb).ToList();
 					}
 
-					string firstTemplate = QuestDeliveryItems.FirstStepItem(true, m_stepItemTemplates, carried);
+					string firstTarget = m_targetNames.Count > 0 ? m_targetNames[0] : null;
+					string firstTemplate = QuestDeliveryItems.FirstStepItem(true, m_stepItemTemplates, carried, firstTarget, living?.Name);
 					if (firstTemplate != null)
 					{
 						if (!player.Inventory.IsSlotsFree(1, eInventorySlot.FirstBackpack, eInventorySlot.LastBackpack))
