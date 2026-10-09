@@ -324,8 +324,8 @@ SEED = {
         # A Caer Caledon guard stays.
         ("DOL.GS.Keeps.GuardStaticCaster", "Renegade Runemaster", 32475, 38015, 4106, 1539, 250, 507, 38, 0,
          "2022-06-21 20:04:28", "caledon-guard-23"),
-        # Thidranki's Hibernia portal keep (12): its hastener, the six casters on its walls (step 5 moves
-        # them) and its two fighters.
+        # Thidranki's Hibernia portal keep (12): its hastener beside its gate and the six casters on its walls
+        # (step 5 moves them), and its two fighters.
         ("DOL.GS.Keeps.FrontierHastener", "new mob", 19075, 19035, 4320, 3547, 252, 408, 1, 0, "2022-05-29 21:49:07",
          "802a1b0a-f47e-47b9-a688-e401ad33e42f"),
         ("DOL.GS.Keeps.GuardStaticCaster", "new mob", 16751, 18401, 4736, 946, 252, 408, 1, 0, "2022-05-29 21:48:07",
@@ -355,8 +355,8 @@ SEED = {
         ("DOL.GS.Keeps.GuardLord", "new mob", 32296, 38267, 4592, 1068, 252, 408, 1, 0, "2022-05-29 21:50:18",
          "863582fc-af9c-4661-8e60-4d8b2985ad2a"),
         # Upstream's guards of Dun Abermenai and Dun Murdaigean (two of each keep's): keep guards in 253 and
-        # 251, but in the central keep's area, so step 4 still adds the portal keep guards; and no casters,
-        # so step 5 adds its own.
+        # 251, but in the central keep's area, so step 4 still adds the portal keep guards; and no casters or
+        # hastener, so step 5 adds its own.
         ("DOL.GS.Keeps.GuardLord", "Renegade Chieftain Abermenai", 32880, 37637, 4937, 1722, 253, 700, 29, 0,
          "2026-10-07 06:32:18", "91c88f86-159d-486c-a374-a1b0c96ba3cc"),
         ("DOL.GS.Keeps.GuardArcher", "Renegade Ranger", 31879, 37912, 4137, 1349, 253, 342, 22, 0,
@@ -409,6 +409,12 @@ CASTERS = {
         ("b05f95a5-9e55-4ddf-93d0-340336bc2e16", 32718, 39019, 4136, 544),
         ("f1f1d987-1b9a-421b-a8a1-9df423f118fe", 31929, 38176, 4136, 1045),
     ],
+}
+# Step 5's hastener of each central keep: Thidranki's Hibernia portal keep hastener (the end of the new Mob_ID),
+# moved beside the central keep's outer gate (spec 7.3), then X, Y, Z, Heading.
+HASTENERS = {
+    253: ("802a1b0a-f47e-47b9-a688-e401ad33e42f", 33612, 39657, 3720, 3888),
+    251: ("802a1b0a-f47e-47b9-a688-e401ad33e42f", 32546, 37248, 3720, 1613),
 }
 # The guard and lord levels the server gives each central keep at keep Level 1 (spec 3.4), by KeepID.
 GUARD_LEVELS = {33: (21, 24), 11: (26, 31), 32: (31, 36), 31: (37, 44)}
@@ -488,6 +494,12 @@ def casters(region):
     return [(end, end, spot) for end, *spot in CASTERS[region]]
 
 
+def hastener(region):
+    """HASTENERS[region] as copies() takes it: the hastener copies its source."""
+    end, *spot = HASTENERS[region]
+    return [(end, end, spot)]
+
+
 def guard_levels(base_level, level, multiplier):
     """A central keep's guard and lord levels, as the server sets them (AbstractGameKeep.GetBaseLevel and
     SetGuardLevel: the byte cast rounds down)."""
@@ -512,7 +524,8 @@ class BattlegroundFixTests(unittest.TestCase):
         "Battlegrounds: keep levels for the ranges (Dun Abermenai base level 19, Thidranki Faste base level 24, "
         "Dun Murdaigean base level 29, Caer Caledon base level 35, 8 gates' health)",
         "Battlegrounds: portal keep guards and hasteners for Abermenai (11), Murdaigean (11)",
-        "Battlegrounds: wall casters for Dun Abermenai (6), Dun Murdaigean (6)",
+        "Battlegrounds: central keep guards for Dun Abermenai (6 wall casters, 1 hastener), "
+        "Dun Murdaigean (6 wall casters, 1 hastener)",
         "Battlegrounds: Atlas leftovers archived in fork_removed_mobs and removed (4 training dummies, "
         "3 Void Merchants, the stray Wizard); 2 saved battleground daily quests deleted",
     ]
@@ -523,7 +536,8 @@ class BattlegroundFixTests(unittest.TestCase):
         "_step2_names_and_xp": "BEFORE UPDATE OF Experience ON Zones WHEN OLD.ZoneID = 250",
         "_step3_keep_levels": "BEFORE UPDATE ON Door WHEN OLD.InternalID = 250000302",
         "_step4_portal_keep_guards": "BEFORE INSERT ON Mob WHEN NEW.Region = 251",
-        "_step5_wall_casters": "BEFORE INSERT ON Mob WHEN NEW.Mob_ID = 'hdc-bg251-ck-f1f1d987-1b9a-421b-a8a1-9df423f118fe'",
+        "_step5_central_keep_guards": "BEFORE INSERT ON Mob WHEN NEW.Mob_ID = "
+                                      "'hdc-bg251-ck-802a1b0a-f47e-47b9-a688-e401ad33e42f'",
         "_step6_atlas_leftovers": "BEFORE DELETE ON Quest",
     }
 
@@ -554,7 +568,8 @@ class BattlegroundFixTests(unittest.TestCase):
             "Battlegrounds: keep levels for the ranges (Dun Abermenai base level 19, Thidranki Faste base level 24, "
             "Dun Murdaigean base level 29, Caer Caledon base level 35, Caer Caledon back to level 1, 8 gates' health)",
             "Battlegrounds: portal keep guards and hasteners for Abermenai (11), Murdaigean (11)",
-            "Battlegrounds: wall casters for Dun Abermenai (6), Dun Murdaigean (6)",
+            "Battlegrounds: central keep guards for Dun Abermenai (6 wall casters, 1 hastener), "
+            "Dun Murdaigean (6 wall casters, 1 hastener)",
             "Battlegrounds: Atlas leftovers archived in fork_removed_mobs and removed (4 training dummies, "
             "3 Void Merchants, the stray Wizard); 2 saved battleground daily quests deleted",
         ])
@@ -589,15 +604,15 @@ class BattlegroundFixTests(unittest.TestCase):
                          [("125d80ca-f7b0-4b13-8340-d14d1c306a94",), ("caledon-guard-23",)])
         # Thidranki's 13 keep guard rows stay, and so do upstream's central keep guards. 253 and 251 each get a
         # copy of Thidranki's 11 portal keep rows on the same spots, although their central keeps have guards,
-        # and six wall casters on the spec's spots, every other column from the source.
+        # and six wall casters and a hastener on the spec's spots, every other column from the source.
         self.assertEqual(self.q("SELECT COUNT(*) FROM Mob WHERE Region=252"), [(13,)])
         self.assertEqual(self.q(f"SELECT COUNT(*) FROM Mob WHERE Mob_ID IN ({marks(4)}) AND LastTimeRowUpdated=?",
                                 UPSTREAM_CENTRAL_GUARDS + ("2026-10-07 06:32:18",)), [(4,)])
         for region in (253, 251):
             with self.subTest(region=region):
-                self.assertEqual(self.q("SELECT COUNT(*) FROM Mob WHERE Region=?", (region,)), [(2 + 11 + 6,)])
+                self.assertEqual(self.q("SELECT COUNT(*) FROM Mob WHERE Region=?", (region,)), [(2 + 11 + 7,)])
                 self.assertEqual(*copies(self.q, region, "pk", [(m, m, None) for m in PORTAL_KEEP_GUARDS], NOW))
-                self.assertEqual(*copies(self.q, region, "ck", casters(region), NOW))
+                self.assertEqual(*copies(self.q, region, "ck", casters(region) + hastener(region), NOW))
         self.assertEqual(self.q("SELECT Name FROM Quest"), [("DOL.GS.DailyQuest.Hibernia.CaptureKeepQuestHib",)])
         self.assertEqual(self.q("SELECT FixId, AppliedUtc FROM fork_world_fixes"), [("classic-battlegrounds-v2", NOW)])
 
@@ -655,18 +670,21 @@ class BattlegroundFixTests(unittest.TestCase):
                 "'120a1ccf-94e8-4420-bc72-05ec20390e44', '853682fd-1de2-4100-adb5-02f05c8ed7d1', "
                 "'27d30f96-e238-482d-b359-fc5387589108', 'ecb08ffb-cf86-47f1-a53b-28581a48666b')",
                 "DELETE FROM Quest WHERE Quest_ID='quest-cale'",
-                # A guard of the owner's at Abermenai's Hibernia portal keep, and a caster in Dun Murdaigean.
+                # A guard of the owner's at Abermenai's Hibernia portal keep, a caster in Dun Murdaigean and a
+                # hastener in Dun Abermenai.
                 "INSERT INTO Mob (ClassType, Name, X, Y, Z, Region, Mob_ID) VALUES ('DOL.GS.Keeps.GuardFighter', "
                 "'new mob', 19000, 19000, 4320, 253, 'owner-guard')",
                 "INSERT INTO Mob (ClassType, Name, X, Y, Z, Region, Mob_ID) VALUES ('DOL.GS.Keeps.GuardStaticCaster', "
-                "'new mob', 34000, 39000, 4137, 251, 'owner-caster')")
+                "'new mob', 34000, 39000, 4137, 251, 'owner-caster')",
+                "INSERT INTO Mob (ClassType, Name, X, Y, Z, Region, Mob_ID) VALUES ('DOL.GS.Keeps.FrontierHastener', "
+                "'new mob', 32000, 37500, 3721, 253, 'owner-hastener')")
         self.assertEqual(apply_fix(self.db), [
             "Battlegrounds: classic level and realm rank limits for Abermenai, Murdaigean, Caledonia",
             "Battlegrounds: no zone XP bonus in Caledonia",
             "Battlegrounds: keep levels for the ranges (Dun Murdaigean base level 29, Caer Caledon base level 35, "
             "4 gates' health)",
             "Battlegrounds: portal keep guards and hasteners for Murdaigean (11)",
-            "Battlegrounds: wall casters for Dun Abermenai (6)",
+            "Battlegrounds: central keep guards for Dun Abermenai (6 wall casters), Dun Murdaigean (1 hastener)",
             "Battlegrounds: Atlas leftovers archived in fork_removed_mobs and removed (1 training dummy, "
             "1 Void Merchant); 1 saved battleground daily quest deleted",
         ])
@@ -681,10 +699,11 @@ class BattlegroundFixTests(unittest.TestCase):
                                 "253000301, 253000302) ORDER BY InternalID"),
                          [(252000301, 6000), (252000302, 5200), (253000301, 3000), (253000302, 4200)])
         self.assertEqual(self.q("SELECT Name, Level FROM Mob WHERE Mob_ID='caledon-guard-25'"), [("Wizard", 50)])
-        # 253 gets no portal keep copies but its wall casters; 251 the other way round.
+        # 253 gets no portal keep copies but its wall casters; 251 the other way round. The casters and the
+        # hastener go by their own class: 253 gets no hastener, and 251 gets its hastener but no casters.
         self.assertEqual(self.q("SELECT COUNT(*) FROM Mob WHERE Mob_ID LIKE 'hdc-bg253-pk-%'"), [(0,)])
         self.assertEqual(*copies(self.q, 253, "ck", casters(253), NOW))
-        self.assertEqual(self.q("SELECT COUNT(*) FROM Mob WHERE Mob_ID LIKE 'hdc-bg251-ck-%'"), [(0,)])
+        self.assertEqual(*copies(self.q, 251, "ck", hastener(251), NOW))
         self.assertEqual(self.q("SELECT COUNT(*) FROM Mob WHERE Mob_ID LIKE 'hdc-bg251-pk-%'"), [(11,)])
         self.assertEqual(self.q("SELECT FixId FROM fork_world_fixes"), [("classic-battlegrounds-v2",)])
 
@@ -713,7 +732,7 @@ class BattlegroundFixTests(unittest.TestCase):
 
     def test_a_run_without_the_marker_adds_nothing_twice(self):
         # The owner removes one of Dun Abermenai's casters and deletes the marker: the next run finds every step
-        # done (the keep still has casters), changes nothing else and writes the marker again.
+        # done (the keep still has casters, and its hastener), changes nothing else and writes the marker again.
         self.assertEqual(apply_fix(self.db), self.LINES)
         caster = "hdc-bg253-ck-" + CASTERS[253][0][0]
         execute(self.db, f"DELETE FROM Mob WHERE Mob_ID='{caster}'", "DELETE FROM fork_world_fixes")
@@ -727,34 +746,44 @@ class BattlegroundFixTests(unittest.TestCase):
     def test_a_stray_copy_id_does_not_stop_the_fix(self):
         # A row of the owner's that already has one of step 4's or step 5's Mob_IDs (and is no keep guard) is
         # left as it is, the step adds the other copies, and the fix applies.
-        strays = ("hdc-bg253-pk-" + PORTAL_KEEP_GUARDS[0], "hdc-bg251-ck-" + CASTERS[251][0][0])
+        strays = ("hdc-bg253-pk-" + PORTAL_KEEP_GUARDS[0], "hdc-bg251-ck-" + CASTERS[251][0][0],
+                  "hdc-bg253-ck-" + HASTENERS[253][0])
         for stray in strays:
             execute(self.db, "INSERT INTO Mob (ClassType, Name, X, Y, Z, Region, Mob_ID) VALUES "
                              f"('DOL.GS.GameNPC', 'stray', 1, 2, 3, {stray[6:9]}, '{stray}')")
         lines = apply_fix(self.db)
         self.assertEqual(lines[3:5], ["Battlegrounds: portal keep guards and hasteners for Abermenai (10), Murdaigean (11)",
-                                      "Battlegrounds: wall casters for Dun Abermenai (6), Dun Murdaigean (5)"])
+                                      "Battlegrounds: central keep guards for Dun Abermenai (6 wall casters), "
+                                      "Dun Murdaigean (5 wall casters, 1 hastener)"])
         for stray in strays:
             self.assertEqual(self.q("SELECT ClassType, Name, X, Y, Z, Region FROM Mob WHERE Mob_ID=?", (stray,)),
                              [("DOL.GS.GameNPC", "stray", 1, 2, 3, int(stray[6:9]))])
         self.assertEqual(self.q("SELECT COUNT(*) FROM Mob WHERE Mob_ID LIKE 'hdc-bg253-pk-%'"), [(11,)])
-        self.assertEqual(self.q("SELECT COUNT(*) FROM Mob WHERE Mob_ID LIKE 'hdc-bg251-ck-%'"), [(6,)])
+        self.assertEqual(self.q("SELECT Region, COUNT(*) FROM Mob WHERE Mob_ID LIKE 'hdc-bg%-ck-%' GROUP BY Region"),
+                         [(251, 7), (253, 7)])
         self.assertEqual(self.q("SELECT FixId FROM fork_world_fixes"), [("classic-battlegrounds-v2",)])
 
-    def test_no_wall_casters_without_the_rows_they_are_made_from(self):
-        # Without a central keep's Keep row (here: in another region), or one of Thidranki's six wall casters,
-        # step 5 leaves that keep as it is. The fix still applies and writes its marker.
+    def test_no_central_keep_rows_without_the_rows_they_are_made_from(self):
+        # Without a central keep's Keep row (here: in another region), step 5 leaves that keep as it is. Without
+        # one of Thidranki's six wall casters, no keep gets casters, and without its hastener no keep gets a
+        # hastener; each time the other kind is still added. The fix still applies and writes its marker.
+        both = "Dun Murdaigean (6 wall casters, 1 hastener)"
         cases = [
-            ("DELETE FROM Keep WHERE KeepID=33", ["Battlegrounds: wall casters for Dun Murdaigean (6)"], [(251, 6)]),
-            ("UPDATE Keep SET Region=251 WHERE KeepID=33", ["Battlegrounds: wall casters for Dun Murdaigean (6)"],
-             [(251, 6)]),
-            ("DELETE FROM Mob WHERE Mob_ID='f1f1d987-1b9a-421b-a8a1-9df423f118fe'", [], []),
+            ("DELETE FROM Keep WHERE KeepID=33", ["Battlegrounds: central keep guards for " + both], [(251, 7)]),
+            ("UPDATE Keep SET Region=251 WHERE KeepID=33", ["Battlegrounds: central keep guards for " + both],
+             [(251, 7)]),
+            ("DELETE FROM Mob WHERE Mob_ID='f1f1d987-1b9a-421b-a8a1-9df423f118fe'",
+             ["Battlegrounds: central keep guards for Dun Abermenai (1 hastener), Dun Murdaigean (1 hastener)"],
+             [(251, 1), (253, 1)]),
+            ("DELETE FROM Mob WHERE Mob_ID='802a1b0a-f47e-47b9-a688-e401ad33e42f'",
+             ["Battlegrounds: central keep guards for Dun Abermenai (6 wall casters), Dun Murdaigean (6 wall casters)"],
+             [(251, 6), (253, 6)]),
         ]
         for n, (statement, lines, added) in enumerate(cases):
             with self.subTest(statement):
                 db = self.world(f"missing-{n}.db")
                 execute(db, statement)
-                self.assertEqual([x for x in apply_fix(db) if "wall casters" in x], lines)
+                self.assertEqual([x for x in apply_fix(db) if "central keep guards" in x], lines)
                 self.assertEqual(query(db, "SELECT Region, COUNT(*) FROM Mob WHERE Mob_ID LIKE 'hdc-bg%-ck-%' "
                                            "GROUP BY Region"), added)
                 self.assertEqual(query(db, "SELECT FixId FROM fork_world_fixes"), [("classic-battlegrounds-v2",)])
@@ -812,7 +841,8 @@ class BattlegroundShippedWorldTests(unittest.TestCase):
         "Battlegrounds: keep levels for the ranges (Dun Abermenai base level 19, Thidranki Faste base level 24, "
         "Dun Murdaigean base level 29, Caer Caledon base level 35, 8 gates' health)",
         "Battlegrounds: portal keep guards and hasteners for Abermenai (34), Murdaigean (34)",
-        "Battlegrounds: wall casters for Dun Abermenai (6), Dun Murdaigean (6)",
+        "Battlegrounds: central keep guards for Dun Abermenai (6 wall casters, 1 hastener), "
+        "Dun Murdaigean (6 wall casters, 1 hastener)",
         "Battlegrounds: Atlas leftovers archived in fork_removed_mobs and removed (15 training dummies, "
         "3 Void Merchants, the stray Wizard)",
     ]
@@ -930,7 +960,7 @@ class BattlegroundShippedWorldTests(unittest.TestCase):
         self.assertEqual(self.before(f"SELECT COUNT(*) FROM Mob m JOIN Keep k ON {self.AREA} AND k.BaseLevel >= 100 "
                                      "WHERE m.Region IN (251, 253) AND m.ClassType LIKE 'DOL.GS.Keeps.%'"), [(0,)])
         # Upstream's central keep guards: 26 in Dun Abermenai and 27 in Dun Murdaigean, each in its keep's area and
-        # in no other, and no casters among them (step 5's precondition).
+        # in no other, and no casters or hastener among them (step 5's preconditions).
         self.assertEqual(self.before(f"SELECT m.Region, k.KeepID, m.ClassType, COUNT(*) FROM Mob m JOIN Keep k ON {self.AREA} "
                                      f"WHERE {self.UPSTREAM_CENTRAL_GUARDS} GROUP BY 1, 2, 3 ORDER BY 1 DESC, 3"), [
             (253, 33, "DOL.GS.Keeps.GuardArcher", 4), (253, 33, "DOL.GS.Keeps.GuardCommander", 3),
@@ -943,16 +973,19 @@ class BattlegroundShippedWorldTests(unittest.TestCase):
         # No monster (upstream 0.35's GameNPC rows) stands in a keep area of 251 or 253.
         self.assertEqual(self.before(f"SELECT COUNT(*) FROM Mob m JOIN Keep k ON {self.AREA} WHERE m.Region IN (251, 253) "
                                      "AND m.ClassType='DOL.GS.GameNPC'"), [(0,)])
-        # Step 5: the Hibernia portal keep's six casters on its walls, "new mob" placeholders at level 1, model 408.
-        sources = [end for end, *_ in CASTERS[253]]
+        # Step 5: the Hibernia portal keep's six casters on its walls and its hastener beside its gate, "new mob"
+        # placeholders at level 1, model 408.
+        sources = [end for end, *_ in CASTERS[253]] + [HASTENERS[253][0]]
         self.assertEqual(self.before(f"SELECT Mob_ID, ClassType, Name, Region, Level, Model, X, Y, Z, Heading FROM Mob "
-                                     f"WHERE Mob_ID IN ({marks(6)}) ORDER BY Mob_ID", sources), [
+                                     f"WHERE Mob_ID IN ({marks(7)}) ORDER BY Mob_ID", sources), [
             ("2fc59f4b-0b0d-4efc-bf3b-93a1b01e681a", "DOL.GS.Keeps.GuardStaticCaster", "new mob", 252, 1, 408,
              18221, 19611, 4736, 3882),
             ("3a07da41-d088-4174-980f-1d5ad21fc334", "DOL.GS.Keeps.GuardStaticCaster", "new mob", 252, 1, 408,
              18069, 16884, 4736, 1861),
             ("62f874d0-333b-475f-a044-109cb0bd74b6", "DOL.GS.Keeps.GuardStaticCaster", "new mob", 252, 1, 408,
              16751, 18401, 4736, 946),
+            ("802a1b0a-f47e-47b9-a688-e401ad33e42f", "DOL.GS.Keeps.FrontierHastener", "new mob", 252, 1, 408,
+             19075, 19035, 4320, 3547),
             ("b05f95a5-9e55-4ddf-93d0-340336bc2e16", "DOL.GS.Keeps.GuardStaticCaster", "new mob", 252, 1, 408,
              18598, 17320, 4736, 2478),
             ("be8e2cbf-6569-4c46-a4aa-d84903a902fc", "DOL.GS.Keeps.GuardStaticCaster", "new mob", 252, 1, 408,
@@ -1006,9 +1039,9 @@ class BattlegroundShippedWorldTests(unittest.TestCase):
         self.assertEqual(len(removed), 19)
         self.assertEqual(self.after(f"SELECT {mob}, FixId, RemovedUtc FROM fork_removed_mobs ORDER BY Mob_ID"),
                          [row + ("classic-battlegrounds-v2", NOW) for row in removed])
-        # 19 removed; 34 portal keep rows and 6 wall casters added in each of 253 and 251.
+        # 19 removed; 34 portal keep rows, 6 wall casters and a hastener added in each of 253 and 251.
         self.assertEqual(self.after("SELECT COUNT(*) FROM Mob")[0][0],
-                         self.before("SELECT COUNT(*) FROM Mob")[0][0] - 19 + 2 * (34 + 6))
+                         self.before("SELECT COUNT(*) FROM Mob")[0][0] - 19 + 2 * (34 + 6 + 1))
         self.assertEqual(self.after("SELECT FixId, AppliedUtc FROM fork_world_fixes"), [("classic-battlegrounds-v2", NOW)])
         # Step 4: in 253 and 251, a copy of each of Thidranki's 34 portal keep rows, on the same spot.
         sources = [(m, m, None) for (m,) in self.before(f"SELECT Mob_ID FROM Mob WHERE {self.PORTAL_KEEP_GUARDS}")]
@@ -1026,10 +1059,10 @@ class BattlegroundShippedWorldTests(unittest.TestCase):
         finally:
             conn.close()
 
-    def test_wall_casters(self):
+    def test_wall_casters_and_hastener(self):
         for region in (253, 251):
             with self.subTest(region=region):
-                self.assertEqual(*copies(self.after, region, "ck", casters(region), NOW))
+                self.assertEqual(*copies(self.after, region, "ck", casters(region) + hastener(region), NOW))
 
     def test_guard_levels(self):
         # The levels the server gives the central keeps' guards and lords from their Keep rows (spec 3.4):
@@ -1042,17 +1075,18 @@ class BattlegroundShippedWorldTests(unittest.TestCase):
     def test_every_guard_stands_in_its_keep_area(self):
         # The server gives every keep an area (keeps/KeepArea.cs), and a guard belongs to the keep whose area
         # holds it. Every new row stands in exactly one area of its region: a portal keep copy in that portal
-        # keep's, a wall caster in its central keep's. So does every one of upstream's central keep guards.
+        # keep's, a wall caster or a hastener in its central keep's. So does every one of upstream's central keep
+        # guards.
         self.assertEqual(self.after(f"SELECT m.Region, k.KeepID, substr(m.Mob_ID, 11, 2), COUNT(*) FROM Mob m "
                                     f"JOIN Keep k ON {self.AREA} WHERE m.Mob_ID LIKE 'hdc-bg%' "
                                     f"GROUP BY m.Region, k.KeepID, substr(m.Mob_ID, 11, 2) ORDER BY m.Region DESC, k.KeepID"), [
-            (253, 33, "ck", 6), (253, 35, "pk", 11), (253, 36, "pk", 11), (253, 37, "pk", 12),
-            (251, 32, "ck", 6), (251, 41, "pk", 11), (251, 42, "pk", 11), (251, 43, "pk", 12),
+            (253, 33, "ck", 7), (253, 35, "pk", 11), (253, 36, "pk", 11), (253, 37, "pk", 12),
+            (251, 32, "ck", 7), (251, 41, "pk", 11), (251, 42, "pk", 11), (251, 43, "pk", 12),
         ])
         self.assertEqual(self.after(f"SELECT m.Mob_ID FROM Mob m WHERE (m.Mob_ID LIKE 'hdc-bg%' OR "
                                     f"{self.UPSTREAM_CENTRAL_GUARDS}) AND "
                                     f"(SELECT COUNT(*) FROM Keep k WHERE {self.AREA}) <> 1"), [])
-        self.assertEqual(self.after("SELECT COUNT(*) FROM Mob WHERE Mob_ID LIKE 'hdc-bg%'"), [(80,)])
+        self.assertEqual(self.after("SELECT COUNT(*) FROM Mob WHERE Mob_ID LIKE 'hdc-bg%'"), [(82,)])
 
     def test_door_check(self):
         # Spec 3.2, "Check": each region's Hibernia portal keep doors, moved like the casters, land on its central
@@ -1096,13 +1130,41 @@ class BattlegroundShippedWorldTests(unittest.TestCase):
                                     "AND Z BETWEEN 4100 AND 4200", (region,))
                 self.assertEqual(min(z for _, _, z in walls), 4137)
                 self.assertLessEqual(max(z for _, _, z in walls), 4154)
-                spots = self.after("SELECT substr(Mob_ID, 14), X, Y, Z FROM Mob WHERE Mob_ID LIKE ?",
-                                   (f"hdc-bg{region}-ck-%",))
+                spots = self.after("SELECT substr(Mob_ID, 14), X, Y, Z FROM Mob WHERE Mob_ID LIKE ? AND ClassType=?",
+                                   (f"hdc-bg{region}-ck-%", battlegrounds.CASTER_CLASS))
                 self.assertEqual({z for _, _, _, z in spots}, {4136})
                 near = sorted(mob_id for mob_id, x, y, _ in spots
                               if min(math.hypot(x - x2, y - y2) for x2, y2, _ in walls) <= 100)
                 self.assertEqual(near, expected[region])
 
+    def test_hasteners_stand_beside_the_outer_gate(self):
+        # Each central keep's hastener stands on the floor (Z 3720) beside its outer gate, on the same side. Measured
+        # from the outer gate door (000301), with u along the line from the inner gate door (000302) out through
+        # it and v across that line: Caer Caledon's at (-93, 233), Thidranki Faste's at (44, 206), and the moved
+        # ones at (-15, 260) in Dun Murdaigean and (-28, 241) in Dun Abermenai. (The Keep rows cannot show this:
+        # the four share one spot and heading, while the client draws a different model, or one turned, in each.)
+        spots = {}
+        for region in (250, 251, 252, 253):
+            (outer,), (inner,) = (self.after("SELECT X, Y FROM Door WHERE InternalID=?", (region * 1000000 + door,))
+                                  for door in (301, 302))
+            ((x, y, z),) = self.after(f"SELECT m.X, m.Y, m.Z FROM Mob m JOIN Keep k ON {self.AREA} AND k.BaseLevel < 100 "
+                                      "WHERE m.Region=? AND m.ClassType='DOL.GS.Keeps.FrontierHastener'", (region,))
+            angle = math.atan2(outer[1] - inner[1], outer[0] - inner[0])
+            dx, dy = x - outer[0], y - outer[1]
+            spots[region] = (round(dx * math.cos(angle) + dy * math.sin(angle)),
+                             round(dy * math.cos(angle) - dx * math.sin(angle)), z)
+        self.assertEqual(spots, {250: (-93, 233, 3720), 251: (-15, 260, 3720), 252: (44, 206, 3720),
+                                 253: (-28, 241, 3720)})
+        # The nearest of upstream's guards is one of its gate fighters, 65 and 60 units away. (Upstream's own
+        # guards at the same height stand at least 152 apart.)
+        for region, distance in ((251, 65), (253, 60)):
+            with self.subTest(region=region):
+                ((x, y),) = self.after("SELECT X, Y FROM Mob WHERE Mob_ID=?", (f"hdc-bg{region}-ck-{HASTENERS[region][0]}",))
+                guards = self.after(f"SELECT ClassType, X, Y FROM Mob m WHERE Region=? AND {self.UPSTREAM_CENTRAL_GUARDS}",
+                                    (region,))
+                nearest = min(guards, key=lambda guard: math.hypot(guard[1] - x, guard[2] - y))
+                self.assertEqual((nearest[0], round(math.hypot(nearest[1] - x, nearest[2] - y))),
+                                 ("DOL.GS.Keeps.GuardFighter", distance))
 
 if __name__ == "__main__":
     unittest.main()

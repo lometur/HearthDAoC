@@ -108,7 +108,8 @@ class FixesTests(unittest.TestCase):
             "Battlegrounds: keep levels for the ranges (Dun Abermenai base level 19, Thidranki Faste base level 24, "
             "Dun Murdaigean base level 29, Caer Caledon base level 35, 8 gates' health)",
             "Battlegrounds: portal keep guards and hasteners for Abermenai (34), Murdaigean (34)",
-            "Battlegrounds: wall casters for Dun Abermenai (6), Dun Murdaigean (6)",
+            "Battlegrounds: central keep guards for Dun Abermenai (6 wall casters, 1 hastener), "
+            "Dun Murdaigean (6 wall casters, 1 hastener)",
             "Battlegrounds: Atlas leftovers archived in fork_removed_mobs and removed (15 training dummies, "
             "3 Void Merchants, the stray Wizard)",
         ])

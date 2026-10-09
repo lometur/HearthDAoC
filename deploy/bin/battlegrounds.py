@@ -11,7 +11,7 @@ v2 is for upstream's 0.35 world. Every world the 0.35 image runs is a fresh 0.35
 and hdc upgrade-world start from upstream's clean world, without the fork tables), so v2 expects 0.35's
 values, not 0.34's (v1). 0.35 ships central keeps of its own in Abermenai and Murdaigean, Dun Abermenai
 (KeepID 33) and Dun Murdaigean (KeepID 32), with their guards; the fork keeps them and only levels them
-for the ranges and adds its wall casters.
+for the ranges and adds its wall casters and a hastener.
 
 Each step changes a value only while it still holds upstream's value (the keep Level reset in step 3 is
 the exception, as the spec requires), adds rows only where none of their kind are there yet, and adds
@@ -22,8 +22,8 @@ one line to the result when it changed something:
    for their ranges and keep Level 1, and their gates (closed already) the matching full health;
 4. the portal keeps of Abermenai and Murdaigean, which have no guards, get a copy of Thidranki's portal
    keep guards and hasteners (all four battlegrounds share one map and the same portal keep spots);
-5. Dun Abermenai and Dun Murdaigean get six casters on their walls: Thidranki's Hibernia portal keep
-   casters, moved onto the central keep model (moved());
+5. Dun Abermenai and Dun Murdaigean get six casters on their walls and a hastener beside their gate:
+   Thidranki's Hibernia portal keep casters and hastener, moved onto the central keep model (moved());
 6. Atlas's leftovers go: training dummies, Void Merchants and a stray Wizard (archived first in the
    fork table fork_removed_mobs), and saved quests of the deleted battleground daily quest classes.
 """
@@ -84,19 +84,27 @@ KEEP_RADIUS = 3000
 PORTAL_KEEP_SOURCE = (252, (12, 13, 14))   # region, KeepIDs
 KEEP_GUARD_CLASSES = ("DOL.GS.Keeps.FrontierHastener", "DOL.GS.Keeps.GuardFighter", "DOL.GS.Keeps.GuardStaticCaster")
 PORTAL_KEEP_TARGETS = (253, 251)
-# Step 5, by region: upstream's central keep (KeepID) that gets the wall casters, and its name.
+# Step 5, by region: upstream's central keep (KeepID) that gets the wall casters and the hastener, and its name.
 CENTRAL_KEEPS = {253: (33, "Dun Abermenai"), 251: (32, "Dun Murdaigean")}
 CASTER_CLASS = "DOL.GS.Keeps.GuardStaticCaster"
-# Thidranki's Hibernia portal keep casters, on the walls of its model (Z 4736): moved onto a central keep.
+HASTENER_CLASS = "DOL.GS.Keeps.FrontierHastener"
+# Thidranki's Hibernia portal keep rows that stand on its model, moved onto a central keep: its six casters on
+# the walls (Z 4736), and its hastener beside the outer gate (on the floor, Z 4320).
 WALL_CASTERS = ("62f874d0-333b-475f-a044-109cb0bd74b6", "be8e2cbf-6569-4c46-a4aa-d84903a902fc",
                 "3a07da41-d088-4174-980f-1d5ad21fc334", "2fc59f4b-0b0d-4efc-bf3b-93a1b01e681a",
                 "b05f95a5-9e55-4ddf-93d0-340336bc2e16", "f1f1d987-1b9a-421b-a8a1-9df423f118fe")
+HASTENER = "802a1b0a-f47e-47b9-a688-e401ad33e42f"
+# Each kind is added on its own: only when all its rows are there and the keep's area has no row of its class
+# yet. (class, source Mob_IDs, the result line's word for one, for more)
+CENTRAL_ROWS = ((CASTER_CLASS, WALL_CASTERS, "wall caster", "wall casters"),
+                (HASTENER_CLASS, (HASTENER,), "hastener", "hasteners"))
 
 # Step 5, the move (spec 3.2): a spot on Thidranki's Hibernia portal keep model goes onto a central keep
 # model. P is the portal keep model's origin. By region, C is the central model's origin and the angle
 # (degrees, from +X towards +Y) is how far that model is turned from the portal keep's. The central
 # keep's floor is FLOOR_DROP lower (3720 against 4320, from the door rows), so a caster on the portal keep's
-# walls (4736) stands at 4136 on the central keep's, where upstream 0.35 puts its own wall-top guards (4137).
+# walls (4736) stands at 4136 on the central keep's, where upstream 0.35 puts its own wall-top guards (4137),
+# and the hastener (4320) at 3720, beside the outer gate, where upstream's gate guards stand at 3719 to 3746.
 P = (18048, 18176)
 FLOOR_DROP = 600
 MOVES = {253: ((33152, 38400), 30), 251: ((33408, 38272), 190)}
@@ -220,28 +228,20 @@ def _step4_portal_keep_guards(conn, now):
     return "Battlegrounds: portal keep guards and hasteners for " + ", ".join(items) if items else None
 
 
-def _step5_wall_casters(conn, now):
+def _step5_central_keep_guards(conn, now):
     items = []
     for region, (keep_id, name) in CENTRAL_KEEPS.items():
         keep = conn.execute("SELECT X, Y FROM Keep WHERE KeepID=? AND Region=?", (keep_id, region)).fetchone()
-        sources = {mob_id: conn.execute("SELECT X, Y, Z, Heading FROM Mob WHERE Mob_ID=?", (mob_id,)).fetchone()
-                   for mob_id in WALL_CASTERS}
-        if keep is None or None in sources.values():
-            continue  # the keep or a row the casters are made from is missing: leave this region as it is
-        if conn.execute("SELECT 1 FROM Mob WHERE Region=? AND ClassType=? AND (X-?)*(X-?) + (Y-?)*(Y-?) <= ?",
-                        (region, CASTER_CLASS, keep[0], keep[0], keep[1], keep[1], KEEP_RADIUS * KEEP_RADIUS)).fetchone():
-            continue  # the keep has casters already: the owner's, or an earlier run's
-        added = 0
-        for mob_id, spot in sources.items():
-            new_id = f"hdc-bg{region}-ck-{mob_id}"
-            x, y, z, heading = moved(region, *spot)
-            added += _copy_mobs(conn, {"Region": ("?", region), "Mob_ID": ("?", new_id),
-                                       "LastTimeRowUpdated": ("?", now), "X": ("?", x), "Y": ("?", y),
-                                       "Z": ("?", z), "Heading": ("?", heading)},
-                                "m.Mob_ID=? AND NOT EXISTS (SELECT 1 FROM Mob WHERE Mob_ID=?)", (mob_id, new_id))
+        if keep is None:
+            continue  # the keep is missing: leave this region as it is
+        added = []
+        for class_type, sources, one, many in CENTRAL_ROWS:
+            n = _move_onto_central_keep(conn, now, region, keep, class_type, sources)
+            if n:
+                added.append(_count(n, one, many))
         if added:
-            items.append(f"{name} ({added})")
-    return "Battlegrounds: wall casters for " + ", ".join(items) if items else None
+            items.append(f"{name} (" + ", ".join(added) + ")")
+    return "Battlegrounds: central keep guards for " + ", ".join(items) if items else None
 
 
 def _step6_atlas_leftovers(conn, now):
@@ -266,7 +266,7 @@ def _step6_atlas_leftovers(conn, now):
 
 
 STEPS = (_step1_battleground_rows, _step2_names_and_xp, _step3_keep_levels, _step4_portal_keep_guards,
-         _step5_wall_casters, _step6_atlas_leftovers)
+         _step5_central_keep_guards, _step6_atlas_leftovers)
 
 
 def _archive(conn, now, where, params):
@@ -276,6 +276,28 @@ def _archive(conn, now, where, params):
     conn.execute(f"INSERT INTO {ARCHIVE_TABLE} ({names}, FixId, RemovedUtc) "
                  f"SELECT {names}, ?, ? FROM Mob WHERE {where}", (FIX_ID, now, *params))
     return conn.execute(f"DELETE FROM Mob WHERE {where}", params).rowcount
+
+
+def _move_onto_central_keep(conn, now, region, keep, class_type, sources):
+    """Add a copy of each source row (all of class_type), moved onto region's central keep model, whose Keep row
+    stands at keep (X, Y). Adds nothing when a source row is missing or the keep's area has a class_type row
+    already (the owner's, or an earlier run's), and each copy only if its Mob_ID is free. Returns how many."""
+    spots = {mob_id: conn.execute("SELECT X, Y, Z, Heading FROM Mob WHERE Mob_ID=?", (mob_id,)).fetchone()
+             for mob_id in sources}
+    if None in spots.values():
+        return 0
+    if conn.execute("SELECT 1 FROM Mob WHERE Region=? AND ClassType=? AND (X-?)*(X-?) + (Y-?)*(Y-?) <= ?",
+                    (region, class_type, keep[0], keep[0], keep[1], keep[1], KEEP_RADIUS * KEEP_RADIUS)).fetchone():
+        return 0
+    added = 0
+    for mob_id, spot in spots.items():
+        new_id = f"hdc-bg{region}-ck-{mob_id}"
+        x, y, z, heading = moved(region, *spot)
+        added += _copy_mobs(conn, {"Region": ("?", region), "Mob_ID": ("?", new_id),
+                                   "LastTimeRowUpdated": ("?", now), "X": ("?", x), "Y": ("?", y),
+                                   "Z": ("?", z), "Heading": ("?", heading)},
+                            "m.Mob_ID=? AND NOT EXISTS (SELECT 1 FROM Mob WHERE Mob_ID=?)", (mob_id, new_id))
+    return added
 
 
 def _copy_mobs(conn, replace, where, params):
