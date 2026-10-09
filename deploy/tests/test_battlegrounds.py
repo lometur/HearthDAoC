@@ -616,6 +616,19 @@ class BattlegroundFixTests(unittest.TestCase):
         self.assertEqual(self.q("SELECT Name FROM Quest"), [("DOL.GS.DailyQuest.Hibernia.CaptureKeepQuestHib",)])
         self.assertEqual(self.q("SELECT FixId, AppliedUtc FROM fork_world_fixes"), [("classic-battlegrounds-v2", NOW)])
 
+    def test_a_keep_put_back_to_level_1_gets_level_1_gate_health(self):
+        # As the server does after a capture (OnKeepTaken). Here an upgrade carried Dun Abermenai at level 4, its
+        # outer gate at level 4's full health, its inner gate damaged and open.
+        execute(self.db, "UPDATE Keep SET Level=4 WHERE KeepID=33",
+                "UPDATE Door SET Health=15200 WHERE InternalID=253000301",
+                "UPDATE Door SET Health=2000, State=0 WHERE InternalID=253000302")
+        self.assertIn("Battlegrounds: keep levels for the ranges (Dun Abermenai base level 19, Thidranki Faste base "
+                      "level 24, Dun Murdaigean base level 29, Caer Caledon base level 35, Dun Abermenai back to level 1, "
+                      "7 gates' health)", apply_fix(self.db))
+        self.assertEqual(self.q("SELECT InternalID, Health, State FROM Door WHERE InternalID IN (253000301, 253000302) "
+                                "ORDER BY InternalID"), [(253000301, 3800, 1), (253000302, 2000, 0)])
+        self.assertEqual(self.q("SELECT Level, BaseLevel FROM Keep WHERE KeepID=33"), [(1, 19)])
+
     def test_second_run_changes_nothing(self):
         self.assertEqual(apply_fix(self.db), self.LINES)
         before = dump(self.db)
