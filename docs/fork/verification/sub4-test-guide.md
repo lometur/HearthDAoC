@@ -12,6 +12,7 @@ start: the server log has a line starting `Epic chains: Guild of Shadows 60 link
 | `/epic goto` | Jumps to the current stage's map marker, or to the next step's giver. |
 | `/epic reset` | Removes every step of the chain, active and finished. |
 | `/player level <n>` | Sets your target's level (target yourself to level yourself). |
+| `/jump to <x> <y> <z> <region>` | Teleports you to a spot (the spec's coordinates are zone-local; `/epic goto` is easier). |
 | `/item create <template id>` | Makes an item, to check a reward's stats. |
 
 Use a character of one of the five classes: Infiltrator, Mercenary, Cabalist, Necromancer or Reaver.
@@ -43,7 +44,7 @@ is closed. At 11, Shades and Shadows from Carys, then 15 from your Camelot train
 - With `/xp off`, a quest that gives XP can't be finished (upstream's rule): "Your XP is turned off, you must turn it
   on to complete this quest!".
 - Another line: a Defenders of Albion character (Armsman, Scout, Friar or Theurgist) at 48 with only 43 finished
-  isn't offered "Feast of the Decadent" 48 (`/epic` says it needs the 45).
+  isn't offered "Feast of the Decadent" 48 (`/epic` lists the 45's quest numbers it waits for).
 - `/item create` each class's new rewards (the `cq_alb_…` ids in `deploy/bin/epic_chains_data.json`) and check the
   stats against `docs/fork/specs/2026-10-09-epic-chains-design.md`, section 4.
 - Class locks: game masters skip them, so use a player account. Give a Mercenary an Infiltrator's reward (for example
