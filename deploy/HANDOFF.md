@@ -100,6 +100,11 @@ set the owner's split, one row at a time:
 For example, `./hdc stop && ./hdc bot-goals set 20-49 20 20 30 30`, then the other two rows the same
 way, then `./hdc up`.
 
+**Duplicate townspeople.** Upstream's world has two copies of Ley Manton and of Tria Ellowis at the same
+spot (the merchant and a plain NPC). At every start, a plain copy standing exactly on its merchant is removed
+and kept in `fork_removed_mobs` (FixId `duplicate-townspeople`); `./hdc logs` shows `Duplicate townspeople
+removed`. Nothing else is touched, and a world without the copies is left alone.
+
 **Classic battlegrounds.** At its first start, a world gets the classic battlegrounds (Abermenai 15-19,
 Thidranki 20-24, Murdaigean 25-29, Caledonia 30-35); `./hdc logs` shows each change on a line starting
 `Battlegrounds:`. This runs once per world: the row `classic-battlegrounds-v2` in the world's

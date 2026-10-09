@@ -9,10 +9,13 @@
    has nowhere to enter the world. Add one, at the Inconnu Disciples' spot in the Shrouded Isles.
 3. The welcome messages players see (motd, starting_msg) name Offline DAoC and describe a world to play
    alone. Replace upstream's texts with HearthDAoC's.
-4. The classic battlegrounds (levels 15 to 35, as in the Shrouded Isles era): battlegrounds.py, once per
+4. Upstream's 0.35 world has two Mob rows at the same spot for two Albion townspeople, Ley Manton and Tria
+   Ellowis: the merchant and a plain GameNPC copy of it, so players see two identical NPCs. Remove the plain
+   copy (archived first in the fork table fork_removed_mobs), only where the merchant is still at its spot.
+5. The classic battlegrounds (levels 15 to 35, as in the Shrouded Isles era): battlegrounds.py, once per
    world (the marker classic-battlegrounds-v2 in fork_world_fixes). It runs last, under its own
    savepoint: if it fails, it undoes only itself and prints why, and the fixes above are still saved.
-5. The epic chains (sub-project 4): epic_chains.py, once per world (the marker epic-chains-v1), after the
+6. The epic chains (sub-project 4): epic_chains.py, once per world (the marker epic-chains-v1), after the
    battlegrounds and under its own savepoint like them: upstream's Guild of Shadows chain in order and complete, the
    real level-50 "Lord of Deceit", and every guild line's steps in order.
 
@@ -28,6 +31,11 @@ import battlegrounds
 import epic_chains
 
 DISCIPLE, SARACEN, INCONNU = 20, 4, 13
+
+# Step 4: the townspeople whose plain copy stands on their merchant, and the archive of the removed rows.
+DUPLICATE_TOWNSPEOPLE = ("Ley Manton", "Tria Ellowis")
+DUPLICATES_FIX_ID = "duplicate-townspeople"
+ARCHIVE_TABLE = battlegrounds.ARCHIVE_TABLE
 
 # Upstream's texts (its ServerProperties.cs defaults, as stored in its worlds), and what replaces them.
 UPSTREAM_WELCOME = {
@@ -65,6 +73,30 @@ def without_classes(value, ids):
     return ";".join(out)
 
 
+def remove_duplicate_townspeople(conn, now):
+    """Remove the plain GameNPC copy of Ley Manton and Tria Ellowis where a GameMerchant of the same name stands at
+    exactly its spot (Name, Region, X, Y, Z), keeping the copy in the archive table. Returns the names removed."""
+    have = {name for _, name, *_ in conn.execute('PRAGMA table_info("Mob")')}
+    if not {"Mob_ID", "Name", "ClassType", "ItemsListTemplateID", "Region", "X", "Y", "Z"} <= have:
+        return []  # no Mob table, or not upstream's
+    marks = ", ".join("?" * len(DUPLICATE_TOWNSPEOPLE))
+    where = (f"Name IN ({marks}) AND ClassType='DOL.GS.GameNPC' AND COALESCE(ItemsListTemplateID, '') = '' "
+             "AND EXISTS (SELECT 1 FROM Mob m WHERE m.ClassType='DOL.GS.GameMerchant' AND m.Name=Mob.Name "
+             "AND m.Region=Mob.Region AND m.X=Mob.X AND m.Y=Mob.Y AND m.Z=Mob.Z)")
+    names = [r[0] for r in conn.execute(f"SELECT Name FROM Mob WHERE {where} ORDER BY Name, Mob_ID", DUPLICATE_TOWNSPEOPLE)]
+    if not names:
+        return []
+    # The same archive as battlegrounds.py's (the Mob columns, FixId, RemovedUtc); it may not exist yet.
+    columns = ", ".join(f'"{name}" {declared}' for _, name, declared, *_ in conn.execute('PRAGMA table_info("Mob")'))
+    conn.execute(f"CREATE TABLE IF NOT EXISTS {ARCHIVE_TABLE} ({columns}, FixId TEXT NOT NULL, RemovedUtc TEXT NOT NULL)")
+    archive = {name for _, name, *_ in conn.execute(f'PRAGMA table_info("{ARCHIVE_TABLE}")')}
+    cols = ", ".join(f'"{name}"' for _, name, *_ in conn.execute('PRAGMA table_info("Mob")') if name in archive)
+    conn.execute(f"INSERT INTO {ARCHIVE_TABLE} ({cols}, FixId, RemovedUtc) SELECT {cols}, ?, ? FROM Mob WHERE {where}",
+                 (DUPLICATES_FIX_ID, now, *DUPLICATE_TOWNSPEOPLE))
+    conn.execute(f"DELETE FROM Mob WHERE {where}", DUPLICATE_TOWNSPEOPLE)
+    return sorted(set(names))
+
+
 def apply(db):
     """Apply the fixes that are still needed; returns a description of each change."""
     changes = []
@@ -94,6 +126,9 @@ def apply(db):
                     renamed.append(key)
             if renamed:
                 changes.append("Welcome messages now name HearthDAoC (%s)" % ", ".join(renamed))
+            removed = remove_duplicate_townspeople(conn, _now())
+            if removed:
+                changes.append("Duplicate townspeople removed, archived in %s: %s" % (ARCHIVE_TABLE, ", ".join(removed)))
             changes.extend(battlegrounds.apply(conn, _now()))
             changes.extend(epic_chains.apply(conn, _now()))
     finally:
