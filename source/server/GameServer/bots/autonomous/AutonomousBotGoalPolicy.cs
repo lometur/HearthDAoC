@@ -53,7 +53,9 @@ public static class AutonomousBotGoalPolicy
         if (!AutonomousObjectiveAssignments.IsBetweenPveTasks(record) &&
             !Allows(record.Level, AutonomousObjectiveAssignments.Parse(record.ObjectiveKind)))
         {
-            record.ObjectiveKind = Choose(record.Level).ToString();
+            // HearthDAoC: a record at or over its battleground's realm rank cap gets no battleground goal.
+            record.ObjectiveKind = Choose(record.Level,
+                excludeBattlegrounds: !HearthDAoC.ClassicBattlegroundsScript.RecordFitsItsBattleground(record)).ToString();
             record.ObjectiveAssignmentId = string.Empty;
             record.ObjectiveAssignedUtc = record.ObjectiveExpiresUtc = string.Empty;
             record.CurrentCampId = record.TargetName = record.TravelDestination = string.Empty;

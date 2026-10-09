@@ -35,6 +35,7 @@ BOTS = os.path.join(GAME_SERVER, "bots", "autonomous")
 OBJECTIVE_ASSIGNMENTS = os.path.join(BOTS, "AutonomousObjectiveAssignments.cs")
 BOT_CONTROLLER = os.path.join(BOTS, "AutonomousWorldBotController.cs")
 BOT_BATTLEGROUND = os.path.join(BOTS, "AutonomousWorldBotController.Battleground.cs")
+GOAL_POLICY = os.path.join(BOTS, "AutonomousBotGoalPolicy.cs")
 FORK_CODE = os.path.join(GAME_SERVER, "scripts", "hearthdaoc")
 
 PORTER_CALL = "PortLocation = HearthDAoC.ClassicBattlegroundsScript.PorterDestination(this, player);"
@@ -146,6 +147,14 @@ class ClassicBattlegroundSourceTests(unittest.TestCase):
         self.assertIn("HearthDAoC.ClassicBattlegroundsScript.BotOverCap(bot, bracket.RegionId) is string overCap", travel)
         self.assertLess(travel.index("BotOverCap("), travel.index("TravelToBattleground("))
 
+    def test_saved_records_get_no_battleground_goal_over_the_cap(self):
+        # ReconcileSavedAssignment re-rolls a disabled saved goal before the bot enters the world, without Assign.
+        text = read(GOAL_POLICY)
+        reconcile = between(text, "public static bool ReconcileSavedAssignment(", "record.ObjectiveAssignmentId = string.Empty;")
+        self.assertIn("// HearthDAoC:", reconcile)
+        self.assertIn("record.ObjectiveKind = Choose(record.Level,\n                excludeBattlegrounds: "
+                      "!HearthDAoC.ClassicBattlegroundsScript.RecordFitsItsBattleground(record)).ToString();", reconcile)
+
     def test_every_bot_trip_into_a_battleground_is_capped(self):
         # TravelToBattleground is the bots' only way in (a realm teleporter's [Battlegrounds] choice). If a sync
         # adds a caller, check that it keeps the cap and add it here.
@@ -174,6 +183,7 @@ class ClassicBattlegroundSourceTests(unittest.TestCase):
         self.assertEqual(calls, {
             "OFTeleporters.cs": 3,
             "BattlegroundTeleportOptions.cs": 1,
+            "AutonomousBotGoalPolicy.cs": 1,
             "AutonomousObjectiveAssignments.cs": 2,
             "AutonomousWorldBotController.Battleground.cs": 1,
             "AutonomousWorldBotController.cs": 2,

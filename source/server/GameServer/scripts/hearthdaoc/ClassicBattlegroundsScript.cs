@@ -13,11 +13,12 @@ namespace DOL.GS.HearthDAoC;
 
 // HearthDAoC: the game wiring of the classic battlegrounds. The frontier porter (OFTeleporter) asks
 // PorterDestination where a character wearing the battlegrounds medallion goes, and the realm teleporters'
-// [Battlegrounds] choice asks RealmRankRefusal; the gamebots ask BotFits, PartyFits, BotOverCap and
-// BotFitsItsBattleground before a battleground goal or trip; a character over its battleground's limit is
-// moved out at logout and, after a link death or a crash, a moment after its next login; and a captured
-// central keep goes back to level 1. ClassicBattlegrounds makes every decision; this class reads the
-// battleground rows and the character's state and carries out the outcome.
+// [Battlegrounds] choice asks RealmRankRefusal; the gamebots ask BotFits, PartyFits, BotOverCap,
+// BotFitsItsBattleground and RecordFitsItsBattleground before a battleground goal or trip;
+// a character over its battleground's limit is moved out at logout and, after a link death or a crash, a
+// moment after its next login; and a captured central keep goes back to level 1. ClassicBattlegrounds
+// makes every decision; this class reads the battleground rows and the character's state and carries out
+// the outcome.
 public static class ClassicBattlegroundsScript
 {
     private static readonly Logger Log = LoggerManager.Create(typeof(ClassicBattlegroundsScript));
@@ -94,7 +95,7 @@ public static class ClassicBattlegroundsScript
         catch (Exception ex)
         {
             // Closed on an error: the bot does something else.
-            LogBotError(bot, ex);
+            LogBotError(bot?.Name, ex);
             return "The battleground's realm rank cap could not be checked";
         }
     }
@@ -116,14 +117,26 @@ public static class ClassicBattlegroundsScript
     // one). Strict: a bot already inside gets no new battleground goal either.
     public static bool BotFitsItsBattleground(GameBot bot)
     {
+        return FitsItsBattleground(bot.Level, RealmLevel(bot), bot.Name);
+    }
+
+    // The same for a saved bot record before the bot enters the world (AutonomousBotGoalPolicy's
+    // ReconcileSavedAssignment, when it picks a new goal for the record).
+    public static bool RecordFitsItsBattleground(OfflineWorldBotRecord record)
+    {
+        return FitsItsBattleground(record.Level, AutonomousBotRealmPointRewards.RealmLevelFor(record.RealmPoints), record.Name);
+    }
+
+    private static bool FitsItsBattleground(int level, int realmLevel, string name)
+    {
         try
         {
-            BattlegroundBrackets.Bracket own = BattlegroundBrackets.ForLevel(bot.Level);
-            return own == null || ClassicBattlegrounds.BotFits(Bracket(own.RegionId), RealmLevel(bot));
+            BattlegroundBrackets.Bracket own = BattlegroundBrackets.ForLevel(level);
+            return own == null || ClassicBattlegrounds.BotFits(Bracket(own.RegionId), realmLevel);
         }
         catch (Exception ex)
         {
-            LogBotError(bot, ex);
+            LogBotError(name, ex);
             return false;
         }
     }
@@ -143,10 +156,10 @@ public static class ClassicBattlegroundsScript
     // Bots ask on their AI turns, so a broken row would log on every turn: only the first error is logged.
     private static int _botErrorLogged;
 
-    private static void LogBotError(GameLiving bot, Exception ex)
+    private static void LogBotError(string name, Exception ex)
     {
         if (Interlocked.Exchange(ref _botErrorLogged, 1) == 0)
-            Log.Error($"Classic battlegrounds: could not check {bot?.Name}'s realm rank for a battleground (logged once)", ex);
+            Log.Error($"Classic battlegrounds: could not check {name}'s realm rank for a battleground (logged once)", ex);
     }
 
     // The Keep Manager loads the battleground rows before the scripts' Loaded event (GameServer.Start).
