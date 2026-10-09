@@ -120,7 +120,7 @@ namespace DOL.GS.Quests.Midgard
 
 			if (npcs.Length > 0)
 				foreach (GameNPC npc in npcs)
-					if (npc.CurrentRegionID == 100 && npc.X == 803559 && npc.Y == 723329 /* HearthDAoC: where the quest creates it */)
+					if (npc.CurrentRegionID == 100 && Math.Abs(npc.X - 803559) <= 2000 && Math.Abs(npc.Y - 723329) <= 2000 /* HearthDAoC: near where the quest creates it, so a world copy is used, not doubled */)
 					{
 						Danica = npc;
 						break;

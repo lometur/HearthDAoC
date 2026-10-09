@@ -68,12 +68,28 @@ LOOKUPS = (
 
 
 def lookup_and_creation(text, name, var):
-    """((lookup X, Y), (creation X, Y)) of the NPC's block in a level-50 quest."""
+    """((lookup X, Y), (creation X, Y), (radius X, Y)) of the NPC's block in a level-50 quest."""
     block = text[text.index(f'GetNPCsByName("{name}"'):]
-    found = re.search(r"npc\.X == (\d+) && npc\.Y == (\d+)", block)
+    found = re.search(r"Math\.Abs\(npc\.X - (\d+)\) <= (\d+) && Math\.Abs\(npc\.Y - (\d+)\) <= (\d+)", block)
     x = re.search(rf"\b{var}\.X = (\d+);", block)
     y = re.search(rf"\b{var}\.Y = (\d+);", block)
-    return (found.group(1), found.group(2)), (x.group(1), y.group(1))
+    return (found.group(1), found.group(3)), (x.group(1), y.group(1)), (found.group(2), found.group(4))
+
+
+@unittest.skipUnless(TEST_WORLD, "needs HDC_TEST_WORLD (a clean classic world database)")
+class EpicLookupWorldTests(unittest.TestCase):
+    # The world's own copies of the level-50 NPCs are within the quests' lookup box, so the quests use them.
+    def test_the_worlds_npcs_are_found_by_their_quests(self):
+        conn = sqlite3.connect(f"file:{TEST_WORLD}?mode=ro", uri=True)
+        try:
+            for rel, name, var in LOOKUPS:
+                (cx, cy), _made, (rx, ry) = lookup_and_creation(read(os.path.join(GAME_SERVER, rel)), name, var)
+                for x, y in conn.execute("SELECT X, Y FROM Mob WHERE Name=?", (name,)):
+                    with self.subTest(name=name):
+                        self.assertLessEqual(abs(x - int(cx)), int(rx))
+                        self.assertLessEqual(abs(y - int(cy)), int(ry))
+        finally:
+            conn.close()
 
 
 class EpicSourceTests(unittest.TestCase):
@@ -82,11 +98,12 @@ class EpicSourceTests(unittest.TestCase):
         for path in pathlib.Path(GAME_SERVER).rglob("*.cs"):
             self.assertNotIn("class Shadows_50", read(str(path)), str(path))
 
-    def test_each_level_50_quest_finds_its_npc_where_it_creates_it(self):
+    def test_each_level_50_quest_finds_its_npc_near_where_it_creates_it(self):
         for rel, name, var in LOOKUPS:
             with self.subTest(rel):
-                found, made = lookup_and_creation(read(os.path.join(GAME_SERVER, rel)), name, var)
+                found, made, radius = lookup_and_creation(read(os.path.join(GAME_SERVER, rel)), name, var)
                 self.assertEqual(found, made)
+                self.assertEqual(radius, ("2000", "2000"))
 
     def test_the_four_files_keep_their_crlf_endings(self):
         for rel, _name, _var in LOOKUPS:

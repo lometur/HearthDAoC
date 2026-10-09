@@ -111,7 +111,7 @@ namespace DOL.GS.Quests.Albion
 
 			if (npcs.Length > 0)
 				foreach (GameNPC npc in npcs)
-					if (npc.CurrentRegionID == 1 && npc.X == 559461 && npc.Y == 510653 /* HearthDAoC: where the quest creates it */)
+					if (npc.CurrentRegionID == 1 && Math.Abs(npc.X - 559461) <= 2000 && Math.Abs(npc.Y - 510653) <= 2000 /* HearthDAoC: near where the quest creates it, so a world copy is used, not doubled */)
 					{
 						Ferowl = npc;
 						break;
