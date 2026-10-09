@@ -26,6 +26,20 @@
     {"ids": [20172], "column": "SourceText", "replace": [["[Blood Encrusted Whip], [Kiss of Death], [Sap of Lost Will], [Bloodletter], [Flail of Fallen Graces], [Blood Encrusted Flail].", "[Blood Encrusted Whip], [Sap of Lost Will], [Bloodletter], [Flail of Fallen Graces]."]]},
     {"ids": [21489, 21490, 21491, 21492, 21493, 21494], "column": "SourceText", "replace": [["Let this (reward) be", "Let this reward be"], ["(prof name)", "the Guild of Shadows"], ["(class name)", "<Class>"]]}
   ],
+  "level50": {
+    "name": "Lord of Deceit",
+    "start_name": "Captain Rhodri",
+    "start_region": 1,
+    "accept": "deceit",
+    "description": "<Player>, Sir Tilian's notes on the seer's journal leave no doubt. The hand behind the Ellyll and the Arawnites belongs to Lord Elidyn, the Lord of Deceit, who holds the old Ellyll ruins on the hill in the Pennine Mountains. Put an end to his [deceit].",
+    "steps": ["Slay Lord Elidyn, the Lord of Deceit, in the Ellyll ruins on the hill in the Pennine Mountains.", "Return to Captain Rhodri at the Snowdonia border keep."],
+    "step_types": [0, 5],
+    "targets": ["Lord Elidyn;1", "Captain Rhodri;1"],
+    "finish": "Lord Elidyn is dead, and his lies with him. Sir Bors will hear of this before nightfall. Take this armour, <Class>; the Guild of Shadows makes it only for its finest.",
+    "armour": ["Helm", "Vest", "Arms", "Gloves", "Legs", "Boots"]
+  },
+  "camp": {"region": 1, "x": 568158, "y": 404718, "radius": 1500, "names": ["Lord Elidyn", "Ellyll guard", "ellyl hero"]},
+  "old_quest": "DOL.GS.Quests.Albion.Shadows_50",
   "items": [
     {"Id_nb": "cq_alb_sleeves_of_might", "Name": "Sleeves of Might", "Level": 7, "Durability": 50000, "MaxDurability": 50000, "Condition": 50000, "MaxCondition": 50000, "Quality": 100, "DPS_AF": 18, "SPD_ABS": 19, "Hand": 0, "Type_Damage": 0, "Object_Type": 34, "Item_Type": 28, "Color": 0, "Weight": 20, "Model": 83, "Bonus": 1, "Bonus1": 4, "Bonus2": 6, "Bonus3": 0, "Bonus4": 0, "Bonus1Type": 1, "Bonus2Type": 10, "Bonus3Type": 0, "Bonus4Type": 0, "SpellID": 0, "Charges": 0, "MaxCharges": 0, "ProcChance": 0, "ProcSpellID": 0, "IsPickable": 1, "IsDropable": 1, "CanDropAsLoot": 0, "IsTradable": 0, "Price": 0, "MaxCount": 1, "PackSize": 1, "Realm": 1, "AllowedClasses": "11", "PackageID": "HearthDAoC", "BonusLevel": 3, "LevelRequirement": 0, "Description": "Classic quest reward (Traveler's Way -- Supply Run)"},
     {"Id_nb": "cq_alb_silvered_cap_of_the_intuit", "Name": "Silvered Cap of the Intuit", "Level": 7, "Durability": 50000, "MaxDurability": 50000, "Condition": 50000, "MaxCondition": 50000, "Quality": 100, "DPS_AF": 9, "SPD_ABS": 0, "Hand": 0, "Type_Damage": 0, "Object_Type": 32, "Item_Type": 21, "Color": 0, "Weight": 10, "Model": 822, "Bonus": 1, "Bonus1": 1, "Bonus2": 3, "Bonus3": 6, "Bonus4": 1, "Bonus1Type": 21, "Bonus2Type": 2, "Bonus3Type": 5, "Bonus4Type": 9, "SpellID": 0, "Charges": 0, "MaxCharges": 0, "ProcChance": 0, "ProcSpellID": 0, "IsPickable": 1, "IsDropable": 1, "CanDropAsLoot": 0, "IsTradable": 0, "Price": 0, "MaxCount": 1, "PackSize": 1, "Realm": 1, "AllowedClasses": "13", "PackageID": "HearthDAoC", "BonusLevel": 0, "LevelRequirement": 0, "Description": "Classic quest reward (Traveler's Way -- Supply Run)"},

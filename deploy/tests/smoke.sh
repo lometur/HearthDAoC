@@ -56,6 +56,10 @@ echo "ok - the server finds its data files (classic-quests.json, classic-quest-g
 [[ "$(docker exec "$NAME" sqlite3 /data/world/opendaoc.sqlite3.db "SELECT COUNT(*) FROM StartupLocation WHERE ClassID=20 AND RaceID=4")" == 1 ]] \
     || fail "Saracen Disciples have no starting location"
 echo "ok - Disciple enabled and Saracen Disciples have a starting location"
+logs_have "Epic chains: Guild of Shadows 60 links" || fail "the epic chains world fix did not run"
+[[ "$(docker exec "$NAME" sqlite3 "$db" "SELECT COUNT(*) FROM DataQuest WHERE ID IN (990509, 990511, 990512, 990513, 990519)")" == 5 ]] \
+    || fail "the level-50 Lord of Deceit quests are missing"
+echo "ok - the epic chains world fix ran (level-50 quests in the world)"
 docker exec "$NAME" python3 /app/tools/accounts/accounts.py --db "$db" create smoketest Sm0keTest >/dev/null || fail "account create"
 docker stop -t 120 "$NAME" >/dev/null
 logs_have "| DOL.GS.GameServer | Stopped" || fail "no clean save on docker stop"

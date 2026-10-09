@@ -12,6 +12,9 @@
 4. The classic battlegrounds (levels 15 to 35, as in the Shrouded Isles era): battlegrounds.py, once per
    world (the marker classic-battlegrounds-v2 in fork_world_fixes). It runs last, under its own
    savepoint: if it fails, it undoes only itself and prints why, and the fixes above are still saved.
+5. The epic chains (sub-project 4): epic_chains.py, once per world (the marker epic-chains-v1), after the
+   battlegrounds and under its own savepoint like them: upstream's Guild of Shadows chain in order and complete, the
+   real level-50 "Lord of Deceit", and every guild line's steps in order.
 
 All of them only apply when needed and leave anything the owner set themselves alone.
 """
@@ -22,6 +25,7 @@ import sqlite3
 import sys
 
 import battlegrounds
+import epic_chains
 
 DISCIPLE, SARACEN, INCONNU = 20, 4, 13
 
@@ -91,6 +95,7 @@ def apply(db):
             if renamed:
                 changes.append("Welcome messages now name HearthDAoC (%s)" % ", ".join(renamed))
             changes.extend(battlegrounds.apply(conn, _now()))
+            changes.extend(epic_chains.apply(conn, _now()))
     finally:
         conn.close()
     return changes

@@ -112,8 +112,12 @@ class FixesTests(unittest.TestCase):
             "Dun Murdaigean (6 wall casters, 1 hastener)",
             "Battlegrounds: Atlas leftovers archived in fork_removed_mobs and removed (15 training dummies, "
             "3 Void Merchants, the stray Wizard)",
+            "Epic chains: Guild of Shadows 60 links, 60 XP and coin, 4 Supply Runs closed, 2 rewards and 7 texts "
+            "fixed; 87 other links; 41 items added, 36 item fixes; 5 level-50 quests, Lord Elidyn's camp 17 restored; "
+            "Shadows_50: 0 finished carried, 0 removed, 0 epic vests recharged",
         ])
-        self.assertEqual(self.q("SELECT FixId FROM fork_world_fixes"), [("classic-battlegrounds-v2",)])
+        self.assertEqual(self.q("SELECT FixId FROM fork_world_fixes"),
+                         [("classic-battlegrounds-v2",), ("epic-chains-v1",)])
         self.assertEqual(self.q("SELECT Value FROM ServerProperty WHERE `Key`='disabled_classes'"), [("33;34;39;58-62",)])
         self.assertEqual(self.q("SELECT RaceID FROM StartupLocation WHERE ClassID=20 ORDER BY RaceID"), [(1,), (4,), (13,)])
         self.assertEqual(dict(self.q("SELECT `Key`, Value FROM ServerProperty WHERE `Key` IN ('motd', 'starting_msg')")),

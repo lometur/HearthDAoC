@@ -22,6 +22,10 @@ epic_chains_data.json, beside this file.
 6. Texts: the Reaver's level-40 list without the two weapons that don't exist; the level-30 speech's source tags.
 7. Items: the missing rewards and level-40 weapons, inserted where missing; fixes to existing rows (the level-50
    armour, upstream's broken rewards, every Guild of Shadows reward locked to its class).
+8. The five level-50 quests ("Lord of Deceit", given by Captain Rhodri after the class's 48), and Lord Elidyn's camp
+   copied back from upstream's archive (offline_classic165_removed_mobs), Mob_IDs kept.
+9. Old Shadows_50 progress: a finished one becomes the character's finished level-50 step (no second armour set),
+   any other is removed; epic vests in inventories with no charges get the template's.
 """
 import datetime
 import json
@@ -240,7 +244,71 @@ def _items(conn, now, data):
     return {"items": added, "fixes": fixed}
 
 
-STEPS = (_gos_links, _pin_names, _close_supply_runs, _pay, _rewards, _texts, _items)
+def _level50(conn, now, data):
+    quest, steps = data["level50"], data["steps"]
+    step = steps["50"]
+    stages = len(quest["steps"])
+    xp, money = pay_lists(stages, step)
+    empty = "|".join([""] * stages)
+    added = 0
+    for col, (class_name, class_id) in enumerate(data["classes"].items()):
+        qid = step["ids"][col]
+        if conn.execute("SELECT 1 FROM DataQuest WHERE ID=?", (qid,)).fetchone():
+            continue
+        armour = "|".join(f"{class_name}Epic{piece}" for piece in quest["armour"])
+        dependency = "|".join(_entry(steps, link, col) for link in step["links"])
+        conn.execute(
+            "INSERT INTO DataQuest (ID, Name, StartType, StartName, StartRegionID, AcceptText, Description, SourceName, "
+            "SourceText, StepType, StepText, StepItemTemplates, AdvanceText, TargetName, TargetText, CollectItemTemplate, "
+            "MaxCount, MinLevel, MaxLevel, RewardMoney, RewardXP, RewardCLXP, RewardRP, RewardBP, "
+            "OptionalRewardItemTemplates, FinalRewardItemTemplates, FinishText, QuestDependency, AllowedClasses, "
+            "ClassType, LastTimeRowUpdated) "
+            "VALUES (?, ?, 0, ?, ?, ?, ?, '', ?, ?, ?, ?, ?, ?, ?, ?, 1, 50, 50, ?, ?, '', '', '', '', ?, ?, ?, ?, ?, ?)",
+            (qid, quest["name"], quest["start_name"], quest["start_region"], quest["accept"], quest["description"], empty,
+             "|".join(map(str, quest["step_types"])), "|".join(quest["steps"]), empty, empty, "|".join(quest["targets"]),
+             empty, empty, money, xp, armour, quest["finish"], dependency, str(class_id), CLASSIC, now))
+        added += 1
+    return {"level50": added, "camp": _camp(conn, data["camp"])}
+
+
+def _camp(conn, camp):
+    """Copy the camp's archived rows back into Mob (kept in the archive); rows already in Mob are skipped."""
+    columns = ", ".join(f'"{name}"' for _, name, *_ in conn.execute('PRAGMA table_info("Mob")'))
+    names = [name.lower() for name in camp["names"]]
+    x, y, radius = camp["x"], camp["y"], camp["radius"]
+    return conn.execute(
+        f"INSERT INTO Mob ({columns}) SELECT {columns} FROM {ARCHIVE} WHERE Region=? "
+        f"AND (X-?)*(X-?) + (Y-?)*(Y-?) <= ? AND lower(Name) IN ({', '.join('?' * len(names))}) "
+        f"AND Mob_ID NOT IN (SELECT Mob_ID FROM Mob)",
+        (camp["region"], x, x, y, y, radius * radius, *names)).rowcount
+
+
+def _old_shadows_50(conn, now, data):
+    by_class = dict(zip(data["classes"].values(), data["steps"]["50"]["ids"]))
+    carried = removed = 0
+    for quest_id, character, step, class_id in conn.execute(
+            "SELECT q.Quest_ID, q.Character_ID, q.Step, c.Class FROM Quest q "
+            "LEFT JOIN DOLCharacters c ON c.DOLCharacters_ID = q.Character_ID WHERE q.Name=?",
+            (data["old_quest"],)).fetchall():
+        target = by_class.get(class_id)
+        if step == -2 and target is not None:  # -2: finished (AbstractQuest.FinishQuest)
+            if not conn.execute("SELECT 1 FROM CharacterXDataQuest WHERE Character_ID=? AND DataQuestID=?",
+                                (character, target)).fetchone():
+                conn.execute("INSERT INTO CharacterXDataQuest (Character_ID, DataQuestID, Step, Count, LastTimeRowUpdated) "
+                             "VALUES (?, ?, 0, 1, ?)", (character, target, now))
+            carried += 1
+        else:
+            removed += 1
+        conn.execute("DELETE FROM Quest WHERE Quest_ID=?", (quest_id,))
+    vests = data["vests"]
+    recharged = conn.execute(
+        f"UPDATE Inventory SET Charges=?, LastTimeRowUpdated=? "
+        f"WHERE ITemplate_Id IN ({', '.join('?' * len(vests['ids']))}) AND Charges=0",
+        (vests["Charges"], now, *vests["ids"])).rowcount
+    return {"carried": carried, "removed": removed, "vests": recharged}
+
+
+STEPS = (_gos_links, _pin_names, _close_supply_runs, _pay, _rewards, _texts, _items, _level50, _old_shadows_50)
 
 
 def _now():

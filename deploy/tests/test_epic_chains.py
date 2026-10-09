@@ -100,7 +100,7 @@ CLASSIC = "DOL.GS.Quests.ClassicQuestStep"
 NOW = "2026-10-09 12:00:00"
 # The clean 0.35 world's summary line. Tasks 6 and 7 update it as they add steps.
 SUMMARY = ("Epic chains: Guild of Shadows 60 links, 60 XP and coin, 4 Supply Runs closed, 2 rewards and 7 texts fixed; "
-           "87 other links; 41 items added, 36 item fixes; 0 level-50 quests, Lord Elidyn's camp 0 restored; "
+           "87 other links; 41 items added, 36 item fixes; 5 level-50 quests, Lord Elidyn's camp 17 restored; "
            "Shadows_50: 0 finished carried, 0 removed, 0 epic vests recharged")
 # Every other line's steps pinned on the clean 0.35 world: (name, level) -> rows (spec 2.5).
 EXPECTED_PINS = {
@@ -422,6 +422,52 @@ class EpicWorldTests(unittest.TestCase):
                 self.assertNotIn(allowed, ("", "0"))
                 self.assertTrue(class_ids <= {int(c) for c in allowed.split(";")}, allowed)
 
+    def test_50_opens_after_48_and_closes_the_chain(self):
+        upto = ["7", "11", "15", "20", "25", "30", "40", "43", "45"]
+        for col, name in enumerate(self.data["classes"]):
+            with self.subTest(name):
+                self.assertEqual(self.open_steps(col, upto), ["48"])
+                self.assertEqual(self.open_steps(col, upto + ["48"]), ["50"])
+                self.assertEqual(self.open_steps(col, upto + ["48", "50"]), [])
+
+    def test_the_level_50_quests(self):
+        for col, (name, class_id) in enumerate(self.data["classes"].items()):
+            qid = LEVEL_50_IDS[col]
+            row = self.after[qid]
+            with self.subTest(name):
+                self.assertEqual(
+                    {k: row[k] for k in ("Name", "StartType", "StartName", "StartRegionID", "AcceptText", "MaxCount",
+                                         "MinLevel", "MaxLevel", "StepType", "TargetName", "RewardXP", "RewardMoney",
+                                         "QuestDependency", "AllowedClasses", "ClassType")},
+                    {"Name": "Lord of Deceit", "StartType": 0, "StartName": "Captain Rhodri", "StartRegionID": 1,
+                     "AcceptText": "deceit", "MaxCount": 1, "MinLevel": 50, "MaxLevel": 50, "StepType": "0|5",
+                     "TargetName": "Lord Elidyn;1|Captain Rhodri;1", "RewardXP": "0|0", "RewardMoney": "0|5000",
+                     "QuestDependency": f"#{self.data['steps']['48']['ids'][col]}", "AllowedClasses": str(class_id),
+                     "ClassType": CLASSIC})
+                armour = row["FinalRewardItemTemplates"].split("|")
+                self.assertEqual(armour, [f"{name}Epic{p}" for p in ("Helm", "Vest", "Arms", "Gloves", "Legs", "Boots")])
+                for item in armour:
+                    self.assertTrue(self.conn.execute("SELECT 1 FROM ItemTemplate WHERE Id_nb=?", (item,)).fetchone(), item)
+                self.assertIn("[deceit]", row["Description"])
+                self.assertEqual(len(row["StepText"].split("|")), 2)
+                self.assertTrue(row["FinishText"])
+
+    def test_lord_elidyns_camp_is_back(self):
+        camp = rows(self.conn, f"SELECT * FROM Mob WHERE Region=1 AND (X-568158)*(X-568158)+(Y-404718)*(Y-404718) <= 2250000 "
+                               f"AND lower(Name) IN ('lord elidyn', 'ellyll guard', 'ellyl hero')")
+        names = sorted(r["Name"].lower() for r in camp)
+        self.assertEqual(names, ["ellyl hero"] * 2 + ["ellyll guard"] * 14 + ["lord elidyn"])
+        archived = {r["Mob_ID"]: r for r in rows(self.conn, "SELECT * FROM offline_classic165_removed_mobs")}
+        for row in camp:
+            self.assertEqual(row, {k: v for k, v in archived[row["Mob_ID"]].items() if k in row})  # copied as archived
+        self.assertIn(LORD_ELIDYN, {r["Mob_ID"] for r in camp})
+
+    def test_the_extra_quest_file_names_the_level_50_quests_and_lord_elidyn(self):
+        with open(EXTRA_QUESTS, encoding="utf-8") as f:
+            extra = json.load(f)
+        self.assertEqual(sorted(int(k) for k in extra["Quests"]), sorted(self.data["steps"]["50"]["ids"]))
+        self.assertTrue(self.conn.execute("SELECT 1 FROM Mob WHERE Mob_ID=?", (extra["QuestMonsterIds"][0],)).fetchone())
+
 
 def world_digest(conn):
     """Every row of the tables the fix touches, as one comparable value."""
@@ -484,6 +530,52 @@ class EpicSafetyTests(unittest.TestCase):
                          ("Their Ring",))
         self.assertEqual(self.conn.execute("SELECT SpellID, Charges FROM ItemTemplate WHERE Id_nb='ReaverEpicVest'").fetchone(),
                          (999, 1))
+
+
+@unittest.skipUnless(TEST_WORLD, "needs HDC_TEST_WORLD (a clean classic world database)")
+class EpicCharacterTests(unittest.TestCase):
+    """Characters' old Shadows_50 and epic vests (spec 2.6, 3.4 step 9), and a camp row already back."""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.db = os.path.join(self.tmp.name, "world.db")
+        shutil.copyfile(TEST_WORLD, self.db)
+        self.conn = sqlite3.connect(self.db)
+        for cid, name, cls in (("char-inf", "Shadowa", 9), ("char-rea", "Reavo", 19), ("char-mer", "Merco", 11)):
+            self.conn.execute("INSERT INTO DOLCharacters (DOLCharacters_ID, Name, Class, Realm, Level) VALUES (?, ?, ?, 1, 50)",
+                              (cid, name, cls))
+        old = "DOL.GS.Quests.Albion.Shadows_50"
+        for qid, cid, step in (("q1", "char-inf", -2), ("q2", "char-rea", -2), ("q3", "char-mer", 1)):
+            self.conn.execute("INSERT INTO Quest (Quest_ID, Name, Step, Character_ID) VALUES (?, ?, ?, ?)", (qid, old, step, cid))
+        self.conn.execute("INSERT INTO CharacterXDataQuest (Character_ID, DataQuestID, Step, Count) VALUES ('char-rea', 990519, 0, 1)")
+        for iid, template, charges in (("i1", "ReaverEpicVest", 0), ("i2", "InfiltratorEpicVest", 2), ("i3", "ReaverEpicHelm", 0)):
+            self.conn.execute("INSERT INTO Inventory (Inventory_ID, OwnerID, ITemplate_Id, SlotPosition, Charges) VALUES (?, 'char-rea', ?, 40, ?)",
+                              (iid, template, charges))
+        self.conn.commit()
+
+    def tearDown(self):
+        self.conn.close()
+        self.tmp.cleanup()
+
+    def test_a_finished_shadows_50_becomes_the_finished_level_50_step(self):
+        result = epic_chains.apply(self.conn, NOW)
+        self.assertIn("Shadows_50: 2 finished carried, 1 removed, 1 epic vests recharged", result[0])
+        self.assertEqual(self.conn.execute("SELECT COUNT(*) FROM Quest WHERE Name LIKE '%Shadows_50'").fetchone(), (0,))
+        done = sorted(self.conn.execute("SELECT Character_ID, DataQuestID, Step, Count FROM CharacterXDataQuest").fetchall())
+        self.assertEqual(done, [("char-inf", 990509, 0, 1), ("char-rea", 990519, 0, 1)])
+
+    def test_only_empty_epic_vests_get_charges(self):
+        epic_chains.apply(self.conn, NOW)
+        charges = dict(self.conn.execute("SELECT Inventory_ID, Charges FROM Inventory WHERE Inventory_ID IN ('i1','i2','i3')"))
+        self.assertEqual(charges, {"i1": 3, "i2": 2, "i3": 0})
+
+    def test_a_camp_row_already_back_is_not_copied_twice(self):
+        columns = ", ".join(f'"{name}"' for _, name, *_ in self.conn.execute('PRAGMA table_info("Mob")'))
+        self.conn.execute(f"INSERT INTO Mob ({columns}) SELECT {columns} FROM offline_classic165_removed_mobs WHERE Mob_ID=?",
+                          (LORD_ELIDYN,))
+        result = epic_chains.apply(self.conn, NOW)
+        self.assertIn("Lord Elidyn's camp 16 restored", result[0])
+        self.assertEqual(self.conn.execute("SELECT COUNT(*) FROM Mob WHERE Mob_ID=?", (LORD_ELIDYN,)).fetchone(), (1,))
 
 
 if __name__ == "__main__":
