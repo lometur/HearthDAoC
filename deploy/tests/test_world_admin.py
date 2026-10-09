@@ -436,6 +436,12 @@ class CarryRvrCommandTests(unittest.TestCase):
             self.assertEqual(f.read(), archived_before)
         self.assertEqual(sorted(os.listdir(self.data)), ["archive", "backups", "world", "world.json"])  # no copy left
 
+    def test_a_world_database_can_be_named_by_its_path(self):
+        archived = self.archive("world-20261001-090000")
+        counts, _ = world_admin.carry_rvr_from_archive(self.data, archived, log=QUIET)
+        self.assertEqual(counts["Keep"], 3)
+        self.assertEqual(test_carry_rvr.query(self.db, "SELECT Realm FROM Keep WHERE KeepID=50"), [(2,)])
+
     def test_the_report_names_what_was_not_carried(self):
         archived = self.archive("world-20261001-090000")
         test_carry_rvr.execute(archived, "UPDATE Keep SET Name='Caer Gone' WHERE KeepID=50")
