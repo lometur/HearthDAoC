@@ -158,10 +158,12 @@ now?" From Steam, the question is a window (with `zenity`); in a terminal, answe
   `~/Games/HearthDAoC/hearthdaoc-client.conf`). From Steam, a window shows its progress. It rebuilds
   `~/Games/HearthDAoC/client` (about 45 MB more to download), replaces `~/Games/HearthDAoC/patches`
   with the new release's patches, applies them and writes a new `play.sh`, which then starts the
-  game. Your saved login and your Steam shortcut stay.
+  game. It builds the new client next to the old one and swaps it in only when everything worked.
+  Your saved login and your Steam shortcut stay.
 - **No** starts the game as it is. The next start asks again.
 - If the update fails, you get a warning that says what failed (in a window, from Steam), and the
-  game starts with the release you have. The next start offers the update again. See Troubleshooting.
+  game starts with the release you have, unchanged. The next start offers the update again. See
+  Troubleshooting.
 - Offline, or when GitHub doesn't answer within 5 seconds, the game just starts.
 - Without a terminal and without `zenity`, `play.sh` can't ask. It warns that an update is out, and
   starts the game. Run `~/Games/HearthDAoC/play.sh` from a terminal to answer.

@@ -24,9 +24,10 @@ die() { tell error "$@"; exit 1; }
 # Updates. setup.sh saved its settings and the installed release in hearthdaoc-client.conf (read here,
 # never run). At each launch, play.sh asks GitHub for the newest release, for 5 seconds at most. When it is
 # newer, it asks the player first. Yes downloads the release's client bundle and runs its setup.sh with the
-# saved settings, then starts the new play.sh. No, or a failed update, plays this release, and the next
-# launch asks again. HEARTHDAOC_NO_UPDATE=1 turns the check off. An install without a saved release
-# (setup.sh from a checkout, or from an older bundle) never checks.
+# saved settings, then starts the new play.sh. No, or a failed update, plays this release (setup.sh changes
+# the install only once everything worked), and the next launch asks again. HEARTHDAOC_NO_UPDATE=1 turns
+# the check off. An install without a saved release (setup.sh from a checkout, or from an older bundle)
+# never checks.
 CONF="$HERE/hearthdaoc-client.conf"
 RELEASES="${HEARTHDAOC_RELEASES_URL:-https://github.com/lometur/HearthDAoC/releases}"
 RELEASE_TAG='^v[0-9]+(\.[0-9]+)*[a-z]?-hearth\.[0-9]+$'  # as deploy/release_tag.py

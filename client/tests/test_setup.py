@@ -51,8 +51,26 @@ def saved_settings(dest):
 
 
 def leftovers(dest):
-    """Files setup.sh writes before renaming them into place: none may stay."""
-    return [name for name in os.listdir(dest) if name.endswith(".new")]
+    """What setup.sh builds beside the install (.new) or keeps until it is done (.old): none may stay."""
+    return [name for name in os.listdir(dest) if name.endswith((".new", ".old"))]
+
+
+def snapshot(folder):
+    """{relative path: (inode, mtime, size)} of every file under folder: any write changes it."""
+    out = {}
+    for parent, _dirs, names in os.walk(folder):
+        for name in names:
+            st = os.stat(os.path.join(parent, name))
+            out[os.path.relpath(os.path.join(parent, name), folder)] = (st.st_ino, st.st_mtime_ns, st.st_size)
+    return out
+
+
+def install_state(dest):
+    """Everything a setup.sh run changes in <dest>: the client, the patches, play.sh and the settings."""
+    with open(os.path.join(dest, CONF), encoding="utf-8") as f:
+        conf = f.read()
+    return (snapshot(os.path.join(dest, "client")), snapshot(os.path.join(dest, "patches")),
+            os.stat(os.path.join(dest, "play.sh")).st_ino, conf)
 
 
 def make_base(directory, files):
@@ -66,7 +84,7 @@ def make_base(directory, files):
     return base
 
 
-def run_setup(script, directory, base, lock, *extra, cwd=None):
+def run_setup(script, directory, base, lock, *extra, cwd=None, env=None):
     """Run setup.sh with lock (part URLs pointing at a RangeServer); return (dest, result)."""
     lock_path = os.path.join(directory, "upstream.lock")
     with open(lock_path, "w") as f:
@@ -74,7 +92,7 @@ def run_setup(script, directory, base, lock, *extra, cwd=None):
     dest = os.path.join(directory, "dest")
     args = ["bash", script, "--server", "192.168.1.64:10301", "--edition", "classic",
             "--base-client", base, "--dest", dest, "--lock", lock_path, *extra]
-    return dest, subprocess.run(args, capture_output=True, text=True, cwd=cwd)
+    return dest, subprocess.run(args, capture_output=True, text=True, cwd=cwd, env=env)
 
 
 class SetupTests(unittest.TestCase):
@@ -185,10 +203,19 @@ class BundlePatchTests(unittest.TestCase):
         with open(os.path.join(self.patches, "classic-creation.json"), "w", encoding="utf-8") as f:
             json.dump(data, f, indent=1)
 
-    def setup_sh(self, base=None, cwd=None):
-        with fx.RangeServer(self.dir) as srv:
-            return run_setup(os.path.join(self.bundle, "setup.sh"), self.dir, base or self.base, srv.lock(self.lock),
-                             cwd=cwd)
+    def setup_sh(self, base=None, cwd=None, release=None, env=None):
+        """Run the bundle's setup.sh; release=(folder, lock) serves another release than setUp's."""
+        folder, lock = release or (self.dir, self.lock)
+        with fx.RangeServer(folder) as srv:
+            return run_setup(os.path.join(self.bundle, "setup.sh"), self.dir, base or self.base, srv.lock(lock),
+                             cwd=cwd, env=env)
+
+    def broken_release(self):
+        """This release with a wrong SHA-256 for the edition's game.dll in its manifest: the fetch stops at
+        game.dll, its last file, after it has written the others. Like a download that stops halfway."""
+        folder = os.path.join(self.dir, "broken")
+        lock, _files = fx.build(folder, self.files, tamper={RELEASE_DLL: "0" * 64})
+        return folder, lock
 
     def write_version(self, tag):
         with open(os.path.join(self.bundle, "VERSION"), "w", encoding="utf-8") as f:
@@ -290,19 +317,83 @@ class BundlePatchTests(unittest.TestCase):
         self.assertEqual(saved_settings(dest)["tag"], "v0.35b-hearth.3")
         self.assertEqual(leftovers(dest), [])
 
-    def test_a_failed_setup_keeps_the_saved_release(self):
-        # play.sh then offers the update again at the next launch.
+    def test_a_failed_setup_over_an_install_leaves_it_as_it_was(self):
+        # play.sh updates by running the next release's setup.sh. When that fails, play.sh starts the game
+        # with the installed release, and the saved release is unchanged, so the next launch offers it again.
         self.write_version("v0.35b-hearth.2")
         dest, r = self.setup_sh()
         self.assertEqual(r.returncode, 0, r.stderr + r.stdout)
-        play_inode = os.stat(os.path.join(dest, "play.sh")).st_ino
+        before = install_state(dest)
         self.write_version("v0.35b-hearth.3")
-        with open(os.path.join(self.patches, "classic-creation.json"), "w", encoding="utf-8") as f:
-            json.dump({"format": 2}, f)  # the patch step fails
+        with self.subTest("the download stops"):
+            dest, r = self.setup_sh(release=self.broken_release())
+            self.assertEqual(r.returncode, 1, r.stderr + r.stdout)
+            self.assertIn("SHA-256 mismatch against the release manifest", r.stderr)
+            self.assertEqual(install_state(dest), before)
+            self.assertEqual(leftovers(dest), [])
+        with self.subTest("the patches fail"):
+            with open(os.path.join(self.patches, "classic-creation.json"), "w", encoding="utf-8") as f:
+                json.dump({"format": 2}, f)
+            dest, r = self.setup_sh()
+            self.assertEqual(r.returncode, 1, r.stderr + r.stdout)
+            self.assertIn("Patching the client failed (apply_patches.py exit 2", r.stderr)
+            self.assertEqual(install_state(dest), before)
+            self.assertEqual(leftovers(dest), [])
+
+    def test_running_setup_again_keeps_the_game_logs_with_or_without_hard_links(self):
+        # rsync leaves the game's logs alone (excluded), so client.new starts as a copy of the client: hard
+        # links, or a full copy on a file system without them.
+        no_hard_links = os.path.join(self.dir, "bin")
+        os.makedirs(no_hard_links)
+        with open(os.path.join(no_hard_links, "cp"), "w", encoding="utf-8") as f:
+            f.write(f'#!/bin/sh\n[ "$1" != -al ] || exit 1\nexec {shutil.which("cp")} "$@"\n')
+        os.chmod(os.path.join(no_hard_links, "cp"), 0o755)
+        for name, path in (("hard links", os.environ["PATH"]),
+                           ("no hard links", no_hard_links + os.pathsep + os.environ["PATH"])):
+            with self.subTest(name):
+                dest, r = self.setup_sh()
+                self.assertEqual(r.returncode, 0, r.stderr + r.stdout)
+                log = os.path.join(dest, "client", "logs", "chat.log")
+                os.makedirs(os.path.dirname(log), exist_ok=True)
+                with open(log, "w", encoding="utf-8") as f:
+                    f.write(name)
+                dest, r = self.setup_sh(env={**os.environ, "PATH": path})
+                self.assertEqual(r.returncode, 0, r.stderr + r.stdout)
+                self.assertNotIn("Warning", r.stderr)
+                self.assertEqual(read(log), name.encode())
+                self.assertEqual(read(os.path.join(dest, "client", "game.dll")), self.dll_patched)
+                self.assertEqual(leftovers(dest), [])
+
+    def test_running_setup_again_after_one_cut_short_starts_afresh(self):
+        # A setup cut short (a power cut) leaves what it built beside the install. The next one, failed or
+        # not, uses none of it: a failed one leaves the install as it was.
+        self.write_version("v0.35b-hearth.2")
         dest, r = self.setup_sh()
-        self.assertEqual(r.returncode, 1, r.stderr + r.stdout)
-        self.assertEqual(saved_settings(dest)["tag"], "v0.35b-hearth.2")
-        self.assertEqual(os.stat(os.path.join(dest, "play.sh")).st_ino, play_inode)
+        self.assertEqual(r.returncode, 0, r.stderr + r.stdout)
+        before = install_state(dest)
+
+        def cut_short():
+            for name in ("client.new", "client.old", "patches.old"):
+                os.makedirs(os.path.join(dest, name, "client"), exist_ok=True)
+                with open(os.path.join(dest, name, "half.bin"), "wb") as f:
+                    f.write(b"cut short")
+        self.write_version("v0.35b-hearth.3")
+        with self.subTest("the next one fails"):
+            cut_short()
+            dest, r = self.setup_sh(release=self.broken_release())
+            self.assertEqual(r.returncode, 1, r.stderr + r.stdout)
+            self.assertEqual(install_state(dest), before)
+            self.assertEqual(leftovers(dest), [])
+        with self.subTest("the next one works"):
+            cut_short()
+            dest, r = self.setup_sh()
+            self.assertEqual(r.returncode, 0, r.stderr + r.stdout)
+            self.assertEqual(leftovers(dest), [])
+            client = os.path.join(dest, "client")
+            self.assertEqual(read(os.path.join(client, "game.dll")), self.dll_patched)
+            self.assertFalse(os.path.exists(os.path.join(client, "half.bin")))
+            installed_patches(self, dest, self.patches)
+            self.assertEqual(saved_settings(dest)["tag"], "v0.35b-hearth.3")
 
     def test_a_failed_patch_fails_setup(self):
         # An invalid patch set (exit 2). The message names the installed copy: setup.sh applies

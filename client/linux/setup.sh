@@ -53,10 +53,25 @@ done
 for t in python3 rsync; do command -v "$t" >/dev/null || { echo "Please install $t first." >&2; exit 1; }; done
 
 mkdir -p "$DEST"
+# Over an installed client (an update), the new client is built in client.new and the old patches wait in
+# patches.old. Both are swapped in only when everything worked, so a failed setup (say, the download
+# stops) leaves the install as it was. client.new starts as hard links to the client, so it takes little
+# room: rsync, the fetch and the patches replace files by a rename and never write into them.
+CLIENT="$DEST/client"
+rm -rf "$DEST/client.new" "$DEST/client.old" "$DEST/patches.old"  # left by a setup cut short
+undo() {
+    rm -rf "$DEST/client.new" "$DEST/play.sh.new"
+    if [[ -d "$DEST/patches.old" ]]; then rm -rf "$DEST/patches"; mv "$DEST/patches.old" "$DEST/patches"; fi
+}
+trap undo EXIT
+if [[ -d "$DEST/client" ]]; then
+    CLIENT="$DEST/client.new"
+    cp -al "$DEST/client" "$CLIENT" 2>/dev/null || { rm -rf "$CLIENT"; cp -a "$DEST/client" "$CLIENT"; }
+fi
 echo "Copying your base client (read only) to $DEST/client ..."
-rsync -a --delete --exclude='*.dxvk-cache' --exclude='/logs/' --exclude='/login.log' "$BASE/" "$DEST/client/"
+rsync -a --delete --exclude='*.dxvk-cache' --exclude='/logs/' --exclude='/login.log' "$BASE/" "$CLIENT/"
 echo "Fetching the OfflineDAoC $EDITION client files (each verified) ..."
-python3 "$FETCH" --lock "$LOCK" client --edition "$EDITION" --client-dir "$DEST/client"
+python3 "$FETCH" --lock "$LOCK" client --edition "$EDITION" --client-dir "$CLIENT"
 # Classic character creation and the HearthDAoC splash. A fresh copy of this bundle's patch files
 # replaces $DEST/patches (nothing from an older release is left), and is applied from there. Exit 3
 # means the applier refused a client file it doesn't know (e.g. the b edition) and changed nothing:
@@ -65,9 +80,9 @@ echo "Applying HearthDAoC's client patches (classic character creation, loading 
 rm -rf "$DEST/patches.new"
 mkdir "$DEST/patches.new"
 for f in "${PATCH_FILES[@]}"; do cp "$PATCH_SRC/$f" "$DEST/patches.new/"; done
-rm -rf "$DEST/patches"
+if [[ -d "$DEST/patches" ]]; then mv "$DEST/patches" "$DEST/patches.old"; fi
 mv "$DEST/patches.new" "$DEST/patches"
-rc=0; python3 "$DEST/patches/apply_patches.py" --client "$DEST/client" || rc=$?
+rc=0; python3 "$DEST/patches/apply_patches.py" --client "$CLIENT" || rc=$?
 if [[ $rc -eq 3 ]]; then
     echo "Warning: the client was set up without HearthDAoC's patches (see the message above)." >&2
 elif [[ $rc -ne 0 ]]; then
@@ -76,7 +91,14 @@ fi
 # A new file renamed over play.sh: a running play.sh (one that is updating itself) goes on reading its own file.
 sed -e "s|@SERVER@|$SERVER|g" -e "s|@EDITION@|$EDITION|g" "$TEMPLATE" > "$DEST/play.sh.new"
 chmod +x "$DEST/play.sh.new"
+# Everything worked: the new client and play.sh replace the old ones, each by a rename.
+trap - EXIT
+if [[ "$CLIENT" != "$DEST/client" ]]; then
+    mv "$DEST/client" "$DEST/client.old"
+    mv "$CLIENT" "$DEST/client"
+fi
 mv -f "$DEST/play.sh.new" "$DEST/play.sh"
+rm -rf "$DEST/client.old" "$DEST/patches.old"
 # Last, once everything worked: the settings and the release that play.sh updates with. play.sh only
 # reads this file, never runs it. Without a release (setup.sh from a checkout), play.sh doesn't look for one.
 printf '%s\n' "# Written by setup.sh: play.sh installs updates with these settings." "server=$SERVER" \

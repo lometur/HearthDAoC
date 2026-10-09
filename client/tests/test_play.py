@@ -27,6 +27,7 @@ RUNTIME_APPID = "1628350"
 # Updates: the installed release, the one GitHub offers, and the settings setup.sh saved.
 OLD, NEW = "v0.35b-hearth.2", "v0.35b-hearth.3"
 CONF = "hearthdaoc-client.conf"
+EDITION_DLL = "editions/0.34-no-custom-class/runtime/client-opendaoc/app/game.dll"  # classic's, in the fixture
 BASE = "/home/player/Games/OpenDAoC client"  # with a space: it must reach the next setup.sh as one argument
 QUESTION = f"HearthDAoC {NEW} is out (you have {OLD}). Update the client now?"
 NO_CHECK = f"play.sh: could not check for a HearthDAoC update; playing {OLD}.\n"
@@ -610,59 +611,99 @@ class UpdateRoundTripTests(FakeSteamTestCase):
     """The real scripts: a release's setup.sh installs the client, and its play.sh updates it with the next
     release's client bundle, built by deploy/build_bundles.sh, whose setup.sh runs with the saved settings."""
 
-    def test_play_sh_updates_a_client_installed_by_setup_sh(self):
+    def setUp(self):
+        super().setUp()
         t = self.tmp.name
         self.dest = os.path.join(t, "Games", "Hearth DAoC")
         self.play = os.path.join(self.dest, "play.sh")
-        base = os.path.join(t, "my games", "OpenDAoC 1.127 client")
+        self.base = os.path.join(t, "my games", "OpenDAoC 1.127 client")
         lock, files = fx.build(t)
-        make_base(base, files)
+        make_base(self.base, files)
         out = os.path.join(t, "dist")
         r = subprocess.run(["bash", os.path.join(REPO, "deploy", "build_bundles.sh"), NEW, out], cwd=REPO,
                            capture_output=True, text=True)
         self.assertEqual(r.returncode, 0, r.stderr)
-        built = os.path.join(out, f"hearthdaoc-client-{NEW}.zip")
-        with fx.RangeServer(t) as parts:
-            lock_json = json.dumps(parts.lock(lock)).encode()
-            # The installed release: this bundle with an older VERSION, set up with the test's lock.
-            with zipfile.ZipFile(built) as z:
-                z.extractall(os.path.join(t, "old"))
-            old = os.path.join(t, "old", f"hearthdaoc-client-{NEW}")
-            write(os.path.join(old, "VERSION"), OLD + "\n")
-            write_bytes(os.path.join(old, "upstream.lock"), lock_json)
-            r = subprocess.run(["bash", os.path.join(old, "setup.sh"), "--server", "192.168.1.64:10301",
-                                "--edition", "classic", "--base-client", base, "--dest", self.dest],
-                               capture_output=True, text=True)
-            self.assertEqual(r.returncode, 0, r.stderr + r.stdout)
-            self.save_login()
-            inode = os.stat(self.play).st_ino
-            # The next release's bundle: its lock points at the test's parts, and its play.sh says who it is.
-            top = f"hearthdaoc-client-{NEW}/"
-            changes = {top + "upstream.lock": lambda data: lock_json,
-                       top + "play.sh.in": lambda data: data.replace(
-                           b"\n", b'\necho "play.sh of the next release" >&2\n', 1)}
-            served = io.BytesIO()
-            with zipfile.ZipFile(built) as z, zipfile.ZipFile(served, "w") as new:
-                for info in z.infolist():
-                    data = z.read(info)
-                    new.writestr(info.filename, changes.get(info.filename, lambda d: d)(data))
-            bin_dir = os.path.join(t, "bin")
-            write(os.path.join(bin_dir, "zenity"), '#!/bin/sh\n[ "$1" != --progress ] || cat > /dev/null\n',
-                  executable=True)  # says yes
-            with ReleaseServer(NEW, {zip_name(NEW): served.getvalue()}) as srv:
-                r = self.run_play(HEARTHDAOC_RELEASES_URL=srv.url, DISPLAY=":99",
-                                  PATH=bin_dir + os.pathsep + os.environ["PATH"])
+        self.built = os.path.join(out, f"hearthdaoc-client-{NEW}.zip")
+        parts = fx.RangeServer(t)
+        parts.__enter__()
+        self.addCleanup(parts.__exit__, None, None, None)
+        self.lock_json = json.dumps(parts.lock(lock)).encode()
+        # The installed release: this bundle with an older VERSION, set up with the test's lock.
+        with zipfile.ZipFile(self.built) as z:
+            z.extractall(os.path.join(t, "old"))
+        old = os.path.join(t, "old", f"hearthdaoc-client-{NEW}")
+        write(os.path.join(old, "VERSION"), OLD + "\n")
+        write_bytes(os.path.join(old, "upstream.lock"), self.lock_json)
+        r = subprocess.run(["bash", os.path.join(old, "setup.sh"), "--server", "192.168.1.64:10301",
+                            "--edition", "classic", "--base-client", self.base, "--dest", self.dest],
+                           capture_output=True, text=True)
+        self.assertEqual(r.returncode, 0, r.stderr + r.stdout)
+        self.save_login()
+
+    def update(self, lock_json):
+        """Start the installed play.sh from Steam; the player says yes to the next release: this bundle, with
+        lock_json as its upstream.lock and a play.sh that says who it is."""
+        top = f"hearthdaoc-client-{NEW}/"
+        changes = {top + "upstream.lock": lambda data: lock_json,
+                   top + "play.sh.in": lambda data: data.replace(
+                       b"\n", b'\necho "play.sh of the next release" >&2\n', 1)}
+        served = io.BytesIO()
+        with zipfile.ZipFile(self.built) as z, zipfile.ZipFile(served, "w") as new:
+            for info in z.infolist():
+                data = z.read(info)
+                new.writestr(info.filename, changes.get(info.filename, lambda d: d)(data))
+        bin_dir = os.path.join(self.tmp.name, "bin")
+        write(os.path.join(bin_dir, "zenity"), '#!/bin/sh\n[ "$1" != --progress ] || cat > /dev/null\n',
+              executable=True)  # says yes
+        with ReleaseServer(NEW, {zip_name(NEW): served.getvalue()}) as srv:
+            return self.run_play(HEARTHDAOC_RELEASES_URL=srv.url, DISPLAY=":99",
+                                 PATH=bin_dir + os.pathsep + os.environ["PATH"])
+
+    def install(self):
+        """What an update changes: the client, the patches, play.sh and the settings."""
+        with open(os.path.join(self.dest, CONF), encoding="utf-8") as f:
+            conf = f.read()
+        return (snapshot(os.path.join(self.dest, "client")), snapshot(os.path.join(self.dest, "patches")),
+                os.stat(self.play).st_ino, conf)
+
+    def assert_launched_once(self):
+        launches = self.launches()
+        self.assertEqual(len(launches), 1, launches)
+        self.assertIn("192.168.1.64:10301 Tester1 pw1", launches[0])
+
+    def assert_nothing_left(self):
+        self.assertEqual([n for n in os.listdir(self.dest) if n.startswith(".update.") or n.endswith((".new", ".old"))],
+                         [])
+
+    def test_play_sh_updates_a_client_installed_by_setup_sh(self):
+        inode = os.stat(self.play).st_ino
+        r = self.update(self.lock_json)
         self.assertEqual(r.returncode, 0, r.stderr)
         self.assertIn("play.sh of the next release\n", r.stderr)
-        launches = self.launches()
-        self.assertEqual(len(launches), 1, r.stderr)
-        self.assertIn("192.168.1.64:10301 Tester1 pw1", launches[0])
+        self.assert_launched_once()
         self.assertNotEqual(os.stat(self.play).st_ino, inode)
         with open(os.path.join(self.dest, CONF), encoding="utf-8") as f:
             settings = dict(line.split("=", 1) for line in f.read().splitlines() if not line.startswith("#"))
-        self.assertEqual(settings, {"server": "192.168.1.64:10301", "edition": "classic", "base_client": base,
+        self.assertEqual(settings, {"server": "192.168.1.64:10301", "edition": "classic", "base_client": self.base,
                                     "tag": NEW})
-        self.assertEqual(glob.glob(os.path.join(self.dest, ".update.*")), [])
+        self.assert_nothing_left()
+
+    def test_an_update_whose_download_stops_leaves_the_installed_client_and_plays_it(self):
+        # The new setup.sh has already put the base client back and fetched some OfflineDAoC files when the
+        # fetch stops: here the manifest has a wrong SHA-256 for game.dll, the last file it fetches.
+        broken = os.path.join(self.tmp.name, "broken")
+        lock, _files = fx.build(broken, tamper={EDITION_DLL: "0" * 64})
+        before = self.install()
+        with fx.RangeServer(broken) as parts:
+            r = self.update(json.dumps(parts.lock(lock)).encode())
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertIn(f"play.sh: Warning: the update to HearthDAoC {NEW} failed: its setup.sh failed (exit 1). "
+                      f"The game starts with {OLD}; the next launch offers the update again.", r.stderr)
+        self.assertIn("SHA-256 mismatch against the release manifest", r.stderr)  # setup.sh's own error
+        self.assertNotIn("play.sh of the next release", r.stderr)
+        self.assert_launched_once()
+        self.assertEqual(self.install(), before)
+        self.assert_nothing_left()
 
 
 if __name__ == "__main__":

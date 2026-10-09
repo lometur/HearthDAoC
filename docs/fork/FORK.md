@@ -146,6 +146,11 @@ Linux clients update at launch, after asking the player. Windows players still c
   `<dest>/hearthdaoc-client.conf`, last and by a rename, so a failed setup keeps the previous release. From a
   checkout there is no `VERSION`, the tag is empty and `play.sh` never checks. It also writes `play.sh` as
   `play.sh.new` and renames it: a running `play.sh` that updates itself goes on reading its own file.
+- Over an installed client, `setup.sh` builds the new one in `<dest>/client.new` (hard links to the old
+  client, or a full copy where hard links fail) and keeps the old patches in `<dest>/patches.old`. It swaps
+  them in only when everything worked; a failed setup, say a download that stops, leaves the install as it
+  was. rsync, `odaoc_fetch.py` and the patches replace files by a rename and never write into them, so the
+  hard-linked old client stays as it was. A first setup builds `<dest>/client` in place.
 - At each launch, before the login, `play.sh` reads that file (never sources it) and asks
   `$HEARTHDAOC_RELEASES_URL/latest` (GitHub's releases page by default, as `hdc update` does) for the newest
   tag, for 5 seconds at most. It offers a newer one (`sort -V`, with 0.35 before 0.35b) with a zenity or
@@ -155,9 +160,11 @@ Linux clients update at launch, after asking the player. Windows players still c
   the installed release. `HEARTHDAOC_NO_UPDATE=1` turns the check off.
 
 So every client bundle must keep `hearthdaoc-client-<tag>/setup.sh` and `VERSION`, and every `setup.sh` must
-accept the options of the earlier ones: the players' `play.sh` runs it with them. `UpdateRoundTripTests` in
-`client/tests/test_play.py` updates a client set up by `setup.sh` with a bundle built by `build_bundles.sh`.
-Every release offers a client update, even one that changed only the server.
+accept the options of the earlier ones: the players' `play.sh` runs it with them. Every `setup.sh` must also
+change an install only once everything worked: after a failed update, `play.sh` tells the player that the
+installed release starts. `UpdateRoundTripTests` in `client/tests/test_play.py` updates a client set up by
+`setup.sh` with a bundle built by `build_bundles.sh`, and fails one halfway. Every release offers a client
+update, even one that changed only the server.
 
 ## Syncing with upstream
 
