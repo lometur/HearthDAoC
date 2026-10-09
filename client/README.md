@@ -22,11 +22,14 @@ password appears on the game's command line, and it is saved on your PC as plain
 
 **Linux**
 - Steam, with **Proton Experimental** installed (Steam → Library → Tools).
-- `python3` and `rsync` (on Ubuntu or Debian: `sudo apt install python3 rsync`).
-- `zenity`, if you want to type your login in a window when you start the game from Steam. Without
-  it, you start the game once from a terminal (see Linux quick start).
+- `python3`, `rsync` and `curl` (on Ubuntu or Debian: `sudo apt install python3 rsync curl`).
+  `play.sh` uses `curl` to look for new releases.
+- `zenity`, if you want to type your login and answer update questions in a window when you start the
+  game from Steam. Without it, you start the game from a terminal for those (see Linux quick start and
+  Updating to a new release).
 - A 1.127 client folder from the free [OpenDAoC installer](https://www.opendaoc.com/docs/client/).
-  It is only read, never changed. You need room for a second copy of it.
+  It is only read, never changed. You need room for a second copy of it. Keep it where it is: every
+  update copies it again.
 
 **Windows**
 - The **official** OfflineDAoC release for the server's edition: upstream's
@@ -44,7 +47,8 @@ password appears on the game's command line, and it is saved on your PC as plain
    This builds a separate client in `~/Games/HearthDAoC`. It downloads about 45 MB of OfflineDAoC
    files, each checked against the official release, installs HearthDAoC's patches in
    `~/Games/HearthDAoC/patches` and applies them. If it warns that the client was set up without
-   HearthDAoC's patches, see Troubleshooting: the game still works.
+   HearthDAoC's patches, see Troubleshooting: the game still works. It saves these options in
+   `~/Games/HearthDAoC/hearthdaoc-client.conf`, for updates.
 3. In Steam: Games → **Add a Non-Steam Game** → Browse → `~/Games/HearthDAoC/play.sh`.
    Leave "Force the use of a specific Steam Play compatibility tool" **unchecked**. Any launch
    options must end with `%command%`.
@@ -124,6 +128,9 @@ bonus.
 
 ## What happens at each launch
 
+On Linux, `play.sh` first looks for a newer HearthDAoC release, and asks you before it updates (see
+Updating to a new release).
+
 Each time you start the game, `play.sh` (Linux) or `connect-hearthdaoc.bat` (Windows) checks
 HearthDAoC's patches just before the game starts:
 
@@ -142,16 +149,37 @@ Then the game starts and connects to the server.
 
 ## Updating to a new release
 
-- **Linux:** download and unpack the new `hearthdaoc-client-<version>.zip`, and run its `setup.sh`
-  with the same options as before. It rebuilds `~/Games/HearthDAoC/client`, replaces
-  `~/Games/HearthDAoC/patches` with the new release's patches, applies them and writes a new
-  `play.sh`. Your saved login and your Steam shortcut stay.
-- **Windows:** unpack the new zip and copy everything in its `windows` folder into
-  `runtime\client-opendaoc\app` again, replacing the old files. Your `hearthdaoc.cfg` stays. The next
-  start of `connect-hearthdaoc.bat` applies the new release's patches.
+**Linux.** Each time you start the game, `play.sh` asks GitHub for the newest HearthDAoC release. When
+it is newer than yours, it asks: "HearthDAoC <version> is out (you have <version>). Update the client
+now?" From Steam, the question is a window (with `zenity`); in a terminal, answer `y` or `n`.
+
+- **Yes** downloads the new `hearthdaoc-client-<version>.zip` (about 27 MB) and runs its `setup.sh`
+  with the options you gave `setup.sh` the first time (saved in
+  `~/Games/HearthDAoC/hearthdaoc-client.conf`). From Steam, a window shows its progress. It rebuilds
+  `~/Games/HearthDAoC/client` (about 45 MB more to download), replaces `~/Games/HearthDAoC/patches`
+  with the new release's patches, applies them and writes a new `play.sh`, which then starts the
+  game. Your saved login and your Steam shortcut stay.
+- **No** starts the game as it is. The next start asks again.
+- If the update fails, you get a warning that says what failed (in a window, from Steam), and the
+  game starts with the release you have. The next start offers the update again. See Troubleshooting.
+- Offline, or when GitHub doesn't answer within 5 seconds, the game just starts.
+- Without a terminal and without `zenity`, `play.sh` can't ask. It warns that an update is out, and
+  starts the game. Run `~/Games/HearthDAoC/play.sh` from a terminal to answer.
+- To turn the check off, start the game with `HEARTHDAOC_NO_UPDATE=1`: in Steam, set the game's
+  launch options to `HEARTHDAOC_NO_UPDATE=1 %command%`; in a terminal, run
+  `HEARTHDAOC_NO_UPDATE=1 ~/Games/HearthDAoC/play.sh`.
+
+A client set up by an older bundle doesn't look for updates: run `setup.sh` from this bundle (or a
+newer one) once more, with the same options as before. From then on, `play.sh` offers each new
+release. You can always update by hand the same way: download and unpack the new zip, and run its
+`setup.sh` with the same options as before.
+
+**Windows.** Unpack the new zip and copy everything in its `windows` folder into
+`runtime\client-opendaoc\app` again, replacing the old files. Your `hearthdaoc.cfg` stays. The next
+start of `connect-hearthdaoc.bat` applies the new release's patches.
 
 If you went back to the standard creation screen (below), updating turns classic creation on again:
-on Linux, repeat the two commands below after `setup.sh`; on Windows, copy only
+on Linux, repeat the two commands below after the update; on Windows, copy only
 `connect-hearthdaoc.bat` from the new `windows` folder.
 
 ## Going back to the standard creation screen
@@ -190,6 +218,13 @@ folder you own, such as `C:\Games\OfflineDAoC`, where nothing needs administrato
 **Linux: a warning that the client patches could not be applied.** Run `~/Games/HearthDAoC/play.sh`
 in a terminal to see the message. Running `setup.sh` again from the bundle installs the patches
 again.
+
+**Linux: the update failed.** The warning says what failed; run `~/Games/HearthDAoC/play.sh` in a
+terminal to see all of the output. The game started with the release you have, and the next start
+offers the update again. Often the internet connection dropped, or your 1.127 client folder (the
+`--base-client` you gave `setup.sh`) was moved or deleted: every update copies it again. If it moved,
+download the new release's zip and run its `setup.sh` by hand with the new `--base-client` path; the
+next updates use that one.
 
 **Wrong account or password saved.** Delete `~/Games/HearthDAoC/account.txt` (Linux) or
 `hearthdaoc.cfg` next to `connect-hearthdaoc.bat` (Windows), and start the game again: it asks

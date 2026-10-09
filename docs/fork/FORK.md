@@ -18,7 +18,7 @@ old names (`odc`, `OFFLINEDAOC_*`, `offlinedaoc-*`) as written at the time.
 | Bot goals with upstream's Battlegrounds column (`hdc bot-goals`) | `tools/linux/bot-goals/Program.cs`, `deploy/hdc` | none: `set` takes Battlegrounds as an optional fourth number and keeps it when left out; the owner's split is in `deploy/HANDOFF.md` (Bot goals), set by hand, not by default |
 | Server data files from the release (`classic-quests.json`, `classic-quest-guides.json`) | `deploy/upstream.lock` (`server_prefix`, `server_files`), `deploy/bin/init_world.py`, `deploy/entrypoint.sh` | none: not in the image. The first start of an upstream version downloads them, checked against the release manifest, into `/data/server-files/<upstream version>/`, and every start links them into `/app/server`. `classic-otd.json` is left out: nothing reads it |
 | World upgrade in `hdc update` | `deploy/hdc`, `deploy/bin/world_admin.py` | none: a release for another upstream version runs `./hdc upgrade-world` (the new release's own) before it starts the server |
-| Player setup | `client/` | none |
+| Player setup, and Linux client updates at launch (see Client updates) | `client/`, `deploy/build_bundles.sh` (the bundle's `VERSION`) | none |
 | Classic character creation and splash (client patch set) | `client/patches/`, `client/windows/patch-client.*` | none: patches each player's own client files (see Client patches) |
 | Leveling spawns (owner's choice) | `deploy/bin/spawns.py`, `hdc spawns` | none: restores rows upstream's setup archived in `offline_classic165_removed_mobs` |
 | Classic battlegrounds 15-35, world data (once per world, marker `classic-battlegrounds-v2`) | `deploy/bin/battlegrounds.py` (run by `deploy/bin/world_fixes.py`) | none: on the 0.35 world it levels all four central keeps (upstream's Dun Abermenai and Dun Murdaigean included) and their gates, adds the portal keep guards, and six wall casters and a hastener in each of upstream's two keeps, and removes the Atlas leftovers ([spec](specs/2026-10-07-classic-battlegrounds-design.md), section 7) |
@@ -137,6 +137,28 @@ since it was patched. The same holds for any patched file whose "after" changes.
 both appliers to upgrade: recognise the older patched file, put its verified backup back, then apply the new
 set.
 
+## Client updates
+
+Linux clients update at launch, after asking the player. Windows players still copy the new files by hand.
+
+- `deploy/build_bundles.sh` writes the release tag into the client bundle's `VERSION`.
+- `setup.sh` saves its options (`--server`, `--edition`, `--base-client`, made absolute) and that tag in
+  `<dest>/hearthdaoc-client.conf`, last and by a rename, so a failed setup keeps the previous release. From a
+  checkout there is no `VERSION`, the tag is empty and `play.sh` never checks. It also writes `play.sh` as
+  `play.sh.new` and renames it: a running `play.sh` that updates itself goes on reading its own file.
+- At each launch, before the login, `play.sh` reads that file (never sources it) and asks
+  `$HEARTHDAOC_RELEASES_URL/latest` (GitHub's releases page by default, as `hdc update` does) for the newest
+  tag, for 5 seconds at most. It offers a newer one (`sort -V`, with 0.35 before 0.35b) with a zenity or
+  terminal question. Yes downloads `hearthdaoc-client-<tag>.zip` into `<dest>/.update.XXXXXX`, checks its
+  `setup.sh` and that `VERSION` says the tag, runs that `setup.sh` with the saved options and `--dest <dest>`,
+  then starts the new `play.sh` with `HEARTHDAOC_NO_UPDATE=1`. A failure warns, keeps the saved tag and plays
+  the installed release. `HEARTHDAOC_NO_UPDATE=1` turns the check off.
+
+So every client bundle must keep `hearthdaoc-client-<tag>/setup.sh` and `VERSION`, and every `setup.sh` must
+accept the options of the earlier ones: the players' `play.sh` runs it with them. `UpdateRoundTripTests` in
+`client/tests/test_play.py` updates a client set up by `setup.sh` with a bundle built by `build_bundles.sh`.
+Every release offers a client update, even one that changed only the server.
+
 ## Syncing with upstream
 
 1. Sync through a PR, not GitHub's **Sync fork** button: that commits straight to `main`, and merging is
@@ -173,7 +195,8 @@ Merging is releasing (`.github/workflows/server-image.yml`):
    bundles), the same run then publishes the next `v<upstream-version>-hearth.<n>` from that commit: the
    image, the tag and the GitHub release with both bundles and notes generated from the merged PRs.
    Docs, tests, CI and `release_tag.py` changes make no release. A failing test publishes nothing.
-3. About 8 minutes after the merge, on the server: `./hdc update`.
+3. About 8 minutes after the merge, on the server: `./hdc update`. Linux players are offered the new
+   client at their next launch (see Client updates).
 
 The repository names no release: `deploy/build_bundles.sh` stamps the tag into the bundle's
 `.env.example`, which is where `./hdc update` reads it, and HANDOFF's install step looks up the latest
@@ -189,5 +212,6 @@ is older than an existing release publishes nothing, so re-running an old run ca
 
 Each release `v<upstream-version>-hearth.<n>` publishes the image `ghcr.io/lometur/hearthdaoc:<tag>` and
 attaches two assets: `hearthdaoc-deploy-<tag>.tar.gz` (compose file, `.env.example`, `hdc`, handoff) and
-`hearthdaoc-client-<tag>.zip` (player scripts, the client patch set with both appliers, and our `splash.mpk`).
+`hearthdaoc-client-<tag>.zip` (player scripts, the client patch set with both appliers, our `splash.mpk`, and
+`VERSION`, the tag).
 Neither contains EA game files. The release notes credit OfflineDAoC for the splash art.
