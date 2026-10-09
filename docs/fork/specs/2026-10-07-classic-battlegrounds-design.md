@@ -756,9 +756,10 @@ The in-game check of section 4 (casters on the walls, neither floating nor insid
 upstream's keeps 33 and 32 (v1's own keeps were 32 and 33 the other way round). After a capture the keep goes
 back to Level 1 and its gates to full health (3,800 and 5,800).
 
-**A v1 world.** The 0.35 image never runs one, since `hdc update` upgrades the world first. If it did, every
-v2 step's precondition would fail (v1's values are already there, and KeepIDs 32 and 33 are in the other
-regions), so v2 would only write its marker.
+**A v1 world.** The 0.35 image never runs one: `init_world.py` refuses a world from another upstream version,
+so a world only reaches 0.35 through `hdc upgrade-world` or `hdc new-world`, which start from upstream's clean
+world. If it did run one, every v2 step's precondition would fail (v1's values are already there, and KeepIDs
+32 and 33 are in the other regions), so v2 would only write its marker.
 
 ### 7.4 What players see, changed from section 2
 
