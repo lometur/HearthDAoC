@@ -60,8 +60,8 @@ hdc - HearthDAoC server
   restore <backup file name> [--force]   (server stopped; --force allows another edition)
   new-world [--edition classic|b]   archive the current world and start a fresh one (server stopped)
   upgrade-world [--same-version]    move progress into the clean world of this image's upstream version (server stopped)
-  carry-rvr [<archive>]          copy keep, gate and relic state from an archived world into this one (server
-                                 stopped; undoes captures made since); without <archive>, list the archived worlds
+  carry-rvr [<archive>]          bring back the state of the keeps and relics in play in an archived world (server
+                                 stopped; undoes later captures of them); without <archive>, list the archived worlds
   auto-accounts on|off           allow or stop account creation at first login (recreates the server)
   spawns restore [--max-level N] | undo | status
                                  bring back the leveling monsters upstream archived (default levels 1-20; server stopped)

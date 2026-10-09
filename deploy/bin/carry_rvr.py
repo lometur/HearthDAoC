@@ -1,22 +1,25 @@
-"""Carry the RvR state of one world into another: who holds each keep, its doors' health, where the relics
-are, the items on keep hookpoints, and the keep capture log.
+"""Carry the RvR state of one world into another: who holds the keeps in play, their doors' health, where
+the relics away from home are, the items on keep hookpoints, and the keep capture log.
 
 world_admin.py runs carry() in upgrade-world, on the new world before it replaces the old one (upstream's
 import engine copies only progress tables, so keeps, doors and relics would come back as upstream ships
-them, and it clears the capture log), and in carry-rvr, on the live world from an archived one. Only what
-the server itself writes while it runs is copied, never a keep's structure (KeepID, BaseLevel, position):
-- Keep: Realm, Level and ClaimedGuildName (AbstractGameKeep.cs: Reset, ChangeLevel, SaveIntoDatabase).
-  Keeps are matched by Name and Region, not by KeepID, which upstream may renumber. Names are compared
-  without case, as the Name column does. A Name and Region found twice in either world is skipped.
-- Door: Health and State, for the doors of the carried keeps. GameKeepDoor.SaveIntoDatabase writes Health
-  and the State setter writes State; nothing writes the other columns of a keep door's row. A door
-  belongs to the keep whose area holds it, as DoorMgr.LoadDoor decides: same region (that of the zone
-  InternalID / 1000000), and within 4,000 of a portal keep (BaseLevel 100 or more) or 3,000 of another
-  keep (KeepArea.cs), the nearest if two. Doors are matched by InternalID within each pair of keeps; an
-  InternalID found twice in a keep's area is skipped.
-- Relic: where it is and who holds it (GameRelic.SaveIntoDatabase), matched by RelicID, relicType and
-  OriginalRealm.
-- KeepHookPointItem: the rows of carried keeps, with the new KeepID, where the hookpoint has no item yet.
+them, and it clears the capture log), and in carry-rvr, on the live world from an archived one. Only state
+that came from play is copied, so upstream's own changes to keeps and relics nobody touched stay; and only
+what the server itself writes while it runs, never a keep's structure (KeepID, BaseLevel, position):
+- Keep: Realm, Level and ClaimedGuildName (AbstractGameKeep.cs: Reset, ChangeLevel, SaveIntoDatabase), for
+  the keeps in play in the old world: held by another realm than their own (Realm is not OriginalRealm),
+  or claimed. Keeps are matched by Name and Region, not by KeepID, which upstream may renumber. Names are
+  compared without case, as the Name column does. A Name and Region found twice in either world is skipped.
+- Door: Health and State, for the doors of the keeps in play. GameKeepDoor.SaveIntoDatabase writes Health
+  and the State setter writes State; nothing writes the other columns of a keep door's row. Health is
+  never raised above the new world's, which is the door's full health there unless it was attacked. A
+  door belongs to the keep whose area holds it, as DoorMgr.LoadDoor decides: same region (that of the
+  zone InternalID / 1000000), and within 4,000 of a portal keep (BaseLevel 100 or more) or 3,000 of
+  another keep (KeepArea.cs), the nearest if two. Doors are matched by InternalID within each pair of
+  keeps; an InternalID found twice in a keep's area is skipped.
+- Relic: where it is and who holds it (GameRelic.SaveIntoDatabase), for the relics away from home in the
+  old world (Realm is not OriginalRealm), matched by RelicID, relicType and OriginalRealm.
+- KeepHookPointItem: the rows of the keeps in play, with the new KeepID, where the hookpoint has no item yet.
 - KeepCaptureLog: the old rows, with new IDs, except those already there.
 Everything runs in one transaction: on an error nothing is changed, and the error is raised.
 """
@@ -24,6 +27,7 @@ import datetime
 
 TABLES = ("Keep", "Door", "Relic", "KeepHookPointItem", "KeepCaptureLog")
 KEEP_COLUMNS = ("Realm", "Level", "ClaimedGuildName")
+IN_PLAY = "Realm IS NOT OriginalRealm OR coalesce(ClaimedGuildName, '') <> ''"
 DOOR_COLUMNS = ("Health", "State")
 RELIC_KEY = ("RelicID", "relicType", "OriginalRealm")
 RELIC_COLUMNS = ("Region", "X", "Y", "Z", "Heading", "Realm", "LastRealm", "LastCaptureDate")
@@ -36,7 +40,7 @@ PORTAL_KEEP_BASE_LEVEL = 100
 
 def carry(conn, old_db, now=None):
     """Copy the RvR state of the world old_db into conn's world. Returns (counts, notes): the rows carried
-    per table, and one line for each kind of row that was not carried."""
+    per table, and lines on how many keeps and relics matched, and on the rows that could not be matched."""
     now = now or _now()
     conn.execute("ATTACH DATABASE ? AS old", (old_db,))
     try:
@@ -49,7 +53,13 @@ def carry(conn, old_db, now=None):
 def _carry(conn, now):
     counts, notes = dict.fromkeys(TABLES, 0), []
     present = {table: _has(conn, table) for table in TABLES + ("Zones",)}
-    pairs = _match_keeps(conn, notes) if present["Keep"] else {}
+    pairs = {}
+    if present["Keep"]:
+        matched = _match_keeps(conn, notes)
+        in_play = {keep_id for (keep_id,) in conn.execute(f"SELECT KeepID FROM old.Keep WHERE {IN_PLAY}")}
+        pairs = {old_id: new_id for old_id, new_id in matched.items() if old_id in in_play}
+        notes.insert(0, f"Keeps matched by name and region: {len(matched)}, of which {len(pairs)} in play (held by "
+                        "another realm than their own, or claimed) and carried")
     for old_id, new_id in pairs.items():
         values = conn.execute(f"SELECT {', '.join(KEEP_COLUMNS)} FROM old.Keep WHERE KeepID=?", (old_id,)).fetchone()
         _update(conn, "Keep", "KeepID=?", (new_id,), KEEP_COLUMNS, values, now)
@@ -108,12 +118,12 @@ def _carry_doors(conn, pairs, notes, now):
             if len(rows) != 1 or len(targets) != 1:
                 missed += 1
                 continue
-            values = conn.execute(f"SELECT {', '.join(DOOR_COLUMNS)} FROM old.Door WHERE rowid=?",
-                                  (rows[0],)).fetchone()
-            _update(conn, "Door", "rowid=?", (targets[0],), DOOR_COLUMNS, values, now)
+            health, state = conn.execute("SELECT Health, State FROM old.Door WHERE rowid=?", (rows[0],)).fetchone()
+            (new_health,) = conn.execute("SELECT Health FROM main.Door WHERE rowid=?", (targets[0],)).fetchone()
+            _update(conn, "Door", "rowid=?", (targets[0],), DOOR_COLUMNS, (min(health, new_health), state), now)
             carried += 1
     if missed:
-        notes.append(f"Doors of carried keeps not carried (no single door with their InternalID in the keep's "
+        notes.append(f"Doors of keeps in play not carried (no single door with their InternalID in the keep's "
                      f"area in both worlds): {missed}")
     return carried
 
@@ -138,14 +148,19 @@ def _doors_by_keep(conn, schema):
 def _carry_relics(conn, notes, now):
     key, n = ", ".join(RELIC_KEY), len(RELIC_KEY)
     new = set(conn.execute(f"SELECT {key} FROM main.Relic"))
-    old = conn.execute(f"SELECT {key}, {', '.join(RELIC_COLUMNS)} FROM old.Relic ORDER BY RelicID").fetchall()
-    carried, old_only = 0, []
+    old = conn.execute(f"SELECT {key}, Realm IS NOT OriginalRealm, {', '.join(RELIC_COLUMNS)} FROM old.Relic "
+                       "ORDER BY RelicID").fetchall()
+    matched = carried = 0
+    old_only = []
     for row in old:
-        if row[:n] in new:
-            _update(conn, "Relic", " AND ".join(f"{c}=?" for c in RELIC_KEY), row[:n], RELIC_COLUMNS, row[n:], now)
-            carried += 1
-        else:
+        if row[:n] not in new:
             old_only.append(str(row[0]))
+            continue
+        matched += 1
+        if row[n]:  # away from home
+            _update(conn, "Relic", " AND ".join(f"{c}=?" for c in RELIC_KEY), row[:n], RELIC_COLUMNS, row[n + 1:], now)
+            carried += 1
+    notes.append(f"Relics matched: {matched}, of which {carried} away from home and carried")
     new_only = sorted(str(row[0]) for row in new - {row[:n] for row in old})
     if old_only:
         notes.append("Relics only in the old world, not carried (RelicID): " + ", ".join(old_only))

@@ -242,8 +242,8 @@ def _archived_db(data, name):
 
 
 def carry_rvr_from_archive(data, name, log=print):
-    """Replace the live world's keep, door and relic state with an archived world's (see carry_rvr.py), after
-    a backup. Captures made since that world was archived are undone. Returns (counts, notes)."""
+    """Bring back, in the live world, the state of the keeps in play and the relics away from home in an archived
+    world (see carry_rvr.py), after a backup: captures of them made since are undone. Returns (counts, notes)."""
     meta = _meta(data)
     src = name if os.path.isabs(name) else _archived_db(data, name)
     if not os.path.isfile(src):

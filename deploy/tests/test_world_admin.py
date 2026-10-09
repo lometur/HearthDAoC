@@ -351,7 +351,10 @@ class WorldAdminTests(unittest.TestCase):
         self.assertEqual(q("SELECT KeepName, CapturedBy FROM KeepCaptureLog"), [("Caer Benowyc", "Midgard")])
         with open(os.path.join(archive, "upgrade-report.txt"), encoding="utf-8") as f:
             report = f.read()
-        self.assertIn("'Keep': 81, 'Door': 219, 'Relic': 6, 'KeepHookPointItem': 0, 'KeepCaptureLog': 1}", report)
+        self.assertIn("Carried over: {'Ban': 0, 'SinglePermission': 0, 'Keep': 1, 'Door': 4, 'Relic': 1, "
+                      "'KeepHookPointItem': 0, 'KeepCaptureLog': 1}\n"
+                      "Keeps matched by name and region: 81, of which 1 in play (held by another realm than their own, "
+                      "or claimed) and carried\nRelics matched: 6, of which 1 away from home and carried\n", report)
 
     @unittest.skipUnless(TEST_WORLD and TOOLS, "needs HDC_TEST_WORLD (clean classic world) and HDC_TOOLS (built CLIs)")
     def test_upgrade_stops_with_the_world_unchanged_when_the_carry_fails(self):
@@ -422,8 +425,12 @@ class CarryRvrCommandTests(unittest.TestCase):
             archived_before = f.read()
         r = self.run_admin("world-pre-upgrade-20261008-120000")
         self.assertEqual(r.returncode, 0, r.stderr)
-        self.assertEqual(r.stdout.splitlines()[0], "Carried over from world-pre-upgrade-20261008-120000: {'Keep': 3, "
-                                                   "'Door': 5, 'Relic': 2, 'KeepHookPointItem': 0, 'KeepCaptureLog': 0}")
+        self.assertEqual(r.stdout.splitlines()[:3], [
+            "Carried over from world-pre-upgrade-20261008-120000: {'Keep': 1, 'Door': 2, 'Relic': 0, "
+            "'KeepHookPointItem': 0, 'KeepCaptureLog': 0}",
+            "Keeps matched by name and region: 3, of which 1 in play (held by another realm than their own, or claimed) "
+            "and carried",
+            "Relics matched: 2, of which 0 away from home and carried"])
         self.assertRegex(r.stdout, r"The state before was backed up as world-.*-pre-carry-rvr\.db\.")
         self.assertEqual(test_carry_rvr.query(self.db, "SELECT Realm, ClaimedGuildName FROM Keep WHERE KeepID=50"),
                          [(2, "Raiders")])
@@ -439,16 +446,24 @@ class CarryRvrCommandTests(unittest.TestCase):
     def test_a_world_database_can_be_named_by_its_path(self):
         archived = self.archive("world-20261001-090000")
         counts, _ = world_admin.carry_rvr_from_archive(self.data, archived, log=QUIET)
-        self.assertEqual(counts["Keep"], 3)
+        self.assertEqual(counts["Keep"], 1)
         self.assertEqual(test_carry_rvr.query(self.db, "SELECT Realm FROM Keep WHERE KeepID=50"), [(2,)])
 
     def test_the_report_names_what_was_not_carried(self):
         archived = self.archive("world-20261001-090000")
         test_carry_rvr.execute(archived, "UPDATE Keep SET Name='Caer Gone' WHERE KeepID=50")
         counts, notes = world_admin.carry_rvr_from_archive(self.data, "world-20261001-090000", log=QUIET)
-        self.assertEqual(counts["Keep"], 2)
-        self.assertEqual(notes, ["Keeps only in the old world, not carried: Caer Gone (region 1)",
-                                 "Keeps only in the new world, left as it ships them: Caer Benowyc (region 1)"])
+        self.assertEqual(counts["Keep"], 0)
+        self.assertEqual(notes[1:3], ["Keeps only in the old world, not carried: Caer Gone (region 1)",
+                                      "Keeps only in the new world, left as it ships them: Caer Benowyc (region 1)"])
+
+    def test_a_keep_at_home_in_the_archive_keeps_its_live_state(self):
+        # Only keeps in play in the archived world get their state back; a capture since of another keep stays.
+        self.archive("world-20261001-090000")
+        test_carry_rvr.execute(self.db, "UPDATE Keep SET Realm=1 WHERE KeepID=22")
+        world_admin.carry_rvr_from_archive(self.data, "world-20261001-090000", log=QUIET)
+        self.assertEqual(test_carry_rvr.query(self.db, "SELECT KeepID, Realm FROM Keep WHERE KeepID IN (22, 50) "
+                                                       "ORDER BY KeepID"), [(22, 1), (50, 2)])
 
     def test_an_unknown_archive_changes_nothing(self):
         r = self.run_admin("world-19990101-000000")
