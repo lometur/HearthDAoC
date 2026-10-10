@@ -18,12 +18,14 @@ The file:
   {"quests": [{"step": "7", "set": {...}, "guard": {"21500": ["<digest>", ...]}}]}
 - step: a key of epic_chains_data.json "steps"; its "ids" are the quest IDs of the classes, in that file's order
   ("classes"); a null ID is skipped.
-- set: DataQuest columns to set (AcceptText, Description, SourceText, StepText, TargetText, AdvanceText, FinishText,
-  StepItemTemplates). A value is a string (every class), an object with all five class names, or (for the per-stage
-  columns SourceText, StepText, TargetText, AdvanceText, StepItemTemplates) a list with one entry, a string or a
-  per-class object, for each stage of the quest row (its StepType split on "|"); the list is joined with "|". No
-  value may contain "|". A quest row with another number of stages than a list has entries is left alone and named
-  with the other rows left alone; the other rows still apply.
+- set: DataQuest columns to set (AcceptText, Description, SourceText, StepType, StepText, TargetText, AdvanceText,
+  FinishText, StepItemTemplates, CollectItemTemplate). A value is a string (every class), an object with all five
+  class names, or (for the per-stage columns SourceText, StepType, StepText, TargetText, AdvanceText,
+  StepItemTemplates, CollectItemTemplate) a list with one entry, a string or a per-class object, for each stage of the
+  quest row (its StepType split on "|"); the list is joined with "|". No value may contain "|". StepType is always
+  such a list, of numbers (eStepType): the fix may change a stage's type but never the number of stages. A quest row
+  with another number of stages than a list has entries is left alone and named with the other rows left alone; the
+  other rows still apply.
 - guard: for each quest ID, the digests of its `set` columns' values that may be replaced. digest() makes them.
   `quest_dialogue.py --seal` appends to every quest's guard list the digest of the file's own current text for that
   quest (computed from the file alone, no world needed). `--digests WORLD.db` prints the digests of the text WORLD
@@ -42,6 +44,7 @@ import datetime
 import hashlib
 import json
 import os
+import re
 import shutil
 import sqlite3
 import sys
@@ -52,9 +55,9 @@ import epic_chains
 SAVEPOINT = "quest_dialogue"
 NOT_APPLIED = "Quest dialogue: not applied ({}); the quests keep the text they have"
 DATA_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "quest_dialogue.json")
-COLUMNS = ("AcceptText", "Description", "SourceText", "StepText", "TargetText", "AdvanceText", "FinishText",
-           "StepItemTemplates")
-PER_STAGE = ("SourceText", "StepText", "TargetText", "AdvanceText", "StepItemTemplates")
+COLUMNS = ("AcceptText", "Description", "SourceText", "StepType", "StepText", "TargetText", "AdvanceText", "FinishText",
+           "StepItemTemplates", "CollectItemTemplate")
+PER_STAGE = ("SourceText", "StepType", "StepText", "TargetText", "AdvanceText", "StepItemTemplates", "CollectItemTemplate")
 
 
 def load_data(path=DATA_FILE):
@@ -98,10 +101,14 @@ def resolve(column, value, classes, stages):
     if column not in COLUMNS:
         raise ValueError(f"unknown column {column}")
     if not isinstance(value, list):
+        if column == "StepType":  # a string would be one stage: the number of stages never changes here
+            raise ValueError(f"{what}: a list with one entry for each stage")
         return _per_class(value, classes, what)
     if column not in PER_STAGE:
         raise ValueError(f"{what}: a list is only for the per-stage columns")
     entries = [_per_class(entry, classes, what) for entry in value]
+    if column == "StepType" and any(not re.fullmatch(r"[0-9]+", text) for entry in entries for text in entry.values()):
+        raise ValueError(f"{what}: a stage's type is not a number")
     out = {}
     for name in classes:
         if stages[name] is not None and len(value) != stages[name]:

@@ -125,7 +125,9 @@ teleporters' [Battlegrounds] choice, and for bots too.
 **Guild of Shadows dialogue.** Upstream left most of the Guild of Shadows chain's dialogue (levels 7 to 50)
 empty or filled with walkthrough notes. At every start, `./hdc logs` shows `Quest dialogue: N quests
 rewritten` when the texts of the chain's quests (`deploy/bin/quest_dialogue.json`, every class's version) were
-changed, and nothing when they are up to date. There is no marker: a quest is rewritten only while its texts
+changed, and nothing when they are up to date. Besides the texts (accept keyword, description, journal steps and
+what the NPCs say), the file can set a quest's step items, step types and turn-in items, but never its number of
+stages: a quest whose stages differ from the file's is kept. There is no marker: a quest is rewritten only while its texts
 still hold upstream's or an earlier version of this file's, so a quest whose text you changed yourself is kept,
 and a later release with revised text reaches a world that had the earlier one. Kept quests are named at every
 start (`M left as they are (their text differs from upstream's and this file's): 21500, ...`): your own edits,

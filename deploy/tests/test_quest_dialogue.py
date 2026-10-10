@@ -27,7 +27,7 @@ import world_fixes as wf  # noqa: E402
 TEST_WORLD = os.environ.get("HDC_TEST_WORLD")
 SCHEMA = ("CREATE TABLE DataQuest (ID INTEGER PRIMARY KEY, StepType TEXT, AcceptText TEXT, Description TEXT, "
           "SourceText TEXT, StepText TEXT, TargetText TEXT, AdvanceText TEXT, FinishText TEXT, StepItemTemplates TEXT, "
-          "LastTimeRowUpdated DATETIME NOT NULL DEFAULT '2000-01-01 00:00:00')")
+          "CollectItemTemplate TEXT, LastTimeRowUpdated DATETIME NOT NULL DEFAULT '2000-01-01 00:00:00')")
 CHAINS = {"classes": {"Alpha": 1, "Beta": 2}, "steps": {"7": {"ids": [100, 200]}, "9": {"ids": [None, 300]}}}
 OLD = "2000-01-01 00:00:00"
 NOW = "2026-10-09 12:00:00"
@@ -164,6 +164,24 @@ class SyntheticTests(unittest.TestCase):
         self.assertEqual(self.row(100, "Description", "StepText"), ("new A", "go|come back"))
         self.assertEqual(self.row(200, "Description", "StepText", "LastTimeRowUpdated"), ("old B", None, OLD))
 
+    def test_step_types_and_collect_items_are_rewritten_stage_by_stage(self):
+        # Level 11's rebuild: a delivery becomes a turn-in of two items, and the item handed is another.
+        data = self.data(set={"StepType": ["10", {"Alpha": "3", "Beta": "11"}],
+                              "CollectItemTemplate": ["cq_stone;2", "cq_gem"], "StepItemTemplates": ["cq_gem", ""]},
+                         guard={"100": [guard_for("", "", "2|3")], "200": [guard_for("", "", "2|3")]})
+        self.assertEqual(self.run_fix(data), ["Quest dialogue: 2 quests rewritten"])
+        self.assertEqual(self.row(100, "StepType", "CollectItemTemplate", "StepItemTemplates"), ("10|3", "cq_stone;2|cq_gem", "cq_gem|"))
+        self.assertEqual(self.row(200, "StepType", "CollectItemTemplate", "StepItemTemplates"), ("10|11", "cq_stone;2|cq_gem", "cq_gem|"))
+        self.assertEqual(self.run_fix(data), [])
+
+    def test_a_step_type_list_with_another_number_of_stages_keeps_the_rows(self):
+        # The fix never changes how many stages a quest has: the rows keep their two.
+        before = self.conn.execute("SELECT * FROM DataQuest ORDER BY ID").fetchall()
+        data = self.data(set={"StepType": ["10", "0", "3"], "CollectItemTemplate": ["cq_stone;2", "", "cq_gem"]},
+                         guard={"100": [guard_for("", "2|3")], "200": [guard_for("", "2|3")]})
+        self.assertEqual(self.run_fix(data), ["Quest dialogue: 2 left as they are (their text differs from upstream's and this file's): 100, 200"])
+        self.assertEqual(self.conn.execute("SELECT * FROM DataQuest ORDER BY ID").fetchall(), before)
+
     def test_a_bad_file_rolls_back_the_fix_and_says_so(self):
         bad = {
             "a list in a column that has no stages": self.data(set={"Description": ["a", "b"]}),
@@ -176,6 +194,9 @@ class SyntheticTests(unittest.TestCase):
             "an unknown step": self.data(step="8"),
             "a step twice": {"quests": self.data()["quests"] * 2},
             "a value that is not text": self.data(set={"Description": 5}),
+            "a StepType that is not a list": self.data(set={"StepType": "2"}),
+            "a StepType that is not a number": self.data(set={"StepType": ["2", "deliver"]}),
+            "a per-class StepType that is not a number": self.data(set={"StepType": ["2", {"Alpha": "3", "Beta": " 3"}]}),
         }
         for what, data in bad.items():
             with self.subTest(what):
