@@ -2381,6 +2381,10 @@ namespace DOL.GS.Quests
 			{
 				TryTurnTo(living, player);
 
+				// HearthDAoC: a full journal gets no prompt (AddQuest would refuse the quest after the prompt was answered).
+				if (RefuseWhenJournalFull(player))
+					return;
+
 				// HearthDAoC: the player is asked "Do you accept?" before the quest starts (owner 2026-10-09: never just a
 				// click on a key word); the answer starts it through StartOffered. The prompt needs a GameNPC; any other
 				// giver starts the quest at once, as upstream did.
@@ -2392,11 +2396,30 @@ namespace DOL.GS.Quests
 		}
 
 		/// <summary>
+		/// HearthDAoC: tells the player the journal is full and returns true when <c>GamePlayer.AddQuest</c> would refuse
+		/// this quest for that reason. Decided before any record, item or text exists (see <see cref="DataQuestOffers.JournalIsFull"/>).
+		/// </summary>
+		private static bool RefuseWhenJournalFull(GamePlayer player)
+		{
+			bool doingAnyDataQuest = player.QuestList.Keys.Any(q => q is DataQuest && q.IsDoingQuest());
+			if (!DataQuestOffers.JournalIsFull(player.QuestList.Count, doingAnyDataQuest))
+				return false;
+
+			player.Out.SendMessage(DataQuestOffers.JournalFullText, eChatType.CT_System, eChatLoc.CL_SystemWindow);
+			return true;
+		}
+
+		/// <summary>
 		/// HearthDAoC: starts this quest for a player who accepted the offer (or whispered to a giver that can't ask).
 		/// Called on the offering instance, whose DBDataQuest describes the quest.
 		/// </summary>
 		public virtual void StartOffered(GamePlayer player, GameLiving living)
 		{
+			// HearthDAoC: the player may have taken other quests while the prompt was open; a full journal creates no
+			// record (it would show in the journal at the next login without its item), hands no item and says only so.
+			if (RefuseWhenJournalFull(player))
+				return;
+
 			{
 				// HearthDAoC: a quest whose first step is a delivery never handed that step's item (nothing "begins" step 1),
 				// so 56 classic quests, among them the level 30 Regal Nobility, could not be finished (owner test 2026-10-09).

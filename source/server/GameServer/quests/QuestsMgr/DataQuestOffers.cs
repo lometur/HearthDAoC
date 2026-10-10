@@ -36,6 +36,15 @@ namespace DOL.GS.Quests
         public static bool AnswerMatches(ushort answeredQuestId, bool sameNpc, DateTime offeredAt, DateTime now)
             => answeredQuestId == OfferQuestId && sameNpc && now - offeredAt <= OfferLifetime;
 
+        public const string JournalFullText = "Your quest journal is full. Finish or abandon a quest first.";
+
+        /// <summary>True when <c>GamePlayer.AddQuest</c> refuses a data quest for lack of room: more than 25 quests in the
+        /// journal and the player already doing a data quest (upstream's <c>if (QuestList.Count &gt; 25)</c> has no body, so it
+        /// guards the next <c>if</c>, and <c>IsDoingQuest</c> compares only the C# type, so for a data quest it means "doing
+        /// any data quest"). Decided before anything is created, so a refusal leaves no half-started quest.</summary>
+        public static bool JournalIsFull(int questCount, bool doingAnyDataQuest)
+            => questCount > 25 && doingAnyDataQuest;
+
         public static bool IsExpired(DateTime offeredAt, DateTime now) => now - offeredAt > OfferLifetime;
 
         private sealed class PendingOffer

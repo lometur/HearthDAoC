@@ -51,4 +51,16 @@ public sealed class UT_DataQuestOffers
         Assert.That(DataQuestOffers.IsExpired(Offered, Offered.AddMinutes(5)), Is.False);
         Assert.That(DataQuestOffers.IsExpired(Offered, Offered.AddMinutes(6)), Is.True);
     }
+
+    [Test]
+    public void JournalWithTwentyFiveQuestsIsNotFull()
+        => Assert.That(DataQuestOffers.JournalIsFull(25, true), Is.False);
+
+    [Test]
+    public void JournalWithTwentySixQuestsAndADataQuestIsFull()
+        => Assert.That(DataQuestOffers.JournalIsFull(26, true), Is.True);
+
+    [Test]
+    public void JournalWithTwentySixQuestsAndNoDataQuestIsNotFull()
+        => Assert.That(DataQuestOffers.JournalIsFull(26, false), Is.False);
 }
