@@ -5,6 +5,7 @@ using DOL.Events;
 using DOL.GS.Commands;
 using DOL.GS.PacketHandler;
 using DOL.GS.Quests;
+using DOL.Logging;
 
 namespace DOL.GS.HearthDAoC;
 
@@ -68,42 +69,88 @@ public sealed class IndicatorCommandHandler : AbstractCommandHandler, ICommandHa
         }
     }
 
+    // How long the NPC stays off the GM's client before it is created again. The owner's client draws an indicator
+    // from the create packet of an NPC it doesn't have (at login: owner test 2026-10-10), so the client must have
+    // dropped it first; the gap also shows the GM that the re-create happened.
+    private const int RecreateDelay = 1000;
+
+    private static readonly Logger Log = LoggerManager.Create(typeof(IndicatorCommandHandler));
+
     private static void Say(GameClient client, string text) =>
         client.Out.SendMessage(text, eChatType.CT_System, eChatLoc.CL_SystemWindow);
 
-    // The NPC disappears from this client and comes back with a new create packet, as GameNPC.MoveInRegion does for
-    // everyone: ClientService sends the create, the equipment, the GM's target again, and notes the NPC as created.
-    private static void Recreate(GamePlayer gm, GameNPC npc)
+    // The NPC leaves this client (the remove packet, as when it leaves the world), and RecreateDelay later comes back
+    // through ClientService.CreateObjectForPlayer: the create the server sends when an NPC comes into view
+    // (ClientService.UpdateNpcs) or when the client asks for an object it doesn't know (CreateObjectRequestHandler),
+    // that is the create packet, the equipment, the GM's target again. Then "after" runs. Nothing goes to anyone else.
+    private static void Recreate(GamePlayer gm, GameNPC npc, Action after)
     {
+        bool targeted = gm.TargetObject == npc;
         gm.Out.SendObjectRemove(npc);
-        ClientService.CreateObjectForPlayer(gm, npc);
+        new ECSGameTimer(gm, _ =>
+        {
+            try
+            {
+                if (gm.ObjectState != GameObject.eObjectState.Active || gm.Client.ClientState != GameClient.eClientState.Playing)
+                    return 0;
+                if (npc.ObjectState != GameObject.eObjectState.Active || npc.CurrentRegion != gm.CurrentRegion
+                    || !gm.IsWithinRadius(npc, WorldMgr.VISIBILITY_DISTANCE))
+                {
+                    Say(gm.Client, $"{npc.Name} is out of your view now; it shows afresh when next in view.");
+                    return 0;
+                }
+                // The client drops its target with the object, and may have told the server so.
+                if (targeted && gm.TargetObject == null)
+                    gm.TargetObject = npc;
+                ClientService.CreateObjectForPlayer(gm, npc);
+                after();
+            }
+            catch (Exception ex)
+            {
+                // A timer that throws sends its owner to the character screen, so this one only logs.
+                Log.Error($"/indicator: could not re-create {npc.Name} for {gm.Name}", ex);
+            }
+            return 0;
+        }, RecreateDelay);
+    }
+
+    // What the create packet just sent said: GetQuestIndicator is what PacketLib1124.SendNPCCreate asked.
+    private static string Created(GameNPC npc, GamePlayer gm, out eQuestIndicator sent)
+    {
+        sent = npc.GetQuestIndicator(gm);
+        return $"{npc.Name} is back on your client; its create packet said {QuestIndicatorProbe.Name(sent)} " +
+            $"({QuestIndicatorProbe.CreateFlag(sent)}).";
     }
 
     private static void Create(GameClient client, GameNPC npc, eQuestIndicator indicator)
     {
         GamePlayer gm = client.Player;
         IndicatorOverrides.Store.Set(gm, npc, indicator);
-        Recreate(gm, npc);
-        string name = QuestIndicatorProbe.Name(indicator);
-        Say(client, $"Re-created {npc.Name} for you only, its create packet saying {name} " +
-            $"({QuestIndicatorProbe.CreateFlag(indicator)}). Kept until /indicator clear or refresh, your logout, or its leaving the world.");
-        // A class that decides its own indicator without asking GameNPC's never sees the override.
-        eQuestIndicator sent = npc.GetQuestIndicator(gm);
-        if (sent != indicator)
-            Say(client, $"But its class, {npc.GetType().Name}, overrides GetQuestIndicator and gave " +
-                $"{QuestIndicatorProbe.Name(sent)}: the create packet carried that.");
+        Say(client, $"{npc.Name} leaves your client for a second and comes back with {QuestIndicatorProbe.Name(indicator)} " +
+            $"in its create packet, for you only. Kept until /indicator clear or refresh, your logout, or its leaving the world.");
+        Recreate(gm, npc, () =>
+        {
+            string text = Created(npc, gm, out eQuestIndicator sent);
+            // A class that decides its own indicator without asking GameNPC's never sees the value.
+            if (sent != indicator)
+                text += $" Its class, {npc.GetType().Name}, overrides GetQuestIndicator and ignores the /indicator value.";
+            Say(client, text);
+        });
     }
 
     private static void Refresh(GameClient client, GameNPC npc)
     {
         GamePlayer gm = client.Player;
         bool dropped = IndicatorOverrides.Store.Remove(gm, npc);
-        eQuestIndicator real = IndicatorOverrides.Real(npc, gm);
-        Recreate(gm, npc);
-        gm.Out.SendNPCsQuestEffect(npc, real);
-        Say(client, $"Re-sent {npc.Name}'s real indicator, {QuestIndicatorProbe.Name(real)}, to you only: the create packet " +
-            $"({QuestIndicatorProbe.CreateFlag(real)}), then the quest effect (byte {(byte)real})." +
+        Say(client, $"{npc.Name} leaves your client for a second and comes back with its real indicator: the create " +
+            "packet, then the quest effect, for you only." +
             (dropped ? " Your /indicator create value on it is dropped." : string.Empty));
+        Recreate(gm, npc, () =>
+        {
+            string text = Created(npc, gm, out eQuestIndicator real);
+            gm.Out.SendNPCsQuestEffect(npc, real);
+            Say(client, $"{text} Then the quest effect: byte {(byte)real}.");
+        });
     }
 
     private static void Clear(GameClient client, GameNPC target)
@@ -116,11 +163,11 @@ public sealed class IndicatorCommandHandler : AbstractCommandHandler, ICommandHa
         // Only NPCs still in the world near the GM are re-created; the others show afresh when next in view.
         List<GameNPC> shown = npcs.Where(n => n.ObjectState == GameObject.eObjectState.Active
             && n.CurrentRegionID == gm.CurrentRegionID && n.IsWithinRadius(gm, WorldMgr.VISIBILITY_DISTANCE)).ToList();
-        foreach (GameNPC npc in shown)
-            Recreate(gm, npc);
         Say(client, (dropped == 0 ? "You had no /indicator create values."
                 : $"Dropped your /indicator create values on {(dropped == 1 ? "1 NPC" : $"{dropped} NPCs")}.") +
-            (shown.Count == 0 ? string.Empty : " Re-created for you: " + string.Join(", ", shown.Select(n => n.Name)) + "."));
+            (shown.Count == 0 ? string.Empty : " Re-creating for you: " + string.Join(", ", shown.Select(n => n.Name)) + "."));
+        foreach (GameNPC npc in shown)
+            Recreate(gm, npc, () => Say(client, Created(npc, gm, out _)));
     }
 
     private static void Show(GameClient client, GameNPC npc)

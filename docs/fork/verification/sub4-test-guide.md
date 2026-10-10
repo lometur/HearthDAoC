@@ -55,8 +55,10 @@ is closed. At 11, Shades and Shadows from Carys, then 15 from your Camelot train
 type `/indicator`: it says which indicator the server means to show you and why. Then try each way the server can
 show one and note what appears each time (a ring at the feet, a knot over the head, its colour, or nothing):
 `/indicator effect 1`, `effect 2`, `effect 4`, `effect 8` and `effect 16` (any other number up to 255 is welcome too),
-then `/indicator create available`, `finish`, `lesson`, `lore`, `pending` and `none`. Then the stale case, a level-7
-character standing by Elaru with nothing shown: `/indicator refresh` re-sends the real indicator both ways; does it
-appear now? `/indicator clear` puts everything back. Report a short list: each command and what you saw.
+then `/indicator create available`, `finish`, `lesson`, `lore`, `pending` and `none`: each time the NPC vanishes for
+a second and comes back, as at a login (say if it doesn't), and the chat says what its create packet carried. Then
+the stale case, a level-7 character standing by Elaru with nothing shown: `/indicator refresh` re-creates her the same
+way with her real indicator, then sends the quest effect; does it appear now? `/indicator clear` puts everything
+back. Report a short list: each command and what you saw.
 
 Results go in `docs/fork/verification/sub4-ingame.md`.

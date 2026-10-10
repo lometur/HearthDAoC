@@ -86,13 +86,31 @@ class IndicatorCommandTests(unittest.TestCase):
         self.assertEqual(calling, ["GameNPC.cs"])
 
     def test_the_create_packet_and_the_re_create_are_upstreams(self):
-        # What /indicator relies on; if upstream changes either, review the command.
+        # What /indicator relies on; if upstream changes any of it, review the command.
         create = read(os.path.join(GAME_SERVER, "packets", "Server", "PacketLib1124.cs"))
         self.assertIn("eQuestIndicator questIndicator = npc.GetQuestIndicator(m_gameClient.Player);", create)
+        # The re-create is the create an NPC gets when it comes into view, or when the client asks for one it lacks.
         service = read(os.path.join(GAME_SERVER, "ECS-Services", "ClientService.cs"))
-        self.assertIn("public static void CreateObjectForPlayer(GamePlayer player, GameObject gameObject)", service)
+        for_player = between(service, "public static void CreateObjectForPlayer(GamePlayer player, GameObject gameObject)",
+                             "public static void CreateObjectForPlayers")
+        self.assertIn("CreateNpcForPlayerInternal(player, gameObject as GameNPC);", for_player)
+        self.assertIn("CreateNpcForPlayerInternal(player, npcInRange);", between(service, "private static void UpdateNpcs(", "\n        }\n"))
+        request = read(os.path.join(GAME_SERVER, "packets", "Client", "168", "CreateObjectRequestHandler.cs"))
+        self.assertIn("ClientService.CreateObjectForPlayer(client.Player, obj);", request)
+        # The client drops the NPC first, and gets it back only after the delay.
         command = read(os.path.join(GAME_SERVER, "scripts", "hearthdaoc", "IndicatorCommand.cs"))
-        self.assertIn("gm.Out.SendObjectRemove(npc);\n        ClientService.CreateObjectForPlayer(gm, npc);", command)
+        recreate = between(command, "private static void Recreate(", "\n    }\n")
+        remove = recreate.index("gm.Out.SendObjectRemove(npc);")
+        timer = recreate.index("new ECSGameTimer(gm, _ =>")
+        create = recreate.index("ClientService.CreateObjectForPlayer(gm, npc);")
+        self.assertLess(remove, timer)
+        self.assertLess(timer, create)
+        self.assertIn("}, RecreateDelay);", recreate[create:])
+
+def between(text, start, end):
+    """The text from start up to the first end after it."""
+    body = text[text.index(start):]
+    return body[:body.index(end)]
 
 
 def read_any(path):
