@@ -10,8 +10,9 @@ saves the setting in /data/spawns.json, so new-world and upgrade-world can re-ap
 exactly the restored rows. Run with the server stopped: mobs load at server start.
 
 The existence check compares names without case, so it also matched named quest monsters: the archived
-"arawnite messenger" came back 170 units from level 20's "Arawnite Messenger", and quests match a kill's
-name exactly, so killing the twin counted for nothing (owner test 2026-10-10). `restore` leaves out an
+"arawnite messenger" came back 170 units from level 20's "Arawnite Messenger", and quests then matched a
+kill's name exactly, so killing the twin counted for nothing (owner test 2026-10-10; quests now match names
+without case, QuestNames.Same, but the twins stay left out as duplicates). `restore` leaves out an
 archived row standing within TWIN_RADIUS of a live monster whose name differs from its own only in case and
 is a quest's kill target, and world_fixes.py removes such rows an earlier restore added
 (remove_quest_twins).

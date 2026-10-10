@@ -131,7 +131,9 @@ public sealed class EpicCommandHandler : AbstractCommandHandler, ICommandHandler
             return;
         }
         DbDataQuest row = GameServer.Database.FindObjectByKey<DbDataQuest>(next.Id);
-        GameNPC giver = row == null ? null : WorldMgr.GetNPCsByNameFromRegion(row.StartName, row.StartRegionID, target.Realm).FirstOrDefault();
+        // The giver's name compares without case, as quests now match names (QuestNames.Same).
+        GameNPC giver = row == null ? null : WorldMgr.GetRegion(row.StartRegionID)?.Objects?.OfType<GameNPC>()
+            .FirstOrDefault(n => n.Realm == target.Realm && QuestNames.Same(row.StartName, n.Name));
         if (giver == null)
         {
             DisplayMessage(client, $"{row?.StartName} isn't in region {row?.StartRegionID}.");
