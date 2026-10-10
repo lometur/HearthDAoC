@@ -114,71 +114,87 @@
     "AcceptText": "Captain Dillon",
     "Description": {
      "Infiltrator": "<Player>. Word of your first errand has come back to me, and it was good. Captain Dillon, who keeps the guard tower near Ludlow, has a problem he would rather the Guild solve quietly than the Defenders solve loudly. Will you go to [Captain Dillon]?",
-     "Mercenary": "<Player>. Word is you can be trusted with an errand. Now let's see you trusted with a sword. Captain Dillon, who keeps the guard tower near Ludlow, has deserters to deal with, and he doesn't want the Defenders crowing about it. Will you go to [Captain Dillon]?",
+     "Mercenary": "<Player>. Word is you can be trusted with an errand. Now let's see you trusted with a sword. Captain Dillon, who keeps the guard tower near Ludlow, has two of his own guards turned thief, and he doesn't want the Defenders crowing about it. Will you go to [Captain Dillon]?",
      "Cabalist": "<Player>. You have shown you can be trusted. Captain Dillon, who keeps the guard tower near Ludlow, has lost something old and valuable, and he would rather the Guild recover it quietly than the Defenders recover it loudly. Will you go to [Captain Dillon]?",
      "Necromancer": "<Player>. You were swift and silent; our friends noticed. Now the Temple has a debt to collect. Captain Dillon, who keeps the guard tower near Ludlow, needs help he cannot ask of the Defenders, and a soldier who owes the Temple a favour is worth more than gold. Will you go to [Captain Dillon]?",
-     "Reaver": "<Player>. You've run your errands; now you get to swing that flail. Captain Dillon, who keeps the guard tower near Ludlow, has deserters loose in the Black Mountains and needs them dealt with quietly. A soldier who owes the Temple a favour is worth more than gold. Will you go to [Captain Dillon]?"
+     "Reaver": "<Player>. You've run your errands; now you get to swing that flail. Captain Dillon, who keeps the guard tower near Ludlow, has two of his guards turned thief and loose in the Black Mountains. A soldier who owes the Temple a favour is worth more than gold. Will you go to [Captain Dillon]?"
     },
     "SourceText": [
      "Then go to the guard tower near Ludlow. Mind your manners; he is a soldier, and soldiers don't love our kind.",
-     "Frund was seen heading west along the road; Agisthil went north. Bring back the crediac, and quickly: without it, what this tower was built to keep down won't stay down. What happens to the deserters is your affair, and I won't ask.",
-     "Agisthil went north. He can't be far.",
-     "A ward-stone should not be this dull. Omis, the vendor at Swanton Keep, is said to know old stones.",
-     "Ah. Someone has cut it loose from its ward; that is why it sleeps. There, polished and awake again; I'll send it home to Dillon by my own courier. But mark this: when it woke, it warmed toward the south. A crediac remembers what it was made to hold down. Brodic, a dead warrior laid to rest under that ward long ago, walks the southern Black Mountains again. Put him back in the ground.",
+     "Frund was seen heading west along the road; Agisthil went north. Each of them carries one of the stones. Bring them back. What happens to the thieves is your affair, and I won't ask.",
+     "Agisthil went north. He'll have the other one.",
+     "Two rough halves of one stone. Omis, the gemcutter at Swanton Keep, can make something of them.",
+     "There. Cut, polished and set together: a crediac once more. Only a crediac can put Brodic down, and now you carry one. He haunts the southern Black Mountains.",
      "Captain Dillon will want to hear of it."
     ],
     "StepText": [
      "Speak with Captain Dillon in the guard tower near Ludlow.",
-     "Find the deserter Frund, who fled west from Captain Dillon's tower.",
-     "Find the deserter Agisthil, who fled north from Captain Dillon's tower.",
-     "Take the Crediac to Omis at Swanton Keep.",
-     "Lay Brodic, the dead warrior the Crediac held down, to rest in the southern Black Mountains.",
-     "Return to Captain Dillon."
+     "Find the thief Frund, who fled west from Captain Dillon's tower, and take his stone.",
+     "Find the thief Agisthil, who fled north from Captain Dillon's tower, and take his stone.",
+     "Take both stones to Omis, the gemcutter at Swanton Keep.",
+     "Rid the land of Brodic in the southern Black Mountains; only the Crediac can defeat him.",
+     "Return to Captain Dillon with what is left of the Crediac."
     ],
     "TargetText": [
-     "So they send me a <Class>. Fine; I'm in no position to be choosy. Three nights ago two of my guards, Frund and Agisthil, deserted, and they took the tower's crediac with them: an old ward-stone this tower has kept since before Ludlow had walls.",
-     "Frund falls. He has nothing of the tower's on him; Agisthil must have the crediac.",
-     "Agisthil falls, and you pull the Crediac from his belt: a smooth grey stone, cold and dull.",
-     "Is that a crediac? I can feel it from here. Let me see it.",
-     "Brodic's bones fall still, and the cold that followed him lifts.",
-     ""
+     "So they send me a <Class>. Fine; I'm in no position to be choosy. A monster named Brodic has been terrorizing the land, a dead thing that won't stay down, and only a crediac stone can defeat him. Two of my own guards, Frund and Agisthil, turned thief and made off with the stones.",
+     "Frund falls. In his pouch is a Crediac stone: half of a broken stone, rough and unworked.",
+     "Agisthil falls, and you take the other Crediac stone from his belt.",
+     "Crediac stones? Let me see them. Both of them, mind; half a stone is no use to anyone.",
+     "Brodic falls, and the crediac cracks in your pouch, its work done.",
+     "Brodic is gone? Then show me what's left of the crediac."
+    ],
+    "StepType": [
+     "4",
+     "0",
+     "0",
+     "10",
+     "0",
+     "3"
     ],
     "StepItemTemplates": [
      "",
-     "",
-     "",
+     "cq_crediac_stone",
+     "cq_crediac_stone",
      "cq_crediac",
      "",
      ""
     ],
+    "CollectItemTemplate": [
+     "",
+     "",
+     "",
+     "cq_crediac_stone;2",
+     "",
+     "cq_crediac"
+    ],
     "FinishText": {
-     "Infiltrator": "The deserters dealt with, Brodic back in his grave, and Omis tells me the crediac is on its way home. I didn't think the Guild would see it done so cleanly. Take this, <Class>, and tell your master that Dillon pays his debts.",
-     "Mercenary": "The deserters dealt with, Brodic back in his grave, and Omis tells me the crediac is on its way home. I didn't think the Guild would see it done so cleanly. Take this, <Class>, and tell your master that Dillon pays his debts.",
-     "Cabalist": "The deserters dealt with, Brodic back in his grave, and Omis tells me the crediac is on its way home. I didn't think the Guild would see it done so cleanly. Take this, <Class>, and tell your master that Dillon pays his debts.",
-     "Necromancer": "The deserters dealt with, Brodic back in his grave, and Omis tells me the crediac is on its way home. I didn't think the Temple would see it done so cleanly. Take this, <Class>, and tell your master that Dillon pays his debts.",
-     "Reaver": "The deserters dealt with, Brodic back in his grave, and Omis tells me the crediac is on its way home. I didn't think the Temple would see it done so cleanly. Take this, <Class>, and tell your master that Dillon pays his debts."
+     "Infiltrator": "Cracked clean through; it did its work. Brodic is gone, and the thieves with him. I didn't think the Guild would see it done so cleanly. Take this, <Class>, and tell your master that Dillon pays his debts.",
+     "Mercenary": "Cracked clean through; it did its work. Brodic is gone, and the thieves with him. I didn't think the Guild would see it done so cleanly. Take this, <Class>, and tell your master that Dillon pays his debts.",
+     "Cabalist": "Cracked clean through; it did its work. Brodic is gone, and the thieves with him. I didn't think the Guild would see it done so cleanly. Take this, <Class>, and tell your master that Dillon pays his debts.",
+     "Necromancer": "Cracked clean through; it did its work. Brodic is gone, and the thieves with him. I didn't think the Temple would see it done so cleanly. Take this, <Class>, and tell your master that Dillon pays his debts.",
+     "Reaver": "Cracked clean through; it did its work. Brodic is gone, and the thieves with him. I didn't think the Temple would see it done so cleanly. Take this, <Class>, and tell your master that Dillon pays his debts."
     }
    },
    "guard": {
     "20157": [
-     "9d99d3b39c93ac39098ab44880e787522ec755fa47857266b80281b46bc13038",
-     "9cfb0e426bf714c7a91f9aa0994d61c6816fe2e130ba60103240e9b8e8edfb58"
+     "1018c9abbbde0169b372b4a5381c608dc43c0769a072e59588af28b7aca23941",
+     "39b249cf5d4e2e04c09ff32d2e120a6881d672cda256a65c28587b8b10aa4f9e"
     ],
     "20155": [
-     "9d99d3b39c93ac39098ab44880e787522ec755fa47857266b80281b46bc13038",
-     "8b6988fd3a3ea28fdacacc5b809ef309467de01421a5d13fadf7e92e43ca0904"
+     "1018c9abbbde0169b372b4a5381c608dc43c0769a072e59588af28b7aca23941",
+     "22830d28bd3103833b23ebb3a195ecd0658a6e3866e0261b32b8c7c46e5bd6b9"
     ],
     "20156": [
-     "9d99d3b39c93ac39098ab44880e787522ec755fa47857266b80281b46bc13038",
-     "ab7b3e3f47f5091814be38eedd76e98d43518de2917adc842b4a28968662e9c4"
+     "1018c9abbbde0169b372b4a5381c608dc43c0769a072e59588af28b7aca23941",
+     "c8266af5c91b3231b65ada6bb662d1181f2efa9a9db239203904cb82e08bf190"
     ],
     "20159": [
-     "9d99d3b39c93ac39098ab44880e787522ec755fa47857266b80281b46bc13038",
-     "09c846e946205730759e3a54f03e3fa2ceb7c6bbb65f23ae90b69d60d15ad3d1"
+     "1018c9abbbde0169b372b4a5381c608dc43c0769a072e59588af28b7aca23941",
+     "8ab2c1f14b4a16d9659d29761a7496171620c4439034fd154313c2b83a936e4a"
     ],
     "20158": [
-     "9d99d3b39c93ac39098ab44880e787522ec755fa47857266b80281b46bc13038",
-     "e63a9960941012dc90074422d8dbedc6d4a019df76aefcc3076ba794e4204068"
+     "1018c9abbbde0169b372b4a5381c608dc43c0769a072e59588af28b7aca23941",
+     "947d5b883dee72556dab56524250eb17cc1ec917c3a96026dd1d79d33a8da20f"
     ]
    }
   },

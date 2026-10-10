@@ -334,6 +334,20 @@ class RealDialogueTests(unittest.TestCase):
                 held = self.conn.execute(f"SELECT {', '.join(columns)} FROM DataQuest WHERE ID=?", (qid,)).fetchone()
                 self.assertEqual([v or "" for v in held], values)
 
+    def test_level_11_has_omis_cut_both_stones_into_the_crediac(self):
+        # Frund and Agisthil each drop a stone; Omis takes both (an "id;2" turn-in) and hands the Crediac, which goes
+        # back to Captain Dillon. The six stages stay, so upstream's map markers still line up.
+        ids = [qid for qid in self.chains["steps"]["11"]["ids"] if qid is not None]
+        self.assertEqual(sorted(ids), [20155, 20156, 20157, 20158, 20159])
+        for qid in ids:
+            with self.subTest(quest=qid):
+                self.assertEqual(self.conn.execute(
+                    "SELECT StepType, StepItemTemplates, CollectItemTemplate FROM DataQuest WHERE ID=?", (qid,)).fetchone(),
+                    ("4|0|0|10|0|3", "|cq_crediac_stone|cq_crediac_stone|cq_crediac||", "|||cq_crediac_stone;2||cq_crediac"))
+        self.assertEqual(self.conn.execute(
+            "SELECT Id_nb FROM ItemTemplate WHERE Id_nb IN ('cq_crediac_stone', 'cq_crediac') ORDER BY Id_nb").fetchall(),
+            [("cq_crediac",), ("cq_crediac_stone",)])
+
     def test_a_description_that_names_the_accept_text_has_it_in_brackets(self):
         for qid, (accept, description, *_rest) in self.rows.items():
             if accept and accept.lower() in (description or "").lower():
