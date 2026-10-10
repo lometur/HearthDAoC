@@ -27,7 +27,8 @@ import world_fixes as wf  # noqa: E402
 TEST_WORLD = os.environ.get("HDC_TEST_WORLD")
 SCHEMA = ("CREATE TABLE DataQuest (ID INTEGER PRIMARY KEY, StepType TEXT, AcceptText TEXT, Description TEXT, "
           "SourceText TEXT, StepText TEXT, TargetText TEXT, AdvanceText TEXT, FinishText TEXT, StepItemTemplates TEXT, "
-          "CollectItemTemplate TEXT, LastTimeRowUpdated DATETIME NOT NULL DEFAULT '2000-01-01 00:00:00')")
+          "CollectItemTemplate TEXT, StartName TEXT, QuestDependency TEXT, "
+          "LastTimeRowUpdated DATETIME NOT NULL DEFAULT '2000-01-01 00:00:00')")
 CHAINS = {"classes": {"Alpha": 1, "Beta": 2}, "steps": {"7": {"ids": [100, 200]}, "9": {"ids": [None, 300]}}}
 OLD = "2000-01-01 00:00:00"
 NOW = "2026-10-09 12:00:00"
@@ -182,6 +183,20 @@ class SyntheticTests(unittest.TestCase):
         self.assertEqual(self.run_fix(data), ["Quest dialogue: 2 left as they are (their text differs from upstream's and this file's): 100, 200"])
         self.assertEqual(self.conn.execute("SELECT * FROM DataQuest ORDER BY ID").fetchall(), before)
 
+    def test_the_giver_and_the_dependencies_are_single_values(self):
+        # The Shrouded Isles 7 and 11: each class's own trainer gives them, and the 11 needs the 7 of its branch.
+        # QuestDependency's "|" separates its entries, not stages.
+        self.conn.execute("UPDATE DataQuest SET StartName='Carys', QuestDependency='#21500/20478|!#20469'")
+        self.conn.commit()
+        upstream = guard_for("#21500/20478|!#20469", "Carys")  # sorted: QuestDependency, StartName
+        data = self.data(set={"StartName": {"Alpha": "Elaru", "Beta": "Carys"},
+                              "QuestDependency": {"Alpha": "#20478|!#20157", "Beta": "#20480|!#20159"}},
+                         guard={"100": [upstream], "200": [upstream]})
+        self.assertEqual(self.run_fix(data), ["Quest dialogue: 2 quests rewritten"])
+        self.assertEqual(self.row(100, "StartName", "QuestDependency"), ("Elaru", "#20478|!#20157"))
+        self.assertEqual(self.row(200, "StartName", "QuestDependency"), ("Carys", "#20480|!#20159"))
+        self.assertEqual(self.run_fix(data), [])
+
     def test_a_bad_file_rolls_back_the_fix_and_says_so(self):
         bad = {
             "a list in a column that has no stages": self.data(set={"Description": ["a", "b"]}),
@@ -190,6 +205,9 @@ class SyntheticTests(unittest.TestCase):
             "a | in a value": self.data(set={"Description": "a|b"}),
             "a | in a per-class value": self.data(set={"Description": {"Alpha": "a", "Beta": "b|c"}}),
             "a | in a stage": self.data(set={"StepText": ["a|b", "c"]}),
+            "a | in a giver": self.data(set={"StartName": {"Alpha": "Elaru", "Beta": "Elaru|Carys"}}),
+            "a list of givers": self.data(set={"StartName": ["Elaru", "Carys"]}),
+            "a list of dependencies": self.data(set={"QuestDependency": ["#20478", "!#20157"]}),
             "an unknown column": self.data(set={"Name": "x"}),
             "an unknown step": self.data(step="8"),
             "a step twice": {"quests": self.data()["quests"] * 2},
