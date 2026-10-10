@@ -29,9 +29,18 @@ python3 "$BIN/region_ports.py" --db "$DATA/world/opendaoc.sqlite3.db" --port "${
 python3 "$BIN/server_properties.py" --db "$DATA/world/opendaoc.sqlite3.db" --gm-only-commands "${HEARTHDAOC_GM_ONLY_COMMANDS-/tele;/tc}" \
     --si-start-choice "${HEARTHDAOC_SI_START_CHOICE-on}"
 # Fixes to upstream's classic world data (Disciple enabled, Saracen Disciple start, HearthDAoC welcome
-# messages) and, once per world, the classic battlegrounds; see world_fixes.py and battlegrounds.py. A
-# battleground fix that fails undoes itself and says so, and the start goes on.
-python3 "$BIN/world_fixes.py" --db "$DATA/world/opendaoc.sqlite3.db"
+# messages, and the fixes world_fixes.py lists: battlegrounds, epic chains, dialogue, mob fixes). A fix
+# that fails undoes itself and says so, and the start goes on. Their lines are also appended, under a line
+# with the time and the release, to /data/logs/world-fixes.log: ./hdc fixes shows the last start's, which
+# are long gone from ./hdc logs' last 200 lines by then (#105). A log it can't write never stops the start.
+mkdir -p "$DATA/logs"
+fixes_log="$DATA/logs/world-fixes.log"
+upstream="$(python3 -c 'import json, sys; print(json.load(open(sys.argv[1]))["version"])' "$LOCK")"
+if ! echo "=== Start $(date -u '+%Y-%m-%d %H:%M:%S') UTC, release ${HEARTHDAOC_TAG:-unknown}, upstream $upstream ===" >> "$fixes_log"; then
+    echo "WARNING: cannot write $fixes_log; ./hdc fixes will not show this start's world fixes." >&2
+    fixes_log=/dev/null
+fi
+python3 "$BIN/world_fixes.py" --db "$DATA/world/opendaoc.sqlite3.db" 2>&1 | tee -a "$fixes_log"
 
 mkdir -p "$DATA/logs" "$DATA/state" "$DATA/backups" "$DATA/navmesh"
 link() {  # link <path in /app/server> <target in /data>

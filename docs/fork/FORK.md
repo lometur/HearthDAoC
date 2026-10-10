@@ -251,8 +251,9 @@ The releases are the fork's changelog: each release's notes list the PRs merged 
 
 Each release's notes also say what to do to update, in a "To update" section just before "What's Changed":
 
-- **Owner:** `./hdc update`, plus anything else the release needs: a new `.env` setting, a world fix to check
-  in the log, a command to run once.
+- **Owner:** `./hdc update`, plus anything else the release needs: a new `.env` setting, a world fix's line to
+  check with `./hdc fixes` (the last start's world fixes; `./hdc logs` has lost them by then), a command to run
+  once.
 - **Players:** what they do, if anything: run `setup.sh` again, accept the update `play.sh` offers, or copy
   the new Windows files.
 

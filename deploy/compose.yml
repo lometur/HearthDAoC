@@ -11,6 +11,7 @@ services:
     init: true
     user: "${HEARTHDAOC_UID:-1000}:${HEARTHDAOC_GID:-1000}"
     environment:
+      HEARTHDAOC_TAG: ${HEARTHDAOC_TAG:-}  # the release, for the header of /data/logs/world-fixes.log
       HEARTHDAOC_EDITION: ${HEARTHDAOC_EDITION:-classic}
       HEARTHDAOC_LISTEN_IP: ${HEARTHDAOC_LISTEN_IP:-0.0.0.0}
       HEARTHDAOC_PORT: ${HEARTHDAOC_PORT:-10301}

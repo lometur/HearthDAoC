@@ -72,10 +72,12 @@ Then ask the owner to connect from their PC (`~/Games/HearthDAoC/play.sh` after 
 
 ## 6. Day-to-day
 
-`./hdc help` lists everything: status, logs, add-bots, accounts, bot goals, backups, restore,
-new-world, upgrade-world, carry-rvr, auto-accounts, spawns. Backups run daily into the volume (keep 7). The
-copies taken before add-bots keep their newest 3; the copies taken before restore, upgrade and carry-rvr are
-kept until you remove them (`./hdc backups` lists them; they are in /data/backups).
+`./hdc help` lists everything: status, logs, fixes, add-bots, accounts, bot goals, backups, restore,
+new-world, upgrade-world, carry-rvr, auto-accounts, spawns. `./hdc fixes` shows what the world fixes below did at
+the last start, running or not: each start appends their lines, under a line with the time and the release, to
+`/data/logs/world-fixes.log` (`./hdc logs` shows only the last 200 lines, long past them). Backups run daily into
+the volume (keep 7). The copies taken before add-bots keep their newest 3; the copies taken before restore, upgrade
+and carry-rvr are kept until you remove them (`./hdc backups` lists them; they are in /data/backups).
 Settings live in `.env` (see `.env.example`), e.g. `HEARTHDAOC_AUTOSAVE_MINUTES` (default 5),
 `HEARTHDAOC_GM_ONLY_COMMANDS` (default `/tele;/tc`: single-player teleports need GM rights) and
 `HEARTHDAOC_SI_START_CHOICE` (default `on`: a new level-1 character of a classic race is asked once
@@ -102,11 +104,11 @@ way, then `./hdc up`.
 
 **Duplicate townspeople.** Upstream's world has two copies of Ley Manton and of Tria Ellowis at the same
 spot (the merchant and a plain NPC). At every start, a plain copy standing exactly on its merchant is removed
-and kept in `fork_removed_mobs` (FixId `duplicate-townspeople`); `./hdc logs` shows `Duplicate townspeople
+and kept in `fork_removed_mobs` (FixId `duplicate-townspeople`); `./hdc fixes` shows `Duplicate townspeople
 removed`. Nothing else is touched, and a world without the copies is left alone.
 
 **Classic battlegrounds.** At its first start, a world gets the classic battlegrounds (Abermenai 15-19,
-Thidranki 20-24, Murdaigean 25-29, Caledonia 30-35); `./hdc logs` shows each change on a line starting
+Thidranki 20-24, Murdaigean 25-29, Caledonia 30-35); `./hdc fixes` shows each change on a line starting
 `Battlegrounds:`. This runs once per world: the row `classic-battlegrounds-v2` in the world's
 `fork_world_fixes` table records it, so later changes to the battlegrounds stay. Deleting that row makes
 it run again at the next start, and the parts whose results are still there change nothing. The `Mob`
@@ -123,7 +125,7 @@ keeps' guards. The realm rank caps (1L2, 1L3, 1L5, 1L9) hold on every way in: th
 teleporters' [Battlegrounds] choice, and for bots too.
 
 **Guild of Shadows dialogue.** Upstream left most of the Guild of Shadows chain's dialogue (levels 7 to 50)
-empty or filled with walkthrough notes. At every start, `./hdc logs` shows `Quest dialogue: N quests
+empty or filled with walkthrough notes. After each start, `./hdc fixes` shows `Quest dialogue: N quests
 rewritten` when the texts of the chain's quests (`deploy/bin/quest_dialogue.json`, every class's version) were
 changed, and nothing when they are up to date. Besides the texts (accept keyword, description, journal steps and
 what the NPCs say), the file can set a quest's step items, step types and turn-in items, but never its number of
@@ -143,7 +145,7 @@ the text a world holds, which is upstream's only on a clean world).
 
 **Mob fixes.** Period corrections to upstream's monsters, from the quest archives: level 11's thieves Frund and
 Agisthil are level 10, and Frund stands at the red dwarf camp beside Agisthil (`deploy/bin/mob_fixes.json`; each
-entry says why, with its source). At every start, `./hdc logs` shows `Mob fixes: N corrected: ...` when rows were
+entry says why, with its source). After each start, `./hdc fixes` shows `Mob fixes: N corrected: ...` when rows were
 changed, and nothing when they are up to date. There is no marker: a row (a `Mob` row, or the `NpcTemplate` rows of
 a template) changes only while it still holds every value upstream shipped, so a monster you changed yourself is
 kept; kept rows are named at every start (`M left as they are (they hold neither upstream's values nor this

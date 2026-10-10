@@ -13,6 +13,7 @@ VOLUME="${HEARTHDAOC_VOLUME:-hearthdaoc-data}"
 UIDGID="${HEARTHDAOC_UID:-1000}:${HEARTHDAOC_GID:-1000}"
 PORT="${HEARTHDAOC_PORT:-10301}"
 DB=/data/world/opendaoc.sqlite3.db
+FIXES_LOG=/data/logs/world-fixes.log  # the entrypoint appends each start's world fixes lines, under "=== Start ..."
 ADMIN=(python3 /app/bin/world_admin.py --data /data --lock /app/upstream.lock)
 
 compose() { docker compose -p "$PROJECT" -f "$here/compose.yml" --env-file "$here/.env" "$@"; }
@@ -50,6 +51,7 @@ usage() {
 hdc - HearthDAoC server
 
   up | stop | down | logs        start, stop (saves first), remove containers (volume kept), follow logs
+  fixes                          what the world fixes did at the last start (changes, rows they left alone, failures)
   status                         server state, world, accounts, players, bots, latest backup
   init [--seed-navmesh DIR]      create the world now (optionally reuse verified navmesh files from DIR)
   add-bots <alb|mid|hib> <1|10|100> <1|50>
@@ -177,6 +179,14 @@ case "$cmd" in
     stop) compose stop ;;
     down) compose down ;;
     logs) compose logs -f --tail=200 server ;;
+    fixes)  # the last start's section of the world fixes log, running or not (./hdc logs has lost it by then)
+        log="$(tool cat "$FIXES_LOG" 2>/dev/null)" || log=""
+        if [[ -z "$log" ]]; then
+            echo "No world fixes log yet ($FIXES_LOG): the server writes it at each start, from this release on." >&2
+            exit 1
+        fi
+        awk '/^=== Start / { last = ""; n = 0 } { last = last $0 "\n"; n++ }
+             END { printf "%s", last; if (n == 1) print "(nothing to report: the world fixes had nothing to change)" }' <<<"$log" ;;
     status)
         if refusal; then
             offline --entrypoint python3 "$(image)" "${ADMIN[@]:1}" status || true

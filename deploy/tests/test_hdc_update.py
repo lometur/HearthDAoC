@@ -1,13 +1,17 @@
 """hdc update, run for real against a fake docker (and a fake sleep) on PATH: the steps it takes, in
 order, and what it tells the owner. The compose and hdc integration test (hdc_integration.sh) runs it
-against real Docker in CI."""
+against real Docker in CI. Also hdc carry-rvr, and hdc fixes with the entrypoint lines that write its log."""
 import json
 import os
+import re
 import shutil
+import sqlite3
 import subprocess
 import tarfile
 import tempfile
 import unittest
+
+from tests.test_world_fixes import SCHEMA as WORLD_FIXES_SCHEMA
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 DEPLOY = os.path.abspath(os.path.join(HERE, ".."))
@@ -15,13 +19,19 @@ DEPLOY = os.path.abspath(os.path.join(HERE, ".."))
 # Stands in for docker. It logs every call to $FAKE_DIR/calls.jsonl and answers from $FAKE_DIR:
 # world.json (the volume's world; absent = no world yet) and the FAKE_UPGRADE setting:
 # ok | fail (before the swap: the world is unchanged) | fail-after-swap (the world was upgraded).
-# The server is stopped, unless FAKE_RUNNING is set.
+# The server is stopped, unless FAKE_RUNNING is set. The volume's /data/logs/world-fixes.log is
+# $FAKE_DIR/world-fixes.log (absent = not written yet), read by cat in the server or a throwaway container.
 FAKE_DOCKER = r'''#!/usr/bin/env python3
 import json, os, sys
 d = os.environ["FAKE_DIR"]
 args = sys.argv[1:]
 with open(os.path.join(d, "calls.jsonl"), "a") as f:
     f.write(json.dumps(args) + "\n")
+if args[:1] in (["run"], ["exec"]) and "cat" in args and args[-1] == "/data/logs/world-fixes.log":
+    if not os.path.exists(os.path.join(d, "world-fixes.log")):
+        sys.exit("cat: /data/logs/world-fixes.log: No such file or directory")
+    sys.stdout.write(open(os.path.join(d, "world-fixes.log")).read())
+    sys.exit(0)
 world = os.path.join(d, "world.json")
 def set_world(version):
     with open(world, "w") as f:
@@ -236,6 +246,147 @@ class HdcCarryRvrTests(unittest.TestCase):
 
     def test_the_usage_names_it(self):
         self.assertIn("carry-rvr [<archive>]", self.hdc("help").stdout)
+
+
+LAST_START = ("=== Start 2026-10-10 09:30:00 UTC, release v0.35b-hearth.8, upstream 0.35b ===\n"
+              "Quest dialogue: 5 quests rewritten\n"
+              "Mob fixes: 4 corrected: Agisthil (Mob fe76247d-ab9e-5a21-b66a-f629e577c87b), Agisthil (NpcTemplate 12070), "
+              "Frund (NpcTemplate 12165), Frund (Mob 3ce2271f-b9f6-4504-b55a-250da35504ba)\n")
+SAMPLE_LOG = ("=== Start 2026-10-09 08:00:00 UTC, release v0.35b-hearth.7, upstream 0.35b ===\n"
+              "Duplicate townspeople removed, archived in fork_removed_mobs: Ley Manton, Tria Ellowis\n"
+              "Quest dialogue: 65 quests rewritten\n"
+              "=== Start 2026-10-09 20:00:00 UTC, release v0.35b-hearth.7, upstream 0.35b ===\n" + LAST_START)
+NOTHING = "(nothing to report: the world fixes had nothing to change)\n"
+
+
+class HdcFixesTests(unittest.TestCase):
+    """hdc fixes prints the last start's section of /data/logs/world-fixes.log, whether the server runs or not
+    (#105: ./hdc logs shows only the last 200 lines, long past the world fixes)."""
+
+    setUp, tearDown, calls = HdcUpdateTests.setUp, HdcUpdateTests.tearDown, HdcUpdateTests.calls
+    hdc = HdcCarryRvrTests.hdc
+
+    def log(self, text):
+        with open(os.path.join(self.fake, "world-fixes.log"), "w") as f:
+            f.write(text)
+
+    def cat_call(self):
+        return next(a for a in self.calls() if a[-1] == "/data/logs/world-fixes.log")
+
+    def test_it_prints_the_last_starts_lines_from_a_throwaway_container_when_stopped(self):
+        self.log(SAMPLE_LOG)
+        r = self.hdc("fixes")
+        self.assertEqual((r.returncode, r.stdout, r.stderr), (0, LAST_START, ""))
+        call = self.cat_call()
+        self.assertEqual(call[:1], ["run"])
+        self.assertEqual(call[call.index("--network") + 1], "none")
+
+    def test_it_prints_the_last_starts_lines_from_the_running_server(self):
+        self.log(SAMPLE_LOG)
+        r = self.hdc("fixes", running=True)
+        self.assertEqual((r.returncode, r.stdout), (0, LAST_START))
+        self.assertEqual(self.cat_call()[:3], ["exec", "-i", "hearthdaoc-server"])
+
+    def test_a_start_with_nothing_to_report_says_so(self):
+        header = "=== Start 2026-10-11 07:00:00 UTC, release v0.35b-hearth.8, upstream 0.35b ===\n"
+        self.log(SAMPLE_LOG + header)
+        self.assertEqual(self.hdc("fixes").stdout, header + NOTHING)
+
+    def test_a_failure_is_shown(self):
+        failed = LAST_START + "Traceback (most recent call last):\nsqlite3.OperationalError: database is locked\n"
+        self.log(SAMPLE_LOG.replace(LAST_START, "") + failed)
+        self.assertEqual(self.hdc("fixes").stdout, failed)
+
+    def test_no_log_yet_says_so(self):
+        for text in (None, ""):
+            with self.subTest(log=text):
+                if text is not None:
+                    self.log(text)
+                r = self.hdc("fixes")
+                self.assertEqual((r.returncode, r.stdout), (1, ""))
+                self.assertIn("No world fixes log yet (/data/logs/world-fixes.log)", r.stderr)
+
+    def test_the_usage_names_it(self):
+        self.assertRegex(self.hdc("help").stdout, r"\n  fixes +what the world fixes did at the last start")
+
+
+class EntrypointFixesLogTests(unittest.TestCase):
+    """The entrypoint's world fixes lines, run against a scratch world: they print the fixes' lines as before and
+    append them, under a header, to /data/logs/world-fixes.log, which hdc fixes reads."""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.data = os.path.join(self.tmp.name, "data")
+        os.makedirs(os.path.join(self.data, "world"))
+        with sqlite3.connect(os.path.join(self.data, "world", "opendaoc.sqlite3.db")) as c:
+            for stmt in WORLD_FIXES_SCHEMA:
+                c.execute(stmt)
+            c.execute("INSERT INTO ServerProperty (`Key`, Value) VALUES ('disabled_classes', '20;33')")
+        with open(os.path.join(DEPLOY, "entrypoint.sh"), encoding="utf-8") as f:
+            lines = f.read().splitlines()
+        first = lines.index('mkdir -p "$DATA/logs"')
+        last = next(i for i, line in enumerate(lines) if line.startswith('python3 "$BIN/world_fixes.py"'))
+        self.assertLess(first, last)
+        self.block = "\n".join(lines[first:last + 1])
+        self.log_path = os.path.join(self.data, "logs", "world-fixes.log")
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    def start(self, **env):
+        script = (f"set -euo pipefail\nBIN={os.path.join(DEPLOY, 'bin')!r}\nDATA={self.data!r}\n"
+                  f"LOCK={os.path.join(DEPLOY, 'upstream.lock')!r}\n{self.block}\n")
+        base = {k: v for k, v in os.environ.items() if not k.startswith("HEARTHDAOC_")}
+        return subprocess.run(["bash", "-c", script], env={**base, **env}, capture_output=True, text=True, timeout=60)
+
+    def read_log(self):
+        with open(self.log_path) as f:
+            return f.read()
+
+    def test_each_start_appends_a_header_and_the_fixes_lines(self):
+        with open(os.path.join(DEPLOY, "upstream.lock")) as f:
+            upstream = json.load(f)["version"]
+        first = self.start(HEARTHDAOC_TAG="v0.35b-hearth.8")
+        self.assertEqual((first.returncode, first.stderr), (0, ""))
+        self.assertEqual(first.stdout, "Disciple (Necromancer's base class) enabled: disabled_classes 20;33 -> 33\n")
+        second = self.start()
+        self.assertEqual((second.returncode, second.stdout), (0, ""))
+        log = self.read_log().splitlines()
+        self.assertEqual(len(log), 3)
+        header = rf"=== Start \d{{4}}-\d\d-\d\d \d\d:\d\d:\d\d UTC, release %s, upstream {re.escape(upstream)} ==="
+        self.assertRegex(log[0], "^" + header % re.escape("v0.35b-hearth.8") + "$")
+        self.assertEqual(log[1], first.stdout.strip())
+        self.assertRegex(log[2], "^" + header % "unknown" + "$")  # a container started without the tag
+
+    def test_hdc_fixes_shows_the_last_start(self):
+        self.start(HEARTHDAOC_TAG="v0.35b-hearth.8")
+        with sqlite3.connect(os.path.join(self.data, "world", "opendaoc.sqlite3.db")) as c:
+            c.execute("UPDATE ServerProperty SET Value='20;34' WHERE `Key`='disabled_classes'")
+        self.start(HEARTHDAOC_TAG="v0.35b-hearth.9")
+        hdc = HdcFixesTests("test_the_usage_names_it")
+        hdc.setUp()
+        try:
+            shutil.copy(self.log_path, os.path.join(hdc.fake, "world-fixes.log"))
+            out = hdc.hdc("fixes").stdout.splitlines()
+        finally:
+            hdc.tearDown()
+        self.assertEqual(len(out), 2, out)
+        self.assertIn("release v0.35b-hearth.9", out[0])
+        self.assertEqual(out[1], "Disciple (Necromancer's base class) enabled: disabled_classes 20;34 -> 34")
+
+    def test_a_log_it_cannot_write_does_not_stop_the_start(self):
+        os.makedirs(self.log_path)  # a folder where the log should be: no user can append to it
+        r = self.start()
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertEqual(r.stdout, "Disciple (Necromancer's base class) enabled: disabled_classes 20;33 -> 33\n")
+        self.assertIn("WARNING: cannot write", r.stderr)
+
+    def test_a_failing_world_fixes_still_stops_the_start_and_is_logged(self):
+        os.remove(os.path.join(self.data, "world", "opendaoc.sqlite3.db"))
+        os.makedirs(os.path.join(self.data, "world", "opendaoc.sqlite3.db"))  # sqlite can't open a folder
+        r = self.start()
+        self.assertNotEqual(r.returncode, 0)
+        self.assertIn("Traceback", self.read_log())
 
 
 if __name__ == "__main__":
