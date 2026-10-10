@@ -68,6 +68,15 @@ logs_have "Quest dialogue: 65 quests rewritten" || fail "the chain's dialogue wa
 [[ "$(docker exec "$NAME" sqlite3 "$db" "SELECT AcceptText FROM DataQuest WHERE ID=21500")" == errand ]] \
     || fail "the Supply Run still offers upstream's [Traveler's]"
 echo "ok - the Guild of Shadows chain has its dialogue"
+# The world fixes' lines are also kept in /data/logs/world-fixes.log (./hdc fixes), under a header per start.
+docker exec "$NAME" cat /data/logs/world-fixes.log > "$T/fixes.log" || fail "no /data/logs/world-fixes.log"
+[[ "$(grep -c '^=== Start ' "$T/fixes.log")" == 1 ]] || fail "world-fixes.log should hold one start: $(cat "$T/fixes.log")"
+grep -qE '^=== Start [0-9]{4}-[0-9]{2}-[0-9]{2} [0-9:]{8} UTC, release unknown, upstream [^ ]+ ===$' "$T/fixes.log" \
+    || fail "world-fixes.log has no start header: $(head -1 "$T/fixes.log")"
+for line in "Epic chains: Guild of Shadows 60 links" "Quest dialogue: 65 quests rewritten" "Mob fixes: 4 corrected: "; do
+    grep -q "^$line" "$T/fixes.log" || fail "world-fixes.log lacks this start's line: $line"
+done
+echo "ok - world-fixes.log holds this start's world fixes"
 docker exec "$NAME" python3 /app/tools/accounts/accounts.py --db "$db" create smoketest Sm0keTest >/dev/null || fail "account create"
 docker stop -t 120 "$NAME" >/dev/null
 logs_have "| DOL.GS.GameServer | Stopped" || fail "no clean save on docker stop"
@@ -80,6 +89,14 @@ echo "ok - realm-event ledger kept across restart"
 docker exec "$NAME" test -L /app/server/classic-quests.json || fail "server data files not linked after restart"
 if logs_have "server data files ready"; then fail "the server data files were downloaded again on restart"; fi
 echo "ok - server data files kept across restart"
+docker exec "$NAME" cat /data/logs/world-fixes.log > "$T/fixes.log"
+[[ "$(grep -c '^=== Start ' "$T/fixes.log")" == 2 ]] || fail "the restart did not append its start to world-fixes.log"
+# The last section is the restart's: the one-time changes of the first start are not in it again.
+awk '/^=== Start / { last = "" } { last = last $0 "\n" } END { printf "%s", last }' "$T/fixes.log" > "$T/last.log"
+if grep -qE '^(Quest dialogue: 65 quests rewritten|Mob fixes: 4 corrected)' "$T/last.log"; then
+    fail "the restart's section repeats the first start's changes: $(cat "$T/last.log")"
+fi
+echo "ok - the restart appended its own start to world-fixes.log"
 docker exec "$NAME" python3 /app/tools/accounts/accounts.py --db "$db" list | grep -q smoketest || fail "data lost on restart"
 echo "ok - restart keeps the data"
 docker rm -f "$NAME" >/dev/null

@@ -1,0 +1,37 @@
+{
+ "_about": "Period corrections to upstream's monsters (levels, spots), applied at every start by deploy/bin/mob_fixes.py (run by world_fixes.py). Each entry names a Mob row by Mob_ID or the NpcTemplate rows of a TemplateId; the row changes only while it holds every expect value (upstream's), so the owner's own changes stay. Every entry says why, with its source.",
+ "fixes": [
+  {
+   "name": "Agisthil",
+   "table": "Mob",
+   "id": "fe76247d-ab9e-5a21-b66a-f629e577c87b",
+   "expect": {"Level": 12},
+   "set": {"Level": 10},
+   "why": "Level 11 \"Entry Into Tomorrow\": the Allakhazam bestiary (2002-09-21) gives Agisthil \"Minimum Level: 10 Maximum Level: 10\" at \"52k, 17k\" (owner 2026-10-10: the period level); upstream has 12."
+  },
+  {
+   "name": "Agisthil",
+   "table": "NpcTemplate",
+   "id": 12070,
+   "expect": {"Level": "12;13"},
+   "set": {"Level": "10"},
+   "why": "Agisthil's template, as his Mob row: Allakhazam bestiary 2002-09-21, \"Minimum Level: 10 Maximum Level: 10\"."
+  },
+  {
+   "name": "Frund",
+   "table": "NpcTemplate",
+   "id": 12165,
+   "expect": {"Level": "12-13"},
+   "set": {"Level": "10"},
+   "why": "Frund's template (his Mob row takes its level from it): the Allakhazam bestiary (2002-09-21) gives Frund \"Minimum Level: 10 Maximum Level: 10\" at \"52k, 17k\" (owner 2026-10-10: the period level)."
+  },
+  {
+   "name": "Frund",
+   "table": "Mob",
+   "id": "3ce2271f-b9f6-4504-b55a-250da35504ba",
+   "expect": {"Region": 1, "X": 491936, "Y": 484744, "Z": 1032},
+   "set": {"X": 537351, "Y": 451347, "Z": 2999},
+   "why": "The 2001-2002 walkthrough and its comments have both thieves at the red dwarf camp (Black Mountains South 53899, 17267, where Agisthil stands): \"Frund and Agisthil spawn frequently near\" the shaman; the bestiary (2002-09-21) has both at \"52k, 17k\". Upstream put Frund far west of the camp (owner 2026-10-10: move him beside Agisthil). The spot is Agisthil's mirrored across Shaman Aslis, so the two thieves flank the shaman: 157 units from Agisthil, 78 from the shaman (as Agisthil is), 159 or more from every other camp mob; Z is the shaman's, the nearest camp mob's. His RoamingRange (200) stays."
+  }
+ ]
+}

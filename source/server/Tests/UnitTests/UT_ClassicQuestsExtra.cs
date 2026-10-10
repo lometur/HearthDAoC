@@ -6,8 +6,8 @@ namespace DOL.GS.Tests;
 
 // HearthDAoC: ClassicQuests also reads hearthdaoc-quests.json, the fork's additions to upstream's classic-quests.json
 // (the Guild of Shadows level-50 quests' map markers, and Lord Elidyn as a quest monster gamebots leave alone). Its
-// quests are added where upstream's file has no entry for the ID, and its quest monsters join upstream's
-// (spec docs/fork/specs/2026-10-09-epic-chains-design.md, section 3.2).
+// quests are added where upstream's file has no entry for the ID (an entry with "Replace": true replaces upstream's), and
+// its quest monsters join upstream's (spec docs/fork/specs/2026-10-09-epic-chains-design.md, section 3.2).
 [TestFixture]
 public sealed class UT_ClassicQuestsExtra
 {
@@ -45,6 +45,56 @@ public sealed class UT_ClassicQuestsExtra
     public void UpstreamsEntryWinsOnTheSameId()
     {
         ClassicQuests.Config merged = ClassicQuests.Merge(Parse(Upstream), Parse(Extra));
+        Assert.That(merged.Quests[21482].Steps[1].Marker, Is.EqualTo(new ClassicQuests.Point(1, 1, 2, 3)));
+    }
+
+    // A quest the fork rebuilt (level 11's "Entry Into Tomorrow") needs its own entry: "Replace": true makes ours win.
+    private const string Rebuilt = """
+    { "Quests": { "21482": { "Replace": true, "Steps": [ null, { "Marker": { "Region": 1, "X": 9, "Y": 9, "Z": 9 } },
+                                                             { "NeedsItem": "cq_crediac", "Issuer": "Omis" } ] },
+                  "990509": { "Replace": true, "Steps": [ null, { "Marker": { "Region": 1, "X": 5, "Y": 5, "Z": 5 } } ] } } }
+    """;
+
+    [Test]
+    public void OurEntryWithReplaceReplacesUpstreamsOnTheSameId()
+    {
+        ClassicQuests.Config merged = ClassicQuests.Merge(Parse(Upstream), Parse(Rebuilt));
+        Assert.Multiple(() =>
+        {
+            Assert.That(merged.Quests.Keys, Is.EquivalentTo(new[] { 21482, 990509 }));
+            Assert.That(merged.Quests[21482].Steps, Has.Count.EqualTo(3));
+            Assert.That(merged.Quests[21482].Steps[1].Marker, Is.EqualTo(new ClassicQuests.Point(1, 9, 9, 9)));
+            Assert.That(merged.Quests[21482].Steps[2].Marker, Is.Null);
+            Assert.That(merged.Quests[21482].Steps[2].NeedsItem, Is.EqualTo("cq_crediac"));
+            Assert.That(merged.Quests[21482].Steps[2].Issuer, Is.EqualTo("Omis"));
+            Assert.That(merged.Quests[990509].Steps[1].Marker, Is.EqualTo(new ClassicQuests.Point(1, 5, 5, 5)));
+            Assert.That(merged.QuestMonsterIds, Is.EquivalentTo(new[] { "upstream-mob" }));
+        });
+    }
+
+    [Test]
+    public void ReplaceFalseOrMissingLeavesUpstreamsEntry()
+    {
+        foreach (string replace in new[] { "\"Replace\": false, ", "" })
+        {
+            string extra = $$"""{ "Quests": { "21482": { {{replace}}"Steps": [ null, { "Marker": { "Region": 1, "X": 9, "Y": 9, "Z": 9 } } ] } } }""";
+            ClassicQuests.Config merged = ClassicQuests.Merge(Parse(Upstream), Parse(extra));
+            Assert.That(merged.Quests[21482].Steps[1].Marker, Is.EqualTo(new ClassicQuests.Point(1, 1, 2, 3)), replace);
+        }
+    }
+
+    [Test]
+    public void ReplaceIsReadWithoutCase()
+    {
+        ClassicQuests.Config merged = ClassicQuests.Merge(Parse(Upstream),
+            Parse("""{ "Quests": { "21482": { "replace": true, "Steps": [ null, { "Marker": { "Region": 1, "X": 9, "Y": 9, "Z": 9 } } ] } } }"""));
+        Assert.That(merged.Quests[21482].Steps[1].Marker, Is.EqualTo(new ClassicQuests.Point(1, 9, 9, 9)));
+    }
+
+    [Test]
+    public void ANullExtraEntryLeavesUpstreamsEntry()
+    {
+        ClassicQuests.Config merged = ClassicQuests.Merge(Parse(Upstream), Parse("""{ "Quests": { "21482": null } }"""));
         Assert.That(merged.Quests[21482].Steps[1].Marker, Is.EqualTo(new ClassicQuests.Point(1, 1, 2, 3)));
     }
 

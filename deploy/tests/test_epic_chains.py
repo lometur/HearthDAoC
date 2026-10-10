@@ -21,6 +21,7 @@ ROOT = os.path.dirname(DEPLOY)
 BIN = os.path.join(DEPLOY, "bin")
 sys.path.insert(0, BIN)
 import epic_chains  # noqa: E402
+import mob_fixes  # noqa: E402
 
 TEST_WORLD = os.environ.get("HDC_TEST_WORLD")
 GAME_SERVER = os.path.join(ROOT, "source", "server", "GameServer")
@@ -28,6 +29,7 @@ EXTRA_QUESTS = os.path.join(DEPLOY, "hearthdaoc-quests.json")
 DOCKERFILE = os.path.join(DEPLOY, "Dockerfile")
 LORD_ELIDYN = "1f005bc1-27ae-40b0-bc42-1ec407a4aa34"
 LEVEL_50_IDS = [990509, 990511, 990513, 990512, 990519]
+LEVEL_11_IDS = [20157, 20155, 20156, 20159, 20158]  # "Entry Into Tomorrow", rebuilt to the period story
 
 
 def read(path):
@@ -44,14 +46,48 @@ class ExtraQuestFileTests(unittest.TestCase):
             self.extra = json.load(f)
 
     def test_it_marks_the_level_50_stages_and_lord_elidyn(self):
-        self.assertEqual(sorted(int(k) for k in self.extra["Quests"]), sorted(LEVEL_50_IDS))
-        for quest in self.extra["Quests"].values():
+        self.assertEqual(sorted(int(k) for k in self.extra["Quests"]), sorted(LEVEL_50_IDS + LEVEL_11_IDS))
+        for qid in LEVEL_50_IDS:
+            quest = self.extra["Quests"][str(qid)]
+            self.assertNotIn("Replace", quest)  # upstream has no entry for them
             steps = quest["Steps"]
             self.assertEqual(len(steps), 3)
             self.assertIsNone(steps[0])
             self.assertEqual(steps[1]["Marker"], {"Region": 1, "X": 568158, "Y": 404718, "Z": 5032})
             self.assertEqual(steps[2]["Marker"], {"Region": 1, "X": 528239, "Y": 359818, "Z": 9088})
         self.assertEqual(self.extra["QuestMonsterIds"], [LORD_ELIDYN])
+
+    def test_level_11_replaces_upstreams_entry_for_the_period_story(self):
+        # Upstream's six stages (the same for all five IDs), with three changes: stage 2's marker on Frund at the red
+        # dwarf camp (where mob_fixes.json moves him), no Crediac issued at stage 4 (upstream's "Agisthil" issued one in
+        # its old design), and Omis hands another Crediac at stage 6 to a player who lost it.
+        frund = next(e for e in mob_fixes.load_data()["fixes"] if e["name"] == "Frund" and e["table"] == "Mob")
+        marker = lambda x, y, z: {"Region": 1, "X": x, "Y": y, "Z": z}  # noqa: E731
+        expected = {"Replace": True, "Steps": [
+            None,
+            {"Marker": marker(536186, 490780, 3133)},  # Captain Dillon
+            {"Marker": {"Region": frund["expect"]["Region"], **frund["set"]}},  # Frund
+            {"Marker": marker(537227, 451443, 2997)},  # Agisthil
+            {"Marker": marker(510333, 381845, 8032)},  # Omis
+            {"Marker": marker(516437, 446860, 2603)},  # Brodic
+            {"Marker": marker(536186, 490780, 3133), "NeedsItem": "cq_crediac", "Issuer": "Omis"},  # Captain Dillon
+        ]}
+        for qid in LEVEL_11_IDS:
+            with self.subTest(quest=qid):
+                self.assertEqual(self.extra["Quests"][str(qid)], expected)
+
+    @unittest.skipUnless(TEST_WORLD, "needs HDC_TEST_WORLD (a clean classic world database)")
+    def test_level_11s_markers_stand_on_its_npcs(self):
+        conn = sqlite3.connect(f"file:{TEST_WORLD}?mode=ro", uri=True)
+        try:
+            spot = {name: conn.execute("SELECT Region, X, Y, Z FROM Mob WHERE Name=?", (name,)).fetchone()
+                    for name in ("Captain Dillon", "Agisthil", "Omis", "Brodic")}
+        finally:
+            conn.close()
+        steps = self.extra["Quests"]["20157"]["Steps"]
+        for stage, name in ((1, "Captain Dillon"), (3, "Agisthil"), (4, "Omis"), (5, "Brodic"), (6, "Captain Dillon")):
+            with self.subTest(stage=stage, npc=name):
+                self.assertEqual(tuple(steps[stage]["Marker"].values()), spot[name])
 
     def test_an_optional_chat_section_replaces_upstreams_npc_replies(self):
         # NPC name -> keyword -> reply; an empty reply silences upstream's line (ClassicQuests.Merge)
@@ -505,7 +541,10 @@ class EpicWorldTests(unittest.TestCase):
     def test_the_extra_quest_file_names_the_level_50_quests_and_lord_elidyn(self):
         with open(EXTRA_QUESTS, encoding="utf-8") as f:
             extra = json.load(f)
-        self.assertEqual(sorted(int(k) for k in extra["Quests"]), sorted(self.data["steps"]["50"]["ids"]))
+        added = sorted(int(k) for k, quest in extra["Quests"].items() if not quest.get("Replace"))
+        self.assertEqual(added, sorted(self.data["steps"]["50"]["ids"]))
+        replaced = sorted(int(k) for k, quest in extra["Quests"].items() if quest.get("Replace"))  # the rebuilt level 11
+        self.assertEqual(replaced, sorted(qid for qid in self.data["steps"]["11"]["ids"] if qid is not None))
         self.assertTrue(self.conn.execute("SELECT 1 FROM Mob WHERE Mob_ID=?", (extra["QuestMonsterIds"][0],)).fetchone())
 
 
