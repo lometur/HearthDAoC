@@ -43,6 +43,11 @@ hearthdaoc → Package settings → visibility Public) and wait.
 Then bring back the leveling monsters upstream archived (the owner chose levels 1-20, OpenDAoC's
 density; takes a few seconds and is re-applied automatically by new-world and upgrade-world):
 `./hdc spawns restore --max-level 20` and check `./hdc spawns status` (expect `restored` about 12,900).
+It leaves out an archived monster within 1000 units of a quest's kill target named like it but for case (an
+"arawnite messenger" beside level 20's "Arawnite Messenger": quests match the exact name, so killing it counted
+for nothing). A world restored before this was fixed loses those twins at its next start, and `./hdc fixes` says
+`Restored spawns: N twins of quest targets removed ...`; they stay in upstream's archive, as after
+`./hdc spawns undo`.
 
 ## 4. Start and firewall
 

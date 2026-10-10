@@ -24,6 +24,10 @@
 8. Period corrections to monsters (levels, spots; level 11's thieves Frund and Agisthil first): mob_fixes.py, from
    mob_fixes.json, last, under its own savepoint like the three before it. No marker: at every start it changes a row
    only while it still holds the values upstream shipped, and names the rows that hold neither those nor the file's.
+9. The leveling spawns an earlier `hdc spawns restore` brought back next to a quest's kill target named like them but
+   for case (level 20's "arawnite messenger" beside the "Arawnite Messenger"): spawns.remove_quest_twins, last, under
+   its own savepoint. Only rows listed in fork_restored_mobs; they stay in upstream's archive, as `hdc spawns undo`
+   leaves them, and the restore now leaves them out.
 
 All of them only apply when needed and leave anything the owner set themselves alone.
 """
@@ -37,6 +41,7 @@ import battlegrounds
 import epic_chains
 import mob_fixes
 import quest_dialogue
+import spawns
 
 DISCIPLE, SARACEN, INCONNU = 20, 4, 13
 
@@ -141,6 +146,7 @@ def apply(db):
             changes.extend(epic_chains.apply(conn, _now()))
             changes.extend(quest_dialogue.apply(conn, _now()))
             changes.extend(mob_fixes.apply(conn, _now()))
+            changes.extend(spawns.remove_quest_twins(conn))
     finally:
         conn.close()
     return changes
