@@ -121,16 +121,16 @@
     },
     "SourceText": [
      "Then go to the guard tower near Ludlow. Mind your manners; he is a soldier, and soldiers don't love our kind.",
-     "Frund was seen heading west along the road; Agisthil went north. Each of them carries one of the stones. Bring them back. What happens to the thieves is your affair, and I won't ask.",
-     "Agisthil went north. He'll have the other one.",
+     "They were seen heading north, for the red dwarf camp where the shaman keeps her fire. Each of them carries one of the stones. Bring them back. What happens to the thieves is your affair, and I won't ask.",
+     "Agisthil can't be far; he was making for the same camp. He'll have the other one.",
      "Two rough halves of one stone. Omis, the gemcutter at Swanton Keep, can make something of them.",
      "There. Cut, polished and set together: a crediac once more. Only a crediac can put Brodic down, and now you carry one. He haunts the southern Black Mountains.",
      "Captain Dillon will want to hear of it."
     ],
     "StepText": [
      "Speak with Captain Dillon in the guard tower near Ludlow.",
-     "Find the thief Frund, who fled west from Captain Dillon's tower, and take his stone.",
-     "Find the thief Agisthil, who fled north from Captain Dillon's tower, and take his stone.",
+     "Find the thief Frund at the red dwarf camp north of Captain Dillon's tower, and take his stone.",
+     "Find the thief Agisthil at the same camp and take his stone.",
      "Take both stones to Omis, the gemcutter at Swanton Keep.",
      "Rid the land of Brodic in the southern Black Mountains; only the Crediac can defeat him.",
      "Return to Captain Dillon with what is left of the Crediac."
@@ -178,23 +178,28 @@
    "guard": {
     "20157": [
      "1018c9abbbde0169b372b4a5381c608dc43c0769a072e59588af28b7aca23941",
-     "39b249cf5d4e2e04c09ff32d2e120a6881d672cda256a65c28587b8b10aa4f9e"
+     "39b249cf5d4e2e04c09ff32d2e120a6881d672cda256a65c28587b8b10aa4f9e",
+     "f04d714d9e1c37b44a7a9e1084716ccd8951b185c920832b5defac3ab7f1d1dd"
     ],
     "20155": [
      "1018c9abbbde0169b372b4a5381c608dc43c0769a072e59588af28b7aca23941",
-     "22830d28bd3103833b23ebb3a195ecd0658a6e3866e0261b32b8c7c46e5bd6b9"
+     "22830d28bd3103833b23ebb3a195ecd0658a6e3866e0261b32b8c7c46e5bd6b9",
+     "ed1515180453735265c05edfe6b2335f5ee51341899b46ed691c05bf05e1546d"
     ],
     "20156": [
      "1018c9abbbde0169b372b4a5381c608dc43c0769a072e59588af28b7aca23941",
-     "c8266af5c91b3231b65ada6bb662d1181f2efa9a9db239203904cb82e08bf190"
+     "c8266af5c91b3231b65ada6bb662d1181f2efa9a9db239203904cb82e08bf190",
+     "0ee6b73b18f02400bc4dd59f8e95ebcb17c8374fb4f250ca22eaaae7ae174d48"
     ],
     "20159": [
      "1018c9abbbde0169b372b4a5381c608dc43c0769a072e59588af28b7aca23941",
-     "8ab2c1f14b4a16d9659d29761a7496171620c4439034fd154313c2b83a936e4a"
+     "8ab2c1f14b4a16d9659d29761a7496171620c4439034fd154313c2b83a936e4a",
+     "83bf5eb4d18ca5cc3b99b36fbe049b3d85b1527bf3c7b398aa0312ac2b824583"
     ],
     "20158": [
      "1018c9abbbde0169b372b4a5381c608dc43c0769a072e59588af28b7aca23941",
-     "947d5b883dee72556dab56524250eb17cc1ec917c3a96026dd1d79d33a8da20f"
+     "947d5b883dee72556dab56524250eb17cc1ec917c3a96026dd1d79d33a8da20f",
+     "6a258b388cde1a30e4fe3c6ecb65dfbbc8f4105affd52d872f6a7aad0e042f57"
     ]
    }
   },
