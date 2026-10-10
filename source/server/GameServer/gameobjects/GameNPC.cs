@@ -1660,6 +1660,10 @@ namespace DOL.GS
 		/// <returns>True if the NPC should show quest indicator, false otherwise</returns>
 		public virtual eQuestIndicator GetQuestIndicator(GamePlayer player)
 		{
+			// HearthDAoC: a GM's /indicator create value for this NPC, seen by that GM only (a test tool, IndicatorCommand.cs).
+			if (HearthDAoC.IndicatorOverrides.TryGet(player, this, out eQuestIndicator forced))
+				return forced;
+
 			// Available one ?
 			if (CanShowOneQuest(player))
 				return eQuestIndicator.Available;

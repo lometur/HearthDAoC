@@ -7,6 +7,10 @@ A /harm kill counts for the GM's quests (owner test 2026-10-10: Frund killed wit
 first, then /harm, worked). A death tells only the attackers in the target's AttackerTracker, which real attacks and
 spells fill; /harm called TakeDamage alone. A unit test would need a live player, client and region, so these check
 the source.
+
+/indicator (GM only, a test tool) forces a quest indicator on an NPC for one GM through one marked block in
+GameNPC.GetQuestIndicator; its decisions are unit-tested (UT_QuestIndicatorProbe), the hook and what it relies on are
+checked here.
 """
 import os
 import re
@@ -60,6 +64,41 @@ class HarmCommandTests(unittest.TestCase):
         with open(HARM, "rb") as f:
             raw = f.read()
         self.assertEqual(raw.count(b"\r\n"), raw.count(b"\n"))
+
+
+class IndicatorCommandTests(unittest.TestCase):
+    def test_the_gm_value_is_asked_first_in_get_quest_indicator(self):
+        text = read(os.path.join(GAME_SERVER, "gameobjects", "GameNPC.cs"))
+        body = text[text.index("public virtual eQuestIndicator GetQuestIndicator(GamePlayer player)"):]
+        body = body[:body.index("CanShowOneQuest(player)")]
+        self.assertIn("// HearthDAoC:", body)
+        self.assertIn("if (HearthDAoC.IndicatorOverrides.TryGet(player, this, out eQuestIndicator forced))", body)
+
+    def test_only_game_npc_calls_the_store_from_upstream_files(self):
+        fork = os.path.join(GAME_SERVER, "scripts", "hearthdaoc")
+        calling = []
+        for folder, _, names in os.walk(GAME_SERVER):
+            if folder.startswith(fork):
+                continue
+            for name in names:
+                if name.endswith(".cs") and "IndicatorOverrides." in read_any(os.path.join(folder, name)):
+                    calling.append(name)
+        self.assertEqual(calling, ["GameNPC.cs"])
+
+    def test_the_create_packet_and_the_re_create_are_upstreams(self):
+        # What /indicator relies on; if upstream changes either, review the command.
+        create = read(os.path.join(GAME_SERVER, "packets", "Server", "PacketLib1124.cs"))
+        self.assertIn("eQuestIndicator questIndicator = npc.GetQuestIndicator(m_gameClient.Player);", create)
+        service = read(os.path.join(GAME_SERVER, "ECS-Services", "ClientService.cs"))
+        self.assertIn("public static void CreateObjectForPlayer(GamePlayer player, GameObject gameObject)", service)
+        command = read(os.path.join(GAME_SERVER, "scripts", "hearthdaoc", "IndicatorCommand.cs"))
+        self.assertIn("gm.Out.SendObjectRemove(npc);\n        ClientService.CreateObjectForPlayer(gm, npc);", command)
+
+
+def read_any(path):
+    """A C# file's text; a few upstream files are not UTF-8."""
+    with open(path, encoding="utf-8-sig", errors="replace") as f:
+        return f.read()
 
 
 if __name__ == "__main__":
