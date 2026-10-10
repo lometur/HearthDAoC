@@ -100,6 +100,11 @@ set the owner's split, one row at a time:
 For example, `./hdc stop && ./hdc bot-goals set 20-49 20 20 30 30`, then the other two rows the same
 way, then `./hdc up`.
 
+**Duplicate townspeople.** Upstream's world has two copies of Ley Manton and of Tria Ellowis at the same
+spot (the merchant and a plain NPC). At every start, a plain copy standing exactly on its merchant is removed
+and kept in `fork_removed_mobs` (FixId `duplicate-townspeople`); `./hdc logs` shows `Duplicate townspeople
+removed`. Nothing else is touched, and a world without the copies is left alone.
+
 **Classic battlegrounds.** At its first start, a world gets the classic battlegrounds (Abermenai 15-19,
 Thidranki 20-24, Murdaigean 25-29, Caledonia 30-35); `./hdc logs` shows each change on a line starting
 `Battlegrounds:`. This runs once per world: the row `classic-battlegrounds-v2` in the world's
@@ -116,6 +121,25 @@ not carried over.
 Battleground keep guard levels follow `keep_guard_level_multiplier` (1.6), which also sets the frontier
 keeps' guards. The realm rank caps (1L2, 1L3, 1L5, 1L9) hold on every way in: the frontier porter, the town
 teleporters' [Battlegrounds] choice, and for bots too.
+
+**Guild of Shadows dialogue.** Upstream left most of the Guild of Shadows chain's dialogue (levels 7 to 50)
+empty or filled with walkthrough notes. At every start, `./hdc logs` shows `Quest dialogue: N quests
+rewritten` when the texts of the chain's quests (`deploy/bin/quest_dialogue.json`, every class's version) were
+changed, and nothing when they are up to date. Besides the texts (accept keyword, description, journal steps and
+what the NPCs say), the file can set a quest's step items, step types and turn-in items, but never its number of
+stages: a quest whose stages differ from the file's is kept. There is no marker: a quest is rewritten only while its texts
+still hold upstream's or an earlier version of this file's, so a quest whose text you changed yourself is kept,
+and a later release with revised text reaches a world that had the earlier one. Kept quests are named at every
+start (`M left as they are (their text differs from upstream's and this file's): 21500, ...`): your own edits,
+or, after an upstream upgrade, quests whose upstream text changed, which keep upstream's text until the file is
+updated. If it fails, the start log says `Quest dialogue: not applied (...)`, the quests keep the
+text they have, and it tries again at the next start. The NPCs' chat lines are in `hearthdaoc-quests.json`
+(`Chat`), which replaces upstream's line for the same NPC and keyword. To revise the text: edit it in `quest_dialogue.json`, run
+`python3 deploy/bin/quest_dialogue.py --seal` (it appends the digest of the file's own text to each quest's guard
+list) and commit; a test fails until you do. Every committed version of the text is then guarded, so a later
+revision reaches a world that holds any earlier committed version. Only when an entry's set of columns changes
+is `python3 deploy/bin/quest_dialogue.py --digests <world.db> [--current]` still needed (it prints the digests of
+the text a world holds, which is upstream's only on a clean world).
 
 ## Rollback
 

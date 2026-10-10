@@ -69,4 +69,105 @@ public sealed class UT_ClassicQuestsExtra
             Assert.That(merged.QuestMonsterIds, Is.EquivalentTo(new[] { "upstream-mob" }));
         });
     }
+
+    private const string UpstreamChat = """
+    { "Chat": { "Captain Rhodri": { "Cabalist": "You are a Cabalist.", "Hello": "Greetings.", "Silenced": "Old notes [Step#3] loc=1" },
+                "Twr ap Alsig": { "Infiltrator": "upstream reply" } } }
+    """;
+
+    private static ClassicQuests.Config MergeChat(string extra) => ClassicQuests.Merge(Parse(UpstreamChat), Parse(extra));
+
+    [Test]
+    public void OurChatReplyReplacesUpstreamsAndTheRestStays()
+    {
+        ClassicQuests.Config merged = MergeChat("""{ "Chat": { "Captain Rhodri": { "Cabalist": "Well met, cabalist." } } }""");
+        Assert.Multiple(() =>
+        {
+            Assert.That(merged.Chat["Captain Rhodri"]["Cabalist"], Is.EqualTo("Well met, cabalist."));
+            Assert.That(merged.Chat["Captain Rhodri"]["Hello"], Is.EqualTo("Greetings."));
+            Assert.That(merged.Chat["Twr ap Alsig"]["Infiltrator"], Is.EqualTo("upstream reply"));
+        });
+    }
+
+    [Test]
+    public void OurChatAddsNpcsAndKeywordsUpstreamHasNone()
+    {
+        ClassicQuests.Config merged = MergeChat("""{ "Chat": { "Captain Rhodri": { "Reaver": "Reaver reply" }, "Ley Manton": { "Hello": "Hi" } } }""");
+        Assert.Multiple(() =>
+        {
+            Assert.That(merged.Chat["Captain Rhodri"]["Reaver"], Is.EqualTo("Reaver reply"));
+            Assert.That(merged.Chat["Ley Manton"]["Hello"], Is.EqualTo("Hi"));
+            Assert.That(merged.Chat["Captain Rhodri"].Keys, Is.EquivalentTo(new[] { "Cabalist", "Hello", "Silenced", "Reaver" }));
+        });
+    }
+
+    [Test]
+    public void AnEmptyChatReplySilencesUpstreamsLine()
+    {
+        ClassicQuests.Config merged = MergeChat("""{ "Chat": { "Captain Rhodri": { "Silenced": "" } } }""");
+        Assert.That(merged.Chat["Captain Rhodri"]["Silenced"], Is.Empty);
+    }
+
+    [Test]
+    public void ChatNpcNamesAndKeywordsCompareWithoutCase()
+    {
+        ClassicQuests.Config merged = MergeChat("""{ "Chat": { "captain rhodri": { "CABALIST": "mine", "hello": "mine too" } } }""");
+        Assert.Multiple(() =>
+        {
+            Assert.That(merged.Chat.Keys, Is.EquivalentTo(new[] { "Captain Rhodri", "Twr ap Alsig" }));
+            Assert.That(merged.Chat["Captain Rhodri"], Has.Count.EqualTo(3));
+            Assert.That(merged.Chat["Captain Rhodri"]["Cabalist"], Is.EqualTo("mine"));
+            Assert.That(merged.Chat["Captain Rhodri"]["Hello"], Is.EqualTo("mine too"));
+            Assert.That(merged.Chat["CAPTAIN RHODRI"].ContainsKey("cabalist"), Is.True);
+        });
+    }
+
+    [Test]
+    public void OurChatKeywordsAreTrimmedLikeAWhisper()
+    {
+        ClassicQuests.Config merged = MergeChat("""{ "Chat": { "Captain Rhodri": { " Hello! ": "mine" } } }""");
+        Assert.Multiple(() =>
+        {
+            Assert.That(merged.Chat["Captain Rhodri"]["Hello"], Is.EqualTo("mine"));
+            Assert.That(merged.Chat["Captain Rhodri"], Has.Count.EqualTo(3));
+        });
+    }
+
+    [Test]
+    public void ChatNeedsNoUpstreamChat()
+    {
+        ClassicQuests.Config merged = ClassicQuests.Merge(Parse(Upstream), Parse("""{ "Chat": { "Captain Rhodri": { "Hello": "Hi" } } }"""));
+        Assert.That(merged.Chat["captain rhodri"]["hello"], Is.EqualTo("Hi"));
+    }
+
+    [Test]
+    public void ANullOrMissingChatChangesNothing()
+    {
+        Assert.Multiple(() =>
+        {
+            Assert.That(MergeChat("""{ "Chat": null }""").Chat["Captain Rhodri"]["Cabalist"], Is.EqualTo("You are a Cabalist."));
+            Assert.That(MergeChat("""{ "Quests": {} }""").Chat["Captain Rhodri"]["Cabalist"], Is.EqualTo("You are a Cabalist."));
+            Assert.That(ClassicQuests.Merge(Parse(UpstreamChat), null).Chat["Twr ap Alsig"]["Infiltrator"], Is.EqualTo("upstream reply"));
+        });
+    }
+
+    [Test]
+    public void UpstreamKeywordsThatDifferOnlyInCaseDoNotStopTheLoad()
+    {
+        ClassicQuests.Config merged = ClassicQuests.Merge(
+            Parse("""{ "Chat": { "Omis": { "Stone": "first", "stone": "second" } } }"""),
+            Parse("""{ "Chat": { "Captain Rhodri": { "Hello": "Hi" } } }"""));
+        Assert.Multiple(() =>
+        {
+            Assert.That(merged.Chat["Omis"], Has.Count.EqualTo(1));
+            Assert.That(merged.Chat["Omis"]["STONE"], Is.EqualTo("second"));
+        });
+    }
+
+    [Test]
+    public void ANullNpcEntryIsIgnored()
+    {
+        ClassicQuests.Config merged = MergeChat("""{ "Chat": { "Captain Rhodri": null } }""");
+        Assert.That(merged.Chat["Captain Rhodri"]["Hello"], Is.EqualTo("Greetings."));
+    }
 }

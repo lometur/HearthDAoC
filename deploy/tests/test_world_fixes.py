@@ -37,6 +37,75 @@ class EnableClassesTests(unittest.TestCase):
         self.assertEqual(wf.without_classes("33,20", {20}), "33")
 
 
+MOB = ("CREATE TABLE Mob (Mob_ID VARCHAR(255) PRIMARY KEY, ClassType TEXT NOT NULL DEFAULT '', Name TEXT NOT NULL DEFAULT '', "
+       "Guild TEXT NOT NULL DEFAULT '', ItemsListTemplateID TEXT, Region INT NOT NULL DEFAULT 0, X INT NOT NULL DEFAULT 0, "
+       "Y INT NOT NULL DEFAULT 0, Z INT NOT NULL DEFAULT 0, LastTimeRowUpdated DATETIME NOT NULL DEFAULT '2000-01-01 00:00:00')")
+
+
+class DuplicateTownspeopleTests(unittest.TestCase):
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.db = os.path.join(self.tmp.name, "world.db")
+        with sqlite3.connect(self.db) as c:
+            for stmt in SCHEMA:
+                c.execute(stmt)
+            c.execute(MOB)
+            self.add(c, "m1", "DOL.GS.GameMerchant", "Ley Manton", "tpl", 1, 511475, 380909, 7992)
+            self.add(c, "n1", "DOL.GS.GameNPC", "Ley Manton", None, 1, 511475, 380909, 7992)
+            self.add(c, "m2", "DOL.GS.GameMerchant", "Tria Ellowis", "tpl2", 1, 508468, 476039, 2304)
+            self.add(c, "n2", "DOL.GS.GameNPC", "Tria Ellowis", "", 1, 508468, 476039, 2304)
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    @staticmethod
+    def add(c, mob_id, cls, name, items, region, x, y, z):
+        c.execute("INSERT INTO Mob (Mob_ID, ClassType, Name, ItemsListTemplateID, Region, X, Y, Z) VALUES (?,?,?,?,?,?,?,?)",
+                  (mob_id, cls, name, items, region, x, y, z))
+
+    def q(self, sql):
+        with sqlite3.connect(self.db) as c:
+            return c.execute(sql).fetchall()
+
+    def test_plain_copies_go_and_the_merchants_stay(self):
+        changes = wf.apply(self.db)
+        self.assertEqual(changes, ["Duplicate townspeople removed, archived in fork_removed_mobs: Ley Manton, Tria Ellowis"])
+        self.assertEqual(self.q("SELECT Mob_ID FROM Mob ORDER BY Mob_ID"), [("m1",), ("m2",)])
+        self.assertEqual(self.q("SELECT Mob_ID, FixId FROM fork_removed_mobs ORDER BY Mob_ID"),
+                         [("n1", "duplicate-townspeople"), ("n2", "duplicate-townspeople")])
+
+    def test_second_run_changes_nothing(self):
+        wf.apply(self.db)
+        self.assertEqual(wf.apply(self.db), [])
+        self.assertEqual(self.q("SELECT COUNT(*) FROM fork_removed_mobs"), [(2,)])
+
+    def test_lone_plain_copy_is_kept(self):
+        with sqlite3.connect(self.db) as c:
+            c.execute("DELETE FROM Mob WHERE Mob_ID='m1'")
+        wf.apply(self.db)
+        self.assertEqual(self.q("SELECT Mob_ID FROM Mob ORDER BY Mob_ID"), [("m2",), ("n1",)])
+
+    def test_copy_at_another_spot_is_kept(self):
+        with sqlite3.connect(self.db) as c:
+            c.execute("UPDATE Mob SET Z=Z+1 WHERE Mob_ID='n1'")
+            c.execute("UPDATE Mob SET Region=2 WHERE Mob_ID='n2'")
+        self.assertEqual(wf.apply(self.db), [])
+        self.assertEqual(self.q("SELECT COUNT(*) FROM Mob"), [(4,)])
+
+    def test_copy_with_an_item_list_is_kept(self):
+        with sqlite3.connect(self.db) as c:
+            c.execute("UPDATE Mob SET ItemsListTemplateID='x' WHERE Mob_ID='n1'")
+        wf.apply(self.db)
+        self.assertEqual(self.q("SELECT Mob_ID FROM Mob ORDER BY Mob_ID"), [("m1",), ("m2",), ("n1",)])
+
+    def test_other_names_are_left_alone(self):
+        with sqlite3.connect(self.db) as c:
+            self.add(c, "a", "DOL.GS.GameMerchant", "Someone", "t", 1, 5, 5, 5)
+            self.add(c, "b", "DOL.GS.GameNPC", "Someone", None, 1, 5, 5, 5)
+        wf.apply(self.db)
+        self.assertEqual(self.q("SELECT COUNT(*) FROM Mob WHERE Name='Someone'"), [(2,)])
+
+
 class FixesTests(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
@@ -103,6 +172,7 @@ class FixesTests(unittest.TestCase):
             "Disciple (Necromancer's base class) enabled: disabled_classes 20;33;34;39;58-62 -> 33;34;39;58-62",
             "Saracen Disciples get a starting location (with the Inconnu Disciples, region 51)",
             "Welcome messages now name HearthDAoC (motd, starting_msg)",
+            "Duplicate townspeople removed, archived in fork_removed_mobs: Ley Manton, Tria Ellowis",
             "Battlegrounds: classic level and realm rank limits for Abermenai, Thidranki, Murdaigean, Caledonia",
             "Battlegrounds: Caledon is shown as Caledonia; no zone XP bonus in Thidranki, Caledonia",
             "Battlegrounds: keep levels for the ranges (Dun Abermenai base level 19, Thidranki Faste base level 24, "
@@ -115,7 +185,12 @@ class FixesTests(unittest.TestCase):
             "Epic chains: Guild of Shadows 60 links, 60 XP and coin, 4 Supply Runs closed, 2 rewards and 7 texts "
             "fixed; 87 other links; 41 items added, 36 item fixes; 5 level-50 quests, Lord Elidyn's camp 17 restored; "
             "Shadows_50: 0 finished carried, 0 removed, 0 epic vests recharged",
+            "Quest dialogue: 65 quests rewritten",
         ])
+        self.assertEqual(self.q("SELECT Mob_ID FROM fork_removed_mobs WHERE FixId='duplicate-townspeople' ORDER BY Mob_ID"),
+                         [("231313cf-eb6a-408f-9811-f697c705ffb7",), ("cc83cc14-e5ff-4eb1-b35c-8ad140793909",)])
+        self.assertEqual(self.q("SELECT Mob_ID FROM Mob WHERE Name IN ('Ley Manton', 'Tria Ellowis') ORDER BY Mob_ID"),
+                         [("2b478cbe-cb3f-44e3-bc86-c5f05ad4714d",), ("a4de3772-723f-452f-9c1a-a00a64e50922",)])
         self.assertEqual(self.q("SELECT FixId FROM fork_world_fixes"),
                          [("classic-battlegrounds-v2",), ("epic-chains-v1",)])
         self.assertEqual(self.q("SELECT Value FROM ServerProperty WHERE `Key`='disabled_classes'"), [("33;34;39;58-62",)])

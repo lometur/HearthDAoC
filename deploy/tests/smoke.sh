@@ -64,6 +64,10 @@ fi
 [[ "$(docker exec "$NAME" sqlite3 "$db" "SELECT COUNT(*) FROM DataQuest WHERE ID IN (990509, 990511, 990512, 990513, 990519)")" == 5 ]] \
     || fail "the level-50 Lord of Deceit quests are missing"
 echo "ok - the epic chains world fix ran (level-50 quests in the world)"
+logs_have "Quest dialogue: 65 quests rewritten" || fail "the chain's dialogue was not written"
+[[ "$(docker exec "$NAME" sqlite3 "$db" "SELECT AcceptText FROM DataQuest WHERE ID=21500")" == errand ]] \
+    || fail "the Supply Run still offers upstream's [Traveler's]"
+echo "ok - the Guild of Shadows chain has its dialogue"
 docker exec "$NAME" python3 /app/tools/accounts/accounts.py --db "$db" create smoketest Sm0keTest >/dev/null || fail "account create"
 docker stop -t 120 "$NAME" >/dev/null
 logs_have "| DOL.GS.GameServer | Stopped" || fail "no clean save on docker stop"

@@ -1,5 +1,5 @@
 {
-  "_about": "HearthDAoC's additions to upstream's classic-quests.json; ClassicQuests reads both. The Guild of Shadows level-50 \"Lord of Deceit\" quests (one per class, added by deploy/bin/epic_chains.py): stage 1 kill Lord Elidyn, stage 2 back to Captain Rhodri; Lord Elidyn is a quest monster gamebots leave alone. Spec: docs/fork/specs/2026-10-09-epic-chains-design.md, section 3.2.",
+  "_about": "HearthDAoC's additions to upstream's classic-quests.json; ClassicQuests reads both. The Guild of Shadows level-50 \"Lord of Deceit\" quests (one per class, added by deploy/bin/epic_chains.py): stage 1 kill Lord Elidyn, stage 2 back to Captain Rhodri; Lord Elidyn is a quest monster gamebots leave alone. \"Chat\": NPC replies to whispered keywords that replace upstream's, keyword by keyword (an empty reply silences one): the chain's dialogue, with deploy/bin/quest_dialogue.json. Spec: docs/fork/specs/2026-10-09-epic-chains-design.md, section 3.2.",
   "Quests": {
     "990509": {"Steps": [null, {"Marker": {"Region": 1, "X": 568158, "Y": 404718, "Z": 5032}}, {"Marker": {"Region": 1, "X": 528239, "Y": 359818, "Z": 9088}}]},
     "990511": {"Steps": [null, {"Marker": {"Region": 1, "X": 568158, "Y": 404718, "Z": 5032}}, {"Marker": {"Region": 1, "X": 528239, "Y": 359818, "Z": 9088}}]},
@@ -7,5 +7,47 @@
     "990512": {"Steps": [null, {"Marker": {"Region": 1, "X": 568158, "Y": 404718, "Z": 5032}}, {"Marker": {"Region": 1, "X": 528239, "Y": 359818, "Z": 9088}}]},
     "990519": {"Steps": [null, {"Marker": {"Region": 1, "X": 568158, "Y": 404718, "Z": 5032}}, {"Marker": {"Region": 1, "X": 528239, "Y": 359818, "Z": 9088}}]}
   },
-  "QuestMonsterIds": ["1f005bc1-27ae-40b0-bc42-1ec407a4aa34"]
+  "QuestMonsterIds": ["1f005bc1-27ae-40b0-bc42-1ec407a4aa34"],
+  "Chat": {
+    "Captain Rhodri": {
+      "matter": "Sir Bors would have the support of the locals within Barfog, and this situation would be the best way to win their trust. Therefore your mission is to return to the renegade post and [dispatch] the outcasts.",
+      "dispatch": "You must ensure that justice is delivered to both Dillus and his [supporting] officers. When this is complete, visit the local outpost there and talk to one named Twr ap Alsig. We have it on good authority that if you win his support the locals will follow.",
+      "down to business": "We have trouble with the [Arawnites] along the border at Sauvage.",
+      "Arawnites": "They have gone quiet along the border at Sauvage, and quiet worries me more than noise. I need you to [speak with Lieutenant Kuebler] at Castle Sauvage.",
+      "assist us": "",
+      "scouts were spotted": "",
+      "venture into the camps": "",
+      "willing to assist": ""
+    },
+    "Magus Agyfen": {
+      "interested": "Many in Camelot have begun to speak of your missions for Sir Bors. It seems you have succeeded where many others failed, and some of them resent it; I would watch my back around them. That is why I hesitate to give you this message from Captain Rhodri. I do not know what it says, only that I was told it would be very [profitable]. May whatever god you worship watch over you. Safe travels!"
+    },
+    "Twr ap Alsig": {
+      "certain": "The undead cythraul roam this land. Destroy one and bring me its skull, and Barfog will give you the support you seek.",
+      "Step#4": "",
+      "goblin": "Yes. They have a new order among them, and it is not their own. It is the result of an [outside influence].",
+      "outside influence": "Dwarves, I am sure of it. There is a tunnel in Tepok's Mine, a [link to the borderlands], and through it they spread their foul word to the goblin hordes.",
+      "link to the borderlands": "Find a Savant in the mine, one of their clever ones, and learn what you can of the passageways. You may be forced to slay the goblin and search his belongings."
+    },
+    "Master Edric": {
+      "interested": "There is trouble in Snowdonia again. Captain Rhodri calls it routine, but Rhodri does not send for the Guild over routine. I have my [doubts].",
+      "doubts": "I will say no more of it here. Will you go back to [Snowdonia]?"
+    },
+    "Master Arenis": {
+      "interested": "Rhodri's asking for us again. Says it's routine border trouble. If it were routine, he'd send his own men. I've got my [doubts].",
+      "doubts": "I will say no more of it here. Will you go back to [Snowdonia]?"
+    },
+    "Magus Isen": {
+      "interested": "Captain Rhodri writes of trouble in Snowdonia, which he calls routine. I have read a great many letters, and this one was written by a frightened man. I have my [doubts].",
+      "doubts": "I will say no more of it here. Will you go back to [Snowdonia]?"
+    },
+    "Yulia": {
+      "interested": "Captain Rhodri has sent for us again. He calls it routine, but the dead do not whisper of routine things. I have my [doubts].",
+      "doubts": "I will say no more of it here. Will you go back to [Snowdonia]?"
+    },
+    "Peze": {
+      "interested": "Rhodri's asking for us again. He calls it routine. Routine doesn't need a Reaver. I've got my [doubts].",
+      "doubts": "I will say no more of it here. Will you go back to [Snowdonia]?"
+    }
+  }
 }
