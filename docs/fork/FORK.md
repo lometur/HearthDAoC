@@ -24,6 +24,7 @@ old names (`odc`, `OFFLINEDAOC_*`, `offlinedaoc-*`) as written at the time.
 | Leveling spawns (owner's choice) | `deploy/bin/spawns.py`, `hdc spawns` | none: restores rows upstream's setup archived in `offline_classic165_removed_mobs` |
 | Duplicate townspeople in the world data (every start) | `deploy/bin/world_fixes.py` (`remove_duplicate_townspeople`), tests `deploy/tests/test_world_fixes.py` | none: removes the plain `GameNPC` copy of Ley Manton and Tria Ellowis standing exactly on their `GameMerchant`, archived in `fork_removed_mobs` (FixId `duplicate-townspeople`); Albion's two town merchants showed twice in game (owner test 2026-10-09) |
 | Classic battlegrounds 15-35, world data (once per world, marker `classic-battlegrounds-v2`) | `deploy/bin/battlegrounds.py` (run by `deploy/bin/world_fixes.py`) | none: on the 0.35 world it levels all four central keeps (upstream's Dun Abermenai and Dun Murdaigean included) and their gates, adds the portal keep guards, and six wall casters and a hastener in each of upstream's two keeps, and removes the Atlas leftovers ([spec](specs/2026-10-07-classic-battlegrounds-design.md), section 7) |
+| Period corrections to monsters in the world data (every start) | `deploy/bin/mob_fixes.py`, `deploy/bin/mob_fixes.json` (run by `deploy/bin/world_fixes.py`, last), tests `deploy/tests/test_mob_fixes.py` | none: each entry names a `Mob` row (by `Mob_ID`) or the `NpcTemplate` rows of a `TemplateId`, the values upstream ships (`expect`), the values to set and why, with its source. No marker: a row changes only while it holds every `expect` value, so the owner's changes stay; kept rows are named in the start log at every start. A column the table lacks stops the fix ("Mob fixes: not applied"). First entries (owner 2026-10-10): level 11's thieves Frund and Agisthil at their period level 10 (Allakhazam bestiary 2002-09-21), and Frund moved from far west to the red dwarf camp beside Agisthil (the 2001-2002 walkthrough and comments) |
 | Design docs | `docs/fork/` | none |
 
 Server code under `source/server` was unchanged in sub-project 1. Every later server-code change is
@@ -201,7 +202,8 @@ update, even one that changed only the server.
 3. Rebuild the client patch set (see Client patches above) and commit it on the same branch if it changed.
 4. Check the fork's world fixes and hooks against the new release. Run the tests with `HDC_TEST_WORLD` set
    to the new clean classic world: `battlegrounds.py` changes a row only while it holds the value it
-   expects, so a changed row fails the real-data tests, and the fix then needs a new version and marker.
+   expects, so a changed row fails the real-data tests, and the fix then needs a new version and marker. The same
+   holds for `mob_fixes.json`'s `expect` values (no marker: update the entry's `expect`).
    The source checks in `deploy/tests/test_battlegrounds.py` list every fork hook in upstream files and
    every `TravelToBattleground` caller (the bots' only way in); a new one fails them until it is reviewed.
    Update the counts `deploy/HANDOFF.md` expects (navmeshes, restored spawns).

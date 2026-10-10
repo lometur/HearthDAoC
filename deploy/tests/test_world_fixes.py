@@ -37,9 +37,12 @@ class EnableClassesTests(unittest.TestCase):
         self.assertEqual(wf.without_classes("33,20", {20}), "33")
 
 
+# Upstream's Mob columns these fixes read, and Level, which mob_fixes.json's entries name (a column they name that the
+# table lacks stops the mob fixes).
 MOB = ("CREATE TABLE Mob (Mob_ID VARCHAR(255) PRIMARY KEY, ClassType TEXT NOT NULL DEFAULT '', Name TEXT NOT NULL DEFAULT '', "
        "Guild TEXT NOT NULL DEFAULT '', ItemsListTemplateID TEXT, Region INT NOT NULL DEFAULT 0, X INT NOT NULL DEFAULT 0, "
-       "Y INT NOT NULL DEFAULT 0, Z INT NOT NULL DEFAULT 0, LastTimeRowUpdated DATETIME NOT NULL DEFAULT '2000-01-01 00:00:00')")
+       "Y INT NOT NULL DEFAULT 0, Z INT NOT NULL DEFAULT 0, Level INT NOT NULL DEFAULT 0, "
+       "LastTimeRowUpdated DATETIME NOT NULL DEFAULT '2000-01-01 00:00:00')")
 
 
 class DuplicateTownspeopleTests(unittest.TestCase):
@@ -186,6 +189,8 @@ class FixesTests(unittest.TestCase):
             "fixed; 87 other links; 41 items added, 36 item fixes; 5 level-50 quests, Lord Elidyn's camp 17 restored; "
             "Shadows_50: 0 finished carried, 0 removed, 0 epic vests recharged",
             "Quest dialogue: 65 quests rewritten",
+            "Mob fixes: 4 corrected: Agisthil (Mob fe76247d-ab9e-5a21-b66a-f629e577c87b), Agisthil (NpcTemplate 12070), "
+            "Frund (NpcTemplate 12165), Frund (Mob 3ce2271f-b9f6-4504-b55a-250da35504ba)",
         ])
         self.assertEqual(self.q("SELECT Mob_ID FROM fork_removed_mobs WHERE FixId='duplicate-townspeople' ORDER BY Mob_ID"),
                          [("231313cf-eb6a-408f-9811-f697c705ffb7",), ("cc83cc14-e5ff-4eb1-b35c-8ad140793909",)])

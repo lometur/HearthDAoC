@@ -141,6 +141,16 @@ revision reaches a world that holds any earlier committed version. Only when an 
 is `python3 deploy/bin/quest_dialogue.py --digests <world.db> [--current]` still needed (it prints the digests of
 the text a world holds, which is upstream's only on a clean world).
 
+**Mob fixes.** Period corrections to upstream's monsters, from the quest archives: level 11's thieves Frund and
+Agisthil are level 10, and Frund stands at the red dwarf camp beside Agisthil (`deploy/bin/mob_fixes.json`; each
+entry says why, with its source). At every start, `./hdc logs` shows `Mob fixes: N corrected: ...` when rows were
+changed, and nothing when they are up to date. There is no marker: a row (a `Mob` row, or the `NpcTemplate` rows of
+a template) changes only while it still holds every value upstream shipped, so a monster you changed yourself is
+kept; kept rows are named at every start (`M left as they are (they hold neither upstream's values nor this
+file's): Frund (Mob 3ce2...)`). If it fails (for example, a column the file names is not in the table), the start
+log says `Mob fixes: not applied (...)`, the monsters keep the values they have, and it tries again at the next
+start.
+
 ## Rollback
 
 `./hdc down` stops and removes the container; the world stays in the `hearthdaoc-data` volume.

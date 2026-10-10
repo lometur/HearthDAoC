@@ -21,6 +21,9 @@
 7. The Guild of Shadows chain's dialogue (levels 7 to 50): quest_dialogue.py, right after the epic chains, under its
    own savepoint like them. It has no marker: at every start it rewrites the texts of a quest that still hold
    upstream's text or an earlier version of its own, and leaves the owner's own edits alone.
+8. Period corrections to monsters (levels, spots; level 11's thieves Frund and Agisthil first): mob_fixes.py, from
+   mob_fixes.json, last, under its own savepoint like the three before it. No marker: at every start it changes a row
+   only while it still holds the values upstream shipped, and names the rows that hold neither those nor the file's.
 
 All of them only apply when needed and leave anything the owner set themselves alone.
 """
@@ -32,6 +35,7 @@ import sys
 
 import battlegrounds
 import epic_chains
+import mob_fixes
 import quest_dialogue
 
 DISCIPLE, SARACEN, INCONNU = 20, 4, 13
@@ -136,6 +140,7 @@ def apply(db):
             changes.extend(battlegrounds.apply(conn, _now()))
             changes.extend(epic_chains.apply(conn, _now()))
             changes.extend(quest_dialogue.apply(conn, _now()))
+            changes.extend(mob_fixes.apply(conn, _now()))
     finally:
         conn.close()
     return changes
