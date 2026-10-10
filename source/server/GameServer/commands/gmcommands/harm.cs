@@ -44,7 +44,13 @@ namespace DOL.GS.Commands
 				amount = Convert.ToInt32(args[1]);
 
 				if (client.Player.TargetObject is GameLiving living)
+				{
+					// HearthDAoC: the GM joins the target's attackers first, as a real attack does (AttackComponent), so a
+					// /harm kill counts for the GM's quests: a death tells only the attackers in its AttackerTracker
+					// (GameLiving.ProcessDeath). Owner test 2026-10-10: Frund killed with /harm advanced nothing.
+					living.attackComponent.AddAttacker(new AttackData { Attacker = client.Player, Target = living, DamageType = eDamageType.GM, Damage = amount });
 					living.TakeDamage(client.Player, eDamageType.GM, amount, 0);
+				}
 				else
 					DisplayMessage(client, LanguageMgr.GetTranslation(client.Account.Language, "GMCommands.Harm.InvalidTarget"));
 			}
