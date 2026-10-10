@@ -25,14 +25,17 @@ The file:
   value may contain "|". A quest row with another number of stages than a list has entries is left alone and named
   with the other rows left alone; the other rows still apply.
 - guard: for each quest ID, the digests of its `set` columns' values that may be replaced. digest() makes them.
-  `quest_dialogue.py --digests WORLD.db` prints the digests of the text WORLD holds (after epic_chains), which is
-  upstream's text only on a clean world; with `--current` it applies this file to its copy first, so it prints the
-  digests of the file's own text.
+  `quest_dialogue.py --seal` appends to every quest's guard list the digest of the file's own current text for that
+  quest (computed from the file alone, no world needed). `--digests WORLD.db` prints the digests of the text WORLD
+  holds (after epic_chains), which is upstream's text only on a clean world; with `--current` it applies this file to
+  its copy first. It is still needed when an entry's set of columns changes: old worlds' values are digested over the
+  new column set, which only a world can give.
 
-To revise the text: before changing any text, run
-  python3 deploy/bin/quest_dialogue.py --digests <clean world.db> --current
-and append each digest to its quest's guard list; then change the text. Keep each entry's `set` columns: the digests
-cover exactly those columns.
+To revise the text: edit it, run
+  python3 deploy/bin/quest_dialogue.py --seal
+and commit (a test fails until you do). Every committed version of the text is then guarded, so a later revision
+reaches a world that holds any earlier committed version. Keep each entry's `set` columns: the digests cover exactly
+those columns (to change them, see `--digests`).
 """
 import argparse
 import datetime
@@ -243,19 +246,70 @@ def _apply_on_copy(conn, data, chains):
                                "of the world's text, or its stages differ from the file's)")
 
 
+def own_digests(data, chains):
+    """{quest id: digest} of the file's own current text for each quest of every entry, computed from the file alone.
+    Without a world the stage counts of a per-stage list can't be checked; that is fine for a digest."""
+    classes = list(chains["classes"])
+    out = {}
+    for entry in data.get("quests", []):
+        columns = sorted(entry["set"])
+        resolved = {column: resolve(column, entry["set"][column], classes, {name: None for name in classes})
+                    for column in columns}
+        for name, qid in zip(classes, chains["steps"][entry["step"]]["ids"]):
+            if qid is not None:
+                out[str(qid)] = digest([resolved[column][name] for column in columns])
+    return out
+
+
+def unsealed(data, chains):
+    """The quest IDs whose current text's digest is not in their guard list."""
+    own = own_digests(data, chains)
+    guards = {qid: set(guard) for entry in data.get("quests", []) for qid, guard in entry.get("guard", {}).items()}
+    return [qid for qid, d in own.items() if d not in guards.get(qid, set())]
+
+
+def seal(path=DATA_FILE, chains=None):
+    """Appends the digest of the file's own current text to each quest's guard list (if it isn't there) and rewrites
+    the file in its format; returns the quest IDs it appended to."""
+    data = load_data(path)
+    chains = chains if chains is not None else epic_chains.load_data()
+    own = own_digests(data, chains)
+    added = []
+    for entry in data.get("quests", []):
+        guard = entry.setdefault("guard", {})
+        for qid in [str(q) for q in chains["steps"][entry["step"]]["ids"] if q is not None]:
+            if own[qid] not in guard.setdefault(qid, []):
+                guard[qid].append(own[qid])
+                added.append(qid)
+    with open(path, "w", encoding="utf-8", newline="\n") as f:
+        json.dump(data, f, ensure_ascii=False, indent=1)
+        f.write("\n")
+    return added
+
+
 def _now():
     return datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%d %H:%M:%S")
 
 
 def main(argv=None):
-    ap = argparse.ArgumentParser(description="The Guild of Shadows chain's dialogue: print the guard digests.")
-    ap.add_argument("--digests", metavar="WORLD.db", required=True,
+    ap = argparse.ArgumentParser(description="The Guild of Shadows chain's dialogue: seal the guard lists, print digests.")
+    ap.add_argument("--seal", action="store_true",
+                    help="append the digest of the file's own current text to each quest's guard list (run it after "
+                         "editing the text, then commit)")
+    ap.add_argument("--digests", metavar="WORLD.db",
                     help="print {step: {quest id: digest}} of the text each entry's set columns hold in the world, after "
-                         "the epic chains (upstream's text on a clean world)")
+                         "the epic chains (upstream's text on a clean world); needed when an entry's set of columns changes")
     ap.add_argument("--current", action="store_true",
-                    help="apply this file to the copy first: print the digests of the file's own text, for the guard "
-                         "lists of the next revision")
+                    help="with --digests: apply this file to the copy first, printing the digests of the file's own text")
     a = ap.parse_args(argv)
+    if a.seal == bool(a.digests):
+        ap.error("give --seal or --digests WORLD.db")
+    if a.current and not a.digests:
+        ap.error("--current goes with --digests")
+    if a.seal:
+        added = seal()
+        print(f"sealed: {len(added)} digests added" + (f" (quests {', '.join(added)})" if added else ""))
+        return 0
     print(json.dumps(digests(a.digests, current=a.current), indent=2))
     return 0
 

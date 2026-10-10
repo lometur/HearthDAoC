@@ -268,6 +268,15 @@ class DataFileTests(unittest.TestCase):
                         self.assertRegex(d, r"^[0-9a-f]{64}$")
 
 
+class SealedTests(unittest.TestCase):
+    """The committed text is sealed: no world needed."""
+
+    def test_every_quests_current_text_is_in_its_guard_list(self):
+        data, chains = real_data()
+        ids = qd.unsealed(data, chains)
+        self.assertFalse(ids, f"the text of quests {', '.join(ids)} is not sealed: run python3 deploy/bin/quest_dialogue.py --seal")
+
+
 @unittest.skipUnless(TEST_WORLD, "needs HDC_TEST_WORLD (a clean classic world database)")
 class RealDialogueTests(unittest.TestCase):
     """The real data file on a copy of a clean classic world. These wait for quest_dialogue.json."""
@@ -482,6 +491,72 @@ class RevisionTests(unittest.TestCase):
             self.assertEqual(qd.main(["--digests", self.clean, "--current"]), 0)
         self.assertEqual(json.loads(out.getvalue()),
                          {"7": {"100": guard_for("new A", "farewell"), "200": guard_for("new B", "farewell")}})
+
+
+class SealTests(unittest.TestCase):
+    """--seal on a temp copy of a small synthetic file."""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.path = os.path.join(self.tmp.name, "quest_dialogue.json")
+        self.clean = os.path.join(self.tmp.name, "clean.db")
+        conn = sqlite3.connect(self.clean)
+        with conn:
+            conn.execute(SCHEMA)
+            conn.execute("INSERT INTO DataQuest (ID, StepType, Description, FinishText) VALUES (100, '2|3', 'old A', 'bye')")
+            conn.execute("INSERT INTO DataQuest (ID, StepType, Description, FinishText) VALUES (200, '2|3', 'old B', 'bye')")
+        conn.close()
+        self.upstream = {"100": [guard_for("old A", "bye")], "200": [guard_for("old B", "bye")]}
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    def dump(self, data):
+        with open(self.path, "w", encoding="utf-8", newline="\n") as f:
+            json.dump(data, f, ensure_ascii=False, indent=1)
+            f.write("\n")
+
+    def write(self, description):
+        self.dump({"_about": "x \u00e9", "quests": [
+            {"step": "7", "set": {"Description": description, "FinishText": "farewell"},
+             "guard": json.loads(json.dumps(self.upstream))}]})
+
+    def seal(self):
+        return qd.seal(self.path, CHAINS)
+
+    def test_it_appends_the_current_digests_once_and_is_byte_identical_the_second_time(self):
+        self.write({"Alpha": "new A", "Beta": "new B"})
+        self.assertEqual(self.seal(), ["100", "200"])
+        sealed = pathlib.Path(self.path).read_bytes()
+        guard = json.loads(sealed)["quests"][0]["guard"]
+        self.assertEqual(guard["100"], self.upstream["100"] + [guard_for("new A", "farewell")])
+        self.assertEqual(guard["200"], self.upstream["200"] + [guard_for("new B", "farewell")])
+        self.assertEqual(self.seal(), [])
+        self.assertEqual(pathlib.Path(self.path).read_bytes(), sealed)
+
+    def test_unsealed_names_the_quests_until_the_file_is_sealed(self):
+        self.write({"Alpha": "new A", "Beta": "new B"})
+        self.assertEqual(qd.unsealed(qd.load_data(self.path), CHAINS), ["100", "200"])
+        self.seal()
+        self.assertEqual(qd.unsealed(qd.load_data(self.path), CHAINS), [])
+
+    def test_a_world_at_revision_n_gets_revision_n_plus_1_after_seal(self):
+        self.write({"Alpha": "new A", "Beta": "new B"})
+        self.seal()
+        world = os.path.join(self.tmp.name, "world.db")
+        shutil.copyfile(self.clean, world)
+        self.assertEqual(apply_file(world, qd.load_data(self.path)), ["Quest dialogue: 2 quests rewritten"])
+        self.assertEqual(held(world), [(100, "new A", "farewell"), (200, "new B", "farewell")])
+        data = qd.load_data(self.path)  # revision N+1: edit the text only, then seal
+        data["quests"][0]["set"]["Description"] = {"Alpha": "newer A", "Beta": "newer B"}
+        self.dump(data)
+        self.seal()
+        self.assertEqual(apply_file(world, qd.load_data(self.path)), ["Quest dialogue: 2 quests rewritten"])
+        self.assertEqual(held(world), [(100, "newer A", "farewell"), (200, "newer B", "farewell")])
+
+    def test_the_command_needs_seal_or_digests(self):
+        with contextlib.redirect_stderr(io.StringIO()), self.assertRaises(SystemExit):
+            qd.main([])
 
 
 if __name__ == "__main__":
