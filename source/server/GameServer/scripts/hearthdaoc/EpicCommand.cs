@@ -124,7 +124,7 @@ public sealed class EpicCommandHandler : AbstractCommandHandler, ICommandHandler
             DisplayMessage(client, $"{target.Name} is at the marker of {active.Name} ({active.ID}) stage {active.Step}.");
             return;
         }
-        EpicQuest next = EpicChain.Steps(chain, ProgressOf(target)).FirstOrDefault(s => s.State is EpicStepState.CanTake or EpicStepState.Waiting)?.Quest;
+        EpicQuest next = EpicChain.NextStep(chain, ProgressOf(target), target.CurrentRegionID);
         if (next == null)
         {
             DisplayMessage(client, $"{target.Name} has no step left to take; see /epic.");

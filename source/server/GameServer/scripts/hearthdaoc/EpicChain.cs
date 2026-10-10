@@ -111,6 +111,22 @@ public static class EpicChain
         return chain.Select(q => StepOf(q, progress, active)).ToList();
     }
 
+    // The step "/epic goto" leads to when none is active: of the steps that can be taken or wait, those whose entries
+    // are all met (only the level may be missing), and of these the first given in the region the character is in,
+    // else the first; failing those, the first step that can be taken or waits. So a character in the Shrouded Isles
+    // starts with their trainer's Shrouded Isles 7, not Camelot's; after it goes on to the Shrouded Isles 11 from
+    // anywhere (Camelot's waits on a 7 closed for good); and is never sent ahead to a later step whose giver happens
+    // to stand in the region. Null when no step is left.
+    public static EpicQuest NextStep(IReadOnlyList<EpicQuest> chain, EpicProgress progress, ushort region)
+    {
+        var active = new HashSet<int>(progress.ActiveStages.Keys);
+        List<EpicQuest> open = Steps(chain, progress)
+            .Where(s => s.State is EpicStepState.CanTake or EpicStepState.Waiting).Select(s => s.Quest).ToList();
+        List<EpicQuest> ready = open
+            .Where(q => QuestDependencies.AreMet(q.Dependencies, progress.FinishedNames, progress.FinishedIds, active)).ToList();
+        return ready.FirstOrDefault(q => q.StartRegion == region) ?? ready.FirstOrDefault() ?? open.FirstOrDefault();
+    }
+
     // The steps below <level> that "/epic done" marks finished, in chain order: each one whose entries are met by
     // what the character has finished, plus the steps marked before it. A closed step is never marked; an active
     // one is (EpicCommand ends it).
