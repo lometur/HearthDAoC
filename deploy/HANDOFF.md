@@ -135,7 +135,12 @@ empty or filled with walkthrough notes. After each start, `./hdc fixes` shows `Q
 rewritten` when the texts of the chain's quests (`deploy/bin/quest_dialogue.json`, every class's version) were
 changed, and nothing when they are up to date. Besides the texts (accept keyword, description, journal steps and
 what the NPCs say), the file can set a quest's step items, step types and turn-in items, but never its number of
-stages: a quest whose stages differ from the file's is kept. There is no marker: a quest is rewritten only while its texts
+stages: a quest whose stages differ from the file's is kept. It can also set a quest's giver (`StartName`) and the
+quests it needs (`QuestDependency`): the Shrouded Isles 7 and 11 ("Strange Beings", "Shades and Shadows") are given
+by each class's own trainer in Caer Gothwaite (upstream named the Necromancer trainer Carys for every class), and
+each 11 needs the 7 of its own branch, so a character who took the Shrouded Isles 7 goes on with the Shrouded Isles
+11 and one who took Camelot's with Camelot's, as in the period. There is no marker: a quest is rewritten only
+while its texts
 still hold upstream's or an earlier version of this file's, so a quest whose text you changed yourself is kept,
 and a later release with revised text reaches a world that had the earlier one. Kept quests are named at every
 start (`M left as they are (their text differs from upstream's and this file's): 21500, ...`): your own edits,

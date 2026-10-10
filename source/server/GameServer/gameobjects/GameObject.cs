@@ -784,7 +784,9 @@ namespace DOL.GS
 
 			static void LoadQuest(GameObject obj, DbDataQuest quest, GamePlayer loader)
 			{
-				if (quest.StartName != obj.Name)
+				// HearthDAoC: names compare without case (QuestNames.Same): upstream's quest data spells some givers differently
+				// from their spawns (quest 21352's "Albion Runner" spawns as "Albion runner").
+				if (!QuestNames.Same(quest.StartName, obj.Name))
 					return;
 
 				DataQuest dq = new(quest, obj);

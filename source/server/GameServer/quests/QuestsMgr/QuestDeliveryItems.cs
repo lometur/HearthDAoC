@@ -128,7 +128,7 @@ namespace DOL.GS.Quests
         private static bool IsGiver(string targetName, string giverName)
         {
             string target = targetName?.Split(';')[0].Trim();
-            return !string.IsNullOrEmpty(target) && string.Equals(target, giverName?.Trim(), StringComparison.OrdinalIgnoreCase);
+            return !string.IsNullOrEmpty(target) && QuestNames.Same(target, giverName?.Trim());
         }
 
         private static bool Contains(IEnumerable<string> ids, string wanted)

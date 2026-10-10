@@ -105,10 +105,43 @@ public static class EpicChain
             .ThenBy(q => q.Id).ToList();
     }
 
+    // Each step's state, in chain order. A step that needs one of some quests of the chain, all of them closed to the
+    // character, is closed too: after the Shrouded Isles 7, Camelot's 11 (it needs Camelot's 7, which the Shrouded
+    // Isles 7 closes, or the Supply Run offered to no one) can never be taken.
     public static IReadOnlyList<EpicStep> Steps(IReadOnlyList<EpicQuest> chain, EpicProgress progress)
     {
         var active = new HashSet<int>(progress.ActiveStages.Keys);
-        return chain.Select(q => StepOf(q, progress, active)).ToList();
+        Dictionary<int, EpicQuest> byId = chain.ToDictionary(q => q.Id);
+        var steps = new Dictionary<int, EpicStep>();
+        var visiting = new HashSet<int>();
+        EpicStep Of(EpicQuest quest)
+        {
+            if (steps.TryGetValue(quest.Id, out EpicStep known))
+                return known;
+            visiting.Add(quest.Id);
+            // A quest outside the chain, or one already being worked out (a loop in the links), is not known closed.
+            EpicStep step = StepOf(quest, progress, active,
+                id => byId.TryGetValue(id, out EpicQuest other) && !visiting.Contains(id) ? Of(other) : null);
+            visiting.Remove(quest.Id);
+            return steps[quest.Id] = step;
+        }
+        return chain.Select(Of).ToList();
+    }
+
+    // The step "/epic goto" leads to when none is active: of the steps that can be taken or wait, those whose entries
+    // are all met (only the level may be missing), and of these the first given in the region the character is in,
+    // else the first; failing those, the first step that can be taken or waits. So a character in the Shrouded Isles
+    // starts with their trainer's Shrouded Isles 7, not Camelot's; after it goes on to the Shrouded Isles 11 from
+    // anywhere (Camelot's is closed); and is never sent ahead to a later step whose giver happens to stand in the
+    // region. Null when no step is left.
+    public static EpicQuest NextStep(IReadOnlyList<EpicQuest> chain, EpicProgress progress, ushort region)
+    {
+        var active = new HashSet<int>(progress.ActiveStages.Keys);
+        List<EpicQuest> open = Steps(chain, progress)
+            .Where(s => s.State is EpicStepState.CanTake or EpicStepState.Waiting).Select(s => s.Quest).ToList();
+        List<EpicQuest> ready = open
+            .Where(q => QuestDependencies.AreMet(q.Dependencies, progress.FinishedNames, progress.FinishedIds, active)).ToList();
+        return ready.FirstOrDefault(q => q.StartRegion == region) ?? ready.FirstOrDefault() ?? open.FirstOrDefault();
     }
 
     // The steps below <level> that "/epic done" marks finished, in chain order: each one whose entries are met by
@@ -138,18 +171,29 @@ public static class EpicChain
         return marked;
     }
 
-    private static EpicStep StepOf(EpicQuest quest, EpicProgress progress, ICollection<int> active)
+    // `stepOf`: the state of another quest of the chain, or null when it isn't known.
+    private static EpicStep StepOf(EpicQuest quest, EpicProgress progress, ICollection<int> active, Func<int, EpicStep> stepOf)
     {
         if (progress.FinishedIds.Contains(quest.Id))
             return new EpicStep(quest, EpicStepState.Finished, "finished");
         if (progress.ActiveStages.TryGetValue(quest.Id, out int stage))
             return new EpicStep(quest, EpicStepState.Active, $"active, stage {stage}");
         if (IsClosedForAll(quest))
-            return new EpicStep(quest, EpicStepState.Closed, "offered to no one");
+            return new EpicStep(quest, EpicStepState.Closed, OfferedToNoOne);
         string closer = quest.Dependencies.FirstOrDefault(e => e.Trim().StartsWith("!#", StringComparison.Ordinal)
             && !QuestDependencies.IsMet(e, progress.FinishedNames, progress.FinishedIds, active));
         if (closer != null)
-            return new EpicStep(quest, EpicStepState.Closed, $"closed by {closer.Trim()}");
+            return new EpicStep(quest, EpicStepState.Closed, ClosedBy + closer.Trim());
+        foreach (string entry in quest.Dependencies)
+        {
+            if (!QuestDependencies.TryParseIds(entry, out int[] ids, out bool closes) || closes
+                || QuestDependencies.IsMet(entry, progress.FinishedNames, progress.FinishedIds, active))
+                continue;
+            List<EpicStep> needed = ids.Select(stepOf).ToList();
+            if (needed.All(s => s?.State == EpicStepState.Closed))
+                return new EpicStep(quest, EpicStepState.Closed,
+                    $"closed: needs {entry.Trim()}, but " + And(needed.Select(s => $"{s.Quest.Id} is {Why(s)}")));
+        }
         List<string> needs = quest.Dependencies
             .Where(e => !QuestDependencies.IsMet(e, progress.FinishedNames, progress.FinishedIds, active))
             .Select(e => e.Trim()).ToList();
@@ -158,6 +202,19 @@ public static class EpicChain
         return needs.Count == 0
             ? new EpicStep(quest, EpicStepState.CanTake, "can take")
             : new EpicStep(quest, EpicStepState.Waiting, "needs " + string.Join(", ", needs));
+    }
+
+    private const string OfferedToNoOne = "offered to no one", ClosedBy = "closed by ";
+
+    // Why a closed step is closed, after "<ID> is": its own reason, or just "closed" when a need closes it in turn.
+    private static string Why(EpicStep step) =>
+        step.Detail == OfferedToNoOne || step.Detail.StartsWith(ClosedBy, StringComparison.Ordinal) ? step.Detail : "closed";
+
+    // "a", "a and b", "a, b and c".
+    private static string And(IEnumerable<string> parts)
+    {
+        List<string> list = parts.ToList();
+        return list.Count < 2 ? string.Concat(list) : string.Join(", ", list.Take(list.Count - 1)) + " and " + list[^1];
     }
 
     // Offered to no one: a level range that admits no level, or a dependency on itself (the world fix closes Lady
