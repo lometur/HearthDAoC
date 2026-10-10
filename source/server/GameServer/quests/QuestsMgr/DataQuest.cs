@@ -1842,12 +1842,27 @@ namespace DOL.GS.Quests
 
 		/// <summary>
 		/// HearthDAoC: takes the items OtherCollectItems chose, as the item handed over is taken; a stack loses only the
-		/// copies wanted.
+		/// copies wanted. The items are chosen before the step advances and taken after it, as upstream takes the item
+		/// handed over; the inventory lock is not held across the advance, which gives experience, rewards and level-ups
+		/// and would then hold the inventory while other locks are taken. Nothing else changes this player's backpack in
+		/// between (a player's packets are handled one at a time, and quest items can't be traded), so an item gone at
+		/// this point is only logged.
 		/// </summary>
-		protected static void RemoveCollectItems(GameObject obj, GamePlayer player, List<(DbInventoryItem Item, int Count)> take)
+		protected void RemoveCollectItems(GameObject obj, GamePlayer player, List<(DbInventoryItem Item, int Count)> take)
 		{
 			foreach ((DbInventoryItem other, int count) in take)
 			{
+				lock (player.Inventory.Lock)
+				{
+					if (other.OwnerID == null || other.SlotPosition < (int)eInventorySlot.FirstBackpack ||
+						other.SlotPosition > (int)eInventorySlot.LastBackpack || other.Count < count)
+					{
+						log.Warn("DataQuest [" + ID + "] " + Name + ": " + other.Id_nb + " was no longer in " + player.Name +
+							"'s backpack when step " + Step + " took it");
+						continue;
+					}
+				}
+
 				if (count >= other.Count)
 				{
 					RemoveItem(obj, player, other, true);
