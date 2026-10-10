@@ -230,16 +230,16 @@
    "set": {
     "AcceptText": "Captain Rhodri",
     "Description": {
-     "Infiltrator": "<Player>. Your name is starting to be spoken in the right rooms. Now a greater man has asked for us: Sir Bors, who holds the Black Mountains for Camelot. His man at Snowdonia, Captain Rhodri, needs eyes and ears in places soldiers can't go. That is what we are for. Will you go to [Captain Rhodri]?",
-     "Mercenary": "<Player>. Word is you don't waste time, which is the best thing anyone can say of a soldier. Sir Bors, who holds the Black Mountains for Camelot, has asked the Guild for help, and his man at Snowdonia, Captain Rhodri, will tell you the rest. Will you go to [Captain Rhodri]?",
-     "Cabalist": "<Player>. You have impressed people who are not easily impressed. Sir Bors, who holds the Black Mountains for Camelot, has asked the Guild for a quiet hand, and his man at Snowdonia, Captain Rhodri, will explain. Will you go to [Captain Rhodri]?",
-     "Necromancer": "<Player>. Sir Bors, who holds the Black Mountains for Camelot, has asked for help, and his man at Snowdonia, Captain Rhodri, will explain. You may hear talk of Arawnites. They are not of the Temple: they are zealots who wear our Lord's name and do none of his will. Will you go to [Captain Rhodri]?",
-     "Reaver": "<Player>. Sir Bors, who holds the Black Mountains for Camelot, has asked for help, and his man at Snowdonia, Captain Rhodri, will tell you what. You may hear talk of Arawnites. They are not of the Temple: they are zealots who wear our Lord's name and do none of his will. The Temple will not weep for them. Will you go to [Captain Rhodri]?"
+     "Infiltrator": "<Player>. Your name is starting to be spoken in the right rooms. Now a greater man has asked for us: Sir Bors, who holds the Black Mountains for the King. His man at Snowdonia, Captain Rhodri, needs eyes and ears in places soldiers can't go. That is what we are for. Will you go to [Captain Rhodri]?",
+     "Mercenary": "<Player>. Word is you don't waste time, which is the best thing anyone can say of a soldier. Sir Bors, who holds the Black Mountains for the King, has asked the Guild for help, and his man at Snowdonia, Captain Rhodri, will tell you the rest. Will you go to [Captain Rhodri]?",
+     "Cabalist": "<Player>. You have impressed people who are not easily impressed. Sir Bors, who holds the Black Mountains for the King, has asked the Guild for a quiet hand, and his man at Snowdonia, Captain Rhodri, will explain. Will you go to [Captain Rhodri]?",
+     "Necromancer": "<Player>. Sir Bors, who holds the Black Mountains for the King, has asked for help, and his man at Snowdonia, Captain Rhodri, will explain. You may hear talk of Arawnites. They are not of the Temple: they are zealots who wear our Lord's name and do none of his will. Will you go to [Captain Rhodri]?",
+     "Reaver": "<Player>. Sir Bors, who holds the Black Mountains for the King, has asked for help, and his man at Snowdonia, Captain Rhodri, will tell you what. You may hear talk of Arawnites. They are not of the Temple: they are zealots who wear our Lord's name and do none of his will. The Temple will not weep for them. Will you go to [Captain Rhodri]?"
     },
     "SourceText": [
      "Captain Rhodri keeps the border keep in Snowdonia Fortress, at the north end of the Black Mountains. Go to him.",
      "Before we court them, we must know them. Elrigh drifts from inn to inn in these mountains, and he hears everything; last I heard he was drinking at Snowdonia Station. Find him and ask him about the locals of Barfog.",
-     "The Barfog folk are proud, and they hate Camelot, but they'd hate the renegades more if they knew the half of it: a tower full of Camelot's guards who stopped answering to Camelot, out on the edge of the lake. Andri knows more. He used to serve with them, and now he drinks in the taverns of Camelot.",
+     "The Barfog folk are proud, and they hate Camelot, but they'd hate the renegades more if they knew the half of it: a tower full of King's guards who stopped answering to the King, out on the edge of the lake. Andri knows more. He used to serve with them, and now he drinks in the taverns of Camelot.",
      "I served at that tower before it turned. Sir Dillus leads them now; he took the tower and half the garrison with it. They say he takes his orders from someone in the north. I didn't stay to find out who."
     ],
     "StepText": [
@@ -259,33 +259,38 @@
    "guard": {
     "20188": [
      "6e7dd8ce005d0f55f4f6e8be4f3553eae80f5ac54e2496dd7336382d41fbfb85",
-     "2fe91f107fd499699f701f8afd7086caf11c180c87721631adfc9f723515bbba"
+     "2fe91f107fd499699f701f8afd7086caf11c180c87721631adfc9f723515bbba",
+     "e2cf4b47e645e435c9c28849dbce1042f1dd796feaa08345648a1b29ca97473c"
     ],
     "20186": [
      "6e7dd8ce005d0f55f4f6e8be4f3553eae80f5ac54e2496dd7336382d41fbfb85",
-     "3fc73b36029456be36ad1f392b77f96c15e73e1efedc725f44e8d6b0b9159b33"
+     "3fc73b36029456be36ad1f392b77f96c15e73e1efedc725f44e8d6b0b9159b33",
+     "86be0ad02fd1b6758a91d0b8eaf3af6c72592802b83c04babdde81698e58275b"
     ],
     "20187": [
      "6e7dd8ce005d0f55f4f6e8be4f3553eae80f5ac54e2496dd7336382d41fbfb85",
-     "62ff5900c40d29570362eb116a78516fd4558da94dd979cfd9489ecd32a86c9f"
+     "62ff5900c40d29570362eb116a78516fd4558da94dd979cfd9489ecd32a86c9f",
+     "82f7d7f7ad9744214e0bf00f07f16b69cbf336a68c7c1502a73fb2526a6aa2c6"
     ],
     "20190": [
      "6e7dd8ce005d0f55f4f6e8be4f3553eae80f5ac54e2496dd7336382d41fbfb85",
-     "5c8223aad8fa6fc067b3ba61f86bf84e41d6395117c312d2fa54e3cbd99cb835"
+     "5c8223aad8fa6fc067b3ba61f86bf84e41d6395117c312d2fa54e3cbd99cb835",
+     "f087a479830a156ef68ad773f420d1d9001c6c3e3f3c85890a18bb71df945c1f"
     ],
     "20189": [
      "6e7dd8ce005d0f55f4f6e8be4f3553eae80f5ac54e2496dd7336382d41fbfb85",
-     "1eadfb4d9298615883e16960a3f332e6de9017b16622d684ec552c71a7df0b8f"
+     "1eadfb4d9298615883e16960a3f332e6de9017b16622d684ec552c71a7df0b8f",
+     "6344be561abec754d1d13737c3d44c6c180f58766a6ff8c418880cb714ab66f8"
     ]
    }
   },
   {
    "step": "20",
    "set": {
-    "AcceptText": "renegades",
-    "Description": "<Player>. Sir Bors cannot move against Sir Dillus on the word of a drunk in a Camelot tavern. We need proof. Will you go into Llyn Barfog under cover of darkness and learn what the [renegades] are hiding?",
+    "AcceptText": "renegade guards",
+    "Description": "<Player>. We cannot actively move on the renegades without a reason. So we have decided to send you to their tower under the cover of darkness. There you will subdue one of the [renegade guards] and learn all you can.",
     "SourceText": [
-     "Their tower stands in Llyn Barfog, on your left as you come down from the North Black Mountains. Subdue one of the renegade guards and take whatever he carries. Don't linger; the guards walk in pairs, and Dillus comes out with more if you get too close. The moment you learn something, come back to me.",
+     "Their tower stands in Llyn Barfog, on your left as you come down from the North Black Mountains. Do not spend much time in the vicinity. The moment you learn of something, return to us. Farewell, <Class>.",
      "Captain Rhodri will want to read it.",
      "'The messenger comes through the pass at the turn of the moon, with word from the north.' The north. Arawnites, if I'm any judge. Find that messenger in the pass to Llyn Barfog and take his orders from him, by whatever means you must.",
      "You can't read a word of it. Omis, the vendor at Swanton Keep, is said to know old scripts.",
@@ -305,28 +310,33 @@
      "Orders, is it? Let me have a look.",
      "Omis could read it? Give it here."
     ],
-    "FinishText": "'Dillus holds the tower. When the border falls, the lake falls with it.' So it's true: Dillus sold Camelot's tower to the Arawnites. You've given Sir Bors his proof, <Player>. Take this, and come back when you're ready. We will have to answer this."
+    "FinishText": "'Dillus holds the tower. When the border falls, the lake falls with it.' So it's true: Dillus sold the King's tower to the Arawnites. You've given Sir Bors his proof, <Player>. Take this, and come back when you're ready. We will have to answer this."
    },
    "guard": {
     "20455": [
      "0e8c2188dc7eba85a4011270ba33e94827263077e64f435c9bdf7d92f3987308",
-     "eeff13ae07e2c490a97dd41ab1050902305c465fe3742e0b6dffb799a073d82d"
+     "eeff13ae07e2c490a97dd41ab1050902305c465fe3742e0b6dffb799a073d82d",
+     "125cd32d8ae32333279e494a50aab5e0daeeec39b92ba37e49072a4dcf823606"
     ],
     "20453": [
      "0e8c2188dc7eba85a4011270ba33e94827263077e64f435c9bdf7d92f3987308",
-     "eeff13ae07e2c490a97dd41ab1050902305c465fe3742e0b6dffb799a073d82d"
+     "eeff13ae07e2c490a97dd41ab1050902305c465fe3742e0b6dffb799a073d82d",
+     "125cd32d8ae32333279e494a50aab5e0daeeec39b92ba37e49072a4dcf823606"
     ],
     "20454": [
      "0e8c2188dc7eba85a4011270ba33e94827263077e64f435c9bdf7d92f3987308",
-     "eeff13ae07e2c490a97dd41ab1050902305c465fe3742e0b6dffb799a073d82d"
+     "eeff13ae07e2c490a97dd41ab1050902305c465fe3742e0b6dffb799a073d82d",
+     "125cd32d8ae32333279e494a50aab5e0daeeec39b92ba37e49072a4dcf823606"
     ],
     "20457": [
      "0e8c2188dc7eba85a4011270ba33e94827263077e64f435c9bdf7d92f3987308",
-     "eeff13ae07e2c490a97dd41ab1050902305c465fe3742e0b6dffb799a073d82d"
+     "eeff13ae07e2c490a97dd41ab1050902305c465fe3742e0b6dffb799a073d82d",
+     "125cd32d8ae32333279e494a50aab5e0daeeec39b92ba37e49072a4dcf823606"
     ],
     "20456": [
      "0e8c2188dc7eba85a4011270ba33e94827263077e64f435c9bdf7d92f3987308",
-     "eeff13ae07e2c490a97dd41ab1050902305c465fe3742e0b6dffb799a073d82d"
+     "eeff13ae07e2c490a97dd41ab1050902305c465fe3742e0b6dffb799a073d82d",
+     "125cd32d8ae32333279e494a50aab5e0daeeec39b92ba37e49072a4dcf823606"
     ]
    }
   },
@@ -382,50 +392,55 @@
    "step": "30",
    "set": {
     "AcceptText": "intentions",
-    "Description": "Ah, <Player>! You've returned, and just in time. Twr ap Alsig has kept his word: Barfog will stand with us. Sir Bors means to put the alliance before the lords of Camelot, and Scribe Veral there must enter it in the rolls before anyone can undo it. Will you carry the document and our [intentions] to him?",
+    "Description": "Ah, <Player>! You have returned, and just in time as well. We have prepared our case and are ready to leave for Camelot. We wish you to journey to Camelot and inform our Scribe Veral of our wish to lend support to Barfog. Take this as proof of our [intentions]. We will be along shortly.",
     "SourceText": [
-     "Here it is, sealed with Sir Bors' own mark. Scribe Veral keeps his desk in Camelot. Put it into no one's hands but his.",
-     "Barfog's support, entered in the rolls; it is done. But you have not heard? There is news that Sir Bors is to be assassinated, and soon; the report doesn't say by whom. I will put this before the lords of Camelot myself. You must return to Snowdonia with all haste and stop this!",
+     "Scribe Veral keeps a house behind Castle Camelot. Put the document into no one's hands but his.",
+     "You are from Sir Bors? How can it be you have not seen the [local report] yet?",
      "He was never after Sir Bors. He was waiting for you. Captain Rhodri will want to know."
     ],
     "StepText": [
-     "Take the document to Scribe Veral in Camelot.",
-     "Search the Snowdonia border keep for the assassin and slay him.",
+     "Take the document to Scribe Veral, in a house behind Castle Camelot.",
+     "Return to the Snowdonia border keep, search it for the assassin (the south-west landing) and slay him.",
      "Speak to Captain Rhodri."
     ],
     "TargetText": [
-     "Hail, traveler. How may I be of service? You come from Sir Bors? Then give me what you carry.",
+     "Hail traveler! How may I be of service to you?",
      "The assassin gasps as he falls: \"I thank thee for the help into the darkness of death. My endurance of life has been paid in full! Peace beckons!\"",
      ""
     ],
     "FinishText": {
-     "Infiltrator": "<Player>! You have done us the greatest of services. These Arawnites have caused us nothing but trouble since you dispatched Sir Dillus, and Sir Bors can offer nothing that would fully repay what he owes you today. Let this reward be the start of what little we have to offer. In time we will find a greater one, and when that time comes we will call once more upon the Guild of Shadows and its most cunning <Class>!",
-     "Mercenary": "<Player>! You have done us the greatest of services. These Arawnites have caused us nothing but trouble since you dispatched Sir Dillus, and Sir Bors can offer nothing that would fully repay what he owes you today. Let this reward be the start of what little we have to offer. In time we will find a greater one, and when that time comes we will call once more upon the Guild of Shadows and its most cunning <Class>!",
-     "Cabalist": "<Player>! You have done us the greatest of services. These Arawnites have caused us nothing but trouble since you dispatched Sir Dillus, and Sir Bors can offer nothing that would fully repay what he owes you today. Let this reward be the start of what little we have to offer. In time we will find a greater one, and when that time comes we will call once more upon the Guild of Shadows and its most cunning <Class>!",
-     "Necromancer": "<Player>! You have done us the greatest of services. These Arawnites have caused us nothing but trouble since you dispatched Sir Dillus, and Sir Bors can offer nothing that would fully repay what he owes you today. Let this reward be the start of what little we have to offer. In time we will find a greater one, and when that time comes we will call once more upon the Temple of Arawn and its most cunning <Class>!",
-     "Reaver": "<Player>! You have done us the greatest of services. These Arawnites have caused us nothing but trouble since you dispatched Sir Dillus, and Sir Bors can offer nothing that would fully repay what he owes you today. Let this reward be the start of what little we have to offer. In time we will find a greater one, and when that time comes we will call once more upon the Temple of Arawn and its most cunning <Class>!"
+     "Infiltrator": "<Player>! You have done us the greatest of services! These Arawnites have caused us nothing but trouble since you dispatched Sir Dillus. Sir Bors can offer nothing that would fully repay the debt you have fashioned this day. Let this reward be the start of what little we have to offer. In time we shall find greater reward for your deeds, and when that time comes, we shall once again call upon the Guild of Shadows and their most cunning <Class>!",
+     "Mercenary": "<Player>! You have done us the greatest of services! These Arawnites have caused us nothing but trouble since you dispatched Sir Dillus. Sir Bors can offer nothing that would fully repay the debt you have fashioned this day. Let this reward be the start of what little we have to offer. In time we shall find greater reward for your deeds, and when that time comes, we shall once again call upon the Guild of Shadows and their most cunning <Class>!",
+     "Cabalist": "<Player>! You have done us the greatest of services! These Arawnites have caused us nothing but trouble since you dispatched Sir Dillus. Sir Bors can offer nothing that would fully repay the debt you have fashioned this day. Let this reward be the start of what little we have to offer. In time we shall find greater reward for your deeds, and when that time comes, we shall once again call upon the Guild of Shadows and their most cunning <Class>!",
+     "Necromancer": "<Player>! You have done us the greatest of services! These Arawnites have caused us nothing but trouble since you dispatched Sir Dillus. Sir Bors can offer nothing that would fully repay the debt you have fashioned this day. Let this reward be the start of what little we have to offer. In time we shall find greater reward for your deeds, and when that time comes, we shall once again call upon the Temple of Arawn and their most cunning <Class>!",
+     "Reaver": "<Player>! You have done us the greatest of services! These Arawnites have caused us nothing but trouble since you dispatched Sir Dillus. Sir Bors can offer nothing that would fully repay the debt you have fashioned this day. Let this reward be the start of what little we have to offer. In time we shall find greater reward for your deeds, and when that time comes, we shall once again call upon the Temple of Arawn and their most cunning <Class>!"
     }
    },
    "guard": {
     "21491": [
      "29a17e932c518cfbacba0fc6f7f702fa344d094ca58db3ba0055bd65f865a6bc",
-     "925bf23d8985928196e94b58166d0371df160ac4530d4409933a50f0f723d9ca"
+     "925bf23d8985928196e94b58166d0371df160ac4530d4409933a50f0f723d9ca",
+     "e3fd9ac7576f20502ea3a29086c5f66c2097f20a89dc46aa9cb1524c984c8fd5"
     ],
     "21489": [
      "29a17e932c518cfbacba0fc6f7f702fa344d094ca58db3ba0055bd65f865a6bc",
-     "925bf23d8985928196e94b58166d0371df160ac4530d4409933a50f0f723d9ca"
+     "925bf23d8985928196e94b58166d0371df160ac4530d4409933a50f0f723d9ca",
+     "e3fd9ac7576f20502ea3a29086c5f66c2097f20a89dc46aa9cb1524c984c8fd5"
     ],
     "21490": [
      "29a17e932c518cfbacba0fc6f7f702fa344d094ca58db3ba0055bd65f865a6bc",
-     "925bf23d8985928196e94b58166d0371df160ac4530d4409933a50f0f723d9ca"
+     "925bf23d8985928196e94b58166d0371df160ac4530d4409933a50f0f723d9ca",
+     "e3fd9ac7576f20502ea3a29086c5f66c2097f20a89dc46aa9cb1524c984c8fd5"
     ],
     "21493": [
      "29a17e932c518cfbacba0fc6f7f702fa344d094ca58db3ba0055bd65f865a6bc",
-     "05dc70c3249590614015d485c6b9f0b839b2d635a31f4bc564e1a500853b7a22"
+     "05dc70c3249590614015d485c6b9f0b839b2d635a31f4bc564e1a500853b7a22",
+     "07fb05ae2d5dc32729be9365e1df2a90cfc89e37595fef360da060393ef4f7a2"
     ],
     "21492": [
      "29a17e932c518cfbacba0fc6f7f702fa344d094ca58db3ba0055bd65f865a6bc",
-     "05dc70c3249590614015d485c6b9f0b839b2d635a31f4bc564e1a500853b7a22"
+     "05dc70c3249590614015d485c6b9f0b839b2d635a31f4bc564e1a500853b7a22",
+     "07fb05ae2d5dc32729be9365e1df2a90cfc89e37595fef360da060393ef4f7a2"
     ]
    }
   },
@@ -680,28 +695,33 @@
      "The Ellyll seer falls. His journal is full of bargains, and one name appears on every page.",
      "Sir Tilian's rider arrived an hour ago. Do you have the seer's journal?"
     ],
-    "FinishText": "Lord Elidyn. The same name, on every page. Sir Tilian was right. Rest tonight, <Player>; tomorrow we decide what to do about him."
+    "FinishText": "Lord Elidyn. The same name, on every page. Sir Tilian was right. Come back to me when you are ready to face him, <Player>."
    },
    "guard": {
     "21482": [
      "db1bf6acd31e1e9a50e8a601dd21a0f4e8ffa921cc2cb243378357abec4eaea7",
-     "cac2865ac18a7fe7b579dc94459dc3ba894e7e92f9da754b66615e1410c307e2"
+     "cac2865ac18a7fe7b579dc94459dc3ba894e7e92f9da754b66615e1410c307e2",
+     "586300545298918ae7fd6ee8f2d02d64797a25b685f3b07c73f85bb926782861"
     ],
     "21480": [
      "db1bf6acd31e1e9a50e8a601dd21a0f4e8ffa921cc2cb243378357abec4eaea7",
-     "be00ab51400fe1b99ad1941f79acec107d6a2ca9457b65e00d2ef064f80acf2d"
+     "be00ab51400fe1b99ad1941f79acec107d6a2ca9457b65e00d2ef064f80acf2d",
+     "d33588ec432df7651d3f3b47862b3adf9f97f604c4a90e4715d6d59188723bbb"
     ],
     "21481": [
      "db1bf6acd31e1e9a50e8a601dd21a0f4e8ffa921cc2cb243378357abec4eaea7",
-     "a3001725052d66be6c1e1dd94e210005a5f1614dac4b8d2e3d1f24f554d1a107"
+     "a3001725052d66be6c1e1dd94e210005a5f1614dac4b8d2e3d1f24f554d1a107",
+     "33b7b529688d5babff4e60302b0c2787b342c294e9e6a26be5c654654c9340f4"
     ],
     "21484": [
      "db1bf6acd31e1e9a50e8a601dd21a0f4e8ffa921cc2cb243378357abec4eaea7",
-     "c707c56d9959baf769956326c6a40f2869c12107faafd1125e81f820ad5339eb"
+     "c707c56d9959baf769956326c6a40f2869c12107faafd1125e81f820ad5339eb",
+     "592fa54ba585bf6b4eec3530f610ea6f494970a5bf9ed2d64d28aac1866eaea8"
     ],
     "21483": [
      "db1bf6acd31e1e9a50e8a601dd21a0f4e8ffa921cc2cb243378357abec4eaea7",
-     "0926b47c6494a339e22abbcdd960843e97927e4c8a72e90ed9e1dd956a8f3718"
+     "0926b47c6494a339e22abbcdd960843e97927e4c8a72e90ed9e1dd956a8f3718",
+     "2c872fa28bb1f0d12add3e64bc07430acd33028b15ae03d643f67a91d19b32d6"
     ]
    }
   },
