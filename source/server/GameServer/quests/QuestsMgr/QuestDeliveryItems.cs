@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Globalization;
 
 namespace DOL.GS.Quests
 {
@@ -11,6 +12,8 @@ namespace DOL.GS.Quests
     /// Accepting a quest whose first step is a delivery hands that step's item too (<see cref="FirstStepItem"/>): upstream
     /// never did, because nothing "begins" step 1, so 56 classic quests could not be finished. A first delivery back to
     /// the giver hands nothing: the giver wants the player to bring the item (11 more classic quests).
+    /// A turn-in can need several items: a CollectItemTemplate entry "id;N" (<see cref="CollectEntry"/>,
+    /// <see cref="OthersToTake"/>).
     /// </summary>
     public static class QuestDeliveryItems
     {
@@ -72,6 +75,54 @@ namespace DOL.GS.Quests
 
             string template = stepItemTemplates[0]?.Trim();
             return ShouldHand(template, carried, null) ? template : null;
+        }
+
+        /// <summary>A CollectItemTemplate entry's item id and the number of items its step needs. "id;N" with N a whole
+        /// number of 2 or more needs N items of id (both parts trimmed): an NPC is only ever handed one item, so a step
+        /// that wants two non-stacking stones needs a count (level 11 "Entry Into Tomorrow": Omis cuts Frund's and
+        /// Agisthil's stones into the Crediac). Any other entry ("id", "id;1", "id;0", "id;x", ";2") is the id as it
+        /// is, needing one, exactly as upstream reads it.</summary>
+        public static (string Id, int Needed) CollectEntry(string entry)
+        {
+            int semicolon = entry?.LastIndexOf(';') ?? -1;
+            if (semicolon >= 0
+                && int.TryParse(entry[(semicolon + 1)..].Trim(), NumberStyles.None, CultureInfo.InvariantCulture, out int needed)
+                && needed >= 2)
+            {
+                string id = entry[..semicolon].Trim();
+                if (id.Length > 0)
+                    return (id, needed);
+            }
+
+            return (entry, 1);
+        }
+
+        /// <summary>True when an item (its Id_nb) is a collect entry's item: upstream's rule in
+        /// <c>DataQuest.OnPlayerGiveItem</c>, the lowercased item id contains the lowercased entry id. An empty id is
+        /// no item.</summary>
+        public static bool IsCollectItem(string itemId, string id)
+            => !string.IsNullOrEmpty(id) && itemId != null && itemId.ToLower().Contains(id.ToLower());
+
+        /// <summary>The copies to take from each of the backpack's other items (<paramref name="others"/>: id and count,
+        /// without the item handed over) for a step that needs <paramref name="needed"/> items of <paramref name="id"/>,
+        /// or null when the player has too few: then nothing advances and nothing is taken. The item handed over counts
+        /// for <paramref name="handedCount"/> copies (at least one); the others count for their copies (at least one each)
+        /// when <see cref="IsCollectItem"/> matches them, and are taken in order, a stack only in part when fewer copies
+        /// are wanted.</summary>
+        public static int[] OthersToTake(IReadOnlyList<(string Id, int Count)> others, string id, int needed, int handedCount)
+        {
+            int[] take = new int[others?.Count ?? 0];
+            int wanted = needed - Math.Max(handedCount, 1);
+            for (int i = 0; i < take.Length && wanted > 0; i++)
+            {
+                if (!IsCollectItem(others[i].Id, id))
+                    continue;
+
+                take[i] = Math.Min(wanted, Math.Max(others[i].Count, 1));
+                wanted -= take[i];
+            }
+
+            return wanted > 0 ? null : take;
         }
 
         private static bool IsGiver(string targetName, string giverName)

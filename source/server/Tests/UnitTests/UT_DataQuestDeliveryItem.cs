@@ -11,6 +11,8 @@ namespace DOL.GS.Tests;
 // A quest whose first step is a delivery hands that step's item
 // when it is accepted, which upstream never did (56 classic quests could not be finished, among them the level 30
 // Regal Nobility), unless that delivery goes back to the giver, who wants the player to bring the item (11 more).
+// A CollectItemTemplate entry "id;N" (N >= 2) needs N items: an NPC is only ever handed one, and level 11 "Entry Into
+// Tomorrow" has Omis take both stones and make the Crediac (owner 2026-10-09).
 [TestFixture]
 public sealed class UT_DataQuestDeliveryItem
 {
@@ -168,4 +170,133 @@ public sealed class UT_DataQuestDeliveryItem
             Assert.That(QuestDeliveryItems.FirstStepItem(true, new[] { "cq_letter" }, Nothing, Target, null), Is.EqualTo("cq_letter"));
         });
     }
+
+    private const string Stone = "cq_crediac_stone";
+    private static readonly (string, int)[] NoOthers = Array.Empty<(string, int)>();
+
+    [Test]
+    public void AnEntryWithACountNeedsThatMany()
+        => Assert.That(QuestDeliveryItems.CollectEntry("a;2"), Is.EqualTo(("a", 2)));
+
+    [Test]
+    public void ALargerCountIsReadToo()
+        => Assert.That(QuestDeliveryItems.CollectEntry("cq_pelt;12"), Is.EqualTo(("cq_pelt", 12)));
+
+    [Test]
+    public void AnEntryWithoutACountNeedsOne()
+        => Assert.That(QuestDeliveryItems.CollectEntry("a"), Is.EqualTo(("a", 1)));
+
+    // Upstream compares the whole entry: anything that isn't "id;N" with N >= 2 stays as it is.
+    [TestCase("a;1")]
+    [TestCase("a;0")]
+    [TestCase("a;x")]
+    [TestCase("a;-2")]
+    [TestCase("a;")]
+    [TestCase(";2")]
+    [TestCase(" ;2")]
+    [TestCase(" a ")]
+    [TestCase("")]
+    public void AnyOtherEntryIsReadAsUpstreamReadsIt(string entry)
+        => Assert.That(QuestDeliveryItems.CollectEntry(entry), Is.EqualTo((entry, 1)));
+
+    [Test]
+    public void ANullEntryNeedsOneOfNothing()
+        => Assert.That(QuestDeliveryItems.CollectEntry(null), Is.EqualTo(((string)null, 1)));
+
+    [TestCase("a; 2")]
+    [TestCase("a ;2")]
+    [TestCase(" a ; 2 ")]
+    public void SpacesAroundTheIdAndTheCountAreTrimmed(string entry)
+        => Assert.That(QuestDeliveryItems.CollectEntry(entry), Is.EqualTo(("a", 2)));
+
+    [Test]
+    public void TheLevel11EntryNeedsBothStones()
+        => Assert.That(QuestDeliveryItems.CollectEntry("cq_crediac_stone;2"), Is.EqualTo((Stone, 2)));
+
+    [Test]
+    public void TheCollectItemRuleIsUpstreamsContainsWithoutCase()
+    {
+        Assert.Multiple(() =>
+        {
+            Assert.That(QuestDeliveryItems.IsCollectItem(Stone, Stone), Is.True);
+            Assert.That(QuestDeliveryItems.IsCollectItem("CQ_Crediac_Stone", Stone), Is.True);
+            Assert.That(QuestDeliveryItems.IsCollectItem(Stone, "CQ_CREDIAC_STONE"), Is.True);
+            Assert.That(QuestDeliveryItems.IsCollectItem(Stone, "cq_crediac"), Is.True);
+            Assert.That(QuestDeliveryItems.IsCollectItem("cq_crediac", Stone), Is.False);
+            Assert.That(QuestDeliveryItems.IsCollectItem("cq_bread", Stone), Is.False);
+        });
+    }
+
+    [Test]
+    public void NoIdIsNoCollectItem()
+    {
+        Assert.Multiple(() =>
+        {
+            Assert.That(QuestDeliveryItems.IsCollectItem(Stone, null), Is.False);
+            Assert.That(QuestDeliveryItems.IsCollectItem(Stone, ""), Is.False);
+            Assert.That(QuestDeliveryItems.IsCollectItem(null, Stone), Is.False);
+        });
+    }
+
+    // Level 11, stage 4: the player hands Omis one stone and carries the other.
+    [Test]
+    public void BothStonesAreEnoughAndTheOtherOneIsTaken()
+        => Assert.That(QuestDeliveryItems.OthersToTake(new[] { ("cq_bread", 1), (Stone, 1) }, Stone, 2, 1), Is.EqualTo(new[] { 0, 1 }));
+
+    [Test]
+    public void OneStoneIsNotEnough()
+        => Assert.That(QuestDeliveryItems.OthersToTake(new[] { ("cq_bread", 1) }, Stone, 2, 1), Is.Null);
+
+    [Test]
+    public void NothingElseCarriedIsNotEnough()
+        => Assert.That(QuestDeliveryItems.OthersToTake(NoOthers, Stone, 2, 1), Is.Null);
+
+    [Test]
+    public void OthersMatchByTheSameRuleAsTheItemHandedOver()
+    {
+        Assert.Multiple(() =>
+        {
+            Assert.That(QuestDeliveryItems.OthersToTake(new[] { ("CQ_Crediac_Stone", 1) }, Stone, 2, 1), Is.EqualTo(new[] { 1 }));
+            Assert.That(QuestDeliveryItems.OthersToTake(new[] { ("cq_crediac", 1) }, Stone, 2, 1), Is.Null);
+        });
+    }
+
+    [Test]
+    public void OnlyTheCopiesNeededAreTaken()
+        => Assert.That(QuestDeliveryItems.OthersToTake(new[] { (Stone, 1), (Stone, 1) }, Stone, 2, 1), Is.EqualTo(new[] { 1, 0 }));
+
+    [Test]
+    public void AStackCountsForItsCopiesAndLosesOnlyThoseWanted()
+    {
+        Assert.Multiple(() =>
+        {
+            Assert.That(QuestDeliveryItems.OthersToTake(new[] { ("cq_pelt", 5) }, "cq_pelt", 3, 1), Is.EqualTo(new[] { 2 }));
+            Assert.That(QuestDeliveryItems.OthersToTake(new[] { ("cq_pelt", 1), ("cq_pelt", 4) }, "cq_pelt", 4, 1), Is.EqualTo(new[] { 1, 2 }));
+            Assert.That(QuestDeliveryItems.OthersToTake(new[] { ("cq_pelt", 1) }, "cq_pelt", 3, 1), Is.Null);
+        });
+    }
+
+    [Test]
+    public void TheItemHandedOverCountsForItsCopiesAndAtLeastOne()
+    {
+        Assert.Multiple(() =>
+        {
+            Assert.That(QuestDeliveryItems.OthersToTake(NoOthers, "cq_pelt", 2, 2), Is.Empty);
+            Assert.That(QuestDeliveryItems.OthersToTake(new[] { ("cq_pelt", 1) }, "cq_pelt", 2, 0), Is.EqualTo(new[] { 1 }));
+        });
+    }
+
+    [Test]
+    public void AStepThatNeedsOneTakesNothingMore()
+    {
+        Assert.Multiple(() =>
+        {
+            Assert.That(QuestDeliveryItems.OthersToTake(new[] { (Stone, 1) }, Stone, 1, 1), Is.EqualTo(new[] { 0 }));
+            Assert.That(QuestDeliveryItems.OthersToTake(null, Stone, 1, 1), Is.Empty);
+        });
+    }
+
+    [Test]
+    public void NoOtherItemsAreTooFewForTwo()
+        => Assert.That(QuestDeliveryItems.OthersToTake(null, Stone, 2, 1), Is.Null);
 }

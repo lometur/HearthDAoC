@@ -84,6 +84,11 @@ namespace DOL.GS.Quests
 	/// 
 	/// CollectItemTemplate - Item that needs to be collected to end the current step.  If no items are ever collected this can be kept null,
 	/// otherwise it needs an entry for each step.  Empty values || are ok.
+	/// HearthDAoC: an entry id;N (N a number of 2 or more) needs N of the item (QuestDeliveryItems.CollectEntry). An NPC is only
+	/// ever handed one item, so handing one over with fewer than N in the backpack advances nothing and takes nothing (the NPC
+	/// says the step's TargetText on a Collect or Deliver step, and the player is told, say, "Omis needs 2 of them."); with N or
+	/// more the step advances and takes the item handed over and N-1 more. Any other entry is read as upstream reads it.
+	/// Level 11 "Entry Into Tomorrow": Omis takes both stones (cq_crediac_stone;2) and makes the Crediac.
 	/// 
 	/// MaxCount, MinLevel, MaxLevel - Single values to determine who can do quest.  All must be provided.  MaxCount == 0 for no limit
 	/// 
@@ -1800,6 +1805,66 @@ namespace DOL.GS.Quests
 			}
 		}
 
+		/// <summary>
+		/// HearthDAoC: for a turn-in that needs <paramref name="needed"/> items of <paramref name="id"/> (a CollectItemTemplate
+		/// entry "id;N"), the backpack's other items to take with the one handed over, and the copies of each
+		/// (QuestDeliveryItems.OthersToTake); empty when one item is needed. With too few, null, and the player is told
+		/// "&lt;NPC&gt; needs N of them.": an NPC is only ever handed one item, so the step waits until the player carries
+		/// them all (level 11: Omis takes both stones).
+		/// </summary>
+		protected static List<(DbInventoryItem Item, int Count)> OtherCollectItems(GamePlayer player, GameObject obj, DbInventoryItem item, string id, int needed)
+		{
+			List<(DbInventoryItem Item, int Count)> take = new();
+			if (needed < 2)
+				return take;
+
+			lock (player.Inventory.Lock)
+			{
+				List<DbInventoryItem> others = player.Inventory.AllItems
+					.Where(i => i.SlotPosition >= (int)eInventorySlot.FirstBackpack && i.SlotPosition <= (int)eInventorySlot.LastBackpack && !ReferenceEquals(i, item))
+					.ToList();
+				int[] counts = QuestDeliveryItems.OthersToTake(others.Select(i => (i.Id_nb, i.Count)).ToList(), id, needed, item.Count);
+				if (counts != null)
+				{
+					for (int k = 0; k < others.Count; k++)
+					{
+						if (counts[k] > 0)
+							take.Add((others[k], counts[k]));
+					}
+
+					return take;
+				}
+			}
+
+			player.Out.SendMessage($"{obj.GetName(0, true)} needs {needed} of them.", eChatType.CT_System, eChatLoc.CL_SystemWindow);
+			return null;
+		}
+
+		/// <summary>
+		/// HearthDAoC: takes the items OtherCollectItems chose, as the item handed over is taken; a stack loses only the
+		/// copies wanted.
+		/// </summary>
+		protected static void RemoveCollectItems(GameObject obj, GamePlayer player, List<(DbInventoryItem Item, int Count)> take)
+		{
+			foreach ((DbInventoryItem other, int count) in take)
+			{
+				if (count >= other.Count)
+				{
+					RemoveItem(obj, player, other, true);
+					continue;
+				}
+
+				lock (player.Inventory.Lock)
+				{
+					if (player.Inventory.RemoveCountFromStack(other, count))
+					{
+						InventoryLogging.LogInventoryAction(player, obj, eInventoryActionType.Quest, other.Template, count);
+						player.Out.SendMessage($"You give {count} {other.Name} to {obj.GetName(0, false)}.", eChatType.CT_System, eChatLoc.CL_SystemWindow);
+					}
+				}
+			}
+		}
+
 
 		#endregion Utility
 
@@ -2550,9 +2615,13 @@ namespace DOL.GS.Quests
 			if (TargetName == obj.Name && (TargetRegion == obj.CurrentRegionID || TargetRegion == 0)
 			   && player.Level >= Level && player.Level <= MaxLevel)
 			{
-				if (m_collectItems.Count >= Step &&
-					!string.IsNullOrEmpty(m_collectItems[Step - 1]) &&
-					item.Id_nb.ToLower().Contains(m_collectItems[Step - 1].ToLower()) &&
+				// HearthDAoC: an entry "id;N" (N >= 2) needs N of the item (QuestDeliveryItems.CollectEntry); the item handed
+				// over matches by the id without ";N". Any other entry is read as upstream reads it.
+				(string collectId, int collectNeeded) = (null, 1);
+				if (m_collectItems.Count >= Step)
+					(collectId, collectNeeded) = QuestDeliveryItems.CollectEntry(m_collectItems[Step - 1]);
+
+				if (QuestDeliveryItems.IsCollectItem(item.Id_nb, collectId) &&
 					ExecuteCustomQuestStep(player, Step, eStepCheckType.GiveItem))
 				{
 					switch (StepType)
@@ -2575,10 +2644,16 @@ namespace DOL.GS.Quests
 									}
 								}
 
+								// HearthDAoC: with fewer than the entry's N items nothing advances or is taken.
+								List<(DbInventoryItem Item, int Count)> others = OtherCollectItems(player, obj, item, collectId, collectNeeded);
+								if (others == null)
+									break;
+
 								// HearthDAoC: the item handed over doesn't count as carried while the step advances.
 								if (AdvanceQuestStepHandingOver(obj, item))
 								{
 									RemoveItem(obj, player, item, true);
+									RemoveCollectItems(obj, player, others);
 								}
 							}
 							break;
@@ -2586,9 +2661,15 @@ namespace DOL.GS.Quests
 						case eStepType.DeliverFinish:
 						case eStepType.CollectFinish:
 							{
+								// HearthDAoC: with fewer than the entry's N items nothing advances or is taken.
+								List<(DbInventoryItem Item, int Count)> others = OtherCollectItems(player, obj, item, collectId, collectNeeded);
+								if (others == null)
+									break;
+
 								if (FinishQuest(obj, true))
 								{
 									RemoveItem(obj, player, item, true);
+									RemoveCollectItems(obj, player, others);
 								}
 							}
 							break;
