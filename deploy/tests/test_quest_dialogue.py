@@ -366,6 +366,37 @@ class RealDialogueTests(unittest.TestCase):
             "SELECT Id_nb FROM ItemTemplate WHERE Id_nb IN ('cq_crediac_stone', 'cq_crediac') ORDER BY Id_nb").fetchall(),
             [("cq_crediac",), ("cq_crediac_stone",)])
 
+    def test_every_giver_stands_in_its_region_and_the_shrouded_isles_7_and_11_come_from_the_class_trainer(self):
+        # Compared without case, as quests match names (QuestNames.Same). Upstream named the Necromancer trainer Carys
+        # as every class's giver of the Shrouded Isles 7 and 11 (owner test 2026-10-10).
+        classes = list(self.chains["classes"])
+        for entry in self.data["quests"]:
+            for name, qid in zip(classes, self.chains["steps"][entry["step"]]["ids"]):
+                if qid is None:
+                    continue
+                giver, region = self.conn.execute("SELECT StartName, StartRegionID FROM DataQuest WHERE ID=?", (qid,)).fetchone()
+                guilds = [guild for mob, guild in self.conn.execute("SELECT Name, Guild FROM Mob WHERE Region=?", (region,))
+                          if mob.lower() == (giver or "").lower()]
+                with self.subTest(quest=qid, giver=giver, region=region):
+                    self.assertTrue(guilds, "no such mob in the region")
+                    if entry["step"] in ("7si", "11si"):
+                        self.assertIn(f"{name} Trainer", guilds)
+
+    def test_each_11_needs_the_7_of_its_own_branch_and_both_lead_to_15(self):
+        # Period rule (Allakhazam, 2004): who takes the Shrouded Isles 7 finishes the first class quests there, so the
+        # Camelot 11 needs the Camelot 7 (either version) and the Shrouded Isles 11 the Shrouded Isles 7. Each closes
+        # the other; the 15 is epic-chains-v1's.
+        ids = [qid for key in ("11", "11si", "15") for qid in self.chains["steps"][key]["ids"]]
+        marks = ", ".join("?" * len(ids))
+        self.assertEqual(dict(self.conn.execute(f"SELECT ID, QuestDependency FROM DataQuest WHERE ID IN ({marks})", ids)), {
+            20157: "#21500/21324|!#20469", 20155: "#21498/21322|!#20467", 20156: "#21499/21323|!#20468",
+            20159: "#20497|!#20471", 20158: "#21501/21325|!#20470",
+            20469: "#20478|!#20157", 20467: "#20476|!#20155", 20468: "#20477|!#20156", 20471: "#20480|!#20159",
+            20470: "#20479|!#20158",
+            20188: "#20157/20469", 20186: "#20155/20467", 20187: "#20156/20468", 20190: "#20159/20471",
+            20189: "#20158/20470",
+        })
+
     def test_a_description_that_names_the_accept_text_has_it_in_brackets(self):
         for qid, (accept, description, *_rest) in self.rows.items():
             if accept and accept.lower() in (description or "").lower():
