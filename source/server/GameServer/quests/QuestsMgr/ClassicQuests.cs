@@ -25,8 +25,9 @@ namespace DOL.GS.Quests
     /// then it not being there for the player").</item>
     /// </list>
     /// Quest givers keep the normal yellow quest indicator over their heads. Without the file nothing happens.
-    /// HearthDAoC: hearthdaoc-quests.json (beside it) adds quests and quest monsters, and its <c>Chat</c> replaces
-    /// upstream's NPC replies keyword by keyword (an empty reply silences one).
+    /// HearthDAoC: hearthdaoc-quests.json (beside it) adds quests (an entry with <c>Replace</c> replaces upstream's: a
+    /// quest the fork rebuilt) and quest monsters, and its <c>Chat</c> replaces upstream's NPC replies keyword by keyword
+    /// (an empty reply silences one).
     /// </summary>
     public static class ClassicQuests
     {
@@ -137,6 +138,9 @@ namespace DOL.GS.Quests
             /// <summary>Races the quest is offered to (empty: any). DataQuest has class limits but no race limits;
             /// Information is the Key (Celt) went to every Hibernian race, Sluaghbinders included (owner check 2026-10-07).</summary>
             public List<string> Races { get; set; } = new();
+            /// <summary>HearthDAoC: in hearthdaoc-quests.json, this entry replaces upstream's for the same quest ID (a quest
+            /// the fork rebuilt, such as level 11's "Entry Into Tomorrow"); without it upstream's entry wins.</summary>
+            public bool Replace { get; set; }
         }
 
         /// <summary>Whether the player's race may take this classic quest.</summary>
@@ -536,16 +540,21 @@ namespace DOL.GS.Quests
         }
 
         /// <summary>
-        /// HearthDAoC: adds the extra file's quests where upstream's file has no entry for the ID (upstream's entry wins),
-        /// and its quest monsters; its <c>Chat</c> replies replace upstream's (see <see cref="MergeChat"/>). Returns
-        /// <paramref name="upstream"/>. A null extra file changes nothing.
+        /// HearthDAoC: adds the extra file's quests where upstream's file has no entry for the ID (upstream's entry wins,
+        /// unless ours says <see cref="QuestInfo.Replace"/>), and its quest monsters; its <c>Chat</c> replies replace
+        /// upstream's (see <see cref="MergeChat"/>). Returns <paramref name="upstream"/>. A null extra file changes nothing.
         /// </summary>
         public static Config Merge(Config upstream, Config extra)
         {
             if (extra == null) return upstream;
             if (extra.Quests != null)
                 foreach (KeyValuePair<int, QuestInfo> quest in extra.Quests)
-                    upstream.Quests.TryAdd(quest.Key, quest.Value);
+                {
+                    if (quest.Value?.Replace == true)
+                        upstream.Quests[quest.Key] = quest.Value;
+                    else
+                        upstream.Quests.TryAdd(quest.Key, quest.Value);
+                }
             if (extra.QuestMonsterIds != null)
                 foreach (string mob in extra.QuestMonsterIds)
                     upstream.QuestMonsterIds.Add(mob);
