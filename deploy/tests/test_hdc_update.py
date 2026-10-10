@@ -312,7 +312,8 @@ class HdcFixesTests(unittest.TestCase):
 
 class EntrypointFixesLogTests(unittest.TestCase):
     """The entrypoint's world fixes lines, run against a scratch world: they print the fixes' lines as before and
-    append them, under a header, to /data/logs/world-fixes.log, which hdc fixes reads."""
+    append them, under a header, to /data/logs/world-fixes.log, which hdc fixes reads and which keeps the last 20
+    starts."""
 
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
@@ -357,6 +358,42 @@ class EntrypointFixesLogTests(unittest.TestCase):
         self.assertRegex(log[0], "^" + header % re.escape("v0.35b-hearth.8") + "$")
         self.assertEqual(log[1], first.stdout.strip())
         self.assertRegex(log[2], "^" + header % "unknown" + "$")  # a container started without the tag
+
+    def old_starts(self, n):
+        os.makedirs(os.path.dirname(self.log_path), exist_ok=True)
+        with open(self.log_path, "w") as f:
+            for i in range(1, n + 1):
+                f.write(f"=== Start 2026-10-{i:02d} 08:00:00 UTC, release v0.35b-hearth.{i}, upstream 0.35b ===\n"
+                        f"Quest dialogue: {i} quests rewritten\n")
+
+    def headers(self):
+        return [line for line in self.read_log().splitlines() if line.startswith("=== Start ")]
+
+    def test_the_log_keeps_the_last_20_starts(self):
+        self.old_starts(24)
+        self.assertEqual(self.start(HEARTHDAOC_TAG="v0.35b-hearth.25").returncode, 0)
+        headers = self.headers()
+        self.assertEqual(len(headers), 20)
+        self.assertIn("release v0.35b-hearth.6,", headers[0])  # the five oldest are gone
+        self.assertIn("release v0.35b-hearth.25,", headers[-1])
+        log = self.read_log()
+        self.assertTrue(log.startswith(headers[0] + "\nQuest dialogue: 6 quests rewritten\n"), log[:200])
+        self.assertTrue(log.endswith("disabled_classes 20;33 -> 33\n"), log[-200:])
+
+    def test_a_log_under_20_starts_is_not_rewritten(self):
+        self.old_starts(19)
+        before = self.read_log()
+        self.start()
+        self.assertEqual(len(self.headers()), 20)
+        self.assertTrue(self.read_log().startswith(before))
+
+    def test_a_log_it_cannot_trim_does_not_stop_the_start(self):
+        self.old_starts(24)
+        os.makedirs(self.log_path + ".tmp")  # the trimmed copy can't be written
+        r = self.start()
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertEqual(r.stdout, "Disciple (Necromancer's base class) enabled: disabled_classes 20;33 -> 33\n")
+        self.assertEqual(len(self.headers()), 25)  # untrimmed, and this start appended
 
     def test_hdc_fixes_shows_the_last_start(self):
         self.start(HEARTHDAOC_TAG="v0.35b-hearth.8")

@@ -32,9 +32,23 @@ python3 "$BIN/server_properties.py" --db "$DATA/world/opendaoc.sqlite3.db" --gm-
 # messages, and the fixes world_fixes.py lists: battlegrounds, epic chains, dialogue, mob fixes). A fix
 # that fails undoes itself and says so, and the start goes on. Their lines are also appended, under a line
 # with the time and the release, to /data/logs/world-fixes.log: ./hdc fixes shows the last start's, which
-# are long gone from ./hdc logs' last 200 lines by then (#105). A log it can't write never stops the start.
+# are long gone from ./hdc logs' last 200 lines by then (#105). The log keeps the last 20 starts. A log it
+# can't write or trim never stops the start.
 mkdir -p "$DATA/logs"
 fixes_log="$DATA/logs/world-fixes.log"
+if [[ -f "$fixes_log" ]]; then  # keep the 19 starts before this one
+    python3 - "$fixes_log" 19 <<'EOF' || true
+import os, sys
+path, keep = sys.argv[1], int(sys.argv[2])
+with open(path, "rb") as f:
+    lines = f.readlines()
+starts = [i for i, line in enumerate(lines) if line.startswith(b"=== Start ")]
+if len(starts) > keep:
+    with open(path + ".tmp", "wb") as f:
+        f.writelines(lines[starts[-keep]:])
+    os.replace(path + ".tmp", path)
+EOF
+fi
 upstream="$(python3 -c 'import json, sys; print(json.load(open(sys.argv[1]))["version"])' "$LOCK")"
 if ! echo "=== Start $(date -u '+%Y-%m-%d %H:%M:%S') UTC, release ${HEARTHDAOC_TAG:-unknown}, upstream $upstream ===" >> "$fixes_log"; then
     echo "WARNING: cannot write $fixes_log; ./hdc fixes will not show this start's world fixes." >&2

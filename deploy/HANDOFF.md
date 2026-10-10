@@ -80,7 +80,8 @@ Then ask the owner to connect from their PC (`~/Games/HearthDAoC/play.sh` after 
 `./hdc help` lists everything: status, logs, fixes, add-bots, accounts, bot goals, backups, restore,
 new-world, upgrade-world, carry-rvr, auto-accounts, spawns. `./hdc fixes` shows what the world fixes below did at
 the last start, running or not: each start appends their lines, under a line with the time and the release, to
-`/data/logs/world-fixes.log` (`./hdc logs` shows only the last 200 lines, long past them). Backups run daily into
+`/data/logs/world-fixes.log`, which keeps the last 20 starts (`./hdc logs` shows only the last 200 lines, long past
+them). Backups run daily into
 the volume (keep 7). The copies taken before add-bots keep their newest 3; the copies taken before restore, upgrade
 and carry-rvr are kept until you remove them (`./hdc backups` lists them; they are in /data/backups).
 Settings live in `.env` (see `.env.example`), e.g. `HEARTHDAOC_AUTOSAVE_MINUTES` (default 5),
