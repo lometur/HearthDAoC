@@ -10,8 +10,10 @@
   "QuestMonsterIds": ["1f005bc1-27ae-40b0-bc42-1ec407a4aa34"],
   "Chat": {
     "Captain Rhodri": {
-      "matter": "Sir Bors wants the folk of Llyn Barfog on our side, and nothing would win their trust faster than seeing the renegades gone. Your task is to go back to the renegade tower and [dispatch] the traitors.",
-      "dispatch": "See that justice finds Sir Dillus, and every one of the officers [supporting] him. Then go to the outpost in Llyn Barfog and speak with Twr ap Alsig. If he will stand with us, the rest of Barfog will follow.",
+      "matter": "Sir Bors would have the support of the locals within Barfog, and this situation would be the best way to win their trust. Therefore your mission is to return to the renegade post and [dispatch] the outcasts.",
+      "dispatch": "You must ensure that justice is delivered to both Dillus and his [supporting] officers. When this is complete, visit the local outpost there and talk to one named Twr ap Alsig. We have it on good authority that if you win his support the locals will follow.",
+      "down to business": "We have trouble with the [Arawnites] along the border at Sauvage.",
+      "Arawnites": "They have gone quiet along the border at Sauvage, and quiet worries me more than noise. I need you to [speak with Lieutenant Kuebler] at Castle Sauvage.",
       "assist us": "",
       "scouts were spotted": "",
       "venture into the camps": "",
@@ -22,7 +24,30 @@
     },
     "Twr ap Alsig": {
       "certain": "The undead cythraul roam this land. Destroy one and bring me its skull, and Barfog will give you the support you seek.",
-      "Step#4": ""
+      "Step#4": "",
+      "goblin": "Yes. They have a new order among them, and it is not their own. It is the result of an [outside influence].",
+      "outside influence": "Dwarves, I am sure of it. There is a tunnel in Tepok's Mine, a [link to the borderlands], and through it they spread their foul word to the goblin hordes.",
+      "link to the borderlands": "Find a Savant in the mine, one of their clever ones, and learn what you can of the passageways. You may be forced to slay the goblin and search his belongings."
+    },
+    "Master Edric": {
+      "interested": "There is trouble in Snowdonia again. Captain Rhodri calls it routine, but Rhodri does not send for the Guild over routine. I have my [doubts].",
+      "doubts": "I will say no more of it here. Will you go back to [Snowdonia]?"
+    },
+    "Master Arenis": {
+      "interested": "Rhodri's asking for us again. Says it's routine border trouble. If it were routine, he'd send his own men. I've got my [doubts].",
+      "doubts": "I will say no more of it here. Will you go back to [Snowdonia]?"
+    },
+    "Magus Isen": {
+      "interested": "Captain Rhodri writes of trouble in Snowdonia, which he calls routine. I have read a great many letters, and this one was written by a frightened man. I have my [doubts].",
+      "doubts": "I will say no more of it here. Will you go back to [Snowdonia]?"
+    },
+    "Yulia": {
+      "interested": "Captain Rhodri has sent for us again. He calls it routine, but the dead do not whisper of routine things. I have my [doubts].",
+      "doubts": "I will say no more of it here. Will you go back to [Snowdonia]?"
+    },
+    "Peze": {
+      "interested": "Rhodri's asking for us again. He calls it routine. Routine doesn't need a Reaver. I've got my [doubts].",
+      "doubts": "I will say no more of it here. Will you go back to [Snowdonia]?"
     }
   }
 }

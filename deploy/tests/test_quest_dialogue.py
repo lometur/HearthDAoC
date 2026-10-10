@@ -337,14 +337,26 @@ class RealDialogueTests(unittest.TestCase):
             with self.subTest(quest=qid, giver=giver):
                 self.assertIn(accept, offered)
 
-    def test_every_whisper_steps_advance_text_is_a_bracketed_keyword_in_its_target_text(self):
+    def test_every_whisper_steps_advance_text_can_be_reached_from_its_target_text(self):
+        # The whisper keyword is in the target's own text, or reached from it through our Chat replies (level 40:
+        # [down to business] -> [Arawnites] -> [speak with Lieutenant Kuebler]).
+        with open(os.path.join(HERE, "..", "hearthdaoc-quests.json"), encoding="utf-8") as f:
+            chat = json.load(f).get("Chat", {})
         for qid, (_accept, _desc, _source, step_types, _steps, targets, advances, _finish) in self.rows.items():
+            names = (self.conn.execute("SELECT TargetName FROM DataQuest WHERE ID=?", (qid,)).fetchone()[0] or "").split("|")
             types, targets, advances = step_types.split("|"), (targets or "").split("|"), (advances or "").split("|")
             for stage, step_type in enumerate(types):
                 if step_type in ("6", "7"):
+                    replies = {k.lower(): v for k, v in chat.get(names[stage].split(";")[0], {}).items()}
+                    offered, todo = set(), re.findall(r"\[([^\]]+)\]", targets[stage])
+                    while todo:
+                        keyword = todo.pop()
+                        if keyword not in offered:
+                            offered.add(keyword)
+                            todo.extend(re.findall(r"\[([^\]]+)\]", replies.get(keyword.lower(), "")))
                     with self.subTest(quest=qid, stage=stage + 1):
                         self.assertTrue(advances[stage])
-                        self.assertIn(f"[{advances[stage]}]", targets[stage])
+                        self.assertIn(advances[stage], offered)
 
     def test_no_popup_text_is_longer_than_1000_characters(self):
         for qid, (accept, description, source, _types, steps, targets, _advances, finish) in self.rows.items():
