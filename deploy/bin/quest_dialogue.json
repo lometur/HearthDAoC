@@ -210,16 +210,16 @@
    "set": {
     "AcceptText": "Captain Rhodri",
     "Description": {
-     "Infiltrator": "<Player>. Your name is starting to be spoken in the right rooms. Now a greater man has asked for us: Sir Bors, who holds the Black Mountains for the King. His man at Snowdonia, Captain Rhodri, needs eyes and ears in places soldiers can't go. That is what we are for. Will you go to [Captain Rhodri]?",
-     "Mercenary": "<Player>. Word is you don't waste time, which is the best thing anyone can say of a soldier. Sir Bors, who holds the Black Mountains for the King, has asked the Guild for help, and his man at Snowdonia, Captain Rhodri, will tell you the rest. Will you go to [Captain Rhodri]?",
-     "Cabalist": "<Player>. You have impressed people who are not easily impressed. Sir Bors, who holds the Black Mountains for the King, has asked the Guild for a quiet hand, and his man at Snowdonia, Captain Rhodri, will explain. Will you go to [Captain Rhodri]?",
-     "Necromancer": "<Player>. Sir Bors, who holds the Black Mountains for the King, has asked for help, and his man at Snowdonia, Captain Rhodri, will explain. You may hear talk of Arawnites. They are not of the Temple: they are zealots who wear our Lord's name and do none of his will. Will you go to [Captain Rhodri]?",
-     "Reaver": "<Player>. Sir Bors, who holds the Black Mountains for the King, has asked for help, and his man at Snowdonia, Captain Rhodri, will tell you what. You may hear talk of Arawnites. They are not of the Temple: they are zealots who wear our Lord's name and do none of his will. The Temple will not weep for them. Will you go to [Captain Rhodri]?"
+     "Infiltrator": "<Player>. Your name is starting to be spoken in the right rooms. Now a greater man has asked for us: Sir Bors, who holds the Black Mountains for Camelot. His man at Snowdonia, Captain Rhodri, needs eyes and ears in places soldiers can't go. That is what we are for. Will you go to [Captain Rhodri]?",
+     "Mercenary": "<Player>. Word is you don't waste time, which is the best thing anyone can say of a soldier. Sir Bors, who holds the Black Mountains for Camelot, has asked the Guild for help, and his man at Snowdonia, Captain Rhodri, will tell you the rest. Will you go to [Captain Rhodri]?",
+     "Cabalist": "<Player>. You have impressed people who are not easily impressed. Sir Bors, who holds the Black Mountains for Camelot, has asked the Guild for a quiet hand, and his man at Snowdonia, Captain Rhodri, will explain. Will you go to [Captain Rhodri]?",
+     "Necromancer": "<Player>. Sir Bors, who holds the Black Mountains for Camelot, has asked for help, and his man at Snowdonia, Captain Rhodri, will explain. You may hear talk of Arawnites. They are not of the Temple: they are zealots who wear our Lord's name and do none of his will. Will you go to [Captain Rhodri]?",
+     "Reaver": "<Player>. Sir Bors, who holds the Black Mountains for Camelot, has asked for help, and his man at Snowdonia, Captain Rhodri, will tell you what. You may hear talk of Arawnites. They are not of the Temple: they are zealots who wear our Lord's name and do none of his will. The Temple will not weep for them. Will you go to [Captain Rhodri]?"
     },
     "SourceText": [
      "Captain Rhodri keeps the border keep in Snowdonia Fortress, at the north end of the Black Mountains. Go to him.",
      "Before we court them, we must know them. Elrigh drifts from inn to inn in these mountains, and he hears everything; last I heard he was drinking at Snowdonia Station. Find him and ask him about the locals of Barfog.",
-     "The Barfog folk are proud, and they hate Camelot, but they'd hate the renegades more if they knew the half of it: a tower full of King's guards who stopped answering to the King, out on the edge of the lake. Andri knows more. He used to serve with them, and now he drinks in the taverns of Camelot.",
+     "The Barfog folk are proud, and they hate Camelot, but they'd hate the renegades more if they knew the half of it: a tower full of Camelot's guards who stopped answering to Camelot, out on the edge of the lake. Andri knows more. He used to serve with them, and now he drinks in the taverns of Camelot.",
      "I served at that tower before it turned. Sir Dillus leads them now; he took the tower and half the garrison with it. They say he takes his orders from someone in the north. I didn't stay to find out who."
     ],
     "StepText": [
@@ -264,7 +264,7 @@
      "Captain Rhodri will want to read it.",
      "'The messenger comes through the pass at the turn of the moon, with word from the north.' The north. Arawnites, if I'm any judge. Find that messenger in the pass to Llyn Barfog and take his orders from him, by whatever means you must.",
      "You can't read a word of it. Omis, the vendor at Swanton Keep, is said to know old scripts.",
-     "Arawnite cipher, and an old one. There; I've written what it says between the lines. Take it to your captain, and don't tell anyone where you had it read."
+     "Arawnite cipher, and an old one. There; I've written what it says between the lines. Take it to your captain, and don't tell anyone who deciphered it for you."
     ],
     "StepText": [
      "Slay a renegade guard in Llyn Barfog and learn of their treason.",
@@ -280,7 +280,7 @@
      "Orders, is it? Let me have a look.",
      "Omis could read it? Give it here."
     ],
-    "FinishText": "'Dillus holds the tower. When the border falls, the lake falls with it.' So it's true: Dillus sold the King's tower to the Arawnites. You've given Sir Bors his proof, <Player>. Take this, and come back when you're ready. We will have to answer this."
+    "FinishText": "'Dillus holds the tower. When the border falls, the lake falls with it.' So it's true: Dillus sold Camelot's tower to the Arawnites. You've given Sir Bors his proof, <Player>. Take this, and come back when you're ready. We will have to answer this."
    },
    "guard": {
     "20455": [
@@ -347,10 +347,10 @@
    "step": "30",
    "set": {
     "AcceptText": "intentions",
-    "Description": "Ah, <Player>! You've returned, and just in time. Twr ap Alsig has kept his word: Barfog will stand with us. Sir Bors means to put the alliance before the King, and Scribe Veral in Camelot must enter it in the rolls before anyone can undo it. Will you carry the document and our [intentions] to him?",
+    "Description": "Ah, <Player>! You've returned, and just in time. Twr ap Alsig has kept his word: Barfog will stand with us. Sir Bors means to put the alliance before the lords of Camelot, and Scribe Veral there must enter it in the rolls before anyone can undo it. Will you carry the document and our [intentions] to him?",
     "SourceText": [
      "Here it is, sealed with Sir Bors' own mark. Scribe Veral keeps his desk in Camelot. Put it into no one's hands but his.",
-     "Barfog's support, entered in the rolls; it is done. But you have not heard? There is news that Sir Bors is to be assassinated, and soon; the report doesn't say by whom. I will take your case before King Constantine myself. You must return to Snowdonia with all haste and stop this!",
+     "Barfog's support, entered in the rolls; it is done. But you have not heard? There is news that Sir Bors is to be assassinated, and soon; the report doesn't say by whom. I will put this before the lords of Camelot myself. You must return to Snowdonia with all haste and stop this!",
      "He was never after Sir Bors. He was waiting for you. Captain Rhodri will want to know."
     ],
     "StepText": [
