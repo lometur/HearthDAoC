@@ -23,13 +23,14 @@ sensible numbers every minute, the same in the log, in chat and in the CSV (chec
 and it turns off by command, by its timer and at a server stop, and on at start from `.env` (checks 8-9). Check 10
 collects the numbers #137 needs.
 
-Before this release the meter ran on a test server: on from its setting at start, first with no bots, then while
-about 250 GameBots logged in, and stopped from outside. There the `gamebot`, `monster`, `unattributed`,
-`BOT_CPU_TOP` and `BOT_CPU_PROCESS` lines, the CSV, the on line at start and the off line at the stop came out as this
-guide says. No game client logged in there, and the GameBots never settled with the meter off, so the `player` line,
-`BOT_CPU_COMPARE`, the in-game `/botcpu` replies, its timer and the overhead comparison have passed only the automated
-tests: checks 2, 3, 5, 7, 8 and 9 are their first real run. If something looks off there, treat it as a possible bug
-and post it on #137.
+Before this release the meter ran on a test server, started with `docker run` (not `./hdc update` or `./hdc up`): off
+by default, then on from its setting at start, first with no bots, then while about 250 GameBots logged in, and stopped
+from outside. There the `gamebot`, `monster`, `unattributed`, `BOT_CPU_TOP` and `BOT_CPU_PROCESS` lines, the CSV, the
+on line at start and the off line at the stop came out as this guide says. No game client logged in there, and the
+GameBots never settled with the meter off, so the `player` line, `BOT_CPU_COMPARE`, the in-game `/botcpu` replies and
+its timer have passed only the automated tests, and the two overhead comparisons (before and after the update, meter
+off and on) have not run at all: checks 1, 2, 3, 5, 7, 8 and 9 are their first real run. If something looks off there,
+treat it as a possible bug and post it on #137.
 
 | Check | What it proves | Pass | Fail |
 |---|---|---|---|
