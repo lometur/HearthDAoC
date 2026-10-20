@@ -23,6 +23,12 @@ sensible numbers every minute, the same in the log, in chat and in the CSV (chec
 and it turns off by command, by its timer and at a server stop, and on at start from `.env` (checks 8-9). Check 10
 collects the numbers #137 needs.
 
+Before this release the meter ran on a test server with about 250 GameBots, where the `gamebot`, `monster`,
+`unattributed`, `BOT_CPU_TOP` and `BOT_CPU_PROCESS` lines, the CSV and the start and stop behaved as this guide says.
+No game client logged in there, so the `player` line, `BOT_CPU_COMPARE` and the in-game `/botcpu` replies have passed
+only the automated tests: checks 2, 3, 5 and 8 are their first real run. If something looks off there, treat it as a
+possible bug and post it on #137.
+
 | Check | What it proves | Pass | Fail |
 |---|---|---|---|
 | 1. The update | The release adds the setting, off, and a default start changes nothing | `.env` has `HEARTHDAOC_BOT_CPU=off`; "Bot CPU meter: off" once in the start output; no meter line in the log; `SERVER_WORK` as before | "on" anywhere, a `BOT_CPU_STATE` line, or no "Bot CPU meter" line |
@@ -31,7 +37,7 @@ collects the numbers #137 needs.
 | 4. Sanity | Its numbers agree with the kernel's | Usually `chargedPct` < `loopThreadsCpuPct` < `processCpuPct` | `chargedPct` higher while the waits are small; `-` on the minutes of a running server |
 | 5. In chat | Chat shows the same minute as the log | The same numbers as the log's last block | Other numbers for the same minute |
 | 6. The CSV | The CSV gets its rows | A header, then a row per minute and kind | No file, or no new rows |
-| 7. Overhead | It costs little | `samples` about 1,800 a minute, `overBudget` not higher, `avgMsSum` within the estimate | `samples` falls or `overBudget` rises while on |
+| 7. Overhead | It costs little | `samples` about 1,800 a minute, `overBudget` not higher, `avgMsSum` within the estimate | `samples` falls or `overBudget` rises while on; `avgMsSum` up by more than the estimate is a softer sign, as bot activity moves |
 | 8. Off | Off stops it at once and cleanly | The reply, the last partial minute (or none under 5 s), the off line, then nothing | Lines keep coming |
 | 9. On at start | The `.env` switch works | "Bot CPU meter: on", `on source=property`, lines with no command | No lines, or "off" in the start output |
 | 10. For #137 | Nothing by itself: it collects the GameBot baseline | | |
@@ -39,8 +45,8 @@ collects the numbers #137 needs.
 ## Before you start
 
 - **Measure on a settled server.** After any start (`./hdc update`, `./hdc up`), wait until `./hdc status` says
-  running (healthy), then 20 minutes more. The GameBots log in over the first 15 minutes (only a third are in after
-  5), so `gamebot` `n` is low before that, and check 7 needs 10 settled minutes with the meter off.
+  running (healthy), then 25 minutes more. The GameBots log in over the first 15 minutes (only a third are in after
+  5), so `gamebot` `n` is low before that, and check 7 needs the next 10 settled minutes with the meter off.
 - **The meter's faults.** This prints nothing while all is well:
 
   ```bash
@@ -69,7 +75,7 @@ BOT_CPU lines, so `grep BOT_CPU` shows it too, but it is not a line of the meter
 |---|---|---|
 | `BOT_CPU` | every minute, one per kind with anything charged, in the kind order above | `n` (the kind's average count), `msPerBotSec` (the average CPU per bot, in ms per second: 1.0 is 0.1% of one core), `msSec` (the whole kind), and after the `\|` the stages, per bot; `unattributed` has `n=-`, and its stages are ms per second for the whole kind |
 | `BOT_CPU_TOP` | every minute, one per bot kind with a bot charged | the 5 costliest bots, `rank=name:ms per s`, with each GameBot's goal |
-| `BOT_CPU_PROCESS` | every minute | the whole process: `tps`, `processCpuPct`, `loopThreadsCpuPct`, `chargedPct`, `callsSec`, `loopWaitMs`, `throttledMs`, `gcPauseMs` and more; `-` for a value the platform can't give, and for the four thread values (`loopThreadsCpuPct`, `offLoopCpuPct`, `campThreadCpuPct`, `loopWaitMs`) in the window a server stop writes, as those threads have ended |
+| `BOT_CPU_PROCESS` | every minute | the whole process: `tps`, `processCpuPct`, `loopThreadsCpuPct`, `chargedPct`, `callsSec`, `loopWaitMs`, `throttledMs`, `gcPauseMs` and more; `-` for a value the platform can't give, and for the four thread values (`loopThreadsCpuPct`, `offLoopCpuPct`, `campThreadCpuPct`, `loopWaitMs`) in the window a normal server stop writes, as those threads have ended |
 | `BOT_CPU_COMPARE` | every minute, for `player/gamebot` while both have `n` of 1.0 or more (also `playerbot/gamebot` and `piloted/gamebot`, which have no bots today) | `cpu`, the ratio of the two kinds' `msPerBotSec`; `alloc`, `calls` and `usPerCall` |
 | `BOT_CPU_STATE` | each time it turns on or off, or its stop time changes | `on source=property` (at start), `on source=command by=<GM> minutes=<m or ->`, `off source=command by=<GM>`, `off source=timer`, `off source=stop` (server stop), `off source=error` |
 | `BOT_CPU_ERROR` | a fault in the meter's report, just before `off source=error` (a Warn line) | what failed: post it on #137. The server goes on, and `/botcpu on` starts the meter again |
@@ -97,14 +103,14 @@ docker exec hearthdaoc-server sh -c 'cat $(ls -tr /data/logs/server*)' | grep BO
 The third shows today's start loading `/botcpu` for GMs (`required plvl:2`): the new release is running. The fourth
 prints nothing: it leaves out that line, which names the BOT_CPU lines in its description.
 
-`SERVER_WORK` as before: 20 minutes after the start, run check 7's command on the 10 minutes before the update and on
+`SERVER_WORK` as before: 25 minutes after the start, run check 7's command on the 10 minutes before the update and on
 the last 10 minutes. Pass if `samples` is about 1,800 a minute in both and `overBudget` is no higher.
 
 Result:
 
 ### 2. Turn it on in game
 
-At least 20 minutes after the server is up (see "Before you start"). Spend the last 10 of them where you will be while
+At least 25 minutes after the server is up (see "Before you start"). Spend the last 10 of them where you will be while
 the meter is on (logged out, or in the same quiet spot): check 7 compares those minutes with the meter's.
 
 In game, as GM: `/botcpu` says "Bot CPU meter: off. /botcpu on [minutes] turns it on." Then `/botcpu on 30`, which
@@ -138,9 +144,11 @@ Result:
 On the `BOT_CPU_PROCESS` lines, usually `chargedPct` < `loopThreadsCpuPct` < `processCpuPct`; one odd minute is not a
 fail. If `chargedPct` is higher, `loopWaitMs`, `throttledMs` or `gcPauseMs` is large too: the wall times are inflated
 (the spec's section 3.9). `gamebot` `msSec` / 10 is its share of one core in %. `loopThreadsCpuPct` as `-` on the
-minutes of a running server means the kernel gives no scheduler statistics (3.9): say so on #137. The window a server
-stop writes (the lines just before `BOT_CPU_STATE off source=stop`) always has `-` there: the loop's threads have
-ended. That is not a fault.
+minutes of a running server means the kernel gives no scheduler statistics (3.9): say so on #137. After a normal stop
+(`./hdc stop`, `./hdc up`, `./hdc update`, `/shutdown`), the window the stop writes has `-` there, as the loop's
+threads have ended: that is not a fault. It is the one with a `win=` under 60 just before `BOT_CPU_STATE off
+source=stop`. A stop within 5 s of a minute's lines writes none: the lines before the off line are then the last full
+minute (`win=60`), with numbers.
 
 Confirm a large `gcPauseMs` with the `SERVER_GC_PAUSE` lines of the same minutes. Those lines list only pauses of
 250 ms or more; shorter pauses add up in the `pauseTotalMs` of the `SERVER_MEMORY` line that covers them (every 5
@@ -159,7 +167,7 @@ Result:
 the minutes on, `stops at ...`), the last minute's process line, one line per kind (`gamebot n=...: ... ms/s per bot`)
 and the totals since on. Chat shows whole percentages where the log has one decimal, and if a minute closes between
 your log read and the command, the two show different minutes. `/botcpu top` lists 5 GameBots with their goals and
-what they are doing, such as `1. Aldric (34 Cleric, region 163): 7.412 ms/s, 880 calls/s, Rvr, "..."`.
+what they are doing, such as `1. Aldric (34 Cleric, region 163): 7.412 ms/s, 880 calls/s, RvR, "..."`.
 
 Result:
 
@@ -218,7 +226,9 @@ Within 5 s of a minute's lines the reply is "Bot CPU meter off. The last 3 s wer
 no partial window comes, and the `off` line follows the last full minute. That is a pass too.
 
 With `on 30` left running instead, `off source=timer` comes by itself after 30 minutes, right after the 30th minute's
-lines.
+lines. If those 30 minutes from check 2 have already passed, `/botcpu off` says "Bot CPU meter is already off." and the
+last line is `off source=timer`: that passes the timer part. For the off part, `/botcpu on`, wait a minute, then
+`/botcpu off`.
 
 Result:
 
@@ -235,7 +245,8 @@ docker exec hearthdaoc-server sh -c 'cat $(ls -tr /data/logs/server*)' | grep BO
 
 `gamebot` `n` is low again for the first 15 minutes after this start. `/botcpu off` stops it until the next start. Set
 it back to `HEARTHDAOC_BOT_CPU=off` and `./hdc up`: the start output says "Bot CPU meter: off". If the meter was still
-on, the stop wrote a last window and `BOT_CPU_STATE off source=stop`, with `-` for the four thread values (check 4).
+on, the stop ends with `BOT_CPU_STATE off source=stop`, after a last short window with `-` for the four thread values
+(check 4).
 
 Result:
 

@@ -147,7 +147,7 @@ BOT_CPU win=60 kind=gamebot n=238.4 msSec=438.6 msPerBotSec=1.840 callsPerBotSec
 BOT_CPU win=60 kind=player n=1.0 msSec=2.1 msPerBotSec=2.104 callsPerBotSec=390.0 usPerCall=5.39 allocKBPerBotSec=60.4 | ClientBegin=0.310 Timer=0.022 Attack=0.201 Movement=0.090 ClientEnd=1.311 Pets=0.170
 BOT_CPU win=60 kind=monster n=1830.2 msSec=96.0 msPerBotSec=0.052 callsPerBotSec=61.0 usPerCall=0.86 allocKBPerBotSec=0.4 | Npc=0.031 Attack=0.008 Movement=0.011 Effect=0.002
 BOT_CPU win=60 kind=unattributed n=- msSec=9.1 callsSec=2210.0 usPerCall=4.12 allocKBSec=88.0 | GameLoop=0.402 Timer=1.210 Npc=6.890 Zone=0.598
-BOT_CPU_TOP win=60 kind=gamebot 1=Aldric:7.412:Rvr 2=Brennos:6.020:Battleground 3=Cathal:5.881:GroupPve 4=Dagny:5.104:Rvr 5=Eirik:4.950:SoloPve
+BOT_CPU_TOP win=60 kind=gamebot 1=Aldric:7.412:RvR 2=Brennos:6.020:Battleground 3=Cathal:5.881:GroupPve 4=Dagny:5.104:RvR 5=Eirik:4.950:SoloPve
 BOT_CPU_PROCESS win=60 tps=30.0 cores=4 processCpuPct=148.2 loopThreadsCpuPct=121.0 offLoopCpuPct=27.2 campThreadCpuPct=3.1 chargedPct=54.6 callsSec=212534 loopWaitMs=212 throttledMs=0 gcPauseMs=14 gen2=0 allocMBSec=41.2 heapMB=2210 rssMB=3480
 BOT_CPU_COMPARE win=60 pair=player/gamebot n=1.0/238.4 cpu=1.14x alloc=1.94x calls=0.95x usPerCall=1.21x
 ```
@@ -336,7 +336,7 @@ Since on (12 min): gamebot 1.792, player 2.020 ms/s per bot.
   the sum of its charged ms ÷ the sum of its bot-seconds over the windows written since on or reset. The current
   partial window is not counted; `N` is those windows' length in minutes. With no window yet the line is left out.
 
-`/botcpu top gamebot`, one line per bot: `1. Aldric (34 Cleric, region 163): 7.412 ms/s, 880 calls/s, Rvr, "<activity>"`
+`/botcpu top gamebot`, one line per bot: `1. Aldric (34 Cleric, region 163): 7.412 ms/s, 880 calls/s, RvR, "<activity>"`
 (the goal and `PersistentRecord.Activity`, as the slow-turn warning logs them, NS:81; `-` and `""` when the bot has
 no `PersistentRecord`). For the other bot kinds: `1. <name> (<level> <class>, region <region>): <ms> ms/s, <calls>
 calls/s`. `calls/s` counts visits as in 2.1.
@@ -652,9 +652,11 @@ window's 60 s closes the window.
   they are not, the absolute numbers are high, but both kinds run in the same batches at the same moments, so the
   ratio between them holds (est., cpu §4.6).
 - Threads are re-listed every minute; a thread that left between two reads is dropped from that window, and a
-  negative difference counts as 0. So the window a server stop writes (the lines just before `BOT_CPU_STATE off
-  source=stop`) has `-` for `loopThreadsCpuPct`, `offLoopCpuPct`, `campThreadCpuPct` and `loopWaitMs`: the server
-  joins the game loop's threads and the camp thread before its stopped event (`GameServer.cs:1013-1015`).
+  negative difference counts as 0. So the window a normal server stop writes (`win=` under 60, just before
+  `BOT_CPU_STATE off source=stop`; none when the stop comes within 5 s of a minute's lines) has `-` for
+  `loopThreadsCpuPct`, `offLoopCpuPct`, `campThreadCpuPct` and `loopWaitMs`: the server joins the game loop's threads
+  and the camp thread before its stopped event (`GameServer.cs:1013-1015`). A stop from the game loop's own error catch
+  (`GameLoop.cs:102`) runs on the `GameLoop` thread, which stays listed: there they cover that thread alone.
 - **A schedstat that says nothing.** Where the kernel keeps no scheduler statistics, the file still exists and reads
   `0 0 0` (est.). A first field of 0 for a running loop thread therefore counts as unavailable: `loopThreadsCpuPct`,
   `offLoopCpuPct`, `campThreadCpuPct` and `loopWaitMs` are then `-`, not 0.
@@ -998,14 +1000,15 @@ deploy tests are found on their own (`.github/workflows/server-image.yml:94`).
 ### 6.5 The owner's checks on the live server, after the release
 
 1. `./hdc update`: `.env` gains `HEARTHDAOC_BOT_CPU=off`. The container's start output has "Bot CPU meter: off" (once:
-   the row is new): `docker logs hearthdaoc-server 2>&1 | grep "Bot CPU meter"`. The server log has no `BOT_CPU`
-   line, and `SERVER_WORK` looks as before.
-2. At least 20 minutes after the server is up (`./hdc status`: running (healthy)): the GameBots log in over the first
-   15 minutes (section 7), and check 7 needs 10 settled minutes with the meter off. In game, as GM: `/botcpu` says
-   "Bot CPU meter: off. /botcpu on [minutes] turns it on." Then `/botcpu on 30`. To
-   keep your character from waking monsters and speeding up GameBots near you (section 7), go somewhere quiet, or go
-   to the character screen or quit the game: both take you out of `player` (3.8). Quit from the game's menu: a client
-   that is killed leaves your character link-dead in the world for 60 s, still counted. The meter runs on.
+   the row is new): `docker logs hearthdaoc-server 2>&1 | grep "Bot CPU meter"`. The server log has no line of the
+   meter: the only `BOT_CPU` match is the start's `Command - '&botcpu'` line, which names the BOT_CPU lines in its
+   description (leave it out with `grep -v`). `SERVER_WORK` looks as before.
+2. At least 25 minutes after the server is up (`./hdc status`: running (healthy)): the GameBots log in over the first
+   15 minutes (section 7), and check 7 needs the next 10 settled minutes with the meter off. In game, as GM:
+   `/botcpu` says "Bot CPU meter: off. /botcpu on [minutes] turns it on." Then `/botcpu on 30`. To keep your
+   character from waking monsters and speeding up GameBots near you (section 7), go somewhere quiet, or go to the
+   character screen or quit the game: both take you out of `player` (3.8). Quit from the game's menu: a client that is
+   killed leaves your character link-dead in the world for 60 s, still counted. The meter runs on.
 3. After 2-3 minutes:
 
    ```bash
@@ -1014,11 +1017,12 @@ deploy tests are found on their own (`.github/workflows/server-image.yml:94`).
 
    Once: a `BOT_CPU_STATE on source=command` line. Then each minute: `gamebot` with `n` close to your bot count
    (about 240), `player` with `n` 1.0 while you are in game, `monster`, `unattributed`, a `BOT_CPU_TOP` for `gamebot`,
-   `BOT_CPU_PROCESS` with `tps=30.0`, and `BOT_CPU_COMPARE pair=player/gamebot` while you are in game.
+   `BOT_CPU_PROCESS` with `tps` at 30.0 (29.9 now and then is fine), and `BOT_CPU_COMPARE pair=player/gamebot` while
+   you are in game.
 4. Sanity: usually `chargedPct` < `loopThreadsCpuPct` < `processCpuPct`. If `chargedPct` is higher, `loopWaitMs`,
    `throttledMs` or `gcPauseMs` is large too: the wall times are inflated (3.9). `gamebot` `msSec` / 10 is its share of
    one core in %. `loopThreadsCpuPct` as `-` on a minute's line while the server runs means the kernel gives no
-   scheduler statistics (3.9): say so on #137. The window a server stop writes always has `-` there (3.9).
+   scheduler statistics (3.9): say so on #137. The window a normal server stop writes has `-` there (3.9).
    Confirm a large `gcPauseMs` with the `SERVER_GC_PAUSE` lines of the same minutes (check 3's command, with
    `grep SERVER_GC_PAUSE` for `grep BOT_CPU`). Those lines list only pauses of 250 ms or more (section 1); shorter
    pauses add up in the `pauseTotalMs` of the `SERVER_MEMORY` line that covers them (every 5 minutes).
@@ -1032,7 +1036,8 @@ deploy tests are found on their own (`.github/workflows/server-image.yml:94`).
    from minute to minute, so this is a rough check.
 8. `/botcpu off`: one partial window, then `BOT_CPU_STATE off source=command`, then no more lines. Under 5 s after a
    window, the reply says the last seconds were too short to write, and no partial window comes (2.2). With `on 30`
-   left running, `off source=timer` comes by itself after 30 minutes.
+   left running, `off source=timer` comes by itself after 30 minutes; a `/botcpu off` after that says "Bot CPU meter
+   is already off."
 9. At start: `HEARTHDAOC_BOT_CPU=on`, `./hdc up`: "Bot CPU meter: on" in `docker logs hearthdaoc-server`,
    `BOT_CPU_STATE on source=property`, lines with no command. `/botcpu off` stops it until the next start. Set it back
    to `off` and `./hdc up`.
