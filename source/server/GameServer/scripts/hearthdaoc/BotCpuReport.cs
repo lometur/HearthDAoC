@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.Globalization;
 using System.Linq;
+using System.Text;
 using System.Threading;
 
 namespace DOL.GS.HearthDAoC;
@@ -10,9 +11,10 @@ namespace DOL.GS.HearthDAoC;
 // the report side takes the difference of two snapshots of the per-thread slots (3.7) and of each bot's counter (3.10),
 // and this file turns it, with the window's exact length, the game time and the registry samples, into the report's
 // numbers: each kind's figures with the - rules of 2.1, n and bot-seconds (3.8), the spread and the top 5 of each bot
-// kind (3.10), the compare pairs (2.1) and the totals since on (2.4). Plain values in and out, no server state, so it
-// is unit-tested without a server (UT_BotCpuReport). BotCpuMeter is the hot path that fills the slots and counters;
-// BotCpuScript reads the server's state and writes the lines.
+// kind (3.10), the compare pairs (2.1) and the totals since on (2.4). It also makes their exact text, in the invariant
+// culture: every log line (2.1), the CSV's header and rows (2.3) and every chat line of /botcpu (2.4). Plain values in
+// and out, no server state, so it is unit-tested without a server (UT_BotCpuReport). BotCpuMeter is the hot path that
+// fills the slots and counters; BotCpuScript reads the server's state and writes the lines.
 
 /// <summary>
 /// The registry samples of one window (3.8): <c>AutonomousBotRegistry.PopulationForBrainTick</c>, read once a second.
@@ -313,10 +315,52 @@ public sealed class BotCpuSince
 }
 
 /// <summary>
-/// The report's numbers (2.1, 2.2, 2.4, 3.8, 3.10): plain values in and out, no server state.
+/// A window's process values read from the platform (2.1 <c>BOT_CPU_PROCESS</c>, 3.9): over the window, or at its end
+/// for the two memory values. Null is a value the platform can't give (Windows, a file missing in the container, a
+/// schedstat that reads 0): <c>-</c> on the line, an empty cell in the CSV. <c>tps</c>, <c>chargedPct</c> and
+/// <c>callsSec</c> come from the window (<see cref="BotCpuWindow"/>).
+/// </summary>
+/// <param name="Cores"><c>cores</c>: <see cref="Environment.ProcessorCount"/>.</param>
+/// <param name="ProcessCpuPct"><c>processCpuPct</c>: the whole process, % of one core.</param>
+/// <param name="LoopThreadsCpuPct"><c>loopThreadsCpuPct</c>: the game-loop threads, % of one core.</param>
+/// <param name="CampThreadCpuPct"><c>campThreadCpuPct</c>: the camp planner thread, % of one core.</param>
+/// <param name="LoopWaitMs"><c>loopWaitMs</c>: the loop threads' time ready to run but waiting for a CPU, ms.</param>
+/// <param name="ThrottledMs"><c>throttledMs</c>: the container's CPU throttling, ms.</param>
+/// <param name="GcPauseMs"><c>gcPauseMs</c>: GC pause time, ms.</param>
+/// <param name="Gen2"><c>gen2</c>: full collections.</param>
+/// <param name="AllocMBSec"><c>allocMBSec</c>: all allocation in the process, MB per s.</param>
+/// <param name="HeapMB"><c>heapMB</c>: the managed heap, <c>GC.GetTotalMemory(false)</c>, MB.</param>
+/// <param name="RssMB"><c>rssMB</c>: resident memory, MB.</param>
+public sealed record BotCpuProcess(int Cores, double? ProcessCpuPct, double? LoopThreadsCpuPct,
+    double? CampThreadCpuPct, double? LoopWaitMs, double? ThrottledMs, double? GcPauseMs, long? Gen2,
+    double? AllocMBSec, double? HeapMB, double? RssMB)
+{
+    /// <summary><c>offLoopCpuPct</c>: <see cref="ProcessCpuPct"/> − <see cref="LoopThreadsCpuPct"/> as the line shows
+    /// them, 1 decimal, so it is the owner's own subtraction of the two; null when either is.</summary>
+    public double? OffLoopCpuPct => ProcessCpuPct is double process && LoopThreadsCpuPct is double loop
+        ? BotCpuReport.Round(BotCpuReport.Round(process, 1) - BotCpuReport.Round(loop, 1), 1)
+        : null;
+}
+
+/// <summary>Why the meter turned off, as its <c>BOT_CPU_STATE off</c> line says (2.1): a GM's <c>/botcpu off</c>, the
+/// stop time of <c>/botcpu on [minutes]</c>, the server's stop, or a fault in the report (3.7).</summary>
+public enum BotCpuOffSource
+{
+    Command,
+    Timer,
+    Stop,
+    Error,
+}
+
+/// <summary>
+/// The report's numbers (2.1, 2.2, 2.4, 3.8, 3.10) and their text (2.1, 2.3, 2.4): plain values in and out, no server
+/// state. The text is in the invariant culture, a <c>.</c> decimal point whatever the server's culture.
 /// </summary>
 public static class BotCpuReport
 {
+    /// <summary>A window's length: 60 s, counted from the moment the meter turns on (2.2).</summary>
+    public const double WindowSeconds = 60;
+
     /// <summary>A final window shorter than this writes no lines or rows, and its counts are dropped (2.2).</summary>
     public const double MinimumWindowSeconds = 5;
 
@@ -488,4 +532,412 @@ public static class BotCpuReport
         double divisor = Round(gamebot.Value, decimals);
         return divisor == 0 ? null : Round(value.Value, decimals) / divisor;
     }
+
+    // ---- The text (2.1, 2.3, 2.4)
+
+    /// <summary>The <c>BOT_CPU_STATE</c> line of a meter the <c>bot_cpu_meter</c> property starts (2.1, 4.1).</summary>
+    public const string StateOnByPropertyLine = "BOT_CPU_STATE on source=property";
+
+    /// <summary>The CSV's header (2.3): the process columns, the kind columns, then the stages in their order.
+    /// </summary>
+    public const string CsvHeader =
+        "utc,win_s,tps,cores,process_cpu_pct,loop_threads_cpu_pct,off_loop_cpu_pct,camp_thread_cpu_pct,charged_pct," +
+        "all_calls_sec,loop_wait_ms,throttled_ms,gc_pause_ms,gen2,alloc_mb_sec,heap_mb,rss_mb," +
+        "kind,n,ms_sec,calls_sec,alloc_kb_sec,ms_per_bot_sec,calls_per_bot_sec,us_per_call,alloc_kb_per_bot_sec," +
+        "p50,p95,max,GameLoop,Timer,ClientBegin,Npc,Fleet,Attack,Casting,Effect,EffectListBegin,EffectListEnd," +
+        "Movement,Crafting,Reaper,Zone,ClientEnd,Quests,Pets,Other";
+
+    /// <summary><c>/botcpu</c> while the meter is off, and <c>/botcpu top</c> and <c>/botcpu reset</c> too: the off
+    /// text (2.4).</summary>
+    public const string OffStatusText = "Bot CPU meter: off. /botcpu on [minutes] turns it on.";
+
+    /// <summary><c>/botcpu off</c> while the meter is off (2.4).</summary>
+    public const string AlreadyOffText = "Bot CPU meter is already off.";
+
+    /// <summary><c>/botcpu reset</c> while the meter is on (2.4).</summary>
+    public const string ResetText = "Bot CPU totals reset.";
+
+    private const string UntilOff = "until /botcpu off or the next start";
+    private const string WhereTheLinesGo = ": BOT_CPU lines every minute in the server log, rows in logs/bot-cpu.csv.";
+
+    /// <summary>A kind's text name (2.5): its member name in lower case.</summary>
+    public static string KindName(BotCpuKind kind) => kind.ToString().ToLowerInvariant();
+
+    /// <summary>
+    /// Every log line of a window, in their order (2.1): a <c>BOT_CPU</c> line per kind that has one, in kind order;
+    /// a <c>BOT_CPU_TOP</c> line per bot kind with a bot charged; <c>BOT_CPU_PROCESS</c>; a <c>BOT_CPU_COMPARE</c> line
+    /// per pair written.
+    /// </summary>
+    public static IReadOnlyList<string> Lines(BotCpuWindow window, BotCpuProcess process)
+    {
+        ArgumentNullException.ThrowIfNull(window);
+        List<string> lines = [];
+        foreach (BotCpuKindWindow kind in window.Kinds)
+            lines.Add(KindLine(window, kind));
+
+        for (int k = 0; k < BotCpuTotals.KindCount; k++)
+        {
+            string top = TopLine(window, (BotCpuKind)k);
+            if (top != null)
+                lines.Add(top);
+        }
+
+        lines.Add(ProcessLine(window, process));
+        foreach (BotCpuCompare compare in window.Compares)
+            lines.Add(CompareLine(window, compare));
+
+        return lines;
+    }
+
+    /// <summary>
+    /// A kind's <c>BOT_CPU</c> line (2.1). Unattributed has <c>n=-</c>, and <c>callsSec</c> and <c>allocKBSec</c> in
+    /// place of the per-bot fields; only the bot kinds have <c>p50</c>, <c>p95</c> and <c>max</c>. After <c>|</c>, the
+    /// stage values in tick order, those that round to 0.000 left out; with none, the line has no <c>|</c> part.
+    /// </summary>
+    public static string KindLine(BotCpuWindow window, BotCpuKindWindow kind)
+    {
+        ArgumentNullException.ThrowIfNull(window);
+        ArgumentNullException.ThrowIfNull(kind);
+        StringBuilder line = new StringBuilder("BOT_CPU win=").Append(Text(window.Win))
+            .Append(" kind=").Append(KindName(kind.Kind))
+            .Append(" n=").Append(Text(kind.N, 1))
+            .Append(" msSec=").Append(Text(kind.MsSec, 1));
+        if (kind.Kind == BotCpuKind.Unattributed)
+        {
+            line.Append(" callsSec=").Append(Text(kind.CallsSec, 1))
+                .Append(" usPerCall=").Append(Text(kind.UsPerCall, 2))
+                .Append(" allocKBSec=").Append(Text(kind.AllocKBSec, 1));
+        }
+        else
+        {
+            line.Append(" msPerBotSec=").Append(Text(kind.MsPerBotSec, 3))
+                .Append(" callsPerBotSec=").Append(Text(kind.CallsPerBotSec, 1))
+                .Append(" usPerCall=").Append(Text(kind.UsPerCall, 2))
+                .Append(" allocKBPerBotSec=").Append(Text(kind.AllocKBPerBotSec, 1));
+            if (BotCpuMeter.IsBotKind(kind.Kind))
+            {
+                line.Append(" p50=").Append(Text(kind.P50, 3))
+                    .Append(" p95=").Append(Text(kind.P95, 3))
+                    .Append(" max=").Append(Text(kind.Max, 3));
+            }
+        }
+
+        string separator = " | ";
+        foreach ((BotCpuStage stage, string value) in ShownStages(kind))
+        {
+            line.Append(separator).Append(stage.ToString()).Append('=').Append(value);
+            separator = " ";
+        }
+
+        return line.ToString();
+    }
+
+    /// <summary>
+    /// A bot kind's <c>BOT_CPU_TOP</c> line (2.1): <c>rank=name:ms per s</c>, a space or <c>:</c> in the name made
+    /// <c>_</c>, and for GameBots the goal (<c>PersistentRecord.ObjectiveKind</c>, written as the name is) or <c>-</c>.
+    /// Null when none of the kind's bots was charged in the window.
+    /// </summary>
+    public static string TopLine(BotCpuWindow window, BotCpuKind kind)
+    {
+        ArgumentNullException.ThrowIfNull(window);
+        IReadOnlyList<BotCpuTopEntry> top = window.Top(kind);
+        if (top.Count == 0)
+            return null;
+
+        StringBuilder line = new StringBuilder("BOT_CPU_TOP win=").Append(Text(window.Win))
+            .Append(" kind=").Append(KindName(kind));
+        foreach (BotCpuTopEntry entry in top)
+        {
+            line.Append(' ').Append(Text(entry.Rank)).Append('=').Append(TopName(entry.Bot.Name))
+                .Append(':').Append(Text(entry.MsSec, 3));
+            if (kind == BotCpuKind.Gamebot)
+                line.Append(':').Append(TopName(entry.Bot.Goal));
+        }
+
+        return line.ToString();
+    }
+
+    /// <summary>The <c>BOT_CPU_PROCESS</c> line (2.1); a value the platform can't give is <c>-</c> (3.9).</summary>
+    public static string ProcessLine(BotCpuWindow window, BotCpuProcess process)
+    {
+        ArgumentNullException.ThrowIfNull(window);
+        StringBuilder line = new StringBuilder("BOT_CPU_PROCESS win=").Append(Text(window.Win));
+        foreach ((string name, string value) in ProcessFields(window, process))
+            line.Append(' ').Append(name).Append('=').Append(value);
+
+        return line.ToString();
+    }
+
+    // The process line's fields after win, in its order, which is also the CSV's (2.1, 2.3).
+    private static (string Name, string Value)[] ProcessFields(BotCpuWindow window, BotCpuProcess process) =>
+    [
+        ("tps", Text(window.Tps, 1)),
+        ("cores", Text(process?.Cores)),
+        ("processCpuPct", Text(process?.ProcessCpuPct, 1)),
+        ("loopThreadsCpuPct", Text(process?.LoopThreadsCpuPct, 1)),
+        ("offLoopCpuPct", Text(process?.OffLoopCpuPct, 1)),
+        ("campThreadCpuPct", Text(process?.CampThreadCpuPct, 1)),
+        ("chargedPct", Text(window.ChargedPct, 1)),
+        ("callsSec", Text(window.CallsSec, 0)),
+        ("loopWaitMs", Text(process?.LoopWaitMs, 0)),
+        ("throttledMs", Text(process?.ThrottledMs, 0)),
+        ("gcPauseMs", Text(process?.GcPauseMs, 0)),
+        ("gen2", Text(process?.Gen2)),
+        ("allocMBSec", Text(process?.AllocMBSec, 1)),
+        ("heapMB", Text(process?.HeapMB, 0)),
+        ("rssMB", Text(process?.RssMB, 0)),
+    ];
+
+    /// <summary>A <c>BOT_CPU_COMPARE</c> line (2.1): each ratio with 2 decimals and <c>x</c>, or <c>-</c>.</summary>
+    public static string CompareLine(BotCpuWindow window, BotCpuCompare compare)
+    {
+        ArgumentNullException.ThrowIfNull(window);
+        ArgumentNullException.ThrowIfNull(compare);
+        return "BOT_CPU_COMPARE win=" + Text(window.Win) + " pair=" + KindName(compare.Kind) + "/gamebot n=" +
+            Text(compare.N, 1) + "/" + Text(compare.GamebotN, 1) + " cpu=" + RatioText(compare.Cpu) + " alloc=" +
+            RatioText(compare.Alloc) + " calls=" + RatioText(compare.Calls) + " usPerCall=" +
+            RatioText(compare.UsPerCall);
+    }
+
+    /// <summary>The <c>BOT_CPU_STATE</c> line of a GM's <c>/botcpu on [minutes]</c>, also written when it changes the
+    /// stop time of a running meter (2.1); no minutes is <c>-</c>.</summary>
+    public static string StateOnByCommandLine(string by, int? minutes) =>
+        "BOT_CPU_STATE on source=command by=" + Who(by) + " minutes=" + Text(minutes);
+
+    /// <summary>The <c>BOT_CPU_STATE off</c> line (2.1); <paramref name="by"/>, the GM, only for
+    /// <see cref="BotCpuOffSource.Command"/>.</summary>
+    public static string StateOffLine(BotCpuOffSource source, string by = null) =>
+        source == BotCpuOffSource.Command
+            ? "BOT_CPU_STATE off source=command by=" + Who(by)
+            : "BOT_CPU_STATE off source=" + source.ToString().ToLowerInvariant();
+
+    /// <summary>The Warn line before <c>off source=error</c> (2.1, 3.7): the step that failed and the exception.
+    /// </summary>
+    public static string ErrorLine(string step, Exception exception) =>
+        "BOT_CPU_ERROR " + step + ": " + exception;
+
+    /// <summary>
+    /// A window's CSV rows (2.3), one per kind line in kind order: the window's process values on each row, then the
+    /// kind's figures, then its stage columns, which are the whole kind's raw stage ticks ÷ the exact window length
+    /// (3 decimals, 0.000 for zero), never left out. A <c>-</c> of the line, and a field the kind has no value for, is
+    /// an empty cell.
+    /// </summary>
+    /// <param name="window">The window.</param>
+    /// <param name="process">Its process values.</param>
+    /// <param name="end">The window's end, in UTC: the <c>utc</c> cell.</param>
+    public static IReadOnlyList<string> CsvRows(BotCpuWindow window, BotCpuProcess process, DateTime end)
+    {
+        ArgumentNullException.ThrowIfNull(window);
+        StringBuilder start = new StringBuilder(CsvUtc(end)).Append(',').Append(Text(window.Win));
+        foreach ((string _, string value) in ProcessFields(window, process))
+            start.Append(',').Append(Cell(value));
+
+        List<string> rows = [];
+        foreach (BotCpuKindWindow kind in window.Kinds)
+        {
+            StringBuilder row = new StringBuilder().Append(start).Append(',').Append(KindName(kind.Kind));
+            string[] figures =
+            [
+                Text(kind.N, 1), Text(kind.MsSec, 1), Text(kind.CallsSec, 1), Text(kind.AllocKBSec, 1),
+                Text(kind.MsPerBotSec, 3), Text(kind.CallsPerBotSec, 1), Text(kind.UsPerCall, 2),
+                Text(kind.AllocKBPerBotSec, 1), Text(kind.P50, 3), Text(kind.P95, 3), Text(kind.Max, 3),
+            ];
+            foreach (string figure in figures)
+                row.Append(',').Append(Cell(figure));
+            foreach (double stage in kind.StageMsSec)
+                row.Append(',').Append(Cell(Text(stage, 3)));
+
+            rows.Add(row.ToString());
+        }
+
+        return rows;
+    }
+
+    /// <summary>The CSV's <c>utc</c> cell (2.3): <paramref name="end"/>, in UTC, to the second, as
+    /// <c>2026-10-18T19:02:10Z</c>. A local time is turned into UTC first.</summary>
+    public static string CsvUtc(DateTime end) =>
+        (end.Kind == DateTimeKind.Local ? end.ToUniversalTime() : end)
+        .ToString("yyyy'-'MM'-'dd'T'HH':'mm':'ss'Z'", CultureInfo.InvariantCulture);
+
+    /// <summary>
+    /// <c>/botcpu</c> while the meter is on (2.4): the status line, then, before the first window, when its lines come;
+    /// after one, the last minute's line, a line per kind that has a kind line, in kind order, and the totals since
+    /// on or reset, left out with no window written or no kind with bot-seconds. The times are the server's local
+    /// time; the minutes are whole minutes, rounded down.
+    /// </summary>
+    /// <param name="onSince">When the run opened: the first window starts there.</param>
+    /// <param name="byCommand">Whether a GM's command turned it on, else the property.</param>
+    /// <param name="stopsAt">Its stop time; null for none.</param>
+    /// <param name="now">The time of the command.</param>
+    /// <param name="last">The last window written; null before the first.</param>
+    /// <param name="process">That window's process values.</param>
+    /// <param name="since">The totals since on or reset.</param>
+    public static IReadOnlyList<string> StatusText(DateTime onSince, bool byCommand, DateTime? stopsAt, DateTime now,
+        BotCpuWindow last, BotCpuProcess process, BotCpuSince since)
+    {
+        List<string> lines =
+        [
+            "Bot CPU meter: on since " + Clock(onSince) + " (" + (byCommand ? "by command" : "by property") + ", " +
+            Text(Whole((now - onSince).TotalMinutes)) + " min; " +
+            (stopsAt is DateTime stop ? "stops at " + Clock(stop) : "no stop time") + ").",
+        ];
+        if (last == null)
+        {
+            lines.Add(NoWindowYetText(onSince));
+            return lines;
+        }
+
+        lines.Add("Last minute (" + Text(last.Win) + " s, " + Text(last.Tps, 1) + " ticks/s): process " +
+            Percent(process?.ProcessCpuPct) + " of one core (" + Count(process?.Cores, "core") + "), " +
+            Percent(last.ChargedPct) + " charged to kinds, " + Percent(process?.OffLoopCpuPct) + " off the loop.");
+        foreach (BotCpuKindWindow kind in last.Kinds)
+        {
+            lines.Add(kind.Kind == BotCpuKind.Unattributed
+                ? "unattributed: " + Text(kind.MsSec, 1) + " ms/s; most in " + MostIn(kind)
+                : KindName(kind.Kind) + " n=" + Text(kind.N, 1) + ": " + Text(kind.MsPerBotSec, 3) +
+                  " ms/s per bot (" + Text(kind.MsSec, 1) + " ms/s in all); most in " + MostIn(kind));
+        }
+
+        string sinceLine = SinceText(since);
+        if (sinceLine != null)
+            lines.Add(sinceLine);
+
+        return lines;
+    }
+
+    /// <summary><c>/botcpu</c> and <c>/botcpu top</c> before the first window (2.4): when its lines come, a window's
+    /// length after <paramref name="onSince"/>.</summary>
+    public static string NoWindowYetText(DateTime onSince) =>
+        "No full minute yet; the first lines come at " + Clock(onSince.AddSeconds(WindowSeconds)) + ".";
+
+    /// <summary><c>/botcpu on</c> with no minutes while the meter is off (2.4).</summary>
+    public static string OnText() => "Bot CPU meter on " + UntilOff + WhereTheLinesGo;
+
+    /// <summary><c>/botcpu on minutes</c> while the meter is off (2.4), stopping at <paramref name="stopsAt"/>.
+    /// </summary>
+    public static string OnText(int minutes, DateTime stopsAt) =>
+        "Bot CPU meter on for " + Count(minutes, "minute") + " (until " + Clock(stopsAt) + ")" + WhereTheLinesGo;
+
+    /// <summary><c>/botcpu on [minutes]</c> while the meter is on (2.4): its new stop time, or none.</summary>
+    public static string AlreadyOnText(DateTime? stopsAt) =>
+        "Bot CPU meter already on; it now " +
+        (stopsAt is DateTime stop ? "stops at " + Clock(stop) : "runs " + UntilOff) + ".";
+
+    /// <summary><c>/botcpu off</c> while the meter is on (2.4), <paramref name="openSeconds"/> into the open window,
+    /// in whole seconds rounded down: written from <see cref="MinimumWindowSeconds"/>, as the final window is (2.2).
+    /// </summary>
+    public static string OffText(double openSeconds) =>
+        "Bot CPU meter off. The last " + Text(Whole(openSeconds)) +
+        (openSeconds >= MinimumWindowSeconds ? " s are being written." : " s were too short to write.");
+
+    /// <summary>
+    /// <c>/botcpu top [kind]</c> once a window is written (2.4): a line per bot of the kind's top 5, or the line that
+    /// none was charged. GameBots add their goal and activity, <c>-</c> and <c>""</c> without a
+    /// <c>PersistentRecord</c>, as the slow-turn warning gives them (NS:81).
+    /// </summary>
+    public static IReadOnlyList<string> TopText(BotCpuWindow last, BotCpuKind kind)
+    {
+        ArgumentNullException.ThrowIfNull(last);
+        IReadOnlyList<BotCpuTopEntry> top = last.Top(kind);
+        if (top.Count == 0)
+            return ["No " + KindName(kind) + " was charged in the last minute."];
+
+        List<string> lines = [];
+        foreach (BotCpuTopEntry entry in top)
+        {
+            BotCpuBot bot = entry.Bot;
+            string line = Text(entry.Rank) + ". " + bot.Name + " (" + Text(bot.Level) + " " + bot.ClassName +
+                ", region " + Text(bot.Region) + "): " + Text(entry.MsSec, 3) + " ms/s, " + Text(entry.CallsSec, 0) +
+                " calls/s";
+            if (kind == BotCpuKind.Gamebot)
+                line += ", " + (string.IsNullOrEmpty(bot.Goal) ? "-" : bot.Goal) + ", \"" + bot.Activity + "\"";
+
+            lines.Add(line);
+        }
+
+        return lines;
+    }
+
+    // The totals since on or reset (2.4): each kind with bot-seconds, in kind order; null with no window written or
+    // no such kind.
+    private static string SinceText(BotCpuSince since)
+    {
+        if (since == null || since.Windows == 0)
+            return null;
+
+        List<string> kinds = [];
+        for (int k = 0; k < BotCpuTotals.KindCount; k++)
+        {
+            if (since.MsPerBotSec((BotCpuKind)k) is double msPerBotSec)
+                kinds.Add(KindName((BotCpuKind)k) + " " + Text(msPerBotSec, 3));
+        }
+
+        return kinds.Count == 0
+            ? null
+            : (since.Reset ? "Since reset (" : "Since on (") + Text(Whole(since.Minutes)) + " min): " +
+              string.Join(", ", kinds) + " ms/s per bot.";
+    }
+
+    // A line's stage values as it shows them, in tick order (3.4), without those that round to 0.000.
+    private static IEnumerable<(BotCpuStage Stage, string Value)> ShownStages(BotCpuKindWindow kind)
+    {
+        if (kind.StageValues == null)
+            yield break;
+
+        for (int stage = 0; stage < kind.StageValues.Count; stage++)
+        {
+            string value = Text(kind.StageValues[stage], 3);
+            if (value is not ("0.000" or "-"))
+                yield return ((BotCpuStage)stage, value);
+        }
+    }
+
+    // A chat line's "most in": the largest stage value the line shows, the first in tick order on a tie; - with none.
+    private static string MostIn(BotCpuKindWindow kind)
+    {
+        BotCpuStage? most = null;
+        foreach ((BotCpuStage stage, string _) in ShownStages(kind))
+        {
+            if (most == null || kind.StageValues[(int)stage] > kind.StageValues[(int)most.Value])
+                most = stage;
+        }
+
+        return most is BotCpuStage largest ? largest + " " + Text(kind.StageValues[(int)largest], 3) : "-";
+    }
+
+    // A value as the text writes it: fixed-point with that many decimals in the invariant culture; - for none, and
+    // for NaN or an infinity, which the text never writes (2.1).
+    private static string Text(double? value, int decimals) => value is double number && double.IsFinite(number)
+        ? number.ToString("F" + decimals.ToString(CultureInfo.InvariantCulture), CultureInfo.InvariantCulture)
+        : "-";
+
+    private static string Text(long value) => value.ToString(CultureInfo.InvariantCulture);
+
+    private static string Text(long? value) => value is long number ? Text(number) : "-";
+
+    // A CSV cell: the text's value, empty for - (2.3).
+    private static string Cell(string text) => text == "-" ? string.Empty : text;
+
+    // A compare ratio: 2 decimals and x, or - (2.1).
+    private static string RatioText(double? ratio) => ratio is double value && double.IsFinite(value)
+        ? Text(value, 2) + "x"
+        : "-";
+
+    // A chat percentage, rounded to a whole number, or - (2.4).
+    private static string Percent(double? value) => value is double number && double.IsFinite(number)
+        ? Text(number, 0) + "%"
+        : "-";
+
+    // A count and its unit, singular for 1: 1 minute, 30 minutes, 4 cores; - cores for none.
+    private static string Count(long? count, string unit) =>
+        Text(count) + " " + unit + (count == 1 ? string.Empty : "s");
+
+    // Whole units of a span, rounded down; 0 for a negative span or one that is not a number.
+    private static long Whole(double value) => double.IsFinite(value) && value > 0 ? (long)Math.Floor(value) : 0;
+
+    // A time of day in chat: the 24-hour clock (2.4).
+    private static string Clock(DateTime time) => time.ToString("HH':'mm", CultureInfo.InvariantCulture);
+
+    // The GM of a BOT_CPU_STATE line; - for none.
+    private static string Who(string by) => string.IsNullOrEmpty(by) ? "-" : by;
 }

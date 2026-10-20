@@ -1,6 +1,7 @@
 using System;
 using System.Collections;
 using System.Collections.Generic;
+using System.Globalization;
 using System.Linq;
 using System.Reflection;
 using DOL.GS.HearthDAoC;
@@ -11,7 +12,8 @@ namespace DOL.GS.Tests;
 // HearthDAoC: the bot CPU meter's report (#137; spec docs/fork/specs/2026-10-14-bot-cpu-meter-design.md, 6.1). Once a
 // minute the report takes the difference of two snapshots of the per-thread slots (3.7) and turns it, with the window's
 // exact length, the game time and the registry samples, into each kind's figures (2.1, 2.2, 3.8), the spread and the
-// top 5 of each bot kind from the per-bot counters (3.10), the compare pairs (2.1) and the totals since on (2.4).
+// top 5 of each bot kind from the per-bot counters (3.10), the compare pairs (2.1) and the totals since on (2.4), then
+// writes them: the log lines (2.1), the CSV rows (2.3) and the chat of /botcpu (2.4), in the invariant culture.
 // BotCpuReport works on plain values only, with no server state, so these tests drive it directly.
 [TestFixture]
 public sealed class UT_BotCpuReport
@@ -948,4 +950,649 @@ public sealed class UT_BotCpuReport
     [TestCase(412.25, 1, 412.2)]
     public void RoundGivesTheValueAsTheReportWritesIt(double value, int decimals, double expected) =>
         Assert.That(BotCpuReport.Round(value, decimals), Is.EqualTo(expected));
+
+    // ---- The lines (2.1)
+
+    // The report writes in the invariant culture, a . decimal point whatever the server's culture (2.1). The text tests
+    // run under de-DE, whose decimal separator is a comma. This guard fails a run in which that culture is not really
+    // in force: with invariant globalization every culture formats as the invariant one, and the tests would prove
+    // nothing.
+    private static void AssertTheCultureIsGerman() =>
+        Assert.That(1.5.ToString(), Is.EqualTo("1,5"), "the text tests must run under de-DE");
+
+    // Charges each stage its value × perSeconds ms: a per-bot value over the kind's bot-seconds, or, for unattributed,
+    // a per-second value over the window's length.
+    private static void ChargeStages(BotCpuTotals counts, BotCpuKind kind, double perSeconds,
+        params (BotCpuStage Stage, double Value)[] stages)
+    {
+        foreach ((BotCpuStage stage, double value) in stages)
+            Charge(counts, kind, stage, value * perSeconds, 0);
+    }
+
+    // 2.1's sample window: 238.4 GameBots by the registry, one player, 1,830.2 live monster brains a tick and the
+    // unattributed work, in 60 s at 30.0 ticks a second. Each stage is charged at its value on the line; gamebot's Npc
+    // is 0.9197 and monster's stages are 0.00011-0.00012 over the values shown, so that msSec is 438.6 and 96.0 as the
+    // lines say. The calls and bytes give the per-bot figures of the sample (and its process line's callsSec=212534).
+    private static BotCpuWindow SpecSample()
+    {
+        BotCpuTotals counts = new();
+        ChargeStages(counts, Gamebot, 238.4 * 60, (BotCpuStage.Timer, 0.041), (BotCpuStage.Npc, 0.9197),
+            (BotCpuStage.Fleet, 0.118), (BotCpuStage.Attack, 0.210), (BotCpuStage.Casting, 0.140),
+            (BotCpuStage.Effect, 0.081), (BotCpuStage.EffectListBegin, 0.050), (BotCpuStage.EffectListEnd, 0.040),
+            (BotCpuStage.Movement, 0.150), (BotCpuStage.Reaper, 0.020), (BotCpuStage.Zone, 0.010),
+            (BotCpuStage.Pets, 0.060));
+        counts.Add(Gamebot, BotCpuStage.Npc, 0, 5_897_537, 456_995_635);
+
+        // The player's stages in the order of 2.1's sample; its line puts them in tick order.
+        counts.AddPresence(Player, WholeWindow);
+        ChargeStages(counts, Player, 60, (BotCpuStage.ClientBegin, 0.310), (BotCpuStage.Timer, 0.022),
+            (BotCpuStage.Attack, 0.201), (BotCpuStage.Movement, 0.090), (BotCpuStage.ClientEnd, 1.311),
+            (BotCpuStage.Pets, 0.170));
+        counts.Add(Player, BotCpuStage.ClientEnd, 0, 23_400, 3_710_976);
+
+        counts.AddPresence(Monster, 3_294_360);
+        ChargeStages(counts, Monster, 1_830.2 * 60, (BotCpuStage.Npc, 0.03112), (BotCpuStage.Attack, 0.00811),
+            (BotCpuStage.Movement, 0.01111), (BotCpuStage.Effect, 0.00211));
+        counts.Add(Monster, BotCpuStage.Npc, 0, 6_698_532, 44_978_995);
+
+        ChargeStages(counts, Unattributed, 60, (BotCpuStage.GameLoop, 0.402), (BotCpuStage.Timer, 1.210),
+            (BotCpuStage.Npc, 6.890), (BotCpuStage.Zone, 0.598));
+        counts.Add(Unattributed, BotCpuStage.Npc, 0, 132_600, 5_406_720);
+
+        return Close(counts, gamebots: Samples(238, 239, 238, 239, 238), bots: SpecSampleBots());
+    }
+
+    // The 238 GameBots of the sample, all charged in the window: its top 5 with their goals, and 233 more placed so
+    // that p50 (rank 119 of 238) is 1.620 and p95 (rank 227) is 3.904.
+    private static BotCpuBot[] SpecSampleBots()
+    {
+        List<BotCpuBot> bots =
+        [
+            new(Gamebot, "Aldric", 34, "Cleric", 163, "Rvr", "Riding stablemaster horse route", Ticks(7.412 * 60),
+                52_800),
+            new(Gamebot, "Brennos", 50, "Armsman", 1, "Battleground", "Choosing first live goal", Ticks(6.020 * 60),
+                45_000),
+            new(Gamebot, "Cathal", 42, "Wizard", 1, "GroupPve", "Defeated; reassessing target difficulty",
+                Ticks(5.881 * 60), 43_200),
+            new(Gamebot, "Dagny", 47, "Paladin", 163, "Rvr", "Recovered to safe capital spawn", Ticks(5.104 * 60),
+                36_000),
+            new(Gamebot, "Eirik", 20, "Scout", 1, "SoloPve", "Queued after a failed world transfer", Ticks(4.950 * 60),
+                30_000),
+        ];
+        for (int rank = 1; rank <= 233; rank++)
+        {
+            double msSec = rank switch
+            {
+                <= 118 => 1 + rank / 1000.0,
+                119 => 1.620,
+                <= 226 => 2 + (rank - 120) / 100.0,
+                227 => 3.904,
+                _ => 4 + (rank - 228) / 10.0,
+            };
+            bots.Add(new BotCpuBot(Gamebot, $"Bot{rank:000}", 30, "Armsman", 1, "SoloPve", "Roaming",
+                Ticks(msSec * 60), 1_800));
+        }
+
+        return bots.ToArray();
+    }
+
+    // The sample's process values (3.9).
+    private static readonly BotCpuProcess SpecSampleProcess = new(Cores: 4, ProcessCpuPct: 148.2,
+        LoopThreadsCpuPct: 121.0, CampThreadCpuPct: 3.1, LoopWaitMs: 212, ThrottledMs: 0, GcPauseMs: 14, Gen2: 0,
+        AllocMBSec: 41.2, HeapMB: 2_210, RssMB: 3_480);
+
+    // A window of 61.4 s (win=61): a player bot charged but never present (its client is not registered in
+    // ClientService, 2.5), so n 0, and unattributed work.
+    private static BotCpuWindow ShortWindow()
+    {
+        BotCpuTotals counts = new();
+        Charge(counts, Playerbot, BotCpuStage.Timer, 30, 900, 2_048);
+        Charge(counts, Unattributed, BotCpuStage.Timer, 72.6, 3_600);
+        return Close(counts, seconds: 61.4);
+    }
+
+    // A platform that gives none of the values it reads (Windows, or every /proc and cgroup read failing, 3.9).
+    private static readonly BotCpuProcess NoPlatformValues = new(4, null, null, null, null, null, null, null, null,
+        null, null);
+
+    [Test]
+    [SetCulture("de-DE")]
+    public void TheSampleWindowsLinesAreTheSpecs()
+    {
+        AssertTheCultureIsGerman();
+
+        // 2.1's sample word for word, in its order: the kind lines, BOT_CPU_TOP, BOT_CPU_PROCESS, BOT_CPU_COMPARE. Only
+        // the stage order differs: the sample's player line has ClientBegin before Timer and its monster line Movement
+        // before Effect, where the lines are in tick order (2.1, 3.4).
+        Assert.That(BotCpuReport.Lines(SpecSample(), SpecSampleProcess), Is.EqualTo(new[]
+        {
+            "BOT_CPU win=60 kind=gamebot n=238.4 msSec=438.6 msPerBotSec=1.840 callsPerBotSec=412.3 usPerCall=4.46 " +
+            "allocKBPerBotSec=31.2 p50=1.620 p95=3.904 max=7.412 | Timer=0.041 Npc=0.920 Fleet=0.118 Attack=0.210 " +
+            "Casting=0.140 Effect=0.081 EffectListBegin=0.050 EffectListEnd=0.040 Movement=0.150 Reaper=0.020 " +
+            "Zone=0.010 Pets=0.060",
+            "BOT_CPU win=60 kind=player n=1.0 msSec=2.1 msPerBotSec=2.104 callsPerBotSec=390.0 usPerCall=5.39 " +
+            "allocKBPerBotSec=60.4 | Timer=0.022 ClientBegin=0.310 Attack=0.201 Movement=0.090 ClientEnd=1.311 " +
+            "Pets=0.170",
+            "BOT_CPU win=60 kind=monster n=1830.2 msSec=96.0 msPerBotSec=0.052 callsPerBotSec=61.0 usPerCall=0.86 " +
+            "allocKBPerBotSec=0.4 | Npc=0.031 Attack=0.008 Effect=0.002 Movement=0.011",
+            "BOT_CPU win=60 kind=unattributed n=- msSec=9.1 callsSec=2210.0 usPerCall=4.12 allocKBSec=88.0 | " +
+            "GameLoop=0.402 Timer=1.210 Npc=6.890 Zone=0.598",
+            "BOT_CPU_TOP win=60 kind=gamebot 1=Aldric:7.412:Rvr 2=Brennos:6.020:Battleground 3=Cathal:5.881:GroupPve " +
+            "4=Dagny:5.104:Rvr 5=Eirik:4.950:SoloPve",
+            "BOT_CPU_PROCESS win=60 tps=30.0 cores=4 processCpuPct=148.2 loopThreadsCpuPct=121.0 offLoopCpuPct=27.2 " +
+            "campThreadCpuPct=3.1 chargedPct=54.6 callsSec=212534 loopWaitMs=212 throttledMs=0 gcPauseMs=14 gen2=0 " +
+            "allocMBSec=41.2 heapMB=2210 rssMB=3480",
+            "BOT_CPU_COMPARE win=60 pair=player/gamebot n=1.0/238.4 cpu=1.14x alloc=1.94x calls=0.95x usPerCall=1.21x",
+        }));
+    }
+
+    [Test]
+    [SetCulture("de-DE")]
+    public void AKindLinesStageValuesAddUpToItsMsPerBotSec()
+    {
+        AssertTheCultureIsGerman();
+        BotCpuWindow window = SpecSample();
+
+        foreach (BotCpuKindWindow kind in window.Kinds)
+        {
+            string[] parts = BotCpuReport.KindLine(window, kind).Split(" | ");
+            Assert.That(parts, Has.Length.EqualTo(2), kind.Kind.ToString());
+            Dictionary<string, string> fields = parts[0].Split(' ').Skip(1)
+                .ToDictionary(field => field.Split('=')[0], field => field.Split('=')[1]);
+            double[] stages = parts[1].Split(' ')
+                .Select(stage => double.Parse(stage.Split('=')[1], CultureInfo.InvariantCulture)).ToArray();
+
+            // Each value is rounded to 3 decimals, and the total to its own (msSec has 1 for unattributed).
+            bool unattributed = kind.Kind == Unattributed;
+            double total = double.Parse(fields[unattributed ? "msSec" : "msPerBotSec"], CultureInfo.InvariantCulture);
+            double rounding = (unattributed ? 0.05 : 0.0005) + stages.Length * 0.0005;
+            Assert.That(stages.Sum(), Is.EqualTo(total).Within(rounding), kind.Kind.ToString());
+        }
+    }
+
+    [Test]
+    [SetCulture("de-DE")]
+    public void TheStagesAreInTickOrderAndAStageThatRoundsToZeroIsLeftOut()
+    {
+        AssertTheCultureIsGerman();
+        BotCpuTotals counts = new();
+        counts.AddPresence(Player, WholeWindow);
+        // Every stage at (its index + 1) × 0.01 ms per bot per s, charged last stage first, but Crafting at 0.0004,
+        // which the line shows as 0.000, and Quests not charged at all.
+        foreach (BotCpuStage stage in Enum.GetValues<BotCpuStage>().Reverse())
+        {
+            double perBot = stage switch
+            {
+                BotCpuStage.Crafting => 0.0004,
+                BotCpuStage.Quests => 0,
+                _ => ((int)stage + 1) * 0.01,
+            };
+            if (perBot > 0)
+                Charge(counts, Player, stage, perBot * 60, 30);
+        }
+
+        BotCpuWindow window = Close(counts);
+
+        Assert.That(BotCpuReport.KindLine(window, window.Kind(Player)), Is.EqualTo(
+            "BOT_CPU win=60 kind=player n=1.0 msSec=1.4 msPerBotSec=1.430 callsPerBotSec=8.5 usPerCall=168.28 " +
+            "allocKBPerBotSec=0.0 | GameLoop=0.010 Timer=0.020 ClientBegin=0.030 Npc=0.040 Fleet=0.050 Attack=0.060 " +
+            "Casting=0.070 Effect=0.080 EffectListBegin=0.090 EffectListEnd=0.100 Movement=0.110 Reaper=0.130 " +
+            "Zone=0.140 ClientEnd=0.150 Pets=0.170 Other=0.180"));
+    }
+
+    [Test]
+    [SetCulture("de-DE")]
+    public void NothingToDivideByIsADashAndALineWithNoStageValueHasNoBar()
+    {
+        AssertTheCultureIsGerman();
+
+        // n 0 with time charged: every per-bot field is -, and no part after |; usPerCall has its calls (2.1).
+        BotCpuWindow window = ShortWindow();
+        Assert.That(BotCpuReport.KindLine(window, window.Kind(Playerbot)), Is.EqualTo(
+            "BOT_CPU win=61 kind=playerbot n=0.0 msSec=0.5 msPerBotSec=- callsPerBotSec=- usPerCall=33.33 " +
+            "allocKBPerBotSec=- p50=- p95=- max=-"));
+        Assert.That(BotCpuReport.KindLine(window, window.Kind(Unattributed)), Is.EqualTo(
+            "BOT_CPU win=61 kind=unattributed n=- msSec=1.2 callsSec=58.6 usPerCall=20.17 allocKBSec=0.0 | " +
+            "Timer=1.182"));
+
+        // A kind that is no bot kind has no spread fields, - or not: a player charged at ClientEnd, never present.
+        BotCpuTotals player = new();
+        Charge(player, Player, BotCpuStage.ClientEnd, 6, 60);
+        BotCpuWindow neverPresent = Close(player);
+        Assert.That(BotCpuReport.KindLine(neverPresent, neverPresent.Kind(Player)), Is.EqualTo(
+            "BOT_CPU win=60 kind=player n=0.0 msSec=0.1 msPerBotSec=- callsPerBotSec=- usPerCall=100.00 " +
+            "allocKBPerBotSec=-"));
+
+        // GameBots in the registry with nothing charged: zeros, usPerCall - with no call, and every stage 0.000, so no
+        // part after | either.
+        BotCpuWindow idle = Close(new BotCpuTotals(), gamebots: Samples(240));
+        Assert.That(BotCpuReport.KindLine(idle, idle.Kind(Gamebot)), Is.EqualTo(
+            "BOT_CPU win=60 kind=gamebot n=240.0 msSec=0.0 msPerBotSec=0.000 callsPerBotSec=0.0 usPerCall=- " +
+            "allocKBPerBotSec=0.0 p50=- p95=- max=-"));
+
+        // GameBots charged but none of them listed as charged in the window: no spread, so p50, p95 and max are -.
+        BotCpuTotals unlisted = new();
+        Charge(unlisted, Gamebot, BotCpuStage.Npc, 2_400, 48_000);
+        BotCpuWindow noSpread = Close(unlisted, gamebots: Samples(240));
+        Assert.That(BotCpuReport.KindLine(noSpread, noSpread.Kind(Gamebot)), Is.EqualTo(
+            "BOT_CPU win=60 kind=gamebot n=240.0 msSec=40.0 msPerBotSec=0.167 callsPerBotSec=3.3 usPerCall=50.00 " +
+            "allocKBPerBotSec=0.0 p50=- p95=- max=- | Npc=0.167"));
+
+        // No NaN or Infinity in any line.
+        foreach (BotCpuWindow each in new[] { window, neverPresent, idle, noSpread })
+        {
+            Assert.That(string.Join('\n', BotCpuReport.Lines(each, NoPlatformValues)),
+                Does.Not.Contain("NaN").And.Not.Contain("Infinity").And.Not.Contain("∞"));
+        }
+    }
+
+    [Test]
+    [SetCulture("de-DE")]
+    public void AKindWithNothingWritesNoLine()
+    {
+        AssertTheCultureIsGerman();
+
+        // Companion, playerbot, piloted and monster have nothing in the sample: 4 kind lines of 7.
+        Assert.That(BotCpuReport.Lines(SpecSample(), SpecSampleProcess).Where(line => line.StartsWith("BOT_CPU ")),
+            Has.Exactly(4).Items);
+
+        // A window with nothing at all has its process line only.
+        Assert.That(BotCpuReport.Lines(Close(new BotCpuTotals()), SpecSampleProcess), Is.EqualTo(new[]
+        {
+            "BOT_CPU_PROCESS win=60 tps=30.0 cores=4 processCpuPct=148.2 loopThreadsCpuPct=121.0 offLoopCpuPct=27.2 " +
+            "campThreadCpuPct=3.1 chargedPct=0.0 callsSec=0 loopWaitMs=212 throttledMs=0 gcPauseMs=14 gen2=0 " +
+            "allocMBSec=41.2 heapMB=2210 rssMB=3480",
+        }));
+    }
+
+    [Test]
+    [SetCulture("de-DE")]
+    public void ATopLineGivesTheGoalOfGameBotsOnly()
+    {
+        AssertTheCultureIsGerman();
+        BotCpuBot[] bots =
+        [
+            // No PersistentRecord: no goal, -.
+            new(Gamebot, "Sir Fenn", 34, "Cleric", 163, null, null, Ticks(2.0 * 60), 1_800),
+            // A companion's name, as GameBot gives a helper with none (bots/GameBot.cs:2279).
+            new(Companion, "Gm's Cleric Bot", 40, "Cleric", 1, null, null, Ticks(1.5 * 60), 3_600),
+            new(Companion, "Hilda", 34, "Cleric", 163, null, null, Ticks(9.0 * 60), 1_800),
+            new(Gamebot, "Odd:Goal", 34, "Cleric", 163, "", null, Ticks(1.0 * 60), 1_800),
+        ];
+        BotCpuTotals counts = new();
+        Charge(counts, Gamebot, BotCpuStage.Npc, 180, 3_600);
+        Charge(counts, Companion, BotCpuStage.Npc, 630, 5_400);
+        counts.AddPresence(Companion, 2 * WholeWindow);
+
+        BotCpuWindow window = Close(counts, gamebots: Samples(2), bots: bots);
+
+        Assert.That(BotCpuReport.TopLine(window, Gamebot),
+            Is.EqualTo("BOT_CPU_TOP win=60 kind=gamebot 1=Sir_Fenn:2.000:- 2=Odd_Goal:1.000:-"));
+        Assert.That(BotCpuReport.TopLine(window, Companion),
+            Is.EqualTo("BOT_CPU_TOP win=60 kind=companion 1=Hilda:9.000 2=Gm's_Cleric_Bot:1.500"));
+        // No bot of the kind charged: no line.
+        Assert.That(BotCpuReport.TopLine(window, Playerbot), Is.Null);
+        Assert.That(BotCpuReport.TopLine(window, Player), Is.Null);
+
+        // The top lines come after the kind lines, in kind order, and before the process line.
+        Assert.That(BotCpuReport.Lines(window, NoPlatformValues).Select(line => line.Split(' ')[0] + " " +
+                line.Split(' ')[2]),
+            Is.EqualTo(new[]
+            {
+                "BOT_CPU kind=gamebot", "BOT_CPU kind=companion", "BOT_CPU_TOP kind=gamebot",
+                "BOT_CPU_TOP kind=companion", "BOT_CPU_PROCESS tps=30.0",
+            }));
+    }
+
+    [Test]
+    [SetCulture("de-DE")]
+    public void AProcessValueThePlatformCannotGiveIsADash()
+    {
+        AssertTheCultureIsGerman();
+
+        Assert.That(BotCpuReport.ProcessLine(ShortWindow(), NoPlatformValues), Is.EqualTo(
+            "BOT_CPU_PROCESS win=61 tps=30.0 cores=4 processCpuPct=- loopThreadsCpuPct=- offLoopCpuPct=- " +
+            "campThreadCpuPct=- chargedPct=0.2 callsSec=73 loopWaitMs=- throttledMs=- gcPauseMs=- gen2=- " +
+            "allocMBSec=- heapMB=- rssMB=-"));
+
+        // A schedstat that reads 0 (3.9): the loop threads' fields are -, and offLoopCpuPct with them.
+        BotCpuProcess noSchedstat = SpecSampleProcess with
+        {
+            LoopThreadsCpuPct = null, CampThreadCpuPct = null, LoopWaitMs = null,
+        };
+        Assert.That(noSchedstat.OffLoopCpuPct, Is.Null);
+        Assert.That(BotCpuReport.ProcessLine(SpecSample(), noSchedstat), Is.EqualTo(
+            "BOT_CPU_PROCESS win=60 tps=30.0 cores=4 processCpuPct=148.2 loopThreadsCpuPct=- offLoopCpuPct=- " +
+            "campThreadCpuPct=- chargedPct=54.6 callsSec=212534 loopWaitMs=- throttledMs=0 gcPauseMs=14 gen2=0 " +
+            "allocMBSec=41.2 heapMB=2210 rssMB=3480"));
+
+        // A value that is not a number is never written as one: -.
+        BotCpuProcess notANumber = SpecSampleProcess with
+        {
+            ProcessCpuPct = double.NaN, GcPauseMs = double.PositiveInfinity, RssMB = double.NegativeInfinity,
+        };
+        Assert.That(BotCpuReport.ProcessLine(SpecSample(), notANumber), Is.EqualTo(
+            "BOT_CPU_PROCESS win=60 tps=30.0 cores=4 processCpuPct=- loopThreadsCpuPct=121.0 offLoopCpuPct=- " +
+            "campThreadCpuPct=3.1 chargedPct=54.6 callsSec=212534 loopWaitMs=212 throttledMs=0 gcPauseMs=- gen2=0 " +
+            "allocMBSec=41.2 heapMB=2210 rssMB=-"));
+    }
+
+    [Test]
+    [SetCulture("de-DE")]
+    public void OffLoopIsTheDifferenceOfTheTwoValuesTheLineShows()
+    {
+        AssertTheCultureIsGerman();
+        // 148.24 and 120.96 show as 148.2 and 121.0: off the loop is 27.2 as the owner subtracts them, not 27.3.
+        BotCpuProcess process = SpecSampleProcess with { ProcessCpuPct = 148.24, LoopThreadsCpuPct = 120.96 };
+
+        Assert.That(process.OffLoopCpuPct, Is.EqualTo(27.2).Within(Tolerance));
+        Assert.That(BotCpuReport.ProcessLine(SpecSample(), process),
+            Does.Contain(" processCpuPct=148.2 loopThreadsCpuPct=121.0 offLoopCpuPct=27.2 "));
+    }
+
+    [Test]
+    [SetCulture("de-DE")]
+    public void ACompareRatioIsADashWhenEitherValueIsOrTheGamebotValueIsZero()
+    {
+        AssertTheCultureIsGerman();
+
+        // GameBots in the registry with nothing charged: their values are 0, or - for usPerCall.
+        BotCpuTotals idle = new();
+        idle.AddPresence(Player, WholeWindow);
+        Charge(idle, Player, BotCpuStage.ClientEnd, 120, 3_600, 1_024);
+        BotCpuWindow window = Close(idle, gamebots: Samples(240));
+        Assert.That(BotCpuReport.CompareLine(window, window.Compares.Single()), Is.EqualTo(
+            "BOT_CPU_COMPARE win=60 pair=player/gamebot n=1.0/240.0 cpu=- alloc=- calls=- usPerCall=-"));
+
+        // A gamebot value that shows as 0.000 is 0; a player value of 0 gives 0.00x; a player with no calls has
+        // usPerCall -.
+        BotCpuTotals tiny = new();
+        Charge(tiny, Gamebot, BotCpuStage.Npc, 0.0004 * 240 * 60, 432_000, 1_024 * 240 * 60);
+        tiny.AddPresence(Player, WholeWindow);
+        window = Close(tiny, gamebots: Samples(240));
+        Assert.That(BotCpuReport.CompareLine(window, window.Compares.Single()), Is.EqualTo(
+            "BOT_CPU_COMPARE win=60 pair=player/gamebot n=1.0/240.0 cpu=- alloc=0.00x calls=0.00x usPerCall=-"));
+    }
+
+    [Test]
+    [SetCulture("de-DE")]
+    public void TheStateAndErrorLinesAreTheSpecs()
+    {
+        AssertTheCultureIsGerman();
+
+        Assert.That(BotCpuReport.StateOnByPropertyLine, Is.EqualTo("BOT_CPU_STATE on source=property"));
+        Assert.That(BotCpuReport.StateOnByCommandLine("Aldwin", 30),
+            Is.EqualTo("BOT_CPU_STATE on source=command by=Aldwin minutes=30"));
+        Assert.That(BotCpuReport.StateOnByCommandLine("Aldwin", 1440),
+            Is.EqualTo("BOT_CPU_STATE on source=command by=Aldwin minutes=1440"));
+        Assert.That(BotCpuReport.StateOnByCommandLine("Aldwin", null),
+            Is.EqualTo("BOT_CPU_STATE on source=command by=Aldwin minutes=-"));
+        Assert.That(BotCpuReport.StateOffLine(BotCpuOffSource.Command, "Aldwin"),
+            Is.EqualTo("BOT_CPU_STATE off source=command by=Aldwin"));
+        Assert.That(BotCpuReport.StateOffLine(BotCpuOffSource.Timer), Is.EqualTo("BOT_CPU_STATE off source=timer"));
+        Assert.That(BotCpuReport.StateOffLine(BotCpuOffSource.Stop), Is.EqualTo("BOT_CPU_STATE off source=stop"));
+        Assert.That(BotCpuReport.StateOffLine(BotCpuOffSource.Error), Is.EqualTo("BOT_CPU_STATE off source=error"));
+
+        Assert.That(BotCpuReport.ErrorLine("tick", new InvalidOperationException("no slot list")),
+            Is.EqualTo("BOT_CPU_ERROR tick: System.InvalidOperationException: no slot list"));
+    }
+
+    // ---- The CSV (2.3)
+
+    [Test]
+    public void TheCsvHeaderIsTheSpecs()
+    {
+        Assert.That(BotCpuReport.CsvHeader, Is.EqualTo(
+            "utc,win_s,tps,cores,process_cpu_pct,loop_threads_cpu_pct,off_loop_cpu_pct,camp_thread_cpu_pct," +
+            "charged_pct,all_calls_sec,loop_wait_ms,throttled_ms,gc_pause_ms,gen2,alloc_mb_sec,heap_mb,rss_mb,kind,n," +
+            "ms_sec,calls_sec,alloc_kb_sec,ms_per_bot_sec,calls_per_bot_sec,us_per_call,alloc_kb_per_bot_sec,p50,p95," +
+            "max,GameLoop,Timer,ClientBegin,Npc,Fleet,Attack,Casting,Effect,EffectListBegin,EffectListEnd,Movement," +
+            "Crafting,Reaper,Zone,ClientEnd,Quests,Pets,Other"));
+        // Its stage columns are the stages, in their order.
+        Assert.That(BotCpuReport.CsvHeader.Split(',').TakeLast(BotCpuTotals.StageCount),
+            Is.EqualTo(Enum.GetNames<BotCpuStage>()));
+    }
+
+    [Test]
+    [SetCulture("de-DE")]
+    public void TheSampleWindowsRowsCarryItsProcessValuesAndEachKindsWholeStageTotals()
+    {
+        AssertTheCultureIsGerman();
+        string window = "2026-10-18T19:02:10Z,60,30.0,4,148.2,121.0,27.2,3.1,54.6,212534,212,0,14,0,41.2,2210,3480,";
+
+        IReadOnlyList<string> rows = BotCpuReport.CsvRows(SpecSample(), SpecSampleProcess,
+            new DateTime(2026, 10, 18, 19, 2, 10, DateTimeKind.Utc));
+
+        // The stage columns are the kind's raw stage ticks ÷ the window: gamebot's Npc is 13,155.3888 ms in 60 s,
+        // 219.256 ms per s, where the line's rounded 0.920 per bot × n 238.4 would give 219.328 (2.3). Player and
+        // monster have no p50, p95 or max; unattributed no n and no per-bot field: empty cells.
+        Assert.That(rows, Is.EqualTo(new[]
+        {
+            window + "gamebot,238.4,438.6,98292.3,7438.1,1.840,412.3,4.46,31.2,1.620,3.904,7.412," +
+            "0.000,9.774,0.000,219.256,28.131,50.064,33.376,19.310,11.920,9.536,35.760,0.000,4.768,2.384,0.000,0.000," +
+            "14.304,0.000",
+            window + "player,1.0,2.1,390.0,60.4,2.104,390.0,5.39,60.4,,,," +
+            "0.000,0.022,0.310,0.000,0.000,0.201,0.000,0.000,0.000,0.000,0.090,0.000,0.000,0.000,1.311,0.000,0.170," +
+            "0.000",
+            window + "monster,1830.2,96.0,111642.2,732.1,0.052,61.0,0.86,0.4,,,," +
+            "0.000,0.000,0.000,56.956,0.000,14.843,0.000,3.862,0.000,0.000,20.334,0.000,0.000,0.000,0.000,0.000," +
+            "0.000,0.000",
+            window + "unattributed,,9.1,2210.0,88.0,,,4.12,,,,," +
+            "0.402,1.210,0.000,6.890,0.000,0.000,0.000,0.000,0.000,0.000,0.000,0.000,0.000,0.598,0.000,0.000,0.000," +
+            "0.000",
+        }));
+        int columns = BotCpuReport.CsvHeader.Split(',').Length;
+        Assert.That(rows.Select(row => row.Split(',').Length), Is.All.EqualTo(columns));
+    }
+
+    [Test]
+    [SetCulture("de-DE")]
+    public void ADashIsAnEmptyCellAndAKindWithNoNKeepsItsStageTotals()
+    {
+        AssertTheCultureIsGerman();
+        string window = "2026-10-18T19:03:11Z,61,30.0,4,,,,,0.2,73,,,,,,,,";
+        string zeros = string.Join(',', Enumerable.Repeat("0.000", 16));
+
+        // A 61.4 s window divides by 61.4 (win_s 61): unattributed's 72.6 ms of timers are 1.182 ms per s, not 1.190.
+        IReadOnlyList<string> rows = BotCpuReport.CsvRows(ShortWindow(), NoPlatformValues,
+            new DateTime(2026, 10, 18, 19, 3, 11, DateTimeKind.Utc));
+
+        Assert.That(rows, Is.EqualTo(new[]
+        {
+            window + "playerbot,0.0,0.5,14.7,0.0,,,33.33,,,,,0.000,0.489," + zeros,
+            window + "unattributed,,1.2,58.6,0.0,,,20.17,,,,,0.000,1.182," + zeros,
+        }));
+        int columns = BotCpuReport.CsvHeader.Split(',').Length;
+        Assert.That(rows.Select(row => row.Split(',').Length), Is.All.EqualTo(columns));
+    }
+
+    [Test]
+    public void TheUtcCellIsTheWindowsEndToTheSecond() =>
+        Assert.That(BotCpuReport.CsvUtc(new DateTime(2026, 10, 18, 19, 2, 10, 750, DateTimeKind.Utc)),
+            Is.EqualTo("2026-10-18T19:02:10Z"));
+
+    // ---- The chat (2.4)
+
+    // When the sample's meter was turned on, in the server's local time.
+    private static readonly DateTime OnAt = new(2026, 10, 18, 14, 2, 5);
+
+    // The totals since on for the sample status: 11 windows before 2.1's sample with 238.4 GameBots at 1.7877 ms per
+    // bot per s and one player at 2.0124, so that with the sample they are gamebot 1.792 and player 2.020 (2.4's
+    // sample); monster has bot-seconds only in the sample, 0.052.
+    private static BotCpuSince SinceTheSample(bool reset)
+    {
+        BotCpuTotals earlier = new();
+        Charge(earlier, Gamebot, BotCpuStage.Npc, 1.7877 * 238.4 * 60, 5_900_000);
+        earlier.AddPresence(Player, WholeWindow);
+        Charge(earlier, Player, BotCpuStage.ClientEnd, 2.0124 * 60, 23_400);
+        BotCpuWindow before = Close(earlier, gamebots: Samples(238, 239, 238, 239, 238));
+
+        BotCpuSince since = BotCpuSince.Start(reset);
+        for (int window = 0; window < 11; window++)
+            since = since.Add(before);
+
+        return since.Add(SpecSample());
+    }
+
+    [Test]
+    [SetCulture("de-DE")]
+    public void TheStatusOfTheSampleWindowIsTheSpecs()
+    {
+        AssertTheCultureIsGerman();
+
+        // 2.4's sample word for word, but for the since-on line: it gives every kind with bot-seconds above 0 (2.4),
+        // and monster has them, so monster is there too. 12 min 15 s after on: 12 min, and 12 windows written.
+        IReadOnlyList<string> status = BotCpuReport.StatusText(OnAt, byCommand: true, stopsAt: OnAt.AddMinutes(30),
+            now: OnAt.AddMinutes(12.25), SpecSample(), SpecSampleProcess, SinceTheSample(reset: false));
+        Assert.That(status, Is.EqualTo(new[]
+        {
+            "Bot CPU meter: on since 14:02 (by command, 12 min; stops at 14:32).",
+            "Last minute (60 s, 30.0 ticks/s): process 148% of one core (4 cores), 55% charged to kinds, 27% off the " +
+            "loop.",
+            "gamebot n=238.4: 1.840 ms/s per bot (438.6 ms/s in all); most in Npc 0.920",
+            "player n=1.0: 2.104 ms/s per bot (2.1 ms/s in all); most in ClientEnd 1.311",
+            "monster n=1830.2: 0.052 ms/s per bot (96.0 ms/s in all); most in Npc 0.031",
+            "unattributed: 9.1 ms/s; most in Npc 6.890",
+            "Since on (12 min): gamebot 1.792, player 2.020, monster 0.052 ms/s per bot.",
+        }));
+
+        // After /botcpu reset the last line says so.
+        Assert.That(BotCpuReport.StatusText(OnAt, byCommand: true, stopsAt: OnAt.AddMinutes(30),
+                now: OnAt.AddMinutes(12.25), SpecSample(), SpecSampleProcess, SinceTheSample(reset: true)).Last(),
+            Is.EqualTo("Since reset (12 min): gamebot 1.792, player 2.020, monster 0.052 ms/s per bot."));
+    }
+
+    [Test]
+    [SetCulture("de-DE")]
+    public void TheStatusBeforeTheFirstWindowSaysWhenItComes()
+    {
+        AssertTheCultureIsGerman();
+
+        Assert.That(BotCpuReport.StatusText(OnAt, byCommand: false, stopsAt: null, now: OnAt.AddSeconds(35), null,
+            null, BotCpuSince.Start(reset: false)), Is.EqualTo(new[]
+        {
+            "Bot CPU meter: on since 14:02 (by property, 0 min; no stop time).",
+            "No full minute yet; the first lines come at 14:03.",
+        }));
+    }
+
+    [Test]
+    [SetCulture("de-DE")]
+    public void TheStatusShowsADashAsTheLinesDo()
+    {
+        AssertTheCultureIsGerman();
+        BotCpuWindow window = ShortWindow();
+
+        // No platform values; a player bot with n 0 has no per-bot value and no stage; no kind has bot-seconds, so
+        // there is no since-on line.
+        Assert.That(BotCpuReport.StatusText(OnAt, byCommand: false, stopsAt: null, now: OnAt.AddSeconds(85), window,
+            NoPlatformValues, BotCpuSince.Start(reset: false).Add(window)), Is.EqualTo(new[]
+        {
+            "Bot CPU meter: on since 14:02 (by property, 1 min; no stop time).",
+            "Last minute (61 s, 30.0 ticks/s): process - of one core (4 cores), 0% charged to kinds, - off the loop.",
+            "playerbot n=0.0: - ms/s per bot (0.5 ms/s in all); most in -",
+            "unattributed: 1.2 ms/s; most in Timer 1.182",
+        }));
+    }
+
+    [Test]
+    [SetCulture("de-DE")]
+    public void EachReplyIsTheSpecs()
+    {
+        AssertTheCultureIsGerman();
+        const string where = ": BOT_CPU lines every minute in the server log, rows in logs/bot-cpu.csv.";
+
+        Assert.That(BotCpuReport.OffStatusText, Is.EqualTo("Bot CPU meter: off. /botcpu on [minutes] turns it on."));
+        Assert.That(BotCpuReport.NoWindowYetText(OnAt),
+            Is.EqualTo("No full minute yet; the first lines come at 14:03."));
+        Assert.That(BotCpuReport.OnText(30, OnAt.AddMinutes(30)),
+            Is.EqualTo("Bot CPU meter on for 30 minutes (until 14:32)" + where));
+        Assert.That(BotCpuReport.OnText(), Is.EqualTo("Bot CPU meter on until /botcpu off or the next start" + where));
+        Assert.That(BotCpuReport.AlreadyOnText(OnAt.AddMinutes(30)),
+            Is.EqualTo("Bot CPU meter already on; it now stops at 14:32."));
+        Assert.That(BotCpuReport.AlreadyOnText(null),
+            Is.EqualTo("Bot CPU meter already on; it now runs until /botcpu off or the next start."));
+        Assert.That(BotCpuReport.OffText(37.6), Is.EqualTo("Bot CPU meter off. The last 37 s are being written."));
+        Assert.That(BotCpuReport.OffText(3.2), Is.EqualTo("Bot CPU meter off. The last 3 s were too short to write."));
+        Assert.That(BotCpuReport.AlreadyOffText, Is.EqualTo("Bot CPU meter is already off."));
+        Assert.That(BotCpuReport.ResetText, Is.EqualTo("Bot CPU totals reset."));
+        Assert.That(BotCpuReport.TopText(SpecSample(), Companion),
+            Is.EqualTo(new[] { "No companion was charged in the last minute." }));
+    }
+
+    [Test]
+    [SetCulture("de-DE")]
+    public void TheMinutesAndTimesOfTheReplies()
+    {
+        AssertTheCultureIsGerman();
+        const string where = ": BOT_CPU lines every minute in the server log, rows in logs/bot-cpu.csv.";
+
+        // 1 to 1440 minutes (2.4), no digit grouping; one minute is singular.
+        Assert.That(BotCpuReport.OnText(1, OnAt.AddMinutes(1)),
+            Is.EqualTo("Bot CPU meter on for 1 minute (until 14:03)" + where));
+        Assert.That(BotCpuReport.OnText(1440, OnAt.AddMinutes(1440)),
+            Is.EqualTo("Bot CPU meter on for 1440 minutes (until 14:02)" + where));
+        // The 24-hour clock, with its leading zero.
+        Assert.That(BotCpuReport.NoWindowYetText(new DateTime(2026, 10, 18, 8, 59, 30)),
+            Is.EqualTo("No full minute yet; the first lines come at 09:00."));
+        Assert.That(BotCpuReport.AlreadyOnText(new DateTime(2026, 10, 18, 23, 7, 0)),
+            Is.EqualTo("Bot CPU meter already on; it now stops at 23:07."));
+    }
+
+    // The last seconds at off are written from 5 s (2.2), in whole seconds.
+    [TestCase(4.99, "Bot CPU meter off. The last 4 s were too short to write.")]
+    [TestCase(5.0, "Bot CPU meter off. The last 5 s are being written.")]
+    [TestCase(59.9, "Bot CPU meter off. The last 59 s are being written.")]
+    [TestCase(0, "Bot CPU meter off. The last 0 s were too short to write.")]
+    [TestCase(-1, "Bot CPU meter off. The last 0 s were too short to write.")]
+    [TestCase(double.NaN, "Bot CPU meter off. The last 0 s were too short to write.")]
+    public void OffSaysWhetherTheLastSecondsAreWritten(double seconds, string reply) =>
+        Assert.That(BotCpuReport.OffText(seconds), Is.EqualTo(reply));
+
+    [Test]
+    [SetCulture("de-DE")]
+    public void TopListsTheFiveCostliestGameBotsWithTheirGoalAndActivity()
+    {
+        AssertTheCultureIsGerman();
+
+        Assert.That(BotCpuReport.TopText(SpecSample(), Gamebot), Is.EqualTo(new[]
+        {
+            "1. Aldric (34 Cleric, region 163): 7.412 ms/s, 880 calls/s, Rvr, \"Riding stablemaster horse route\"",
+            "2. Brennos (50 Armsman, region 1): 6.020 ms/s, 750 calls/s, Battleground, \"Choosing first live goal\"",
+            "3. Cathal (42 Wizard, region 1): 5.881 ms/s, 720 calls/s, GroupPve, " +
+            "\"Defeated; reassessing target difficulty\"",
+            "4. Dagny (47 Paladin, region 163): 5.104 ms/s, 600 calls/s, Rvr, \"Recovered to safe capital spawn\"",
+            "5. Eirik (20 Scout, region 1): 4.950 ms/s, 500 calls/s, SoloPve, \"Queued after a failed world transfer\"",
+        }));
+    }
+
+    [Test]
+    [SetCulture("de-DE")]
+    public void TopShowsADashAndEmptyQuotesForAGameBotWithNoRecord()
+    {
+        AssertTheCultureIsGerman();
+        BotCpuBot[] bots =
+        [
+            new(Gamebot, "Sir Fenn", 34, "Cleric", 163, null, null, Ticks(2.0 * 60), 1_800),
+            new(Companion, "Hilda", 34, "Cleric", 163, null, null, Ticks(9.0 * 60), 1_800),
+            new(Companion, "Gm's Cleric Bot", 40, "Cleric", 1, null, null, Ticks(1.5 * 60), 3_600),
+        ];
+        BotCpuTotals counts = new();
+        Charge(counts, Gamebot, BotCpuStage.Npc, 120, 1_800);
+        Charge(counts, Companion, BotCpuStage.Npc, 630, 5_400);
+
+        BotCpuWindow window = Close(counts, gamebots: Samples(1), bots: bots);
+
+        // The goal and activity as the slow-turn warning reads them, with ?. (NS:81): -, and "" (2.4).
+        Assert.That(BotCpuReport.TopText(window, Gamebot),
+            Is.EqualTo(new[] { "1. Sir Fenn (34 Cleric, region 163): 2.000 ms/s, 30 calls/s, -, \"\"" }));
+        // The other bot kinds have no goal or activity; the name is the bot's own, not the log line's.
+        Assert.That(BotCpuReport.TopText(window, Companion), Is.EqualTo(new[]
+        {
+            "1. Hilda (34 Cleric, region 163): 9.000 ms/s, 30 calls/s",
+            "2. Gm's Cleric Bot (40 Cleric, region 1): 1.500 ms/s, 60 calls/s",
+        }));
+        Assert.That(BotCpuReport.TopText(window, Playerbot),
+            Is.EqualTo(new[] { "No playerbot was charged in the last minute." }));
+    }
 }
