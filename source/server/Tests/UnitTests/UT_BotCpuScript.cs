@@ -2412,6 +2412,22 @@ public sealed class UT_BotCpuScript
         AssertOff();
     }
 
+    [TestCase(-1)]
+    [TestCase(1)]
+    public void TheStatusCountsItsMinutesOnAcrossAClockChange(int hours)
+    {
+        // 2.4: the status line gives the minutes the meter has been on. Ten minutes in, the server's local clock moves
+        // an hour back (summer time ends) or ahead (it begins): twenty minutes later it says 30 min, not 0 or 90, and
+        // still on since 14:02. The minutes come from the Stopwatch, as the stop time's do (4.3).
+        BotCpuScript.CommandOn(Gm, null);
+        RunQueued();
+        Seconds(600);
+        _now = _now.AddHours(hours);
+        Seconds(1_200);
+
+        Assert.That(BotCpu()[0], Is.EqualTo("Bot CPU meter: on since 14:02 (by command, 30 min; no stop time)."));
+    }
+
     // A server's time zone with summer time: UTC-6, and UTC-5 from the second Sunday of March at 02:00 to the first
     // Sunday of November at 02:00, as US Central time.
     private static readonly TimeZoneInfo SummerTimeZone = TimeZoneInfo.CreateCustomTimeZone("HearthDAoC test",
@@ -2740,7 +2756,7 @@ public sealed class UT_BotCpuScript
         IReadOnlyList<string> status = BotCpu();
         BotCpuResult result = BotCpuScript.Result;
         Assert.That(status, Is.EqualTo(BotCpuReport.StatusText(result.OnSince, result.ByCommand, result.StopsAt,
-            At(14, 3, 30), result.Last, result.LastProcess, result.Since)));
+            TimeSpan.FromSeconds(90), result.Last, result.LastProcess, result.Since)));
         Assert.That(status, Has.Count.EqualTo(4));
         Assert.That(status[0], Is.EqualTo("Bot CPU meter: on since 14:02 (by command, 1 min; stops at 14:32)."));
         // The process values are the test process's own; it has no loop threads, so its off-the-loop share is -.

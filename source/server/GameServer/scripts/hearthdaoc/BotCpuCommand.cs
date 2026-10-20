@@ -91,8 +91,8 @@ public sealed class BotCpuCommandHandler : AbstractCommandHandler, ICommandHandl
     {
         BotCpuResult result = BotCpuScript.Result;
         return result.On
-            ? BotCpuReport.StatusText(result.OnSince, result.ByCommand, result.StopsAt, BotCpuScript.LocalNow(),
-                result.Last, result.LastProcess, result.Since)
+            ? BotCpuReport.StatusText(result.OnSince, result.ByCommand, result.StopsAt,
+                BotCpuScript.ElapsedSince(result.OnSinceTimestamp), result.Last, result.LastProcess, result.Since)
             : [BotCpuReport.OffStatusText];
     }
 

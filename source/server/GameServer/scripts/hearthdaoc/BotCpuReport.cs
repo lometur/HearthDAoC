@@ -768,17 +768,18 @@ public static class BotCpuReport
     /// <param name="onSince">When the run opened: the first window starts there.</param>
     /// <param name="byCommand">Whether a GM's command turned it on, else the property.</param>
     /// <param name="stopsAt">Its stop time; null for none.</param>
-    /// <param name="now">The time of the command.</param>
+    /// <param name="on">How long the run has been open, on the Stopwatch, so that summer time does not change it.
+    /// </param>
     /// <param name="last">The last window written; null before the first.</param>
     /// <param name="process">That window's process values.</param>
     /// <param name="since">The totals since on or reset.</param>
-    public static IReadOnlyList<string> StatusText(DateTime onSince, bool byCommand, DateTime? stopsAt, DateTime now,
+    public static IReadOnlyList<string> StatusText(DateTime onSince, bool byCommand, DateTime? stopsAt, TimeSpan on,
         BotCpuWindow last, BotCpuProcess process, BotCpuSince since)
     {
         List<string> lines =
         [
             "Bot CPU meter: on since " + Clock(onSince) + " (" + (byCommand ? "by command" : "by property") + ", " +
-            Text(Whole((now - onSince).TotalMinutes)) + " min; " +
+            Text(Whole(on.TotalMinutes)) + " min; " +
             (stopsAt is DateTime stop ? "stops at " + Clock(stop) : "no stop time") + ").",
         ];
         if (last == null)

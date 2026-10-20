@@ -1443,7 +1443,7 @@ public sealed class UT_BotCpuReport
         // 2.4's sample word for word, but for the since-on line: it gives every kind with bot-seconds above 0 (2.4),
         // and monster has them, so monster is there too. 12 min 15 s after on: 12 min, and 12 windows written.
         IReadOnlyList<string> status = BotCpuReport.StatusText(OnAt, byCommand: true, stopsAt: OnAt.AddMinutes(30),
-            now: OnAt.AddMinutes(12.25), SpecSample(), SpecSampleProcess, SinceTheSample(reset: false));
+            on: TimeSpan.FromMinutes(12.25), SpecSample(), SpecSampleProcess, SinceTheSample(reset: false));
         Assert.That(status, Is.EqualTo(new[]
         {
             "Bot CPU meter: on since 14:02 (by command, 12 min; stops at 14:32).",
@@ -1458,7 +1458,7 @@ public sealed class UT_BotCpuReport
 
         // After /botcpu reset the last line says so.
         Assert.That(BotCpuReport.StatusText(OnAt, byCommand: true, stopsAt: OnAt.AddMinutes(30),
-                now: OnAt.AddMinutes(12.25), SpecSample(), SpecSampleProcess, SinceTheSample(reset: true)).Last(),
+                on: TimeSpan.FromMinutes(12.25), SpecSample(), SpecSampleProcess, SinceTheSample(reset: true)).Last(),
             Is.EqualTo("Since reset (12 min): gamebot 1.792, player 2.020, monster 0.052 ms/s per bot."));
     }
 
@@ -1468,7 +1468,7 @@ public sealed class UT_BotCpuReport
     {
         AssertTheCultureIsGerman();
 
-        Assert.That(BotCpuReport.StatusText(OnAt, byCommand: false, stopsAt: null, now: OnAt.AddSeconds(35), null,
+        Assert.That(BotCpuReport.StatusText(OnAt, byCommand: false, stopsAt: null, on: TimeSpan.FromSeconds(35), null,
             null, BotCpuSince.Start(reset: false)), Is.EqualTo(new[]
         {
             "Bot CPU meter: on since 14:02 (by property, 0 min; no stop time).",
@@ -1485,7 +1485,7 @@ public sealed class UT_BotCpuReport
 
         // No platform values; a player bot with n 0 has no per-bot value and no stage; no kind has bot-seconds, so
         // there is no since-on line.
-        Assert.That(BotCpuReport.StatusText(OnAt, byCommand: false, stopsAt: null, now: OnAt.AddSeconds(85), window,
+        Assert.That(BotCpuReport.StatusText(OnAt, byCommand: false, stopsAt: null, on: TimeSpan.FromSeconds(85), window,
             NoPlatformValues, BotCpuSince.Start(reset: false).Add(window)), Is.EqualTo(new[]
         {
             "Bot CPU meter: on since 14:02 (by property, 1 min; no stop time).",

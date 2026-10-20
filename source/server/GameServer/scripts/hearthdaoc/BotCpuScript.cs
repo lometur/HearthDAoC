@@ -211,7 +211,8 @@ public static class BotCpuScript
     /// one that started in it counts from zero. A loop thread whose schedstat reads 0 makes
     /// <c>loopThreadsCpuPct</c>, <c>offLoopCpuPct</c>, <c>campThreadCpuPct</c> and <c>loopWaitMs</c> <c>-</c>; so do
     /// no loop thread and threads listed at one end only. With loop threads read, no camp thread is 0: it starts with
-    /// the first camp planning (CPP:52).
+    /// the first camp planning (CPP:52). The window a server stop writes has no loop thread: the server joins the game
+    /// loop's threads and the camp thread before the stopped event (GameServer.cs:1013-1015), so its four are <c>-</c>.
     /// </summary>
     public static BotCpuProcess ProcessWindow(BotCpuProcessSample earlier, BotCpuProcessSample later, double seconds)
     {
@@ -265,9 +266,9 @@ public static class BotCpuScript
                 loopWaitMs = waitNs / 1e6;
             }
 
-            // No camp thread gives 0, but only once the loop threads show the readers work: a server always has loop
-            // threads, so none found means the threads could not be told or read (no schedstat files, unreadable comm
-            // files), the camp thread's included.
+            // No camp thread gives 0, but only once the loop threads show the readers work: a running server always
+            // has loop threads, so none found means the threads could not be told or read (no schedstat files,
+            // unreadable comm files), the camp thread's included, or that they have ended (a server stop).
             if (loopThreads > 0 && !loopUnread && !campUnread)
                 campThreadCpuPct = PercentOfOneCore(campNs / 1e6, seconds);
         }
@@ -519,6 +520,11 @@ public static class BotCpuScript
 
     // The Stopwatch timestamp a window is measured with (2.2).
     private static long Timestamp() => _timestampHook?.Invoke() ?? Stopwatch.GetTimestamp();
+
+    /// <summary>The time since <paramref name="timestamp"/> on the Stopwatch a window is measured with (2.2): a change
+    /// of the server's local clock (summer time) does not move it, so <c>/botcpu</c>'s minutes on stay true (2.4).
+    /// </summary>
+    public static TimeSpan ElapsedSince(long timestamp) => TimeSpan.FromSeconds(SecondsBetween(timestamp, Timestamp()));
 
     private static double SecondsBetween(long start, long end) => (end - start) / (double)Stopwatch.Frequency;
 
@@ -876,7 +882,8 @@ public static class BotCpuScript
 
     // The open run's result, swapped in whole (3.7).
     private static void Publish(MeterRun run) => Volatile.Write(ref _result, new BotCpuResult(true, run.Number,
-        run.ByCommand, run.OnSince, run.StopsAt?.Time, run.WindowStart.Time, run.WindowStart.Timestamp, run.Last,
+        run.ByCommand, run.OnSince, run.OnSinceTimestamp, run.StopsAt?.Time, run.WindowStart.Time,
+        run.WindowStart.Timestamp, run.Last,
         run.LastProcess, run.Since));
 }
 
@@ -888,6 +895,9 @@ public static class BotCpuScript
 /// <param name="Run">The open run's number (<see cref="BotCpuMeter.RunNumber"/>).</param>
 /// <param name="ByCommand">Whether a GM's <c>/botcpu on</c> opened it, else the property (2.4).</param>
 /// <param name="OnSince">When it opened, the server's local time.</param>
+/// <param name="OnSinceTimestamp">The same instant as a <see cref="Stopwatch"/> timestamp: <c>/botcpu</c>'s minutes
+/// on count from it, through <see cref="BotCpuScript.ElapsedSince"/>, so summer time does not change them (2.4).
+/// </param>
 /// <param name="StopsAt">Its stop time, local, as the chat shows it; null for none (4.3).</param>
 /// <param name="WindowStart">When the open window started, local: its lines come a window's length later (2.4).
 /// </param>
@@ -897,11 +907,12 @@ public static class BotCpuScript
 /// <param name="Last">The last window written, with the top 5 of each bot kind; null before the first.</param>
 /// <param name="LastProcess">That window's process values.</param>
 /// <param name="Since">The totals since on or reset (2.4).</param>
-public sealed record BotCpuResult(bool On, int Run, bool ByCommand, DateTime OnSince, DateTime? StopsAt,
-    DateTime WindowStart, long WindowStartTimestamp, BotCpuWindow Last, BotCpuProcess LastProcess, BotCpuSince Since)
+public sealed record BotCpuResult(bool On, int Run, bool ByCommand, DateTime OnSince, long OnSinceTimestamp,
+    DateTime? StopsAt, DateTime WindowStart, long WindowStartTimestamp, BotCpuWindow Last, BotCpuProcess LastProcess,
+    BotCpuSince Since)
 {
     /// <summary>The meter off: no run open.</summary>
-    public static BotCpuResult Off { get; } = new(false, 0, false, default, null, default, 0, null, null, null);
+    public static BotCpuResult Off { get; } = new(false, 0, false, default, 0, null, default, 0, null, null, null);
 }
 
 /// <summary>What a thread is to the process line (3.9), from its <c>comm</c> name.</summary>

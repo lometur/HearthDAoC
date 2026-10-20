@@ -55,6 +55,7 @@ public sealed class UT_BotCpuMeter
     private const BindingFlags HiddenStatic = BindingFlags.Static | BindingFlags.NonPublic;
     private static readonly FieldInfo ThreadPoolField = typeof(GameLoop).GetField("_threadPool", HiddenStatic)!;
     private static readonly FieldInfo StageHookField = typeof(BotCpuMeter).GetField("_stageHook", HiddenStatic)!;
+    private static readonly FieldInfo SetupWarnedField = typeof(BotCpuMeter).GetField("_setupWarned", HiddenStatic)!;
     private static readonly FieldInfo SlotsField = typeof(BotCpuMeter).GetField("_slots", HiddenStatic)!;
     private static readonly FieldInfo ThreadSlotField = typeof(BotCpuMeter).GetField("_threadSlot", HiddenStatic)!;
     private static readonly FieldInfo InFleetField = typeof(BotCpuMeter).GetField("_inFleet", HiddenStatic)!;
@@ -942,10 +943,18 @@ public sealed class UT_BotCpuMeter
         Assert.DoesNotThrow(() => GameLoop.ExecuteForEach(brains, brains.Count, action));
         Assert.That(_pool.Given, Is.SameAs(action));
         Assert.That(brains.Select(brain => runs.GetValueOrDefault(brain)), Is.EqualTo(new[] { 1, 1 }));
-        // Again: the warning is not written twice, and the call runs the same way.
+        // The first failure sets the warning's once-a-run guard (3.1; the test host's log is a NullLogger, so the
+        // warning itself is not read). Again: the guard stays set, and the call runs the same way.
+        Assert.That(SetupWarnedField.GetValue(null), Is.EqualTo(1));
         Assert.DoesNotThrow(() => GameLoop.ExecuteForEach(brains, brains.Count, action));
         Assert.That(brains.Select(brain => runs.GetValueOrDefault(brain)), Is.EqualTo(new[] { 2, 2 }));
         Assert.That(Values(BotCpuMeter.TakeSnapshot()), Is.EqualTo(Values(before)));
+        Assert.That(SetupWarnedField.GetValue(null), Is.EqualTo(1));
+        // A new run may warn once again.
+        BotCpuMeter.Enable();
+        Assert.That(SetupWarnedField.GetValue(null), Is.EqualTo(0));
+        Assert.DoesNotThrow(() => GameLoop.ExecuteForEach(brains, brains.Count, action));
+        Assert.That(SetupWarnedField.GetValue(null), Is.EqualTo(1));
     }
 
     [TestCase(null)]
