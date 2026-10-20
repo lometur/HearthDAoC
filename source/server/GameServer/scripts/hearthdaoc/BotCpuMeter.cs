@@ -221,6 +221,10 @@ public static class BotCpuMeter
     // A test hook (6.1, "Setup fallback"): set, it replaces StageOf in a call's setup. Null on the server.
     private static Func<string, BotCpuStage> _stageHook;
 
+    // A test hook (6.1, "Setup fallback"): set, it gets the setup fallback's warning in place of the log, where the
+    // test host writes nothing, so a test can count the warnings. Null on the server.
+    private static Action<string> _warnHook;
+
     // The fleet scope (3.5), read and written by the game-loop thread only: the "in fleet" flag, the run the scope
     // began in, that thread's allocated bytes when it began, and the time and bytes of the nested calls inside it.
     private static bool _inFleet;
@@ -495,10 +499,17 @@ public static class BotCpuMeter
 
         try
         {
+            string warning = "Bot CPU meter: the setup of a game-loop call failed, so its items ran unmetered (later " +
+                $"failures in this run are not logged): {exception}";
+            if (_warnHook != null)
+            {
+                _warnHook(warning);
+                return;
+            }
+
             Logger log = LoggerManager.Create(typeof(BotCpuMeter));
             if (log.IsWarnEnabled)
-                log.Warn("Bot CPU meter: the setup of a game-loop call failed, so its items ran unmetered (later " +
-                    $"failures in this run are not logged): {exception}");
+                log.Warn(warning);
         }
         catch (Exception)
         {

@@ -55,7 +55,7 @@ public sealed class UT_BotCpuReport
 
     // A bot as the report lists it (3.10): its ticks and calls in a 60 s window, worth msSec ms per s.
     private static BotCpuBot Bot(BotCpuKind kind, string name, double msSec, long calls = WholeWindow) =>
-        new(kind, name, 34, "Cleric", 163, "Rvr", "Hunting", Ticks(msSec * 60), calls);
+        new(kind, name, 34, "Cleric", 163, "RvR", "Hunting", Ticks(msSec * 60), calls);
 
     // A spread computed from the counts: its three values, within the tolerance.
     private static void AssertSpread(BotCpuSpread? spread, double p50, double p95, double max)
@@ -1008,13 +1008,13 @@ public sealed class UT_BotCpuReport
     {
         List<BotCpuBot> bots =
         [
-            new(Gamebot, "Aldric", 34, "Cleric", 163, "Rvr", "Riding stablemaster horse route", Ticks(7.412 * 60),
+            new(Gamebot, "Aldric", 34, "Cleric", 163, "RvR", "Riding stablemaster horse route", Ticks(7.412 * 60),
                 52_800),
             new(Gamebot, "Brennos", 50, "Armsman", 1, "Battleground", "Choosing first live goal", Ticks(6.020 * 60),
                 45_000),
             new(Gamebot, "Cathal", 42, "Wizard", 1, "GroupPve", "Defeated; reassessing target difficulty",
                 Ticks(5.881 * 60), 43_200),
-            new(Gamebot, "Dagny", 47, "Paladin", 163, "Rvr", "Recovered to safe capital spawn", Ticks(5.104 * 60),
+            new(Gamebot, "Dagny", 47, "Paladin", 163, "RvR", "Recovered to safe capital spawn", Ticks(5.104 * 60),
                 36_000),
             new(Gamebot, "Eirik", 20, "Scout", 1, "SoloPve", "Queued after a failed world transfer", Ticks(4.950 * 60),
                 30_000),
@@ -1077,8 +1077,8 @@ public sealed class UT_BotCpuReport
             "allocKBPerBotSec=0.4 | Npc=0.031 Attack=0.008 Effect=0.002 Movement=0.011",
             "BOT_CPU win=60 kind=unattributed n=- msSec=9.1 callsSec=2210.0 usPerCall=4.12 allocKBSec=88.0 | " +
             "GameLoop=0.402 Timer=1.210 Npc=6.890 Zone=0.598",
-            "BOT_CPU_TOP win=60 kind=gamebot 1=Aldric:7.412:Rvr 2=Brennos:6.020:Battleground 3=Cathal:5.881:GroupPve " +
-            "4=Dagny:5.104:Rvr 5=Eirik:4.950:SoloPve",
+            "BOT_CPU_TOP win=60 kind=gamebot 1=Aldric:7.412:RvR 2=Brennos:6.020:Battleground 3=Cathal:5.881:GroupPve " +
+            "4=Dagny:5.104:RvR 5=Eirik:4.950:SoloPve",
             "BOT_CPU_PROCESS win=60 tps=30.0 cores=4 processCpuPct=148.2 loopThreadsCpuPct=121.0 offLoopCpuPct=27.2 " +
             "campThreadCpuPct=3.1 chargedPct=54.6 callsSec=212534 loopWaitMs=212 throttledMs=0 gcPauseMs=14 gen2=0 " +
             "allocMBSec=41.2 heapMB=2210 rssMB=3480",
@@ -1557,11 +1557,11 @@ public sealed class UT_BotCpuReport
 
         Assert.That(BotCpuReport.TopText(SpecSample(), Gamebot), Is.EqualTo(new[]
         {
-            "1. Aldric (34 Cleric, region 163): 7.412 ms/s, 880 calls/s, Rvr, \"Riding stablemaster horse route\"",
+            "1. Aldric (34 Cleric, region 163): 7.412 ms/s, 880 calls/s, RvR, \"Riding stablemaster horse route\"",
             "2. Brennos (50 Armsman, region 1): 6.020 ms/s, 750 calls/s, Battleground, \"Choosing first live goal\"",
             "3. Cathal (42 Wizard, region 1): 5.881 ms/s, 720 calls/s, GroupPve, " +
             "\"Defeated; reassessing target difficulty\"",
-            "4. Dagny (47 Paladin, region 163): 5.104 ms/s, 600 calls/s, Rvr, \"Recovered to safe capital spawn\"",
+            "4. Dagny (47 Paladin, region 163): 5.104 ms/s, 600 calls/s, RvR, \"Recovered to safe capital spawn\"",
             "5. Eirik (20 Scout, region 1): 4.950 ms/s, 500 calls/s, SoloPve, \"Queued after a failed world transfer\"",
         }));
     }

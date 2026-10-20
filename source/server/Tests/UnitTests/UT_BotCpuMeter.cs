@@ -55,7 +55,7 @@ public sealed class UT_BotCpuMeter
     private const BindingFlags HiddenStatic = BindingFlags.Static | BindingFlags.NonPublic;
     private static readonly FieldInfo ThreadPoolField = typeof(GameLoop).GetField("_threadPool", HiddenStatic)!;
     private static readonly FieldInfo StageHookField = typeof(BotCpuMeter).GetField("_stageHook", HiddenStatic)!;
-    private static readonly FieldInfo SetupWarnedField = typeof(BotCpuMeter).GetField("_setupWarned", HiddenStatic)!;
+    private static readonly FieldInfo WarnHookField = typeof(BotCpuMeter).GetField("_warnHook", HiddenStatic)!;
     private static readonly FieldInfo SlotsField = typeof(BotCpuMeter).GetField("_slots", HiddenStatic)!;
     private static readonly FieldInfo ThreadSlotField = typeof(BotCpuMeter).GetField("_threadSlot", HiddenStatic)!;
     private static readonly FieldInfo InFleetField = typeof(BotCpuMeter).GetField("_inFleet", HiddenStatic)!;
@@ -85,6 +85,7 @@ public sealed class UT_BotCpuMeter
         BotCpuMeter.Disable();
         InFleetField.SetValue(null, false);
         StageHookField.SetValue(null, null);
+        WarnHookField.SetValue(null, null);
         ThreadPoolField.SetValue(null, _savedPool);
         GameLoop.ActiveService = _savedActiveService;
         GameServer.LoadTestDouble(_savedServer);
@@ -933,6 +934,8 @@ public sealed class UT_BotCpuMeter
     public void WhenTheSetupThrowsEveryItemRunsOnceUnmeteredWithTheCallersDelegate()
     {
         BotCpuMeter.Enable();
+        List<string> warnings = [];
+        WarnHookField.SetValue(null, (Action<string>)warnings.Add);
         GameLoop.ActiveService = nameof(NpcService);
         StageHookField.SetValue(null, (Func<string, BotCpuStage>)(_ => throw new InvalidOperationException("stage")));
         List<ABrain> brains = [Bot(autonomous: true).Brain, BrainOf(Npc(Make<StandardMobBrain>()))];
@@ -943,18 +946,18 @@ public sealed class UT_BotCpuMeter
         Assert.DoesNotThrow(() => GameLoop.ExecuteForEach(brains, brains.Count, action));
         Assert.That(_pool.Given, Is.SameAs(action));
         Assert.That(brains.Select(brain => runs.GetValueOrDefault(brain)), Is.EqualTo(new[] { 1, 1 }));
-        // The first failure sets the warning's once-a-run guard (3.1; the test host's log is a NullLogger, so the
-        // warning itself is not read). Again: the guard stays set, and the call runs the same way.
-        Assert.That(SetupWarnedField.GetValue(null), Is.EqualTo(1));
+        // One warning a run (3.1, 5.1), naming the failure. Again: no second warning, and the call runs the same way.
+        Assert.That(warnings, Has.Count.EqualTo(1));
+        Assert.That(warnings[0], Does.StartWith("Bot CPU meter: the setup of a game-loop call failed")
+            .And.Contain("InvalidOperationException"));
         Assert.DoesNotThrow(() => GameLoop.ExecuteForEach(brains, brains.Count, action));
         Assert.That(brains.Select(brain => runs.GetValueOrDefault(brain)), Is.EqualTo(new[] { 2, 2 }));
         Assert.That(Values(BotCpuMeter.TakeSnapshot()), Is.EqualTo(Values(before)));
-        Assert.That(SetupWarnedField.GetValue(null), Is.EqualTo(1));
+        Assert.That(warnings, Has.Count.EqualTo(1));
         // A new run may warn once again.
         BotCpuMeter.Enable();
-        Assert.That(SetupWarnedField.GetValue(null), Is.EqualTo(0));
         Assert.DoesNotThrow(() => GameLoop.ExecuteForEach(brains, brains.Count, action));
-        Assert.That(SetupWarnedField.GetValue(null), Is.EqualTo(1));
+        Assert.That(warnings, Has.Count.EqualTo(2));
     }
 
     [TestCase(null)]

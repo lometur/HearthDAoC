@@ -1492,7 +1492,7 @@ public sealed class UT_BotCpuScript
         TurnOn();
         GameBot aldric = Bot("Aldric");
         typeof(GameBot).GetField("<PersistentRecord>k__BackingField", Hidden)!.SetValue(aldric,
-            new OfflineWorldBotRecord { ObjectiveKind = "Rvr", Activity = "Guarding Caer Benowyc" });
+            new OfflineWorldBotRecord { ObjectiveKind = "RvR", Activity = "Guarding Caer Benowyc" });
         PutInRegion(aldric, 163);
         GameBot brennos = Bot("Brennos");
         GameBot wynn = Bot("Wynn");
@@ -1511,14 +1511,14 @@ public sealed class UT_BotCpuScript
 
         Assert.That(Logged().Where(line => line.StartsWith("BOT_CPU_TOP ", StringComparison.Ordinal)), Is.EqualTo(new[]
         {
-            "BOT_CPU_TOP win=60 kind=gamebot 1=Aldric:1.500:Rvr 2=Brennos:1.000:-",
+            "BOT_CPU_TOP win=60 kind=gamebot 1=Aldric:1.500:RvR 2=Brennos:1.000:-",
             "BOT_CPU_TOP win=60 kind=companion 1=Wynn:0.500",
             "BOT_CPU_TOP win=60 kind=playerbot 1=Tamsin:2.000",
         }));
         BotCpuWindow last = BotCpuScript.Result.Last;
         Assert.That(last.Top(Gamebot).Select(entry => entry.Bot), Is.EqualTo(new[]
         {
-            new BotCpuBot(Gamebot, "Aldric", 34, "Cleric", 163, "Rvr", "Guarding Caer Benowyc", StopwatchTicks(90),
+            new BotCpuBot(Gamebot, "Aldric", 34, "Cleric", 163, "RvR", "Guarding Caer Benowyc", StopwatchTicks(90),
                 1_800),
             new BotCpuBot(Gamebot, "Brennos", 34, "Cleric", 0, null, null, StopwatchTicks(60), 1_800),
         }));
@@ -2428,6 +2428,24 @@ public sealed class UT_BotCpuScript
         Assert.That(BotCpu()[0], Is.EqualTo("Bot CPU meter: on since 14:02 (by command, 30 min; no stop time)."));
     }
 
+    [Test]
+    public void AResetAndANewStopTimeKeepTheMinutesOn()
+    {
+        // 2.4: the minutes on count from when the meter went on. /botcpu reset starts only the totals since on again,
+        // and on <minutes> on a running meter changes only its stop time: twenty minutes in, it says 20 min.
+        BotCpuScript.CommandOn(Gm, null);
+        RunQueued();
+        Seconds(600);
+        BotCpu("reset");
+        RunQueued();
+        Seconds(300);
+        BotCpuScript.CommandOn(Gm, 30);
+        RunQueued();
+        Seconds(300);
+
+        Assert.That(BotCpu()[0], Is.EqualTo("Bot CPU meter: on since 14:02 (by command, 20 min; stops at 14:47)."));
+    }
+
     // A server's time zone with summer time: UTC-6, and UTC-5 from the second Sunday of March at 02:00 to the first
     // Sunday of November at 02:00, as US Central time.
     private static readonly TimeZoneInfo SummerTimeZone = TimeZoneInfo.CreateCustomTimeZone("HearthDAoC test",
@@ -2871,7 +2889,7 @@ public sealed class UT_BotCpuScript
 
         GameBot aldric = Bot("Aldric");
         typeof(GameBot).GetField("<PersistentRecord>k__BackingField", Hidden)!.SetValue(aldric,
-            new OfflineWorldBotRecord { ObjectiveKind = "Rvr", Activity = "Guarding Caer Benowyc" });
+            new OfflineWorldBotRecord { ObjectiveKind = "RvR", Activity = "Guarding Caer Benowyc" });
         PutInRegion(aldric, 163);
         GameBot brennos = Bot("Brennos");
         ChargeBot(aldric, 90, 1_800);
@@ -2880,7 +2898,7 @@ public sealed class UT_BotCpuScript
 
         string[] gamebots =
         [
-            "1. Aldric (34 Cleric, region 163): 1.500 ms/s, 30 calls/s, Rvr, \"Guarding Caer Benowyc\"",
+            "1. Aldric (34 Cleric, region 163): 1.500 ms/s, 30 calls/s, RvR, \"Guarding Caer Benowyc\"",
             "2. Brennos (34 Cleric, region 0): 1.000 ms/s, 30 calls/s, -, \"\"",
         ];
         Assert.That(BotCpu("top"), Is.EqualTo(gamebots));
@@ -3092,13 +3110,13 @@ public sealed class UT_BotCpuScript
         Population(1);
         GameBot aldric = Bot("Aldric");
         typeof(GameBot).GetField("<PersistentRecord>k__BackingField", Hidden)!.SetValue(aldric,
-            new OfflineWorldBotRecord { ObjectiveKind = "Rvr", Activity = "Holding {0} at {the bridge}" });
+            new OfflineWorldBotRecord { ObjectiveKind = "RvR", Activity = "Holding {0} at {the bridge}" });
         ChargeBot(aldric, 90, 1_800);
         Seconds(60);
         chat.Lines.Clear();
         handler.OnCommand(client, ["&botcpu", "top"]);
         Assert.That(chat.Lines, Is.EqualTo(new[]
-            { "1. Aldric (34 Cleric, region 0): 1.500 ms/s, 30 calls/s, Rvr, \"Holding {0} at {the bridge}\"" }));
+            { "1. Aldric (34 Cleric, region 0): 1.500 ms/s, 30 calls/s, RvR, \"Holding {0} at {the bridge}\"" }));
         GC.KeepAlive(aldric);
     }
 }

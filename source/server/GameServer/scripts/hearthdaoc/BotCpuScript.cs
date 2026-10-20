@@ -211,8 +211,10 @@ public static class BotCpuScript
     /// one that started in it counts from zero. A loop thread whose schedstat reads 0 makes
     /// <c>loopThreadsCpuPct</c>, <c>offLoopCpuPct</c>, <c>campThreadCpuPct</c> and <c>loopWaitMs</c> <c>-</c>; so do
     /// no loop thread and threads listed at one end only. With loop threads read, no camp thread is 0: it starts with
-    /// the first camp planning (CPP:52). The window a server stop writes has no loop thread: the server joins the game
-    /// loop's threads and the camp thread before the stopped event (GameServer.cs:1013-1015), so its four are <c>-</c>.
+    /// the first camp planning (CPP:52). The window a normal server stop writes has no loop thread: the server joins
+    /// the game loop's threads and the camp thread before the stopped event (GameServer.cs:1013-1015), so its four are
+    /// <c>-</c>. A stop from the game loop's own error catch runs on the <c>GameLoop</c> thread, which then stays
+    /// listed: there they cover that thread alone, and the ended workers' CPU is in <c>offLoopCpuPct</c>.
     /// </summary>
     public static BotCpuProcess ProcessWindow(BotCpuProcessSample earlier, BotCpuProcessSample later, double seconds)
     {
@@ -268,7 +270,7 @@ public static class BotCpuScript
 
             // No camp thread gives 0, but only once the loop threads show the readers work: a running server always
             // has loop threads, so none found means the threads could not be told or read (no schedstat files,
-            // unreadable comm files), the camp thread's included, or that they have ended (a server stop).
+            // unreadable comm files), the camp thread's included, or that they have ended (a normal server stop).
             if (loopThreads > 0 && !loopUnread && !campUnread)
                 campThreadCpuPct = PercentOfOneCore(campNs / 1e6, seconds);
         }
