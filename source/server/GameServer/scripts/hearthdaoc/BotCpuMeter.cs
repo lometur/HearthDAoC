@@ -1,4 +1,5 @@
 using System;
+using DOL.AI;
 using DOL.AI.Brain;
 
 namespace DOL.GS.HearthDAoC;
@@ -65,7 +66,23 @@ public enum BotCpuStage
     Other,
 }
 
-/// <summary>The meter's hot path: the stage of a profile key and the kind of an owner.</summary>
+/// <summary>
+/// What one game-loop item is charged to (3.2 step 1): the <paramref name="Kind"/> and <paramref name="Stage"/> of its
+/// slot cell, the <paramref name="Bot"/> whose per-bot counter it adds to (3.10), and whether it counts one toward its
+/// kind's <c>n</c> (<paramref name="Presence"/>, 3.8).
+/// </summary>
+/// <param name="Kind">The kind of the item's owner (3.3).</param>
+/// <param name="Stage">The stage of the call, <see cref="BotCpuStage.Pets"/> for a pet's item, or
+/// <see cref="BotCpuStage.Fleet"/> for an item with no owner inside the fleet scope (3.5).</param>
+/// <param name="Bot">The owner, for a bot kind (<see cref="BotCpuMeter.IsBotKind"/>); null for any other kind and for
+/// <see cref="BotCpuStage.Fleet"/>, which counts for no bot.</param>
+/// <param name="Presence">A brain in <see cref="BotCpuStage.Npc"/> or a client in
+/// <see cref="BotCpuStage.ClientBegin"/>, not a pet, of a kind whose <c>n</c> is its presence: companion, monster and
+/// the three player kinds.</param>
+public readonly record struct BotCpuCharge(BotCpuKind Kind, BotCpuStage Stage, GameObject Bot, bool Presence);
+
+/// <summary>The meter's hot path: the stage of a profile key, the kind of an owner and what each item charges.
+/// </summary>
 public static class BotCpuMeter
 {
     /// <summary>The most owners the pet walk follows (3.3); a longer walk, a cycle, is
@@ -146,5 +163,96 @@ public static class BotCpuMeter
                     return BotCpuKind.Unattributed;
             }
         }
+    }
+
+    /// <summary>The kinds whose bots have a per-bot counter, a spread and a top 5 (3.10): gamebot, companion,
+    /// playerbot and piloted.</summary>
+    public static bool IsBotKind(BotCpuKind kind) =>
+        kind is BotCpuKind.Gamebot or BotCpuKind.Companion or BotCpuKind.Playerbot or BotCpuKind.Piloted;
+
+    /// <summary>
+    /// What one item of a game-loop call is charged to (3.3, 3.8). Its owner is read as its type
+    /// <typeparamref name="T"/> says (3.3's table; a posted action, an <c>int</c> or any other type has none), then the
+    /// kind of that owner by the pure
+    /// <see cref="KindOf(GameObject, Func{GamePlayer, bool}, out GameObject, out bool)"/> with
+    /// <paramref name="isPiloted"/>. A pet's item goes to <see cref="BotCpuStage.Pets"/>, whatever
+    /// <paramref name="stage"/>; an item with no owner inside the fleet scope (<paramref name="inFleet"/>, 3.5) to
+    /// <see cref="BotCpuKind.Gamebot"/> / <see cref="BotCpuStage.Fleet"/>. Called before the item's callback runs, so
+    /// the owner is read while the item is intact; it throws only if a game object's member does (<c>Body</c> is
+    /// virtual), and the wrapper's <c>try</c> charges such an item to unattributed (3.2).
+    /// </summary>
+    public static BotCpuCharge Classify<T>(T item, BotCpuStage stage, bool inFleet, Func<GamePlayer, bool> isPiloted)
+    {
+        Func<T, GameObject> owner = ItemOwner<T>.Read;
+        BotCpuKind kind = KindOf(owner?.Invoke(item), isPiloted, out GameObject charged, out bool pet);
+        if (pet)
+            stage = BotCpuStage.Pets;
+        else if (inFleet && kind == BotCpuKind.Unattributed)
+        {
+            kind = BotCpuKind.Gamebot;
+            stage = BotCpuStage.Fleet;
+        }
+
+        // Presence (3.8) only in the item type's own stage, so a pet's item (now Pets) and fleet work never count; nor
+        // a gamebot, whose n comes from the registry, nor unattributed, which has none.
+        bool presence = stage == ItemOwner<T>.PresenceStage &&
+            kind is not (BotCpuKind.Gamebot or BotCpuKind.Unattributed);
+        return new BotCpuCharge(kind, stage, IsBotKind(kind) ? charged : null, presence);
+    }
+
+    /// <summary>
+    /// The owner reader of item type <typeparamref name="T"/> (3.3) and the stage in which its items count presence
+    /// (3.8), chosen once per type when an item of it is first classified: only while the meter is on (5.1). A reader
+    /// of a type also reads the types derived from it (<see cref="Func{T, TResult}"/> is contravariant); a value type
+    /// has none, so it is never boxed.
+    /// </summary>
+    private static class ItemOwner<T>
+    {
+        internal static readonly Func<T, GameObject> Read = (Func<T, GameObject>)OwnerReader(typeof(T));
+
+        internal static readonly BotCpuStage? PresenceStage =
+            Is<ABrain>(typeof(T)) ? BotCpuStage.Npc : Is<GameClient>(typeof(T)) ? BotCpuStage.ClientBegin : null;
+    }
+
+    private static bool Is<TItem>(Type type) => typeof(TItem).IsAssignableFrom(type);
+
+    // The owner of each item type in 3.3's table; each reader gives none for a null item.
+    private static Delegate OwnerReader(Type type) => type switch
+    {
+        _ when Is<ABrain>(type) => (Func<ABrain, GameObject>)(static brain => brain?.Body),
+        _ when Is<AttackComponent>(type) => (Func<AttackComponent, GameObject>)(static attack => attack?.owner),
+        _ when Is<CastingComponent>(type) => (Func<CastingComponent, GameObject>)(static casting => casting?.Owner),
+        _ when Is<ECSGameEffect>(type) => (Func<ECSGameEffect, GameObject>)(static effect => effect?.Owner),
+        _ when Is<EffectListComponent>(type) => (Func<EffectListComponent, GameObject>)(static list => list?.Owner),
+        _ when Is<MovementComponent>(type) => (Func<MovementComponent, GameObject>)(static move => move?.Owner),
+        _ when Is<CraftComponent>(type) => (Func<CraftComponent, GameObject>)(static craft => craft?.Owner),
+        _ when Is<ECSGameTimer>(type) => (Func<ECSGameTimer, GameObject>)(static timer => timer?.Owner),
+        _ when Is<SubZoneObject>(type) => (Func<SubZoneObject, GameObject>)(static node => node?.Node?.Value),
+        _ when Is<LivingBeingKilled>(type) => (Func<LivingBeingKilled, GameObject>)KillOwner,
+        _ when Is<GameClient>(type) => (Func<GameClient, GameObject>)ClientOwner,
+        _ => null,
+    };
+
+    // The Reaper rule (3.3): XP, loot and quest credit run for the killer, so a kill is its killer's when the killer's
+    // kind, after the pet walk, is a bot or player kind; otherwise the killed's. Piloted or not changes nothing here,
+    // so no pilot check is asked; Classify then walks the killer again, for its kind and its Pets stage.
+    private static GameObject KillOwner(LivingBeingKilled kill)
+    {
+        if (kill == null)
+            return null;
+
+        GameObject killer = kill.Killer;
+        return KindOf(killer, null, out _, out _) is BotCpuKind.Gamebot or BotCpuKind.Companion or
+            BotCpuKind.Playerbot or BotCpuKind.Piloted or BotCpuKind.Player ? killer : kill.Killed;
+    }
+
+    // A client's owner (3.3): its player while the client IsPlaying (Playing or Linkdead) and the player is Active;
+    // none while it loads (WorldEnter) or at the character screen, where it keeps its old player.
+    private static GameObject ClientOwner(GameClient client)
+    {
+        GamePlayer player = client?.Player;
+        return player != null && client.IsPlaying && player.ObjectState == GameObject.eObjectState.Active
+            ? player
+            : null;
     }
 }
