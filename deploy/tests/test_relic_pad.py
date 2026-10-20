@@ -60,7 +60,8 @@ class RelicPadWorldTests(unittest.TestCase):
         shutil.copyfile(TEST_WORLD, db)
         os.chmod(db, 0o644)
         r = subprocess.run([sys.executable, os.path.join(BIN, "server_properties.py"), "--db", db,
-                            "--gm-only-commands", "/tele;/tc", "--si-start-choice", "on", "--bot-rp-timer-wait", "on"],
+                            "--gm-only-commands", "/tele;/tc", "--si-start-choice", "on", "--bot-rp-timer-wait", "on",
+                            "--bot-cpu", "off"],
                            capture_output=True, text=True)
         self.assertEqual(r.returncode, 0, r.stderr)
         world_fixes.apply(db)

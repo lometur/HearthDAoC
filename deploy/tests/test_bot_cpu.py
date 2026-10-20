@@ -1,21 +1,38 @@
-"""The bot CPU meter (spec docs/fork/specs/2026-10-14-bot-cpu-meter-design.md, 6.2).
+"""The bot CPU meter (spec docs/fork/specs/2026-10-14-bot-cpu-meter-design.md, 6.2, 6.3).
 
 While the meter is on, each game-loop callback is timed and charged to the kind of its owner and to its stage. The hot
 path is unit-tested (UT_BotCpuMeter), through the real hook H1 in GameLoop.ExecuteForEach and hook H6's fleet scope;
 the hooks' shape in the upstream files, the upstream facts the meter mirrors (the stage of each profile key, the pool's
 entry point, the member each item's owner is read from, the one nested call inside the fleet scope) and the upstream
 files' line endings need the source, so these check it.
+
+The switch goes .env -> compose.yml -> entrypoint.sh -> server_properties.py -> the bot_cpu_meter server property,
+default off at every step (hdc update appends the new .env.example line to an existing .env); the server reads it once,
+at start (4.1, 4.2).
 """
 import os
 import re
+import shlex
+import sqlite3
+import subprocess
+import sys
+import tempfile
 import unittest
 
 from tests import endings
 
 ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+DEPLOY = os.path.join(ROOT, "deploy")
+BIN = os.path.join(DEPLOY, "bin")
+sys.path.insert(0, BIN)
+
+import server_properties as sp  # noqa: E402
+from tests.test_server_properties import SCHEMA, row, run_cli  # noqa: E402
+
 GAME_SERVER = os.path.join(ROOT, "source", "server", "GameServer")
 FORK = os.path.join(GAME_SERVER, "scripts", "hearthdaoc")
 METER_CS = os.path.join(FORK, "BotCpuMeter.cs")
+SCRIPT_CS = os.path.join(FORK, "BotCpuScript.cs")
 LOOP = os.path.join(GAME_SERVER, "Managers", "GameLoop")
 GL = os.path.join(LOOP, "GameLoop.cs")
 POOL = os.path.join(LOOP, "GameLoopThreadPool.cs")
@@ -35,6 +52,12 @@ END_FLEET = "HearthDAoC.BotCpuMeter.EndFleet(fleetStart); // HearthDAoC: end of 
 FLEET_PLANNING = ["AutonomousBotRegistry.PrepareBrainTick();", "AutonomousWorldBotController.PrepareRvrPlanningTick();",
                   "AutonomousBotGroupCoordinator.PrepareCoordinatorTick();",
                   "AutonomousWorldBotController.PrepareCampPlanningTick();"]
+
+
+def read(name):
+    """A file of deploy/."""
+    with open(os.path.join(DEPLOY, name), encoding="utf-8") as f:
+        return f.read()
 
 
 def source(path):
@@ -208,6 +231,132 @@ class UpstreamFactTests(unittest.TestCase):
         for path, header, member in self.OWNERS:
             with self.subTest(path=path, member=member):
                 self.assertIn(member, type_body(source(os.path.join(GAME_SERVER, *path.split("/"))), header))
+
+
+class SwitchValueTests(unittest.TestCase):
+    def test_on_and_off_in_any_case_become_true_and_false(self):
+        for spec, expected in (("on", "True"), ("ON", "True"), ("On", "True"),
+                               ("off", "False"), ("OFF", "False"), ("oFf", "False")):
+            with self.subTest(spec=spec):
+                self.assertEqual(sp.bot_cpu_value(spec), expected)
+
+    def test_other_values_are_refused(self):
+        for bad in ("", "yes", "no", "true", "false", "1", "0", "none", "onn", " on", "off "):
+            with self.subTest(bad=bad), self.assertRaisesRegex(
+                    sp.PropertyError, f"^HEARTHDAOC_BOT_CPU must be on or off, got {re.escape(repr(bad))}$"):
+                sp.bot_cpu_value(bad)
+
+    def test_the_property_matches_the_server_declaration(self):
+        # [ServerProperty("server", "bot_cpu_meter", <description>, false)]: off in code, "False" in the table (4.1).
+        self.assertEqual((sp.CPU_KEY, sp.CPU_DEFAULT), ("bot_cpu_meter", "False"))
+        self.assertNotIn('"', sp.CPU_DESCRIPTION)
+        self.assertNotIn("\\", sp.CPU_DESCRIPTION)
+
+    def test_the_setting_is_required_and_declared_last(self):
+        # A start without it stops before any write; argparse names the missing arguments in declaration order, so
+        # test_server_properties.py's missing-argument test still finds --si-start-choice first (6.3).
+        with tempfile.TemporaryDirectory() as tmp:
+            db = os.path.join(tmp, "world.db")
+            with sqlite3.connect(db) as c:
+                c.execute(SCHEMA)
+            r = run_cli(db, "--gm-only-commands", "/tele;/tc", "--si-start-choice", "on", "--bot-rp-timer-wait", "on")
+            self.assertEqual((r.returncode, r.stdout), (2, ""))
+            self.assertIn("the following arguments are required: --bot-cpu\n", r.stderr)
+            self.assertIsNone(row(db, sp.OVERRIDES_KEY))
+            self.assertIsNone(row(db, sp.CPU_KEY))
+            r = run_cli(db, "--gm-only-commands", "/tele;/tc")
+            self.assertIn("the following arguments are required: --si-start-choice, --bot-rp-timer-wait, --bot-cpu\n",
+                          r.stderr)
+
+
+class EntrypointTests(unittest.TestCase):
+    """Runs the entrypoint's own server_properties.py command against a scratch world."""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        os.makedirs(os.path.join(self.tmp.name, "world"))
+        self.db = os.path.join(self.tmp.name, "world", "opendaoc.sqlite3.db")
+        with sqlite3.connect(self.db) as c:
+            c.execute(SCHEMA)
+        lines = read("entrypoint.sh").replace("\\\n", " ").splitlines()
+        commands = [line for line in lines if line.startswith('python3 "$BIN/server_properties.py"')]
+        self.assertEqual(len(commands), 1, "the entrypoint runs server_properties.py once")
+        self.command = commands[0]
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    def run_entrypoint_line(self, **env):
+        script = f"set -euo pipefail\nBIN={shlex.quote(BIN)}\nDATA={shlex.quote(self.tmp.name)}\n{self.command}\n"
+        base = {k: v for k, v in os.environ.items() if not k.startswith("HEARTHDAOC_")}
+        return subprocess.run(["bash", "-c", script], env={**base, **env}, capture_output=True, text=True)
+
+    def test_passes_the_setting_with_default_off(self):
+        self.assertIn('--bot-cpu "${HEARTHDAOC_BOT_CPU-off}"', self.command)
+        r = self.run_entrypoint_line()
+        # A new world has no row, so its first start writes False and says so, once (4.2).
+        self.assertEqual((r.returncode, r.stdout, r.stderr),
+                         (0, "GM-only commands: /tele;/tc\nShrouded Isles start choice: on\n"
+                             "Bot realm point timer wait: on\nBot CPU meter: off\n", ""))
+        self.assertEqual(row(self.db, sp.CPU_KEY), ("server", sp.CPU_DESCRIPTION, "False", "False"))
+        r = self.run_entrypoint_line()
+        self.assertEqual((r.returncode, r.stdout, r.stderr), (0, "", ""))
+
+    def test_on_in_any_case_turns_it_on_until_the_next_start_says_off(self):
+        r = self.run_entrypoint_line(HEARTHDAOC_BOT_CPU="ON")
+        self.assertEqual((r.returncode, r.stdout, r.stderr),
+                         (0, "GM-only commands: /tele;/tc\nShrouded Isles start choice: on\n"
+                             "Bot realm point timer wait: on\nBot CPU meter: on\n", ""))
+        self.assertEqual(row(self.db, sp.CPU_KEY), ("server", sp.CPU_DESCRIPTION, "False", "True"))
+        r = self.run_entrypoint_line()
+        self.assertEqual((r.returncode, r.stdout, r.stderr), (0, "Bot CPU meter: off\n", ""))
+        self.assertEqual(row(self.db, sp.CPU_KEY)[3], "False")
+
+    def test_a_bad_value_stops_the_start(self):
+        for bad in ("maybe", ""):
+            with self.subTest(bad=bad):
+                r = self.run_entrypoint_line(HEARTHDAOC_BOT_CPU=bad)
+                self.assertEqual((r.returncode, r.stdout), (2, ""))
+                self.assertEqual(r.stderr, f"ERROR: HEARTHDAOC_BOT_CPU must be on or off, got {bad!r}\n")
+                # Checked before any write: nothing at all.
+                for key in (sp.CPU_KEY, sp.OVERRIDES_KEY, sp.SI_KEY, sp.RP_WAIT_KEY):
+                    self.assertIsNone(row(self.db, key), key)
+
+
+class SettingDocsTests(unittest.TestCase):
+    def test_compose_passes_the_setting_with_default_off(self):
+        environment = read("compose.yml").split("\n    environment:\n", 1)[1].split("\n    volumes:\n", 1)[0]
+        self.assertIn("\n      HEARTHDAOC_BOT_RP_TIMER_WAIT: ${HEARTHDAOC_BOT_RP_TIMER_WAIT-on}\n"
+                      "      HEARTHDAOC_BOT_CPU: ${HEARTHDAOC_BOT_CPU-off}\n", environment + "\n")
+
+    # The setting in .env.example, under its comment, after the realm point waits' line (spec 4.2).
+    ENV_EXAMPLE = """\
+HEARTHDAOC_BOT_RP_TIMER_WAIT=on
+# on = the server measures the game loop's CPU per kind of bot and player and writes BOT_CPU lines to the server log
+# every minute, and rows to /data/logs/bot-cpu.csv; it costs about 1-5% of one core while on. off = nothing is
+# measured. A GM can also turn it on or off in game with /botcpu, until the next start. Case is ignored.
+HEARTHDAOC_BOT_CPU=off
+"""
+
+    def test_env_example_documents_the_setting_default_off(self):
+        example = read(".env.example")
+        self.assertEqual([line for line in example.splitlines() if line.startswith("HEARTHDAOC_BOT_CPU")],
+                         ["HEARTHDAOC_BOT_CPU=off"])
+        self.assertIn("\n" + self.ENV_EXAMPLE, example)
+
+    def test_handoff_lists_the_setting(self):
+        handoff = read("HANDOFF.md")
+        settings = between(handoff, "Settings live in `.env`", "`./hdc up` recreates the server with them.")
+        self.assertIn("`HEARTHDAOC_BOT_CPU` (default `off`", settings)
+        update = between(handoff, "`./hdc update <tag>` installs a specific release.", "It always backs up the world")
+        self.assertIn("`HEARTHDAOC_BOT_CPU=off`", update)  # what ./hdc update adds to an existing .env
+
+
+class ServerDeclarationTests(unittest.TestCase):
+    def test_server_declares_the_property_with_the_same_description(self):
+        found = re.findall(r'\[ServerProperty\(\s*"([^"]*)",\s*"bot_cpu_meter",\s*"([^"]*)",\s*(\w+)\s*\)\]\s*'
+                           r'public static bool BOT_CPU_METER;', source(SCRIPT_CS))
+        self.assertEqual(found, [("server", sp.CPU_DESCRIPTION, "false")])
 
 
 class EndingsTests(unittest.TestCase):

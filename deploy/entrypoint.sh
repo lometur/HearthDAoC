@@ -25,10 +25,12 @@ python3 "$BIN/gen_config.py" --data "$DATA" --out "$SRV/config/serverconfig.xml"
 # Clients get their UDP port from the world's Regions table, which upstream ships as 10400.
 python3 "$BIN/region_ports.py" --db "$DATA/world/opendaoc.sqlite3.db" --port "${HEARTHDAOC_UDP_PORT:-10401}"
 # Single-player shortcuts that need GM rights on a shared server (command_plvl_overrides), the Shrouded
-# Isles start choice for new characters (si_start_choice), and released gamebots waiting until they are worth
-# realm points again (bot_rp_timer_wait). A bad value stops the start (exit 2).
+# Isles start choice for new characters (si_start_choice), released gamebots waiting until they are worth
+# realm points again (bot_rp_timer_wait), and the bot CPU meter, on from the start or not (bot_cpu_meter).
+# A bad value stops the start (exit 2).
 python3 "$BIN/server_properties.py" --db "$DATA/world/opendaoc.sqlite3.db" --gm-only-commands "${HEARTHDAOC_GM_ONLY_COMMANDS-/tele;/tc}" \
-    --si-start-choice "${HEARTHDAOC_SI_START_CHOICE-on}" --bot-rp-timer-wait "${HEARTHDAOC_BOT_RP_TIMER_WAIT-on}"
+    --si-start-choice "${HEARTHDAOC_SI_START_CHOICE-on}" --bot-rp-timer-wait "${HEARTHDAOC_BOT_RP_TIMER_WAIT-on}" \
+    --bot-cpu "${HEARTHDAOC_BOT_CPU-off}"
 # Fixes to upstream's classic world data (Disciple enabled, Saracen Disciple start, HearthDAoC welcome
 # messages, and the fixes world_fixes.py lists: battlegrounds, epic chains, dialogue, mob fixes). A fix
 # that fails undoes itself and says so, and the start goes on. Their lines are also appended, under a line

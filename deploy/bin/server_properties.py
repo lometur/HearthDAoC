@@ -10,6 +10,10 @@ Shrouded Isles town.
 HEARTHDAOC_BOT_RP_TIMER_WAIT (on or off, case ignored) becomes the bot_rp_timer_wait property (True or
 False): a gamebot released after a death in RvR or a battleground then waits at a safe spot and comes back
 just as it is worth realm points again.
+HEARTHDAOC_BOT_CPU (on or off, case ignored) becomes the bot_cpu_meter property (True or False): the bot CPU
+meter then starts with the server, measures the game loop's CPU time per kind of bot and player and writes
+BOT_CPU lines to the server log every minute. The server reads it once, at start; a GM's /botcpu turns the
+meter on or off until the next start.
 Only writes a property when its value differs, and prints a line for each one it changed.
 """
 import argparse
@@ -39,6 +43,13 @@ RP_WAIT_KEY = "bot_rp_timer_wait"
 RP_WAIT_DESCRIPTION = ("Released gamebots wait at a safe spot until their trip back to the fight ends as their "
                        "rp_worth_seconds timer does, so they come back worth realm points")
 RP_WAIT_DEFAULT = "False"  # the code default (off), as the server itself writes it
+
+# Must match the server's [ServerProperty("server", "bot_cpu_meter", CPU_DESCRIPTION, false)] in
+# source/server/GameServer/scripts/hearthdaoc/BotCpuScript.cs (deploy/tests/test_bot_cpu.py checks).
+CPU_KEY = "bot_cpu_meter"
+CPU_DESCRIPTION = ("Measure the game loop's CPU time per kind of bot and player and write BOT_CPU lines to the server "
+                   "log every minute; a GM's /botcpu turns it on or off until the next start")
+CPU_DEFAULT = "False"  # the code default (off), as the server itself writes it
 
 
 class PropertyError(Exception):
@@ -72,6 +83,14 @@ def bot_rp_timer_wait_value(spec):
         raise PropertyError(f"HEARTHDAOC_BOT_RP_TIMER_WAIT must be on or off, got {spec!r}") from None
 
 
+def bot_cpu_value(spec):
+    """'on' -> 'True', 'off' -> 'False', in any case; anything else is refused."""
+    try:
+        return SI_VALUES[spec.lower()]
+    except KeyError:
+        raise PropertyError(f"HEARTHDAOC_BOT_CPU must be on or off, got {spec!r}") from None
+
+
 def set_property(db, key, value, category="server", description=OVERRIDES_DESCRIPTION, default=""):
     """Create or update a server property. Returns True when something changed.
 
@@ -101,11 +120,13 @@ def main(argv=None):
     ap.add_argument("--gm-only-commands", required=True, help='e.g. "/tele;/tc", or "none"')
     ap.add_argument("--si-start-choice", required=True, help="on or off (case ignored)")
     ap.add_argument("--bot-rp-timer-wait", required=True, help="on or off (case ignored)")
+    ap.add_argument("--bot-cpu", required=True, help="on or off (case ignored)")
     a = ap.parse_args(argv)
     try:  # check every setting before writing any
         overrides = gm_only_overrides(a.gm_only_commands)
         si_start = si_start_value(a.si_start_choice)
         rp_wait = bot_rp_timer_wait_value(a.bot_rp_timer_wait)
+        cpu = bot_cpu_value(a.bot_cpu)
     except PropertyError as e:
         print(f"ERROR: {e}", file=sys.stderr)
         return 2
@@ -115,6 +136,8 @@ def main(argv=None):
         print(f"Shrouded Isles start choice: {a.si_start_choice.lower()}")
     if set_property(a.db, RP_WAIT_KEY, rp_wait, description=RP_WAIT_DESCRIPTION, default=RP_WAIT_DEFAULT):
         print(f"Bot realm point timer wait: {a.bot_rp_timer_wait.lower()}")
+    if set_property(a.db, CPU_KEY, cpu, description=CPU_DESCRIPTION, default=CPU_DEFAULT):
+        print(f"Bot CPU meter: {a.bot_cpu.lower()}")
     return 0
 
 
