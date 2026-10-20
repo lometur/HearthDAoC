@@ -276,7 +276,8 @@ SERVER_UNIT_TESTS = ("dotnet test source/server/Tests/Tests.csproj --nologo --fi
                      '|FullyQualifiedName~UT_QuestIndicators|FullyQualifiedName~UT_IndicatorSentStore'
                      '|FullyQualifiedName~UT_RpTimerWait|FullyQualifiedName~UT_RpTimerWaitScript'
                      '|FullyQualifiedName~UT_RelicPadAttackers'
-                     '|FullyQualifiedName~UT_QuestGrants"')
+                     '|FullyQualifiedName~UT_QuestGrants'
+                     '|FullyQualifiedName~UT_BotCpuMeter"')
 UNIT_TESTS = os.path.join(ROOT, "source", "server", "Tests", "UnitTests")
 
 
@@ -306,7 +307,8 @@ class ServerUnitTestWorkflowTests(unittest.TestCase):
                                  "UT_QuestIndicators", "UT_IndicatorSentStore",
                                  "UT_RpTimerWait", "UT_RpTimerWaitScript",
                                  "UT_RelicPadAttackers",
-                                 "UT_QuestGrants"])
+                                 "UT_QuestGrants",
+                                 "UT_BotCpuMeter"])
         for name in names:
             with open(os.path.join(UNIT_TESTS, name + ".cs"), encoding="utf-8") as f:
                 self.assertRegex(f.read(), rf"\n\s*public (sealed )?class {name}\n", name)  # upstream's are not sealed
