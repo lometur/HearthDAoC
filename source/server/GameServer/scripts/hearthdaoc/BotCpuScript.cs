@@ -213,8 +213,10 @@ public static class BotCpuScript
     /// no loop thread and threads listed at one end only. With loop threads read, no camp thread is 0: it starts with
     /// the first camp planning (CPP:52). The window a normal server stop writes has no loop thread: the server joins
     /// the game loop's threads and the camp thread before the stopped event (GameServer.cs:1013-1015), so its four are
-    /// <c>-</c>. A stop from the game loop's own error catch runs on the <c>GameLoop</c> thread, which then stays
-    /// listed: there they cover that thread alone, and the ended workers' CPU is in <c>offLoopCpuPct</c>.
+    /// <c>-</c>; so are those of a minute the timer closes between those joins and the event. A stop from the game
+    /// loop's own error catch runs on the <c>GameLoop</c> thread, which then stays listed: <c>loopThreadsCpuPct</c> and
+    /// <c>loopWaitMs</c> cover that thread alone, <c>campThreadCpuPct</c> is 0, and the ended workers' and camp
+    /// thread's CPU is in <c>offLoopCpuPct</c>.
     /// </summary>
     public static BotCpuProcess ProcessWindow(BotCpuProcessSample earlier, BotCpuProcessSample later, double seconds)
     {

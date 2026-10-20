@@ -23,11 +23,13 @@ sensible numbers every minute, the same in the log, in chat and in the CSV (chec
 and it turns off by command, by its timer and at a server stop, and on at start from `.env` (checks 8-9). Check 10
 collects the numbers #137 needs.
 
-Before this release the meter ran on a test server with about 250 GameBots, where the `gamebot`, `monster`,
-`unattributed`, `BOT_CPU_TOP` and `BOT_CPU_PROCESS` lines, the CSV and the start and stop behaved as this guide says.
-No game client logged in there, so the `player` line, `BOT_CPU_COMPARE` and the in-game `/botcpu` replies have passed
-only the automated tests: checks 2, 3, 5 and 8 are their first real run. If something looks off there, treat it as a
-possible bug and post it on #137.
+Before this release the meter ran on a test server: on from its setting at start, first with no bots, then while
+about 250 GameBots logged in, and stopped from outside. There the `gamebot`, `monster`, `unattributed`,
+`BOT_CPU_TOP` and `BOT_CPU_PROCESS` lines, the CSV, the on line at start and the off line at the stop came out as this
+guide says. No game client logged in there, and the GameBots never settled with the meter off, so the `player` line,
+`BOT_CPU_COMPARE`, the in-game `/botcpu` replies, its timer and the overhead comparison have passed only the automated
+tests: checks 2, 3, 5, 7, 8 and 9 are their first real run. If something looks off there, treat it as a possible bug
+and post it on #137.
 
 | Check | What it proves | Pass | Fail |
 |---|---|---|---|
@@ -45,8 +47,9 @@ possible bug and post it on #137.
 ## Before you start
 
 - **Measure on a settled server.** After any start (`./hdc update`, `./hdc up`), wait until `./hdc status` says
-  running (healthy), then 25 minutes more. The GameBots log in over the first 15 minutes (only a third are in after
-  5), so `gamebot` `n` is low before that, and check 7 needs the next 10 settled minutes with the meter off.
+  running (healthy), then 30 minutes more. The GameBots log in over the first 15 minutes (only a third are in after
+  5) and settle by 20 (the spec's section 7), so `gamebot` `n` is low before that, and check 7 needs the next 10
+  minutes with the meter off.
 - **The meter's faults.** This prints nothing while all is well:
 
   ```bash
@@ -103,14 +106,14 @@ docker exec hearthdaoc-server sh -c 'cat $(ls -tr /data/logs/server*)' | grep BO
 The third shows today's start loading `/botcpu` for GMs (`required plvl:2`): the new release is running. The fourth
 prints nothing: it leaves out that line, which names the BOT_CPU lines in its description.
 
-`SERVER_WORK` as before: 25 minutes after the start, run check 7's command on the 10 minutes before the update and on
+`SERVER_WORK` as before: 30 minutes after the start, run check 7's command on the 10 minutes before the update and on
 the last 10 minutes. Pass if `samples` is about 1,800 a minute in both and `overBudget` is no higher.
 
 Result:
 
 ### 2. Turn it on in game
 
-At least 25 minutes after the server is up (see "Before you start"). Spend the last 10 of them where you will be while
+At least 30 minutes after the server is up (see "Before you start"). Spend the last 10 of them where you will be while
 the meter is on (logged out, or in the same quiet spot): check 7 compares those minutes with the meter's.
 
 In game, as GM: `/botcpu` says "Bot CPU meter: off. /botcpu on [minutes] turns it on." Then `/botcpu on 30`, which
@@ -145,10 +148,10 @@ On the `BOT_CPU_PROCESS` lines, usually `chargedPct` < `loopThreadsCpuPct` < `pr
 fail. If `chargedPct` is higher, `loopWaitMs`, `throttledMs` or `gcPauseMs` is large too: the wall times are inflated
 (the spec's section 3.9). `gamebot` `msSec` / 10 is its share of one core in %. `loopThreadsCpuPct` as `-` on the
 minutes of a running server means the kernel gives no scheduler statistics (3.9): say so on #137. After a normal stop
-(`./hdc stop`, `./hdc up`, `./hdc update`, `/shutdown`), the window the stop writes has `-` there, as the loop's
-threads have ended: that is not a fault. It is the one with a `win=` under 60 just before `BOT_CPU_STATE off
-source=stop`. A stop within 5 s of a minute's lines writes none: the lines before the off line are then the last full
-minute (`win=60`), with numbers.
+(`./hdc stop`, `./hdc up`, `./hdc update`, `/shutdown`), the block just before `BOT_CPU_STATE off source=stop` can
+have `-` there, as the loop's threads have ended: that is not a fault, whatever its `win=`. It is usually the
+part-minute the stop writes (`win=` under 60), but `win=60` or `61` when the stop came as a minute ended; a stop
+within 5 s of a minute's lines writes no part-minute.
 
 Confirm a large `gcPauseMs` with the `SERVER_GC_PAUSE` lines of the same minutes. Those lines list only pauses of
 250 ms or more; shorter pauses add up in the `pauseTotalMs` of the `SERVER_MEMORY` line that covers them (every 5
@@ -245,8 +248,8 @@ docker exec hearthdaoc-server sh -c 'cat $(ls -tr /data/logs/server*)' | grep BO
 
 `gamebot` `n` is low again for the first 15 minutes after this start. `/botcpu off` stops it until the next start. Set
 it back to `HEARTHDAOC_BOT_CPU=off` and `./hdc up`: the start output says "Bot CPU meter: off". If the meter was still
-on, the stop ends with `BOT_CPU_STATE off source=stop`, after a last short window with `-` for the four thread values
-(check 4).
+on, the stop ends with `BOT_CPU_STATE off source=stop`; the block just before it can have `-` for the four thread
+values (check 4).
 
 Result:
 

@@ -652,11 +652,14 @@ window's 60 s closes the window.
   they are not, the absolute numbers are high, but both kinds run in the same batches at the same moments, so the
   ratio between them holds (est., cpu §4.6).
 - Threads are re-listed every minute; a thread that left between two reads is dropped from that window, and a
-  negative difference counts as 0. So the window a normal server stop writes (`win=` under 60, just before
-  `BOT_CPU_STATE off source=stop`; none when the stop comes within 5 s of a minute's lines) has `-` for
-  `loopThreadsCpuPct`, `offLoopCpuPct`, `campThreadCpuPct` and `loopWaitMs`: the server joins the game loop's threads
-  and the camp thread before its stopped event (`GameServer.cs:1013-1015`). A stop from the game loop's own error catch
-  (`GameLoop.cs:102`) runs on the `GameLoop` thread, which stays listed: there they cover that thread alone.
+  negative difference counts as 0. So after a normal server stop, the block just before
+  `BOT_CPU_STATE off source=stop` can have `-` for `loopThreadsCpuPct`, `offLoopCpuPct`, `campThreadCpuPct` and
+  `loopWaitMs`: the server joins the game loop's threads and the camp thread before its stopped event
+  (`GameServer.cs:1013-1015`). That block is usually the part-minute the stop writes (`win=` under 60), but `win=60` or
+  `61` when the stop came as a minute ended; a stop within 5 s of a minute's lines writes no part-minute. A stop from
+  the game loop's own error catch (`GameLoop.cs:102`) runs on the `GameLoop` thread, which stays listed:
+  `loopThreadsCpuPct` and `loopWaitMs` cover that thread alone, `campThreadCpuPct` is 0 (the camp thread was joined),
+  and the ended workers' and camp thread's CPU is in `offLoopCpuPct`.
 - **A schedstat that says nothing.** Where the kernel keeps no scheduler statistics, the file still exists and reads
   `0 0 0` (est.). A first field of 0 for a running loop thread therefore counts as unavailable: `loopThreadsCpuPct`,
   `offLoopCpuPct`, `campThreadCpuPct` and `loopWaitMs` are then `-`, not 0.
@@ -1003,8 +1006,8 @@ deploy tests are found on their own (`.github/workflows/server-image.yml:94`).
    the row is new): `docker logs hearthdaoc-server 2>&1 | grep "Bot CPU meter"`. The server log has no line of the
    meter: the only `BOT_CPU` match is the start's `Command - '&botcpu'` line, which names the BOT_CPU lines in its
    description (leave it out with `grep -v`). `SERVER_WORK` looks as before.
-2. At least 25 minutes after the server is up (`./hdc status`: running (healthy)): the GameBots log in over the first
-   15 minutes (section 7), and check 7 needs the next 10 settled minutes with the meter off. In game, as GM:
+2. At least 30 minutes after the server is up (`./hdc status`: running (healthy)): the GameBots log in over the first
+   15 minutes and settle by 20 (section 7), and check 7 needs the next 10 minutes with the meter off. In game, as GM:
    `/botcpu` says "Bot CPU meter: off. /botcpu on [minutes] turns it on." Then `/botcpu on 30`. To keep your
    character from waking monsters and speeding up GameBots near you (section 7), go somewhere quiet, or go to the
    character screen or quit the game: both take you out of `player` (3.8). Quit from the game's menu: a client that is
