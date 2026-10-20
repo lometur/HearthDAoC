@@ -11,6 +11,7 @@ using System.Threading;
 using DOL.Database;
 using DOL.Events;
 using DOL.GS.HearthDAoC;
+using DOL.GS.PacketHandler;
 using DOL.GS.PlayerClass;
 using DOL.GS.ServerProperties;
 using DOL.GS.ServerRules;
@@ -26,7 +27,9 @@ namespace DOL.GS.Tests;
 // files, and appends the CSV (2.3), tested in a folder of each test's own. Then the report side (3.7, 3.8, 4.1, 4.3):
 // a command only turns the meter off or queues a job; the jobs, the 1-second timer's ticks and the server's started and
 // stopped handlers run one at a time under the report lock, write each window once and never let an exception out.
-// The tests hold the queued work items, tick a timer of their own and move a clock of their own (test hooks).
+// The tests hold the queued work items, tick a timer of their own and move a clock of their own (test hooks). Last, the
+// GM's /botcpu (2.4): its attribute, its replies from the result the report published, the arguments it refuses in any
+// state, and its changes, which only turn the meter off or queue a job.
 [TestFixture, NonParallelizable]
 public sealed class UT_BotCpuScript
 {
@@ -2589,5 +2592,497 @@ public sealed class UT_BotCpuScript
 
         Assert.That(Logged(), Is.EqualTo(new[] { OnLine, "BOT_CPU_PROCESS win=10", OffLine }));
         AssertOff();
+    }
+
+    // ---- /botcpu (2.4, 3.7, 6.1)
+
+    // The command's description and syntax lines (2.4), which a GM sees for arguments it refuses.
+    private const string CommandDescription =
+        "HearthDAoC: measure the game loop's CPU per kind of bot (BOT_CPU lines in the server log)";
+
+    private static readonly string[] CommandUsage =
+    [
+        "/botcpu - status, the last minute and the totals since on",
+        "/botcpu on [minutes] - start, for 1-1440 minutes, or until off or the next start",
+        "/botcpu off - stop and write the last partial minute",
+        "/botcpu top [gamebot|companion|playerbot|piloted] - the 5 costliest bots of the last minute " +
+        "(gamebot if none given)",
+        "/botcpu reset - start the totals since on again",
+    ];
+
+    private const string OffStatus = "Bot CPU meter: off. /botcpu on [minutes] turns it on.";
+    private const string WhereTheLinesGo = ": BOT_CPU lines every minute in the server log, rows in logs/bot-cpu.csv.";
+
+    // /botcpu with these words after it, typed by the GM: its reply's lines, or null for the syntax lines.
+    private static IReadOnlyList<string> BotCpu(string words = "") =>
+        BotCpuCommandHandler.Run(Gm, words.Length == 0 ? ["&botcpu"] : ["&botcpu", .. words.Split(' ')]);
+
+    [Test]
+    public void BotCpuIsAGmCommandWithTheSpecsAttribute()
+    {
+        // 2.4: &botcpu, for GMs, with no alias, found by ScriptMgr as a command handler of the GameServer assembly.
+        Type handler = typeof(BotCpuCommandHandler);
+        CmdAttribute[] attributes = handler.GetCustomAttributes<CmdAttribute>(false).ToArray();
+        Assert.That(attributes, Has.Length.EqualTo(1));
+        Assert.That(attributes[0].Cmd, Is.EqualTo("&botcpu"));
+        Assert.That(attributes[0].Aliases, Is.Null);
+        Assert.That(attributes[0].Header, Is.Null);
+        Assert.That(attributes[0].Level, Is.EqualTo((uint)ePrivLevel.GM));
+        Assert.That(attributes[0].Description, Is.EqualTo(CommandDescription));
+        Assert.That(attributes[0].Usage, Is.EqualTo(CommandUsage));
+        Assert.That(handler.GetInterface("DOL.GS.Commands.ICommandHandler"), Is.Not.Null);
+        Assert.That(handler.Assembly, Is.SameAs(typeof(GameServer).Assembly));
+    }
+
+    [Test]
+    public void BotCpuIsTheOnlyCommandNameThatStartsWithBot()
+    {
+        // 2.4: a command resolves its exact name first, then the one command the caller may use whose name or alias
+        // starts with what was typed, in any case (ScriptMgr.GuessCommand). /bot is not registered (section 1), so a
+        // GM's /bot runs /botcpu: on purpose, as long as no other command name or alias starts with &bot.
+        string[] names = typeof(GameServer).Assembly.GetTypes()
+            .SelectMany(type => type.GetCustomAttributes<CmdAttribute>(false))
+            .SelectMany(attribute => new[] { attribute.Cmd }.Concat(attribute.Aliases ?? []))
+            .Where(name => name.StartsWith("&bot", StringComparison.OrdinalIgnoreCase))
+            .ToArray();
+
+        Assert.That(names, Is.EqualTo(new[] { "&botcpu" }));
+    }
+
+    [Test]
+    public void BotCpuOffTurnsTheMeterOffAndQueuesOneJobBeforeAnyFileProcReadOrLogWrite()
+    {
+        // 6.1, 3.7: on its game-loop thread the command only turns the meter off and queues the job; its reply comes
+        // from the published result, 37 s into the open window.
+        Population(3);
+        TurnOn();
+        Charge(Slot(), Gamebot, Npc, 111, 3_330);
+        Seconds(37);
+        lock (_logs)
+            _logs.Clear();
+        // A /proc read would throw here: the process sample has no folder to read.
+        ProcSelfHook.SetValue(null, null);
+
+        IReadOnlyList<string> reply = BotCpu("off");
+
+        Assert.That(reply, Is.EqualTo(new[] { "Bot CPU meter off. The last 37 s are being written." }));
+        Assert.That(BotCpuMeter.Enabled, Is.False);
+        Assert.That(_queued, Has.Count.EqualTo(1));
+        Assert.That(QueuedJobs, Is.EqualTo(1));
+        Assert.That(Logged(), Is.Empty);
+        Assert.That(File.Exists(Csv), Is.False);
+        Assert.That(BotCpuScript.Result.On, Is.True, "the report has not run the job yet");
+
+        // The job, on the report side: the last 37 s, then the GM's off line.
+        ProcSelfHook.SetValue(null, _procSelf);
+        RunQueued();
+        Assert.That(Logged(), Is.EqualTo(new[]
+            { GamebotLine(37, "3.0", "1.000", "30.0"), "BOT_CPU_PROCESS win=37", OffLine }));
+        AssertOff();
+    }
+
+    [Test]
+    public void BotCpuOnLeavesEnabledAsItIsAndQueuesOneJobBeforeAnyFileProcReadOrLogWrite()
+    {
+        // 6.1, 3.7: Enabled goes true only in the on job, on the report side.
+        ProcSelfHook.SetValue(null, null);
+
+        IReadOnlyList<string> reply = BotCpu("on 30");
+
+        Assert.That(reply, Is.EqualTo(new[] { "Bot CPU meter on for 30 minutes (until 14:32)" + WhereTheLinesGo }));
+        Assert.That(BotCpuMeter.Enabled, Is.False);
+        Assert.That(_queued, Has.Count.EqualTo(1));
+        Assert.That(QueuedJobs, Is.EqualTo(1));
+        Assert.That(Logged(), Is.Empty);
+        Assert.That(File.Exists(Csv), Is.False);
+        Assert.That(_timers, Is.Empty);
+
+        ProcSelfHook.SetValue(null, _procSelf);
+        RunQueued();
+        Assert.That(BotCpuMeter.Enabled, Is.True);
+        Assert.That(Logged(), Is.EqualTo(new[] { "BOT_CPU_STATE on source=command by=Aldwin minutes=30" }));
+
+        // On a running meter: Enabled stays true, one job queued, still before any file, /proc read or log write.
+        Seconds(10);
+        ProcSelfHook.SetValue(null, null);
+        reply = BotCpu("on");
+        Assert.That(reply,
+            Is.EqualTo(new[] { "Bot CPU meter already on; it now runs until /botcpu off or the next start." }));
+        Assert.That(BotCpuMeter.Enabled, Is.True);
+        Assert.That(_queued, Has.Count.EqualTo(1));
+        Assert.That(QueuedJobs, Is.EqualTo(1));
+        Assert.That(Logged(), Has.Count.EqualTo(1));
+
+        ProcSelfHook.SetValue(null, _procSelf);
+        RunQueued();
+        Assert.That(Logged()[^1], Is.EqualTo(OnLine));
+        Assert.That(BotCpuScript.Result.StopsAt, Is.Null);
+    }
+
+    [Test]
+    public void BotCpuShowsTheStatusOfThePublishedResult()
+    {
+        // 2.4: off; on with no window yet; on with a window, the status line, the last minute, its kind lines and the
+        // totals since on, made by BotCpuReport from the result the report published. None queues a job.
+        Assert.That(BotCpu(), Is.EqualTo(new[] { OffStatus }));
+
+        Population(3);
+        TurnOn(30);
+        Assert.That(BotCpu(), Is.EqualTo(new[]
+        {
+            "Bot CPU meter: on since 14:02 (by command, 0 min; stops at 14:32).",
+            "No full minute yet; the first lines come at 14:03.",
+        }));
+
+        Charge(Slot(), Gamebot, Npc, 180, 5_400);
+        Seconds(60);
+        Advance(30);
+        IReadOnlyList<string> status = BotCpu();
+        BotCpuResult result = BotCpuScript.Result;
+        Assert.That(status, Is.EqualTo(BotCpuReport.StatusText(result.OnSince, result.ByCommand, result.StopsAt,
+            At(14, 3, 30), result.Last, result.LastProcess, result.Since)));
+        Assert.That(status, Has.Count.EqualTo(4));
+        Assert.That(status[0], Is.EqualTo("Bot CPU meter: on since 14:02 (by command, 1 min; stops at 14:32)."));
+        // The process values are the test process's own; it has no loop threads, so its off-the-loop share is -.
+        Assert.That(status[1],
+            Does.StartWith("Last minute (60 s, 30.0 ticks/s): process ").And.EndWith(" off the loop."));
+        Assert.That(status[2], Is.EqualTo("gamebot n=3.0: 1.000 ms/s per bot (3.0 ms/s in all); most in Npc 1.000"));
+        Assert.That(status[3], Is.EqualTo("Since on (1 min): gamebot 1.000 ms/s per bot."));
+        Assert.That(_queued, Is.Empty);
+        Assert.That(QueuedJobs, Is.EqualTo(0));
+
+        BotCpu("off");
+        RunQueued();
+        Assert.That(BotCpu(), Is.EqualTo(new[] { OffStatus }));
+    }
+
+    [Test]
+    public void BotCpuShowsARunThePropertyStartedAsByPropertyWithNoStopTime()
+    {
+        // 2.4: the status line's other variants, through the command: by property, no stop time.
+        BotCpuScript.BOT_CPU_METER = true;
+        BotCpuScript.OnServerStarted(null, null, EventArgs.Empty);
+
+        Assert.That(BotCpu(), Is.EqualTo(new[]
+        {
+            "Bot CPU meter: on since 14:02 (by property, 0 min; no stop time).",
+            "No full minute yet; the first lines come at 14:03.",
+        }));
+        Assert.That(QueuedJobs, Is.EqualTo(0));
+    }
+
+    [Test]
+    public void BotCpuOnRepliesWithItsStopTimeOrNone()
+    {
+        // 2.4: on and on <minutes>, with the meter off, then on.
+        Assert.That(BotCpu("on"),
+            Is.EqualTo(new[] { "Bot CPU meter on until /botcpu off or the next start" + WhereTheLinesGo }));
+        RunQueued();
+        Seconds(10);
+        Assert.That(BotCpu("on 30"), Is.EqualTo(new[] { "Bot CPU meter already on; it now stops at 14:32." }));
+        RunQueued();
+        Assert.That(BotCpu("on"),
+            Is.EqualTo(new[] { "Bot CPU meter already on; it now runs until /botcpu off or the next start." }));
+        RunQueued();
+        Assert.That(Logged(),
+            Is.EqualTo(new[] { OnLine, "BOT_CPU_STATE on source=command by=Aldwin minutes=30", OnLine }));
+
+        BotCpu("off");
+        RunQueued();
+        Assert.That(BotCpu("on 30"),
+            Is.EqualTo(new[] { "Bot CPU meter on for 30 minutes (until 14:32)" + WhereTheLinesGo }));
+    }
+
+    [TestCase("on 1", "Bot CPU meter on for 1 minute (until 14:03)", "1")]
+    [TestCase("on 1440", "Bot CPU meter on for 1440 minutes (until 14:02)", "1440")]
+    public void TheMinutesRunFromOneToADay(string words, string reply, string minutes)
+    {
+        // 2.4: 1-1440 minutes; 1440 stops at the same time the next day.
+        Assert.That(BotCpu(words), Is.EqualTo(new[] { reply + WhereTheLinesGo }));
+        RunQueued();
+        Assert.That(Logged(), Is.EqualTo(new[] { "BOT_CPU_STATE on source=command by=Aldwin minutes=" + minutes }));
+        Assert.That(BotCpuScript.Result.StopsAt, Is.EqualTo(At(14, 2, 0).AddMinutes(int.Parse(minutes))));
+    }
+
+    [TestCase(37, "Bot CPU meter off. The last 37 s are being written.")]
+    [TestCase(3, "Bot CPU meter off. The last 3 s were too short to write.")]
+    public void BotCpuOffRepliesWithTheLastSecondsOrThatItIsAlreadyOff(int seconds, string reply)
+    {
+        // 2.4, 2.2: the open window's seconds, written from 5 s; then, off, a second off changes nothing.
+        TurnOn();
+        Seconds(seconds);
+
+        Assert.That(BotCpu("off"), Is.EqualTo(new[] { reply }));
+        RunQueued();
+        AssertOff();
+
+        Assert.That(BotCpu("off"), Is.EqualTo(new[] { "Bot CPU meter is already off." }));
+        RunQueued();
+        Assert.That(Logged().Count(line => line.StartsWith("BOT_CPU_STATE ", StringComparison.Ordinal)),
+            Is.EqualTo(2));
+        Assert.That(Logged()[^1], Is.EqualTo(OffLine));
+        AssertOff();
+    }
+
+    [Test]
+    public void BotCpuOffRightAfterOnIsStillQueuedAndEndsOff()
+    {
+        // 3.7: on then off ends off. The on job has not run, so the published result is still off and the reply says
+        // so; the off is queued all the same, after the on, and its job closes the run the on job opens.
+        Assert.That(BotCpu("on 30"),
+            Is.EqualTo(new[] { "Bot CPU meter on for 30 minutes (until 14:32)" + WhereTheLinesGo }));
+
+        Assert.That(BotCpu("off"), Is.EqualTo(new[] { "Bot CPU meter is already off." }));
+        Assert.That(BotCpuMeter.Enabled, Is.False);
+        Assert.That(QueuedJobs, Is.EqualTo(2));
+
+        RunQueued();
+        Assert.That(Logged(), Is.EqualTo(new[] { "BOT_CPU_STATE on source=command by=Aldwin minutes=30", OffLine }));
+        AssertOff();
+    }
+
+    [Test]
+    public void BotCpuTopListsTheLastMinutesCostliestBotsOfABotKind()
+    {
+        // 2.4: off, the off text; on with no window yet, when the first lines come; then the top of the last window,
+        // for gamebot when no kind is given, or that no bot of the kind was charged. None queues a job.
+        Assert.That(BotCpu("top"), Is.EqualTo(new[] { OffStatus }));
+
+        Population(2);
+        TurnOn();
+        Assert.That(BotCpu("top companion"),
+            Is.EqualTo(new[] { "No full minute yet; the first lines come at 14:03." }));
+
+        GameBot aldric = Bot("Aldric");
+        typeof(GameBot).GetField("<PersistentRecord>k__BackingField", Hidden)!.SetValue(aldric,
+            new OfflineWorldBotRecord { ObjectiveKind = "Rvr", Activity = "Guarding Caer Benowyc" });
+        PutInRegion(aldric, 163);
+        GameBot brennos = Bot("Brennos");
+        ChargeBot(aldric, 90, 1_800);
+        ChargeBot(brennos, 60, 1_800);
+        Seconds(60);
+
+        string[] gamebots =
+        [
+            "1. Aldric (34 Cleric, region 163): 1.500 ms/s, 30 calls/s, Rvr, \"Guarding Caer Benowyc\"",
+            "2. Brennos (34 Cleric, region 0): 1.000 ms/s, 30 calls/s, -, \"\"",
+        ];
+        Assert.That(BotCpu("top"), Is.EqualTo(gamebots));
+        Assert.That(BotCpu("top gamebot"), Is.EqualTo(gamebots));
+        foreach (string kind in new[] { "companion", "playerbot", "piloted" })
+            Assert.That(BotCpu("top " + kind), Is.EqualTo(new[] { $"No {kind} was charged in the last minute." }));
+        Assert.That(_queued, Is.Empty);
+        Assert.That(QueuedJobs, Is.EqualTo(0));
+
+        BotCpu("off");
+        RunQueued();
+        Assert.That(BotCpu("top"), Is.EqualTo(new[] { OffStatus }));
+        GC.KeepAlive(new[] { aldric, brennos });
+    }
+
+    [Test]
+    public void BotCpuResetStartsTheTotalsAgainOnlyWhileOn()
+    {
+        // 2.4: off, the off text and no job; on, the totals since on start again in the job.
+        Assert.That(BotCpu("reset"), Is.EqualTo(new[] { OffStatus }));
+        Assert.That(_queued, Is.Empty);
+        Assert.That(QueuedJobs, Is.EqualTo(0));
+
+        TurnOn();
+        Assert.That(BotCpu("reset"), Is.EqualTo(new[] { "Bot CPU totals reset." }));
+        Assert.That(QueuedJobs, Is.EqualTo(1));
+        Assert.That(BotCpuScript.Result.Since.Reset, Is.False, "the report has not run the job yet");
+        RunQueued();
+        Assert.That(BotCpuScript.Result.Since.Reset, Is.True);
+        Assert.That(BotCpuMeter.Enabled, Is.True);
+    }
+
+    [TestCase("x")]
+    [TestCase("on 0")]
+    [TestCase("on 1441")]
+    [TestCase("on x")]
+    [TestCase("on -5")]
+    [TestCase("on 30 x")]
+    [TestCase("off now")]
+    [TestCase("top monster")]
+    [TestCase("top player")]
+    [TestCase("top unattributed")]
+    [TestCase("top x")]
+    [TestCase("top gamebot x")]
+    [TestCase("reset x")]
+    public void RefusedArgumentsGetTheSyntaxLinesAndChangeNothing(string words)
+    {
+        // 2.4: anything else, a kind that is not a bot kind, minutes out of range: the syntax lines, the meter off or
+        // on, with nothing turned off and no job queued.
+        Assert.That(BotCpu(words), Is.Null);
+        Assert.That(_queued, Is.Empty);
+        Assert.That(QueuedJobs, Is.EqualTo(0));
+
+        Population(3);
+        TurnOn(30);
+        Seconds(60);
+        List<string> logged = Logged();
+        Assert.That(BotCpu(words), Is.Null);
+        Assert.That(_queued, Is.Empty);
+        Assert.That(QueuedJobs, Is.EqualTo(0));
+        Assert.That(BotCpuMeter.Enabled, Is.True);
+        Assert.That(BotCpuScript.Result.StopsAt, Is.EqualTo(At(14, 32, 0)));
+        Assert.That(Logged(), Is.EqualTo(logged));
+    }
+
+    [TestCase("ON 30")]
+    [TestCase("On 30")]
+    public void OnInAnotherCaseIsAccepted(string words)
+    {
+        // Review Focus 1: case is ignored, as HEARTHDAOC_BOT_CPU ignores it.
+        Assert.That(BotCpu(words),
+            Is.EqualTo(new[] { "Bot CPU meter on for 30 minutes (until 14:32)" + WhereTheLinesGo }));
+        RunQueued();
+        Assert.That(Logged(), Is.EqualTo(new[] { "BOT_CPU_STATE on source=command by=Aldwin minutes=30" }));
+        Assert.That(BotCpu("Reset"), Is.EqualTo(new[] { "Bot CPU totals reset." }));
+        Assert.That(BotCpu("OFF"), Is.EqualTo(new[] { "Bot CPU meter off. The last 0 s were too short to write." }));
+        RunQueued();
+        AssertOff();
+    }
+
+    [TestCase("top GameBot")]
+    [TestCase("TOP GAMEBOT")]
+    [TestCase("Top gamebot")]
+    public void ATopKindInAnotherCaseIsAccepted(string words)
+    {
+        // Review Focus 1: case is ignored, as HEARTHDAOC_BOT_CPU ignores it.
+        Population(1);
+        TurnOn();
+        GameBot aldric = Bot("Aldric");
+        ChargeBot(aldric, 90, 1_800);
+        Seconds(60);
+
+        Assert.That(BotCpu(words),
+            Is.EqualTo(new[] { "1. Aldric (34 Cleric, region 0): 1.500 ms/s, 30 calls/s, -, \"\"" }));
+        Assert.That(BotCpu("top Companion"), Is.EqualTo(new[] { "No companion was charged in the last minute." }));
+        GC.KeepAlive(aldric);
+    }
+
+    [Test]
+    public void TheRepliesSpeakOfTheStateBeforeTheirJobRuns()
+    {
+        // 3.7: a command's job can run on the thread pool before the command replies. Here each job runs inside its
+        // queueing: on still says the meter was off, and off gives the last seconds of the run it ends.
+        QueueHook.SetValue(null, (Action<WaitCallback>)(work => work(null)));
+
+        Assert.That(BotCpu("on 30"),
+            Is.EqualTo(new[] { "Bot CPU meter on for 30 minutes (until 14:32)" + WhereTheLinesGo }));
+        Assert.That(BotCpuScript.Result.On, Is.True);
+        Seconds(37);
+        Assert.That(BotCpu("off"), Is.EqualTo(new[] { "Bot CPU meter off. The last 37 s are being written." }));
+        AssertOff();
+    }
+
+    [Test]
+    public void NoBotCpuReplyWaitsForTheReportLock()
+    {
+        // 2.4, 3.7: the command never builds a report: it reads the result the report published and, for a change,
+        // queues a job. With the report lock held by another thread, each reply comes at once.
+        Population(3);
+        TurnOn();
+        Seconds(60);
+        object reportLock = ReportLockField.GetValue(null);
+        using ManualResetEventSlim held = new();
+        using ManualResetEventSlim release = new();
+        Thread holder = new(() =>
+        {
+            lock (reportLock)
+            {
+                held.Set();
+                release.Wait();
+            }
+        });
+        holder.Start();
+        held.Wait();
+        List<string> waited = [];
+        foreach (string words in new[] { "", "top", "top companion", "reset", "on 30", "on", "off", "x" })
+        {
+            if (!ReturnsWithTheLockHeld(() => BotCpu(words)))
+                waited.Add(words);
+        }
+
+        release.Set();
+        holder.Join();
+
+        Assert.That(waited, Is.Empty);
+        Assert.That(QueuedJobs, Is.EqualTo(4));
+        RunQueued();
+        AssertOff();
+    }
+
+    // A GM's chat: each line the server sends the client.
+    public class ChatRecorder : DispatchProxy
+    {
+        public readonly List<string> Lines = [];
+
+        protected override object Invoke(MethodInfo method, object[] args)
+        {
+            if (method.Name == nameof(IPacketLib.SendMessage))
+                Lines.Add((string)args[0]);
+            return method.ReturnType.IsValueType && method.ReturnType != typeof(void)
+                ? Activator.CreateInstance(method.ReturnType)
+                : null;
+        }
+    }
+
+    // A GM in game, the test's Gm, made without the constructors, whose chat the test reads.
+    private static GameClient GmClient(out ChatRecorder chat)
+    {
+        GamePlayer gm = (GamePlayer)RuntimeHelpers.GetUninitializedObject(typeof(GamePlayer));
+        typeof(GameObject).GetField("m_name", Hidden)!.SetValue(gm, Gm);
+        GameClient client = (GameClient)RuntimeHelpers.GetUninitializedObject(typeof(GameClient));
+        typeof(GameClient).GetField("<ClientState>k__BackingField", Hidden)!
+            .SetValue(client, GameClient.eClientState.Playing);
+        typeof(GameClient).GetField("<Player>k__BackingField", Hidden)!.SetValue(client, gm);
+        client.Out = DispatchProxy.Create<IPacketLib, ChatRecorder>();
+        chat = (ChatRecorder)client.Out;
+        return client;
+    }
+
+    [Test]
+    public void TheCommandSendsItsReplyAsItIsOrTheSyntaxLinesToTheGm()
+    {
+        // 2.4: the handler sends the reply's lines, with the GM's character as by=, or the attribute's syntax lines
+        // for arguments it refuses. The syntax lines go through LanguageMgr, which gives an untranslated line back as
+        // it is: the pet tests' language scope gives it no language files.
+        using var language = new DOL.UnitTests.PetTestLanguageScope();
+        GameClient client = GmClient(out ChatRecorder chat);
+        BotCpuCommandHandler handler = new();
+
+        handler.OnCommand(client, ["&botcpu", "on", "0"]);
+        Assert.That(chat.Lines, Is.EqualTo(new[] { CommandDescription }.Concat(CommandUsage)));
+        Assert.That(_queued, Is.Empty);
+
+        chat.Lines.Clear();
+        handler.OnCommand(client, ["&botcpu"]);
+        Assert.That(chat.Lines, Is.EqualTo(new[] { OffStatus }));
+
+        // A change, with the GM's character as by=. ScriptMgr puts the registered name first whatever was typed
+        // (gameutils/ScriptMgr.cs:373), so a GM's /bot reaches the handler as this; that /bot resolves to /botcpu
+        // (2.4) is BotCpuIsTheOnlyCommandNameThatStartsWithBot's.
+        chat.Lines.Clear();
+        handler.OnCommand(client, ["&botcpu", "on"]);
+        Assert.That(chat.Lines,
+            Is.EqualTo(new[] { "Bot CPU meter on until /botcpu off or the next start" + WhereTheLinesGo }));
+        RunQueued();
+        Assert.That(Logged(), Is.EqualTo(new[] { OnLine }));
+
+        // Sent as it is: a bot's activity holds braces, which a format would take for its arguments.
+        Population(1);
+        GameBot aldric = Bot("Aldric");
+        typeof(GameBot).GetField("<PersistentRecord>k__BackingField", Hidden)!.SetValue(aldric,
+            new OfflineWorldBotRecord { ObjectiveKind = "Rvr", Activity = "Holding {0} at {the bridge}" });
+        ChargeBot(aldric, 90, 1_800);
+        Seconds(60);
+        chat.Lines.Clear();
+        handler.OnCommand(client, ["&botcpu", "top"]);
+        Assert.That(chat.Lines, Is.EqualTo(new[]
+            { "1. Aldric (34 Cleric, region 0): 1.500 ms/s, 30 calls/s, Rvr, \"Holding {0} at {the bridge}\"" }));
+        GC.KeepAlive(aldric);
     }
 }

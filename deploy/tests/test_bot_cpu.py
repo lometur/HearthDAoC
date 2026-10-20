@@ -8,7 +8,8 @@ files' line endings need the source, so these check it.
 
 The switch goes .env -> compose.yml -> entrypoint.sh -> server_properties.py -> the bot_cpu_meter server property,
 default off at every step (hdc update appends the new .env.example line to an existing .env); the server reads it once,
-at start (4.1, 4.2).
+at start (4.1, 4.2). The image's smoke test checks that a default start loads /botcpu for GMs only and leaves the
+meter off (6.3); its two lines are run here on sample server logs.
 """
 import os
 import re
@@ -357,6 +358,56 @@ class ServerDeclarationTests(unittest.TestCase):
         found = re.findall(r'\[ServerProperty\(\s*"([^"]*)",\s*"bot_cpu_meter",\s*"([^"]*)",\s*(\w+)\s*\)\]\s*'
                            r'public static bool BOT_CPU_METER;', source(SCRIPT_CS))
         self.assertEqual(found, [("server", sp.CPU_DESCRIPTION, "false")])
+
+
+# The server log's line for /botcpu at start (gameutils/ScriptMgr.cs:241, config/logconfig.xml:20): the command, the
+# attribute's description and the plvl.
+COMMAND_LOADED = ("10/20 14:02:00 | DBG | DOL.GS.ScriptMgr | ScriptMgr: Command - '&botcpu' - (HearthDAoC: measure the "
+                  "game loop's CPU per kind of bot (BOT_CPU lines in the server log)) required plvl:2")
+
+
+class SmokeTests(unittest.TestCase):
+    """deploy/tests/smoke.sh's checks of the meter after the image's first, default start (spec 6.3)."""
+
+    def smoke_lines(self):
+        """smoke.sh's lines that check the meter."""
+        return [line for line in read(os.path.join("tests", "smoke.sh")).splitlines()
+                if "&botcpu" in line or "BOT_CPU" in line]
+
+    def run_smoke_lines(self, log):
+        """The lines, with a fail() like smoke.sh's (no docker logs), on a copy of the server log that holds log:
+        (exit code, stderr)."""
+        with tempfile.TemporaryDirectory() as tmp:
+            with open(os.path.join(tmp, "server.log"), "w", encoding="utf-8") as f:
+                f.write(log)
+            script = "\n".join(["set -euo pipefail", 'fail() { echo "FAIL: $*" >&2; exit 1; }',
+                                f"T={shlex.quote(tmp)}", *self.smoke_lines(), ""])
+            r = subprocess.run(["bash", "-c", script], capture_output=True, text=True)
+            return r.returncode, r.stderr
+
+    def test_the_smoke_test_has_two_plain_grep_lines_after_epics(self):
+        # Plain grep -q lines on the server log smoke.sh copied, not logs_have calls or a loop:
+        # test_container_lines.py reads every logs_have string and smoke.sh's first loop as world-fix lines.
+        lines = self.smoke_lines()
+        self.assertEqual(len(lines), 2, lines)
+        for line in lines:
+            self.assertRegex(line, r'^(if )?grep -q "[^"]+" "\$T/server\.log"', line)
+            self.assertNotIn("logs_have", line)
+        smoke = read(os.path.join("tests", "smoke.sh"))
+        self.assertLess(smoke.index("grep -q \"Command - '&epic' .* required plvl:2\""), smoke.index(lines[0]))
+
+    def test_a_default_start_passes_with_botcpu_for_gms_and_no_state_line(self):
+        log = f"10/20 14:01:59 | INF | DOL.GS.GameServer | Starting\n{COMMAND_LOADED}\n"
+        self.assertEqual(self.run_smoke_lines(log), (0, ""))
+
+    def test_botcpu_missing_or_open_to_players_or_a_meter_on_fails(self):
+        for log in ("", COMMAND_LOADED.replace("plvl:2", "plvl:1") + "\n",
+                    COMMAND_LOADED + "\n10/20 14:02:05 | INF | DOL.GS.HearthDAoC.BotCpuScript | "
+                                     "BOT_CPU_STATE on source=property\n"):
+            with self.subTest(log=log):
+                code, stderr = self.run_smoke_lines(log)
+                self.assertEqual(code, 1, stderr)
+                self.assertTrue(stderr.startswith("FAIL: "), stderr)
 
 
 class EndingsTests(unittest.TestCase):
