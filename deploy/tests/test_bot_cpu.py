@@ -10,6 +10,10 @@ The switch goes .env -> compose.yml -> entrypoint.sh -> server_properties.py -> 
 default off at every step (hdc update appends the new .env.example line to an existing .env); the server reads it once,
 at start (4.1, 4.2). The image's smoke test checks that a default start loads /botcpu for GMs only and leaves the
 meter off (6.3); its two lines are run here on sample server logs.
+
+The record and the guides (8): the row in docs/fork/FORK.md, HANDOFF.md's Day-to-day paragraph and the owner's live
+checks (docs/fork/verification/bot-cpu-meter-live.md), whose reads of the meter's lines take every server log file,
+oldest first, line by line (6.2).
 """
 import os
 import re
@@ -33,7 +37,10 @@ from tests.test_server_properties import SCHEMA, row, run_cli  # noqa: E402
 GAME_SERVER = os.path.join(ROOT, "source", "server", "GameServer")
 FORK = os.path.join(GAME_SERVER, "scripts", "hearthdaoc")
 METER_CS = os.path.join(FORK, "BotCpuMeter.cs")
+REPORT_CS = os.path.join(FORK, "BotCpuReport.cs")
 SCRIPT_CS = os.path.join(FORK, "BotCpuScript.cs")
+COMMAND_CS = os.path.join(FORK, "BotCpuCommand.cs")
+UNIT_TESTS = os.path.join(ROOT, "source", "server", "Tests", "UnitTests")
 LOOP = os.path.join(GAME_SERVER, "Managers", "GameLoop")
 GL = os.path.join(LOOP, "GameLoop.cs")
 POOL = os.path.join(LOOP, "GameLoopThreadPool.cs")
@@ -433,6 +440,71 @@ class EndingsTests(unittest.TestCase):
         self.assertEqual(len(hooks), 3)
         for line in hooks:
             self.assertTrue(line.endswith(b"\r"), line)
+
+    def test_the_fork_files_are_lf_without_bom_or_tabs(self):
+        # The four new files, the three test files and this one (spec 5.1, 6.2), as test_rp_timer_wait.py's.
+        for path in (METER_CS, REPORT_CS, SCRIPT_CS, COMMAND_CS, os.path.join(UNIT_TESTS, "UT_BotCpuMeter.cs"),
+                     os.path.join(UNIT_TESTS, "UT_BotCpuReport.cs"), os.path.join(UNIT_TESTS, "UT_BotCpuScript.cs"),
+                     os.path.abspath(__file__)):
+            with self.subTest(path=path):
+                with open(path, "rb") as f:
+                    raw = f.read()
+                self.assertFalse(b"\r" in raw, "a CR")
+                self.assertFalse(raw.startswith(endings.BOM), "a BOM")
+                self.assertFalse(b"\t" in raw, "a tab")
+
+
+class GuideTests(unittest.TestCase):
+    """The record and the guides (spec 8)."""
+
+    HANDOFF = os.path.join(DEPLOY, "HANDOFF.md")
+    GUIDE = os.path.join(ROOT, "docs", "fork", "verification", "bot-cpu-meter-live.md")
+    FORK_MD = os.path.join(ROOT, "docs", "fork", "FORK.md")
+    # Every server log file, oldest first: the server starts a new one at midnight and at 100 MB and keeps 7 days
+    # (config/logconfig.xml), so a read of server.log alone loses the day's earlier lines (spec 2.2).
+    EVERY_LOG = "docker exec hearthdaoc-server sh -c 'cat $(ls -tr /data/logs/server*)'"
+
+    def test_every_read_of_the_meters_lines_takes_every_server_log_file(self):
+        # Line by line, not file by file as test_rp_timer_wait.py's: HANDOFF.md's start checks read server.log alone,
+        # which holds the last start's lines (6.2). A line that reads the server log names its files.
+        for path in (self.HANDOFF, self.GUIDE):
+            with self.subTest(path=path):
+                lines = source(path).splitlines()
+                reads = [line for line in lines if "BOT_CPU" in line and "/data/logs/server" in line]
+                self.assertTrue(reads, "no read of the meter's lines")
+                for line in reads:
+                    self.assertIn(self.EVERY_LOG, line)
+                self.assertEqual([line for line in lines if "BOT_CPU" in line and "/data/logs/server.log" in line], [])
+
+    def test_the_handoff_tells_how_to_use_the_meter_under_day_to_day(self):
+        # /botcpu, the read command of 2.2 and the CSV (spec 8).
+        day_to_day = between(source(self.HANDOFF), "## 6. Day-to-day", "## Rollback")
+        paragraph = between(day_to_day, "**Bot CPU meter.**", "\n\n")
+        for told in ("`/botcpu`", "`/botcpu on [minutes]`", "`/botcpu off`", "`/botcpu top", "`/botcpu reset`",
+                     self.EVERY_LOG + " | grep BOT_CPU | tail -40", "/data/logs/bot-cpu.csv"):
+            self.assertIn(told, paragraph)
+
+    def test_the_live_guide_has_the_ten_checks_of_the_spec_each_with_a_result(self):
+        # The owner's checks on the live server (spec 6.5), in its order, each with a line for the owner's result.
+        checks = re.split(r"^### (?=\d+\. )", source(self.GUIDE), flags=re.M)[1:]
+        self.assertEqual([check.split(".", 1)[0] for check in checks], [str(n) for n in range(1, 11)])
+        for check in checks:
+            with self.subTest(check=check.split("\n", 1)[0]):
+                self.assertRegex(check, r"(?m)^Result:")
+        # Check 3's read of the meter's lines and check 10's of the autosave lines, as 6.5 gives them.
+        self.assertIn(self.EVERY_LOG + " | grep BOT_CPU | tail -20", checks[2])
+        self.assertIn(self.EVERY_LOG + ' | grep -E "(players|autonomousBots): [0-9]+ in" | tail -6', checks[9])
+
+    def test_fork_md_records_the_meter_after_the_realm_point_waits(self):
+        # The four new files, the five marked lines in GL and NS, and the tests (spec 8), for upstream syncs.
+        rows = [line for line in source(self.FORK_MD).splitlines() if line.startswith("| ")]
+        waits = next(n for n, line in enumerate(rows) if line.startswith("| Gamebots come back worth realm points"))
+        meter = rows[waits + 1]
+        files = [f"`GameServer/scripts/hearthdaoc/BotCpu{n}.cs`" for n in ("Meter", "Report", "Script", "Command")]
+        files += [f"`Tests/UnitTests/UT_BotCpu{n}.cs`" for n in ("Meter", "Report", "Script")]
+        files += ["`GameServer/Managers/GameLoop/GameLoop.cs`", "`GameServer/ECS-Services/NpcService.cs`"]
+        for named in files + ["`deploy/tests/test_bot_cpu.py`", "(specs/2026-10-14-bot-cpu-meter-design.md)"]:
+            self.assertIn(named, meter)
 
 
 if __name__ == "__main__":

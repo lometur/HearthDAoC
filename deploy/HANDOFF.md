@@ -112,6 +112,24 @@ set the owner's split, one row at a time:
 For example, `./hdc stop && ./hdc bot-goals set 20-49 20 20 30 30`, then the other two rows the same
 way, then `./hdc up`.
 
+**Bot CPU meter.** It measures the game loop's CPU per kind of bot and player, to compare what each kind costs. It is
+off unless `HEARTHDAOC_BOT_CPU=on` or a GM turns it on in game, and while on it costs about 1-5% of one core. As a GM:
+`/botcpu` shows its state, the last minute and the totals since on; `/botcpu on [minutes]` turns it on, for 1-1440
+minutes or until `/botcpu off` or the next start; `/botcpu off` stops it and writes the last partial minute;
+`/botcpu top [gamebot|companion|playerbot|piloted]` lists the 5 costliest bots of the last minute; `/botcpu reset`
+starts the totals since on again. For a GM, `/bot` is short for `/botcpu`, so `/bot on` turns the meter on. Every
+minute while it is on, the server log gets one `BOT_CPU` line per kind (`msPerBotSec` is the average CPU per bot, in
+ms per second), the 5 costliest bots of each bot kind (`BOT_CPU_TOP`) and a whole-process line (`BOT_CPU_PROCESS`);
+`BOT_CPU_STATE` lines say when it turned on and off. The server starts a new log file every day and keeps a week of
+them, so read them all, oldest first (`./hdc logs` shows only the last 200 lines, then the new ones as they come):
+```bash
+docker exec hearthdaoc-server sh -c 'cat $(ls -tr /data/logs/server*)' | grep BOT_CPU | tail -40
+```
+The same minutes go to `/data/logs/bot-cpu.csv`, one row per minute and kind, for charts (its stage columns are
+whole-kind totals; above 50 MB it becomes `bot-cpu.csv.1`): `docker exec hearthdaoc-server cat /data/logs/bot-cpu.csv`,
+or `docker cp hearthdaoc-server:/data/logs/bot-cpu.csv .` to copy it out. The owner's checks on the live server are in
+`docs/fork/verification/bot-cpu-meter-live.md`.
+
 **Duplicate townspeople.** Upstream's world has two copies of Ley Manton and of Tria Ellowis at the same
 spot (the merchant and a plain NPC), and two Master Graents, the fighter trainer, in Prydwen Keep: one in the
 keep's middle structure, by the healer and the town crier, and one among the merchants just outside. It also
