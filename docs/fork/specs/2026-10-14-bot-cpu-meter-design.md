@@ -652,7 +652,9 @@ window's 60 s closes the window.
   they are not, the absolute numbers are high, but both kinds run in the same batches at the same moments, so the
   ratio between them holds (est., cpu §4.6).
 - Threads are re-listed every minute; a thread that left between two reads is dropped from that window, and a
-  negative difference counts as 0.
+  negative difference counts as 0. So the window a server stop writes (the lines just before `BOT_CPU_STATE off
+  source=stop`) has `-` for `loopThreadsCpuPct`, `offLoopCpuPct`, `campThreadCpuPct` and `loopWaitMs`: the server
+  joins the game loop's threads and the camp thread before its stopped event (`GameServer.cs:1013-1015`).
 - **A schedstat that says nothing.** Where the kernel keeps no scheduler statistics, the file still exists and reads
   `0 0 0` (est.). A first field of 0 for a running loop thread therefore counts as unavailable: `loopThreadsCpuPct`,
   `offLoopCpuPct`, `campThreadCpuPct` and `loopWaitMs` are then `-`, not 0.
@@ -998,7 +1000,9 @@ deploy tests are found on their own (`.github/workflows/server-image.yml:94`).
 1. `./hdc update`: `.env` gains `HEARTHDAOC_BOT_CPU=off`. The container's start output has "Bot CPU meter: off" (once:
    the row is new): `docker logs hearthdaoc-server 2>&1 | grep "Bot CPU meter"`. The server log has no `BOT_CPU`
    line, and `SERVER_WORK` looks as before.
-2. In game, as GM: `/botcpu` says "Bot CPU meter: off. /botcpu on [minutes] turns it on." Then `/botcpu on 30`. To
+2. At least 20 minutes after the server is up (`./hdc status`: running (healthy)): the GameBots log in over the first
+   15 minutes (section 7), and check 7 needs 10 settled minutes with the meter off. In game, as GM: `/botcpu` says
+   "Bot CPU meter: off. /botcpu on [minutes] turns it on." Then `/botcpu on 30`. To
    keep your character from waking monsters and speeding up GameBots near you (section 7), go somewhere quiet, or go
    to the character screen or quit the game: both take you out of `player` (3.8). Quit from the game's menu: a client
    that is killed leaves your character link-dead in the world for 60 s, still counted. The meter runs on.
@@ -1013,26 +1017,31 @@ deploy tests are found on their own (`.github/workflows/server-image.yml:94`).
    `BOT_CPU_PROCESS` with `tps=30.0`, and `BOT_CPU_COMPARE pair=player/gamebot` while you are in game.
 4. Sanity: usually `chargedPct` < `loopThreadsCpuPct` < `processCpuPct`. If `chargedPct` is higher, `loopWaitMs`,
    `throttledMs` or `gcPauseMs` is large too: the wall times are inflated (3.9). `gamebot` `msSec` / 10 is its share of
-   one core in %. `loopThreadsCpuPct` as `-` means the kernel gives no scheduler statistics (3.9): say so on #137.
+   one core in %. `loopThreadsCpuPct` as `-` on a minute's line while the server runs means the kernel gives no
+   scheduler statistics (3.9): say so on #137. The window a server stop writes always has `-` there (3.9).
    Confirm a large `gcPauseMs` with the `SERVER_GC_PAUSE` lines of the same minutes (check 3's command, with
    `grep SERVER_GC_PAUSE` for `grep BOT_CPU`). Those lines list only pauses of 250 ms or more (section 1); shorter
    pauses add up in the `pauseTotalMs` of the `SERVER_MEMORY` line that covers them (every 5 minutes).
 5. `/botcpu` in chat shows the same last minute; `/botcpu top` lists 5 GameBots with their goals.
-6. `docker exec hearthdaoc-server tail -5 /data/logs/bot-cpu.csv`: a header the first time, then rows.
+6. `docker exec hearthdaoc-server head -1 /data/logs/bot-cpu.csv` gives the header (2.3);
+   `docker exec hearthdaoc-server tail -5 /data/logs/bot-cpu.csv` the last rows, one per minute and kind (`utc` is
+   UTC, not the log's local time).
 7. Overhead: compare the `SERVER_WORK` lines of the 10 minutes before with 10 minutes on. Pass if `samples` stays at
    about 1,800 a minute (30 ticks a second), `overBudget` does not rise, and the stages' `avgMs`, added up, rise by no
    more than `callsSec` × 100 ns ÷ 30 per tick (est.; at `callsSec=212534` that is about 0.7 ms). Bot activity moves
    from minute to minute, so this is a rough check.
-8. `/botcpu off`: one partial window, then `BOT_CPU_STATE off source=command`, then no more lines. With `on 30`
+8. `/botcpu off`: one partial window, then `BOT_CPU_STATE off source=command`, then no more lines. Under 5 s after a
+   window, the reply says the last seconds were too short to write, and no partial window comes (2.2). With `on 30`
    left running, `off source=timer` comes by itself after 30 minutes.
 9. At start: `HEARTHDAOC_BOT_CPU=on`, `./hdc up`: "Bot CPU meter: on" in `docker logs hearthdaoc-server`,
    `BOT_CPU_STATE on source=property`, lines with no command. `/botcpu off` stops it until the next start. Set it back
    to `off` and `./hdc up`.
 10. Post a few windows (the `gamebot`, `player` and `PROCESS` lines) on #137, with the autosave lines of the same
-    period (section 7):
+    period (section 7). The autosave's counts have no time of their own: this gives each the time of its "Saving
+    completed" line, and the last `awk` keeps the period posted (here 14:00 to 14:30 on 21 October):
 
     ```bash
-    docker exec hearthdaoc-server sh -c 'cat $(ls -tr /data/logs/server*)' | grep -E "(players|autonomousBots): [0-9]+ in" | tail -6
+    docker exec hearthdaoc-server sh -c 'cat $(ls -tr /data/logs/server*)' | awk '/Saving completed in/ { t = $1 " " $2 } /(players|autonomousBots): [0-9]+ in/ { print t " " $0 }' | awk '$0 >= "10/21 14:00" && $0 < "10/21 14:30"'
     ```
 
     They are the GameBot baseline the prototype will be compared with.
@@ -1099,7 +1108,8 @@ Short, for the live server; the prototype's full rules are in cpu §5 and README
 - **Effects count for the living that carries them,** not the caster: a damage-over-time a bot puts on a monster costs
   in `monster`. The same for every kind, so comparisons hold (cpu §7).
 - **Overhead** while on: an est. 1.4-5.4% of one core (3.11). On a server already near 33 ms a tick, turning it on
-  could push stages over budget; `tps` below 30.0 or new `overBudget` counts in `SERVER_WORK` mean turn it off.
+  could push stages over budget; `tps` staying below 30.0 for several minutes or new `overBudget` counts in
+  `SERVER_WORK` mean turn it off.
 - **Log volume** on the live server: an est. 6-8 lines a minute at 200-450 characters, about 3-4 MB a day, inside a
   log that rotates daily and above 100 MB and keeps 7 days (`config/logconfig.xml:19-27`). Docker's own copy is bounded
   too (`deploy/compose.yml:31-35`). The CSV: about 2.5 MB a day, capped at 50 MB plus one old file.

@@ -491,9 +491,14 @@ class GuideTests(unittest.TestCase):
         for check in checks:
             with self.subTest(check=check.split("\n", 1)[0]):
                 self.assertRegex(check, r"(?m)^Result:")
-        # Check 3's read of the meter's lines and check 10's of the autosave lines, as 6.5 gives them.
+        # Check 3's read of the meter's lines and check 10's of the autosave lines, as 6.5 gives them. The autosave's
+        # counts have no time of their own: each gets its "Saving completed" line's, so a period can be picked.
         self.assertIn(self.EVERY_LOG + " | grep BOT_CPU | tail -20", checks[2])
-        self.assertIn(self.EVERY_LOG + ' | grep -E "(players|autonomousBots): [0-9]+ in" | tail -6', checks[9])
+        autosaves = (self.EVERY_LOG + " | awk '/Saving completed in/ { t = $1 \" \" $2 } "
+                     "/(players|autonomousBots): [0-9]+ in/ { print t \" \" $0 }' | awk '$0 >= \"")
+        self.assertIn(autosaves, checks[9])
+        spec = os.path.join(ROOT, "docs", "fork", "specs", "2026-10-14-bot-cpu-meter-design.md")
+        self.assertIn(autosaves, source(spec))
 
     def test_fork_md_records_the_meter_after_the_realm_point_waits(self):
         # The four new files, the five marked lines in GL and NS, and the tests (spec 8), for upstream syncs.
