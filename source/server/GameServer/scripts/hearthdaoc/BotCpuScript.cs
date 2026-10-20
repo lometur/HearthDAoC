@@ -1,9 +1,12 @@
 using System;
+using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.Diagnostics;
 using System.Globalization;
 using System.IO;
 using System.Text;
+using System.Threading;
+using DOL.Events;
 using DOL.GS.ServerProperties;
 using DOL.Logging;
 
@@ -15,8 +18,10 @@ namespace DOL.GS.HearthDAoC;
 // until the next start and never writes the property (4.3). The process readers (3.9): the /proc and cgroup parsers,
 // pure functions of a file's text, their reads, the process sample and a window's process values. The CSV (2.3):
 // logs/bot-cpu.csv, its header check and its rotation to bot-cpu.csv.1 above 50 MB. The guarded log writer (3.7): a
-// failed CSV write logs one warning and never escapes. BotCpuMeter is the hot path; BotCpuReport makes the numbers and
-// the text.
+// failed CSV write logs one warning and never escapes. The report side (3.7, 3.8, 4.1, 4.3, 4.4): a command only turns
+// the meter off or queues a job; the jobs, the 1-second timer and the server's started and stopped handlers run one at
+// a time under the report lock, off the game loop: runs, windows, the stop time, the published result, and a catch that
+// turns the meter off at the first fault. BotCpuMeter is the hot path; BotCpuReport makes the numbers and the text.
 public static class BotCpuScript
 {
     [ServerProperty("server", "bot_cpu_meter",
@@ -415,6 +420,488 @@ public static class BotCpuScript
         stream.Seek(-1, SeekOrigin.End);
         return stream.ReadByte() == '\n';
     }
+
+    // ---- The report side (3.7, 3.8, 4.1, 4.3, 4.4)
+
+    /// <summary>The report's timer ticks once a second (3.7, 3.8): it samples the registry, closes a window at the
+    /// first tick at or after its 60 s, and checks the stop time.</summary>
+    public const int TickMilliseconds = 1000;
+
+    // Every change to the report's state runs under this lock (3.7), taken only on the report side: by a queued work
+    // item (waiting for it), a timer tick (skipping its second while it is held) and the server's started and stopped
+    // handlers. The game-loop thread never takes it.
+    private static readonly object ReportLock = new();
+
+    // The jobs the commands queue, first in first out (3.7); whoever holds the lock runs every job waiting, in order.
+    private static readonly ConcurrentQueue<Job> Jobs = new();
+
+    // The open run, or null: read and written under the report lock only.
+    private static MeterRun _open;
+
+    // The last result the report published, swapped in whole (3.7); /botcpu reads only this.
+    private static BotCpuResult _result = BotCpuResult.Off;
+
+    // Test hooks (6.1), null on the server: the queued work items (in place of ThreadPool.QueueUserWorkItem), the
+    // 1-second timer (in place of a System.Threading.Timer), the server's local time, the Stopwatch timestamp, the
+    // server's time zone (in place of TimeZoneInfo.Local, for a stop time's way through UTC) and the CSV's path.
+    private static Action<WaitCallback> _queueHook;
+    private static Func<TimerCallback, object, IDisposable> _timerHook;
+    private static Func<DateTime> _nowHook;
+    private static Func<long> _timestampHook;
+    private static TimeZoneInfo _zoneHook;
+    private static string _csvFile;
+
+    // A job of the report side: what a command asked for, run under the report lock in its turn, and its step name for
+    // BOT_CPU_ERROR.
+    private sealed record Job(string Step, Action Work);
+
+    // An instant on the report's three clocks: the Stopwatch timestamp a window is measured with (2.2), the server's
+    // local time it is shown in, and the game time its ticks are counted from (3.8). A window starts and ends at one.
+    private readonly record struct Instant(long Timestamp, DateTime Time, long GameTime)
+    {
+        internal static Instant Now() => new(BotCpuScript.Timestamp(), LocalNow(), GameLoop.GameLoopTime);
+    }
+
+    // A stop time (4.3): the server's local time it shows, and the Stopwatch timestamp the timer checks, so the run
+    // stops after its minutes even when the local clock moves meanwhile (summer time begins or ends).
+    private readonly record struct StopTime(DateTime Time, long Timestamp)
+    {
+        // The stop time <minutes> from now: shown as the local time of the instant it stops, that many minutes on in
+        // UTC, so a change of the local clock before then shows the time the run really stops at.
+        internal static StopTime In(int minutes)
+        {
+            TimeZoneInfo zone = _zoneHook ?? TimeZoneInfo.Local;
+            Func<DateTime> now = _nowHook;
+            DateTime utc = now == null
+                ? DateTime.UtcNow
+                : TimeZoneInfo.ConvertTimeToUtc(DateTime.SpecifyKind(now(), DateTimeKind.Unspecified), zone);
+            return new StopTime(TimeZoneInfo.ConvertTimeFromUtc(utc.AddMinutes(minutes), zone),
+                BotCpuScript.Timestamp() + minutes * 60L * Stopwatch.Frequency);
+        }
+    }
+
+    // A run (3.7): from its Enable to its close, with its number, how and when it turned on, its stop time, its timer,
+    // its open window and its totals since on or reset. Read and written under the report lock only.
+    private sealed class MeterRun
+    {
+        internal int Number;
+        internal bool ByCommand;
+        internal DateTime OnSince;
+        // The same instant as a Stopwatch timestamp: its first window's start, which an off command's instant is
+        // compared with (3.7).
+        internal long OnSinceTimestamp;
+        internal StopTime? StopsAt;
+        internal IDisposable Timer;
+
+        // The open window (3.7): its start, the slots' totals then (its baseline), the process values then and the
+        // Stopwatch timestamp they were taken at, and the registry's samples so far (3.8).
+        internal Instant WindowStart;
+        internal BotCpuTotals Baseline;
+        internal BotCpuProcessSample ProcessStart;
+        internal long ProcessTaken;
+        internal BotCpuSamples Samples;
+
+        // The last window written, its process values, and the totals since on or reset (2.4).
+        internal BotCpuWindow Last;
+        internal BotCpuProcess LastProcess;
+        internal BotCpuSince Since;
+    }
+
+    /// <summary>
+    /// The last result the report published (3.7): an immutable object, swapped in whole at each change (on, a window,
+    /// reset, a new stop time, off). <c>/botcpu</c> reads only this and never builds a report. Never null.
+    /// </summary>
+    public static BotCpuResult Result => Volatile.Read(ref _result);
+
+    /// <summary>The server's local time (<c>TZ</c>), as the chat shows it (2.4), the stop time included (4.3).
+    /// </summary>
+    public static DateTime LocalNow() => _nowHook?.Invoke() ?? DateTime.Now;
+
+    // The Stopwatch timestamp a window is measured with (2.2).
+    private static long Timestamp() => _timestampHook?.Invoke() ?? Stopwatch.GetTimestamp();
+
+    private static double SecondsBetween(long start, long end) => (end - start) / (double)Stopwatch.Frequency;
+
+    // Where the windows' rows go: logs/bot-cpu.csv (2.3).
+    private static string CsvFile => _csvFile ?? CsvPath;
+
+    /// <summary>
+    /// <c>/botcpu on [minutes]</c>, on its game-loop thread (3.7): queues the on job and returns at once, with no file,
+    /// <c>/proc</c> read or log write. <see cref="BotCpuMeter.Enabled"/> is unchanged until the job runs. The job opens
+    /// a run when none is open (<c>BOT_CPU_STATE on source=command</c>), or sets or clears the stop time of the running
+    /// one and writes that line again (4.3). Returns the stop time, <paramref name="minutes"/> from now, or null for
+    /// none, so the reply shows the time the job uses: the local time of the instant it stops, so across a change of
+    /// the local clock (summer time) it shows the time the run really stops at. The timer checks it as that many
+    /// minutes of the Stopwatch, so such a change neither shortens nor lengthens the run.
+    /// </summary>
+    /// <param name="by">The GM's name, for the line.</param>
+    /// <param name="minutes">1-1440 (the command checks it), or null: until off or the next start.</param>
+    public static DateTime? CommandOn(string by, int? minutes)
+    {
+        StopTime? stopsAt = minutes is int stopIn ? StopTime.In(stopIn) : null;
+        Queue("on", () => OnJob(by, minutes, stopsAt));
+        return stopsAt?.Time;
+    }
+
+    /// <summary>
+    /// <c>/botcpu off</c>, on its game-loop thread (3.7, 4.4): <see cref="BotCpuMeter.Disable"/>, so metering stops at
+    /// once, then the off job queued; no file, <c>/proc</c> read or log write. The job closes the open run, if any:
+    /// its final window, then <c>BOT_CPU_STATE off source=command</c>. The final window ends at this command's
+    /// instant, when metering stopped, not when the job runs. Returns that window's length in seconds, measured from
+    /// the published open window's start to that instant as the job measures it, so the reply and the job agree on
+    /// whether it is written (5 s, 2.2): below 0 when a tick started the open window after that instant, and the job
+    /// then writes none. Null when the published result is off.
+    /// </summary>
+    /// <param name="by">The GM's name, for the line.</param>
+    public static double? CommandOff(string by)
+    {
+        BotCpuMeter.Disable();
+        Instant stopped = Instant.Now();
+        BotCpuResult result = Result;
+        Queue("off", () => OffJob(by, stopped));
+        return result.On ? SecondsBetween(result.WindowStartTimestamp, stopped.Timestamp) : null;
+    }
+
+    /// <summary><c>/botcpu reset</c>, on its game-loop thread (3.7): queues the reset job, which starts the open run's
+    /// totals since on again ("Since reset"); the windows go on. With no run open the job does nothing.</summary>
+    public static void CommandReset() => Queue("reset", ResetJob);
+
+    /// <summary>
+    /// The property's start (4.1): read once, before the game loop starts (<c>GameServer.cs:510</c>, :517), so the
+    /// first tick is metered. On, a run opens at once on this thread, under the report lock, not queued:
+    /// <c>BOT_CPU_STATE on source=property</c>. Nothing escapes to the server's start.
+    /// </summary>
+    [GameServerStartedEvent]
+    public static void OnServerStarted(DOLEvent e, object sender, EventArgs args) => RunNow("start", () =>
+    {
+        if (BOT_CPU_METER && _open == null)
+            Open(false, null, BotCpuReport.StateOnByPropertyLine);
+    });
+
+    /// <summary>
+    /// The server's stop (4.1), after <c>GameLoop.Exit</c> (<c>GameServer.cs:1013</c>, :1015): the jobs waiting, then
+    /// the open run closed at once on this thread, under the report lock: its partial window, then
+    /// <c>BOT_CPU_STATE off source=stop</c>. Nothing escapes to the server's stop.
+    /// </summary>
+    [GameServerStoppedEvent]
+    public static void OnServerStopped(DOLEvent e, object sender, EventArgs args) => RunNow("stop", () =>
+    {
+        if (_open is MeterRun run)
+            Close(run, BotCpuOffSource.Stop, null);
+    });
+
+    // A command's job (3.7): into the queue, then a work item for the thread pool, as PublishBotAiDelay does
+    // (GameLoopWorkMetrics.cs:98-104).
+    private static void Queue(string step, Action work)
+    {
+        Jobs.Enqueue(new Job(step, work));
+        Action<WaitCallback> hook = _queueHook;
+        if (hook != null)
+            hook(RunQueuedJobs);
+        else
+            ThreadPool.QueueUserWorkItem(RunQueuedJobs);
+    }
+
+    // A queued work item (3.7): it waits for the lock, then runs every job waiting, in order. An earlier item may
+    // already have run its job: it then finds none.
+    private static void RunQueuedJobs(object state)
+    {
+        try
+        {
+            lock (ReportLock)
+                RunJobs();
+        }
+        catch (Exception)
+        {
+            // Nothing: each job has its own catch; an exception that escaped a thread-pool callback would end the
+            // process (3.7).
+        }
+    }
+
+    // A server event's job (4.1): at once, on the event's own thread, under the lock, after the jobs waiting.
+    private static void RunNow(string step, Action work)
+    {
+        try
+        {
+            lock (ReportLock)
+            {
+                RunJobs();
+                Guarded(step, work);
+            }
+        }
+        catch (Exception)
+        {
+            // Nothing: an exception here never reaches the server's start or stop (4.1).
+        }
+    }
+
+    // The timer's tick (3.7, 3.8): it skips its second while the lock is held. Holding it, it runs every job waiting,
+    // then its own work, for its own run: a tick of a run already closed (a tick that waited, or a disposed timer's
+    // last) does nothing.
+    private static void OnTimer(object state)
+    {
+        try
+        {
+            if (!Monitor.TryEnter(ReportLock))
+                return;
+
+            try
+            {
+                RunJobs();
+                Guarded("tick", () => Tick(state as MeterRun));
+            }
+            finally
+            {
+                Monitor.Exit(ReportLock);
+            }
+        }
+        catch (Exception)
+        {
+            // Nothing: an exception that escaped a timer callback would end the process (3.7).
+        }
+    }
+
+    // Every job waiting, in order, each in its own catch (3.7). Under the report lock.
+    private static void RunJobs()
+    {
+        while (Jobs.TryDequeue(out Job job))
+            Guarded(job.Step, job.Work);
+    }
+
+    // A step of the report side inside the catch of 3.7: its first exception turns the meter off. It never rethrows.
+    private static void Guarded(string step, Action work)
+    {
+        try
+        {
+            work();
+        }
+        catch (Exception exception)
+        {
+            Fail(step, exception);
+        }
+    }
+
+    // The catch of 3.7: Enabled false, the timer disposed, the run closed with no final window (its counts are
+    // dropped), one Warn line BOT_CPU_ERROR <step>: <exception>, then BOT_CPU_STATE off source=error, each log call in
+    // its own try whose catch does nothing. Never throws. Under the report lock.
+    private static void Fail(string step, Exception exception)
+    {
+        BotCpuMeter.Disable();
+        MeterRun run = _open;
+        _open = null;
+        Volatile.Write(ref _result, BotCpuResult.Off);
+        try
+        {
+            run?.Timer?.Dispose();
+        }
+        catch (Exception)
+        {
+            // Nothing: the run is closed whatever its timer does.
+        }
+
+        TryWriteLog(ELogLevel.Warning, () => BotCpuReport.ErrorLine(step, exception));
+        TryWriteLog(ELogLevel.Info, () => BotCpuReport.StateOffLine(BotCpuOffSource.Error));
+    }
+
+    // The on job (3.7, 4.3): with a run open, its new stop time (or none) and the on line again; else a new run.
+    private static void OnJob(string by, int? minutes, StopTime? stopsAt)
+    {
+        string line = BotCpuReport.StateOnByCommandLine(by, minutes);
+        if (_open is not MeterRun run)
+        {
+            Open(true, stopsAt, line);
+            return;
+        }
+
+        run.StopsAt = stopsAt;
+        WriteLog(ELogLevel.Info, line);
+        Publish(run);
+    }
+
+    // The off job (3.7): closes the open run, its final window ending at the command's instant, when metering stopped;
+    // with no run, nothing. A command that came before this run opened (an off queued before the on job that opened
+    // it) did not stop this run: its close does, now. A command that came after it opened but before its open window
+    // started (a tick closed the minute between the command's instant and its job's place in the queue) leaves a
+    // final window of negative length: none is written, as metering stopped before that window started.
+    private static void OffJob(string by, Instant stopped)
+    {
+        if (_open is MeterRun run)
+            Close(run, BotCpuOffSource.Command, by, stopped.Timestamp >= run.OnSinceTimestamp ? stopped : null);
+    }
+
+    // The reset job (2.4): the open run's totals since on start again; the windows go on. With no run, nothing.
+    private static void ResetJob()
+    {
+        if (_open is not MeterRun run)
+            return;
+
+        run.Since = BotCpuSince.Start(true);
+        Publish(run);
+    }
+
+    // A run opens (3.7): Enable first (the slot list the first time, a new per-bot table and the next run number, then
+    // Enabled), then a fresh baseline and the first window's start, so counts from an earlier run never leak in; then
+    // its timer, its on line and its result. Under the report lock.
+    private static void Open(bool byCommand, StopTime? stopsAt, string line)
+    {
+        MeterRun run = new()
+        {
+            Number = BotCpuMeter.Enable(),
+            ByCommand = byCommand,
+            StopsAt = stopsAt,
+            Since = BotCpuSince.Start(false),
+        };
+        BotCpuTotals baseline = BotCpuMeter.TakeSnapshot();
+        BotCpuProcessSample process = TakeProcessSample();
+        Instant start = Instant.Now();
+        StartWindow(run, baseline, process, start.Timestamp, start, new BotCpuSamples());
+        run.OnSince = start.Time;
+        run.OnSinceTimestamp = start.Timestamp;
+        _open = run;
+        run.Timer = NewTimer(run);
+        WriteLog(ELogLevel.Info, line);
+        Publish(run);
+    }
+
+    // The run's 1-second System.Threading.Timer (3.7), made when the run opens, with the run as its state.
+    private static IDisposable NewTimer(MeterRun run)
+    {
+        Func<TimerCallback, object, IDisposable> hook = _timerHook;
+        return hook != null
+            ? hook(OnTimer, run)
+            : new System.Threading.Timer(OnTimer, run, TickMilliseconds, TickMilliseconds);
+    }
+
+    // A window starts (3.7): its baseline, the process values and when they were taken, its instant and the samples so
+    // far.
+    private static void StartWindow(MeterRun run, BotCpuTotals baseline, BotCpuProcessSample process,
+        long processTaken, Instant start, BotCpuSamples samples)
+    {
+        run.Baseline = baseline;
+        run.ProcessStart = process;
+        run.ProcessTaken = processTaken;
+        run.WindowStart = start;
+        run.Samples = samples;
+    }
+
+    // A second of the run (3.8, 4.3): the registry sampled, the window closed at the first tick at or after its 60 s,
+    // then the stop time checked on the Stopwatch: the first tick at or after it closes the run (off source=timer).
+    private static void Tick(MeterRun run)
+    {
+        if (run == null || run != _open)
+            return;
+
+        run.Samples = run.Samples.Add(AutonomousBotRegistry.PopulationForBrainTick);
+        Instant now = Instant.Now();
+        if (SecondsBetween(run.WindowStart.Timestamp, now.Timestamp) >= BotCpuReport.WindowSeconds)
+        {
+            WriteWindow(run, now);
+            Publish(run);
+        }
+
+        if (run.StopsAt is StopTime stop && now.Timestamp >= stop.Timestamp)
+            Close(run, BotCpuOffSource.Timer, null);
+    }
+
+    // A window (3.7, 3.8), under the lock, from its start to its end instant: the slots' totals less its baseline (the
+    // slot list copied under its lock, each value read with Volatile.Read), each bot's counter since the report last
+    // read it, the process values, the game ticks and the registry samples. A window of 5 s or more writes its lines,
+    // then its CSV rows, whose failure only loses them (2.3), and counts in the totals since on; a shorter final window
+    // writes nothing (2.2). The next window starts at its end, with these totals as its baseline. The process values
+    // are read here, off the loop: a final window that ends at an off command's instant has them up to its job,
+    // moments later, so each of their rates divides by the time between their own two samples, not by the window's.
+    private static void WriteWindow(MeterRun run, Instant end)
+    {
+        BotCpuTotals totals = BotCpuMeter.TakeSnapshot();
+        BotCpuProcessSample process = TakeProcessSample();
+        long processTaken = Timestamp();
+        double seconds = SecondsBetween(run.WindowStart.Timestamp, end.Timestamp);
+        BotCpuWindow window = BotCpuReport.Window(BotCpuReport.Difference(totals, run.Baseline), seconds,
+            Stopwatch.Frequency, end.GameTime - run.WindowStart.GameTime, GameLoop.TickDuration, run.Samples,
+            ListBots());
+        BotCpuProcess values = ProcessWindow(run.ProcessStart, process, SecondsBetween(run.ProcessTaken, processTaken));
+        StartWindow(run, totals, process, processTaken, end, run.Samples.NextWindow());
+        if (window == null)
+            return;
+
+        foreach (string line in BotCpuReport.Lines(window, values))
+            WriteLog(ELogLevel.Info, line);
+
+        IReadOnlyList<string> rows = BotCpuReport.CsvRows(window, values, end.Time);
+        if (rows.Count > 0)
+            AppendCsv(CsvFile, rows);
+
+        run.Last = window;
+        run.LastProcess = values;
+        run.Since = run.Since.Add(window);
+    }
+
+    // The bots of the run's per-bot table (3.10), with their counters' ticks and calls since the report last read
+    // them. A bot that left the world is gone from the table once its counter is collected, or simply not listed:
+    // either way nothing of it stays behind. These are reads of another thread's objects without a lock: a name or an
+    // activity a moment old is harmless. Each is read once: the region is set to null on the loop when an instance
+    // collapses (world/Region.cs:270), so CurrentRegionID, which reads it twice, could find it gone at its second read.
+    private static List<BotCpuBot> ListBots()
+    {
+        List<BotCpuBot> bots = [];
+        foreach ((GameObject owner, BotCpuCounter counter) in BotCpuMeter.Counters())
+        {
+            (long ticks, long calls) = BotCpuReport.TakeCounterWindow(counter);
+            OfflineWorldBotRecord record = (owner as GameBot)?.PersistentRecord;
+            string className = owner switch
+            {
+                GameBot bot => bot.ClassName,
+                GamePlayer player => player.CharacterClass?.Name,
+                _ => null,
+            };
+            bots.Add(new BotCpuBot(counter.Kind, owner.Name, owner.Level, className, owner.CurrentRegion?.ID ?? 0,
+                record?.ObjectiveKind, record?.Activity, ticks, calls));
+        }
+
+        return bots;
+    }
+
+    // A run closes (3.7): Enabled false, then its final window, to the instant metering stopped (an off command's, else
+    // now), then the BOT_CPU_STATE off line, then its timer disposed, all under the lock. A tick of this run waiting
+    // for the lock then finds it closed.
+    private static void Close(MeterRun run, BotCpuOffSource source, string by, Instant? end = null)
+    {
+        BotCpuMeter.Disable();
+        WriteWindow(run, end ?? Instant.Now());
+        WriteLog(ELogLevel.Info, BotCpuReport.StateOffLine(source, by));
+        run.Timer?.Dispose();
+        _open = null;
+        Volatile.Write(ref _result, BotCpuResult.Off);
+    }
+
+    // The open run's result, swapped in whole (3.7).
+    private static void Publish(MeterRun run) => Volatile.Write(ref _result, new BotCpuResult(true, run.Number,
+        run.ByCommand, run.OnSince, run.StopsAt?.Time, run.WindowStart.Time, run.WindowStart.Timestamp, run.Last,
+        run.LastProcess, run.Since));
+}
+
+/// <summary>
+/// What the report published last (3.7), for <c>/botcpu</c>: immutable, and swapped in whole at each change (on, a
+/// window, reset, a new stop time, off), so the command reads one consistent state and never builds a report.
+/// </summary>
+/// <param name="On">Whether a run is open; when false, nothing else is set.</param>
+/// <param name="Run">The open run's number (<see cref="BotCpuMeter.RunNumber"/>).</param>
+/// <param name="ByCommand">Whether a GM's <c>/botcpu on</c> opened it, else the property (2.4).</param>
+/// <param name="OnSince">When it opened, the server's local time.</param>
+/// <param name="StopsAt">Its stop time, local, as the chat shows it; null for none (4.3).</param>
+/// <param name="WindowStart">When the open window started, local: its lines come a window's length later (2.4).
+/// </param>
+/// <param name="WindowStartTimestamp">The same instant as a <see cref="Stopwatch"/> timestamp, the clock a window
+/// is measured with (2.2): <see cref="BotCpuScript.CommandOff"/> gives the seconds since then for
+/// <c>/botcpu off</c>'s reply (2.4).</param>
+/// <param name="Last">The last window written, with the top 5 of each bot kind; null before the first.</param>
+/// <param name="LastProcess">That window's process values.</param>
+/// <param name="Since">The totals since on or reset (2.4).</param>
+public sealed record BotCpuResult(bool On, int Run, bool ByCommand, DateTime OnSince, DateTime? StopsAt,
+    DateTime WindowStart, long WindowStartTimestamp, BotCpuWindow Last, BotCpuProcess LastProcess, BotCpuSince Since)
+{
+    /// <summary>The meter off: no run open.</summary>
+    public static BotCpuResult Off { get; } = new(false, 0, false, default, null, default, 0, null, null, null);
 }
 
 /// <summary>What a thread is to the process line (3.9), from its <c>comm</c> name.</summary>
