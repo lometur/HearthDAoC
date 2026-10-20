@@ -1,13 +1,20 @@
 using System;
+using System.Collections.Generic;
+using System.Diagnostics;
+using System.Runtime.CompilerServices;
+using System.Runtime.InteropServices;
+using System.Threading;
 using DOL.AI;
 using DOL.AI.Brain;
+using DOL.Logging;
 
 namespace DOL.GS.HearthDAoC;
 
 // HearthDAoC: the bot CPU meter's hot path (#137; spec docs/fork/specs/2026-10-14-bot-cpu-meter-design.md). While the
 // meter is on, each game-loop callback is timed and charged to the kind of its owner (2.5, 3.3) and to its stage (3.4),
-// so the owner can compare the average CPU of each kind of bot. BotCpuMeter has no static field initializer and no
-// static constructor (5.1): nothing in it runs or allocates while the meter is off.
+// so the owner can compare the average CPU of each kind of bot. Hook H1 in GameLoop.ExecuteForEach hands each call to
+// BotCpuMeter.ExecuteForEach while the meter is on (3.1). BotCpuMeter has no static field initializer and no static
+// constructor (5.1): nothing in it runs or allocates while the meter is off.
 
 /// <summary>
 /// The player-bot contract (2.5): a <see cref="GamePlayer"/> whose client implements this marker is counted as
@@ -81,13 +88,317 @@ public enum BotCpuStage
 /// the three player kinds.</param>
 public readonly record struct BotCpuCharge(BotCpuKind Kind, BotCpuStage Stage, GameObject Bot, bool Presence);
 
-/// <summary>The meter's hot path: the stage of a profile key, the kind of an owner and what each item charges.
+/// <summary>
+/// Raw totals of the per-thread slots (3.7): for each kind and stage the <see cref="Stopwatch"/> ticks, calls and bytes
+/// charged, and for each kind its presence count (3.8). A slot is a <c>long[]</c> of <see cref="SlotLength"/> longs:
+/// the 7 × 18 cells of 3 values (ticks, calls, bytes) from <see cref="CellIndex"/>, then the 7 presence counts at
+/// <see cref="PresenceIndex"/>, with <see cref="SlotPadding"/> unused longs at each end, so two threads' slots never
+/// share a cache line. <see cref="BotCpuMeter.TakeSnapshot"/> sums every slot into one of these; a window is the
+/// difference of two (3.7).
+/// </summary>
+public sealed class BotCpuTotals
+{
+    /// <summary>The kinds (2.5).</summary>
+    public const int KindCount = 7;
+    /// <summary>The stages (3.4).</summary>
+    public const int StageCount = 18;
+    /// <summary>The unused longs at each end of a slot: 64 bytes.</summary>
+    public const int SlotPadding = 8;
+    /// <summary>7 kinds × 18 stages × 3 values and 7 presence counts, 385 longs, between the padding: 401 longs, about
+    /// 3.2 KB.</summary>
+    public const int SlotLength = SlotPadding + KindCount * StageCount * 3 + KindCount + SlotPadding;
+
+    private const int PresenceStart = SlotPadding + KindCount * StageCount * 3;
+
+    // The values, laid out as in a slot.
+    private readonly long[] _values = new long[SlotLength];
+
+    /// <summary>The index of the ticks of [<paramref name="kind"/>, <paramref name="stage"/>] in a slot; its calls are
+    /// at the next index and its bytes at the one after.</summary>
+    public static int CellIndex(BotCpuKind kind, BotCpuStage stage) =>
+        SlotPadding + ((int)kind * StageCount + (int)stage) * 3;
+
+    /// <summary>The index of the presence count of <paramref name="kind"/> in a slot.</summary>
+    public static int PresenceIndex(BotCpuKind kind) => PresenceStart + (int)kind;
+
+    public long Ticks(BotCpuKind kind, BotCpuStage stage) => _values[CellIndex(kind, stage)];
+
+    public long Calls(BotCpuKind kind, BotCpuStage stage) => _values[CellIndex(kind, stage) + 1];
+
+    public long Bytes(BotCpuKind kind, BotCpuStage stage) => _values[CellIndex(kind, stage) + 2];
+
+    public long Presence(BotCpuKind kind) => _values[PresenceIndex(kind)];
+
+    /// <summary>Adds to the [<paramref name="kind"/>, <paramref name="stage"/>] cell: the report builds its windows
+    /// from plain values.</summary>
+    public void Add(BotCpuKind kind, BotCpuStage stage, long ticks, long calls, long bytes)
+    {
+        int cell = CellIndex(kind, stage);
+        _values[cell] += ticks;
+        _values[cell + 1] += calls;
+        _values[cell + 2] += bytes;
+    }
+
+    /// <summary>Adds to the presence count of <paramref name="kind"/>.</summary>
+    public void AddPresence(BotCpuKind kind, long count) => _values[PresenceIndex(kind)] += count;
+
+    /// <summary>
+    /// The sums of <paramref name="slots"/> (3.7, a window's step 2): each value read with
+    /// <see cref="Volatile.Read(ref long)"/>, as its thread may be adding to it (aligned 64-bit reads are atomic on the
+    /// 64-bit server). A slot is never written.
+    /// </summary>
+    public static BotCpuTotals Sum(IEnumerable<long[]> slots)
+    {
+        BotCpuTotals totals = new();
+        foreach (long[] slot in slots)
+        {
+            for (int i = SlotPadding; i < SlotLength - SlotPadding; i++)
+                totals._values[i] += Volatile.Read(ref slot[i]);
+        }
+
+        return totals;
+    }
+}
+
+/// <summary>
+/// One bot's counter (3.10): the <see cref="Stopwatch"/> ticks and the calls charged to the bot, added with
+/// <see cref="Interlocked.Add(ref long, long)"/> by the loop threads (one bot's effects can run on two threads at
+/// once), and the values the report last read, written by the report only. Counters are small objects allocated one
+/// after another, so the two hot fields sit between 64 bytes of padding on each side (explicit field offsets, as the
+/// pool's own <c>WorkState</c> does, MT:45-50): two bots' counters never share a cache line. Under 200 bytes a bot.
+/// </summary>
+[StructLayout(LayoutKind.Explicit)]
+public sealed class BotCpuCounter
+{
+    /// <summary>The ticks charged to the bot.</summary>
+    [FieldOffset(64)] public long Ticks;
+    /// <summary>The callbacks charged to the bot.</summary>
+    [FieldOffset(72)] public long Calls;
+    /// <summary>The <see cref="Ticks"/> the report read last.</summary>
+    [FieldOffset(144)] public long LastTicks;
+    /// <summary>The <see cref="Calls"/> the report read last.</summary>
+    [FieldOffset(152)] public long LastCalls;
+    /// <summary>The bot's kind when its counter was made.</summary>
+    [FieldOffset(160)] public readonly BotCpuKind Kind;
+
+    public BotCpuCounter(BotCpuKind kind) => Kind = kind;
+}
+
+/// <summary>The meter's hot path: the switch and its runs, the wrapper hook H1 hands each call to, the per-thread slots
+/// and the per-bot counters it charges, the stage of a profile key, the kind of an owner and what each item charges.
 /// </summary>
 public static class BotCpuMeter
 {
     /// <summary>The most owners the pet walk follows (3.3); a longer walk, a cycle, is
     /// <see cref="BotCpuKind.Unattributed"/>.</summary>
     public const int PetWalkSteps = 8;
+
+    /// <summary>
+    /// The switch (3.11, 4.4): a plain static bool, false by default, which hook H1 reads on every
+    /// <c>GameLoop.ExecuteForEach</c> call, so off costs one bool read. Written with
+    /// <see cref="Volatile.Write(ref bool, bool)"/> by <see cref="Enable"/> and <see cref="Disable"/> only.
+    /// </summary>
+    public static bool Enabled;
+
+    // The slot of every thread that ran a metered item, under the list's own lock (3.7): made by the first Enable and
+    // kept. A slot is never removed or zeroed; a restarted worker gets a new one and the old one keeps its totals.
+    private static List<long[]> _slots;
+
+    // This thread's slot, written only by this thread, with plain adds; null until its first metered item.
+    [ThreadStatic] private static long[] _threadSlot;
+
+    // The run's per-bot counters (3.10), a new table at each Enable; an entry goes with its bot.
+    private static ConditionalWeakTable<GameObject, BotCpuCounter> _counters;
+
+    // The run number, counted up by Enable (3.7).
+    private static int _run;
+
+    // 1 once the setup fallback has written its warning in this run (3.1, 5.1).
+    private static int _setupWarned;
+
+    // A test hook (6.1, "Setup fallback"): set, it replaces StageOf in a call's setup. Null on the server.
+    private static Func<string, BotCpuStage> _stageHook;
+
+    /// <summary>The number of the current run, or of the last one once off; 0 before the first.</summary>
+    public static int RunNumber => Volatile.Read(ref _run);
+
+    /// <summary>
+    /// Turns the meter on, for the report side, in an open job (3.7): first the slot list (the first time), a new
+    /// per-bot table and the next run number, so no wrapper runs before they exist, then <see cref="Enabled"/>.
+    /// Returns the new run's number.
+    /// </summary>
+    public static int Enable()
+    {
+        if (Volatile.Read(ref _slots) == null)
+            Interlocked.CompareExchange(ref _slots, new List<long[]>(), null);
+
+        Volatile.Write(ref _counters, new ConditionalWeakTable<GameObject, BotCpuCounter>());
+        Volatile.Write(ref _setupWarned, 0);
+        int run = Interlocked.Increment(ref _run);
+        Volatile.Write(ref Enabled, true);
+        return run;
+    }
+
+    /// <summary>
+    /// Turns the meter off (3.7, 4.4): the next <c>GameLoop.ExecuteForEach</c> call runs unwrapped. Wrappers already
+    /// in flight still add their items. The slots and the per-bot table stay, for the report's last window.
+    /// </summary>
+    public static void Disable() => Volatile.Write(ref Enabled, false);
+
+    /// <summary>
+    /// The per-bot counters of the current run, or of the last one once off (3.10), for the report: each bot charged
+    /// in the run, while it lives, with its counter. Empty before the first run.
+    /// </summary>
+    public static IEnumerable<KeyValuePair<GameObject, BotCpuCounter>> Counters() =>
+        Volatile.Read(ref _counters) ?? (IEnumerable<KeyValuePair<GameObject, BotCpuCounter>>)[];
+
+    /// <summary>
+    /// The sums of every thread's slot (3.7, a window's steps 1-2): the slot list copied under its lock, then each
+    /// value read with <see cref="Volatile.Read(ref long)"/>, without a lock. Never writes a slot. All zero before the
+    /// first run.
+    /// </summary>
+    public static BotCpuTotals TakeSnapshot()
+    {
+        List<long[]> slots = Volatile.Read(ref _slots);
+        if (slots == null)
+            return new BotCpuTotals();
+
+        long[][] copy;
+        lock (slots)
+            copy = slots.ToArray();
+        return BotCpuTotals.Sum(copy);
+    }
+
+    /// <summary>
+    /// Hook H1's call while the meter is on (3.1). On the game-loop thread, once per call: reads the stage from
+    /// <see cref="GameLoop.ActiveService"/>, builds one wrapper that carries it and the run's per-bot table to the
+    /// worker threads, and hands the wrapper to the pool's own <see cref="GameLoopThreadPool.ExecuteForEach{T}"/>. A
+    /// call with nothing to run is passed through unwrapped. The setup never throws: on an exception, after one
+    /// warning, the pool gets the caller's own delegate, so each item still runs once, unmetered. An exception from the
+    /// pool or a callback reaches the caller unchanged.
+    /// </summary>
+    public static void ExecuteForEach<T>(GameLoopThreadPool pool, List<T> items, int toExclusive, Action<T> action)
+    {
+        Action<T> run = action;
+        try
+        {
+            // No table yet: Enabled was set without Enable, and nothing could be charged to a bot.
+            ConditionalWeakTable<GameObject, BotCpuCounter> counters = Volatile.Read(ref _counters);
+            if (items != null && Math.Min(items.Count, toExclusive) > 0 && counters != null)
+            {
+                string profileKey = GameLoop.ActiveService;
+                BotCpuStage stage = _stageHook != null ? _stageHook(profileKey) : StageOf(profileKey);
+                if ((uint)stage >= BotCpuTotals.StageCount)
+                    stage = BotCpuStage.Other;
+                run = new Metered<T>(action, stage, counters).Run;
+            }
+        }
+        catch (Exception exception)
+        {
+            run = action;
+            WarnSetup(exception);
+        }
+
+        pool.ExecuteForEach(items, toExclusive, run);
+    }
+
+    // The wrapper of one call (3.2), made on the game-loop thread with the call's stage and the run's per-bot table:
+    // the worker threads read neither GameLoop.ActiveService nor a static.
+    private sealed class Metered<T>
+    {
+        private readonly Action<T> _action;
+        private readonly BotCpuStage _stage;
+        private readonly ConditionalWeakTable<GameObject, BotCpuCounter> _counters;
+
+        internal Metered(Action<T> action, BotCpuStage stage, ConditionalWeakTable<GameObject, BotCpuCounter> counters)
+        {
+            _action = action;
+            _stage = stage;
+            _counters = counters;
+        }
+
+        internal void Run(T item)
+        {
+            // 1. Before the callback, inside a try: this thread's slot on its first item, the owner, kind and stage,
+            // and a bot's counter. An exception charges the item to unattributed, or, with no slot, leaves it
+            // uncharged.
+            long[] slot = null;
+            int cell;
+            int presence = -1;
+            BotCpuCounter counter = null;
+            try
+            {
+                slot = _threadSlot ?? RegisterSlot();
+                BotCpuCharge charge = Classify(item, _stage, false, AutonomousPlayerPilot.IsActive);
+                cell = BotCpuTotals.CellIndex(charge.Kind, charge.Stage);
+                if (charge.Presence)
+                    presence = BotCpuTotals.PresenceIndex(charge.Kind);
+                if (charge.Bot != null)
+                    counter = _counters.GetOrAdd(charge.Bot, static (_, kind) => new BotCpuCounter(kind), charge.Kind);
+            }
+            catch (Exception)
+            {
+                cell = BotCpuTotals.CellIndex(BotCpuKind.Unattributed, _stage);
+                presence = -1;
+                counter = null;
+            }
+
+            // 2-4. The callback, timed, with what it allocates; outside the try, so its exceptions reach the service as
+            // today.
+            long bytes = GC.GetAllocatedBytesForCurrentThread();
+            long start = Stopwatch.GetTimestamp();
+            _action(item);
+            long ticks = Stopwatch.GetTimestamp() - start;
+            bytes = GC.GetAllocatedBytesForCurrentThread() - bytes;
+
+            // 5-6. Plain adds to this thread's own slot, Interlocked ones to the bot's counter: neither can throw.
+            if (slot != null)
+            {
+                slot[cell] += ticks;
+                slot[cell + 1]++;
+                slot[cell + 2] += bytes;
+                if (presence >= 0)
+                    slot[presence]++;
+            }
+
+            if (counter != null)
+            {
+                Interlocked.Add(ref counter.Ticks, ticks);
+                Interlocked.Add(ref counter.Calls, 1);
+            }
+        }
+    }
+
+    // A thread's first metered item (3.7): its slot, added to the list under the list's lock, once per thread.
+    private static long[] RegisterSlot()
+    {
+        long[] slot = new long[BotCpuTotals.SlotLength];
+        List<long[]> slots = Volatile.Read(ref _slots);
+        lock (slots)
+            slots.Add(slot);
+        _threadSlot = slot;
+        return slot;
+    }
+
+    // The setup fallback's warning (3.1): at most one a run (5.1), its log call in its own try, as NLog here throws
+    // from log calls. The logger is made here, not in a static field, so BotCpuMeter keeps no static initializer.
+    private static void WarnSetup(Exception exception)
+    {
+        if (Interlocked.Exchange(ref _setupWarned, 1) != 0)
+            return;
+
+        try
+        {
+            Logger log = LoggerManager.Create(typeof(BotCpuMeter));
+            if (log.IsWarnEnabled)
+                log.Warn("Bot CPU meter: the setup of a game-loop call failed, so its items ran unmetered (later " +
+                    $"failures in this run are not logged): {exception}");
+        }
+        catch (Exception)
+        {
+            // Nothing: the meter's own faults never reach the game loop.
+        }
+    }
 
     /// <summary>
     /// The stage of a <see cref="GameLoop.ActiveService"/> profile key (3.4): the service's class name, plus

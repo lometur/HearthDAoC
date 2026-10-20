@@ -1,10 +1,13 @@
 using System;
 using System.Collections;
 using System.Collections.Generic;
+using System.Diagnostics;
 using System.Linq;
 using System.Net.Sockets;
 using System.Reflection;
 using System.Runtime.CompilerServices;
+using System.Runtime.InteropServices;
+using System.Threading;
 using DOL.AI;
 using DOL.AI.Brain;
 using DOL.Database;
@@ -19,7 +22,9 @@ namespace DOL.GS.Tests;
 // each game-loop callback is charged to the kind of its owner and to its stage. These tests pin the kinds and stages
 // in their report order (2.5, 2.3), the stage of each profile key (3.4), the kind of each owner, pets included (3.3),
 // and what each item charges: its kind, its stage, the bot whose counter it adds to and its presence (3.3, 3.8), with
-// game objects built without their constructors and their fields set by reflection.
+// game objects built without their constructors and their fields set by reflection. Then the real hook H1 (3.1, 3.2,
+// 3.7, 3.10, 3.11): GameLoop's pool is a recording pool, and while the meter is on each item runs once and is charged
+// to its thread's slot and its bot's counter; off, the pool gets the caller's own delegate.
 [TestFixture, NonParallelizable]
 public sealed class UT_BotCpuMeter
 {
@@ -46,17 +51,40 @@ public sealed class UT_BotCpuMeter
 
     private static readonly IObjectDatabase EmptyDatabase = DispatchProxy.Create<IObjectDatabase, EmptyReads>();
 
+    private const BindingFlags HiddenStatic = BindingFlags.Static | BindingFlags.NonPublic;
+    private static readonly FieldInfo ThreadPoolField = typeof(GameLoop).GetField("_threadPool", HiddenStatic)!;
+    private static readonly FieldInfo StageHookField = typeof(BotCpuMeter).GetField("_stageHook", HiddenStatic)!;
+    private static readonly FieldInfo SlotsField = typeof(BotCpuMeter).GetField("_slots", HiddenStatic)!;
+    private static readonly FieldInfo ThreadSlotField = typeof(BotCpuMeter).GetField("_threadSlot", HiddenStatic)!;
+
     private GameServer _savedServer;
+    private GameLoopThreadPool _savedPool;
+    private string _savedActiveService;
+    private RecordingPool _pool;
 
     [SetUp]
     public void SaveGlobals()
     {
         _savedServer = GameServer.Instance;
         GameServer.LoadTestDouble((EmptyServer)RuntimeHelpers.GetUninitializedObject(typeof(EmptyServer)));
+        // Hook H1 hands each call to GameLoop's private pool (GL:18): a recording pool here, and the stage is
+        // GameLoop.ActiveService, which each test sets (6.1).
+        _savedPool = (GameLoopThreadPool)ThreadPoolField.GetValue(null);
+        _savedActiveService = GameLoop.ActiveService;
+        _pool = new RecordingPool();
+        ThreadPoolField.SetValue(null, _pool);
     }
 
+    // A failing test never leaves the meter on, or the setup's test hook set, for the next (6.1).
     [TearDown]
-    public void RestoreGlobals() => GameServer.LoadTestDouble(_savedServer);
+    public void RestoreGlobals()
+    {
+        BotCpuMeter.Disable();
+        StageHookField.SetValue(null, null);
+        ThreadPoolField.SetValue(null, _savedPool);
+        GameLoop.ActiveService = _savedActiveService;
+        GameServer.LoadTestDouble(_savedServer);
+    }
 
     // A client of the prototype's first kind: derived from BotDummyClient (2.5).
     private sealed class TestDummyClient : BotDummyClient { }
@@ -331,7 +359,7 @@ public sealed class UT_BotCpuMeter
     private static BotCpuCharge Charge<T>(T item, BotCpuStage stage, bool inFleet = false, bool piloted = false) =>
         BotCpuMeter.Classify(item, stage, inFleet, piloted ? Piloted : NotPiloted);
 
-    // Classify<T> for an item type the test can only name at run time (a private one, or one of a list).
+    // Classify<T> for an item type the test names at run time (one of a list).
     private static BotCpuCharge ChargeAs(Type itemType, object item, BotCpuStage stage) =>
         (BotCpuCharge)typeof(BotCpuMeter).GetMethod(nameof(BotCpuMeter.Classify))!.MakeGenericMethod(itemType)
             .Invoke(null, [item, stage, false, (Func<GamePlayer, bool>)NotPiloted])!;
@@ -619,17 +647,6 @@ public sealed class UT_BotCpuMeter
             BotCpuKind.Gamebot, BotCpuStage.Fleet, null, presence: false);
     }
 
-    [TestCase(BotCpuStage.GameLoop)]
-    [TestCase(BotCpuStage.Npc)]
-    [TestCase(BotCpuStage.Quests)]
-    public void APostedActionIsUnattributedInTheStageItWasPostedTo(BotCpuStage stage)
-    {
-        // GameServiceBase.PostedAction is private (3.6), so Classify<PostedAction> is reached by reflection.
-        Type posted = typeof(GameServiceBase).GetNestedType("PostedAction", BindingFlags.NonPublic)!;
-        AssertCharge(ChargeAs(posted, RuntimeHelpers.GetUninitializedObject(posted), stage), BotCpuKind.Unattributed,
-            stage, null, presence: false);
-    }
-
     [Test]
     public void AnItemTypeTheMeterDoesNotKnowIsUnattributed()
     {
@@ -678,5 +695,535 @@ public sealed class UT_BotCpuMeter
         long before = GC.GetAllocatedBytesForCurrentThread();
         ClassifyEach();
         Assert.That(GC.GetAllocatedBytesForCurrentThread() - before, Is.Zero);
+    }
+
+    // The slots, the wrapper and hook H1 (3.1, 3.2, 3.7, 3.10, 3.11): each test calls the real GameLoop.ExecuteForEach,
+    // whose pool keeps the delegate it was given, and reads what was charged as the difference of two snapshots.
+
+    // A test subclass of GameLoopThreadPool that keeps the delegate it was given and runs the items in order, on the
+    // calling thread (6.1).
+    private sealed class RecordingPool : GameLoopThreadPool
+    {
+        public Delegate Given;
+        public int Calls;
+
+        public override void ExecuteForEach<T>(List<T> items, int toExclusive, Action<T> action)
+        {
+            Calls++;
+            Given = action;
+            int count = Math.Min(items.Count, toExclusive);
+            for (int i = 0; i < count; i++)
+                action(items[i]);
+        }
+
+        public override void Dispose() { }
+    }
+
+    // A brain whose Body getter throws (Body is virtual, ai/ABrain.cs:15).
+    private sealed class ThrowingBrain : ABrain
+    {
+        public override GameNPC Body
+        {
+            get => throw new InvalidOperationException("Body");
+            set { }
+        }
+
+        public override void Think() { }
+
+        public override void KillFSM() { }
+    }
+
+    // What was charged between two snapshots.
+    private sealed class Charged(BotCpuTotals before, BotCpuTotals after)
+    {
+        public long Ticks(BotCpuKind kind, BotCpuStage stage) => after.Ticks(kind, stage) - before.Ticks(kind, stage);
+
+        public long Calls(BotCpuKind kind, BotCpuStage stage) => after.Calls(kind, stage) - before.Calls(kind, stage);
+
+        public long Bytes(BotCpuKind kind, BotCpuStage stage) => after.Bytes(kind, stage) - before.Bytes(kind, stage);
+
+        public long Presence(BotCpuKind kind) => after.Presence(kind) - before.Presence(kind);
+
+        public long AllCalls =>
+            Enum.GetValues<BotCpuKind>().Sum(kind => Enum.GetValues<BotCpuStage>().Sum(stage => Calls(kind, stage)));
+
+        public long AllPresence => Enum.GetValues<BotCpuKind>().Sum(Presence);
+    }
+
+    private static Charged Since(BotCpuTotals before) => new(before, BotCpuMeter.TakeSnapshot());
+
+    // Every value of a snapshot: per kind its stages' ticks, calls and bytes, then its presence.
+    private static long[] Values(BotCpuTotals totals) =>
+        Enum.GetValues<BotCpuKind>().SelectMany(kind => Enum.GetValues<BotCpuStage>()
+            .SelectMany(stage =>
+                new[] { totals.Ticks(kind, stage), totals.Calls(kind, stage), totals.Bytes(kind, stage) })
+            .Append(totals.Presence(kind))).ToArray();
+
+    private static int SlotCount()
+    {
+        var slots = (List<long[]>)SlotsField.GetValue(null);
+        if (slots == null)
+            return 0;
+        lock (slots)
+            return slots.Count;
+    }
+
+    // Runs work on a new thread, as a game-loop worker would, and returns what it threw, if anything.
+    private static Exception OnNewThread(Action work)
+    {
+        Exception failure = null;
+        Thread thread = new(() =>
+        {
+            try { work(); }
+            catch (Exception exception) { failure = exception; }
+        });
+        thread.Start();
+        thread.Join();
+        return failure;
+    }
+
+    private static void Spin(long ticks)
+    {
+        long end = Stopwatch.GetTimestamp() + ticks;
+        while (Stopwatch.GetTimestamp() < end) { }
+    }
+
+    private static byte[] _sink;
+
+    [Test]
+    public void TheSwitchIsAPlainPublicStaticBoolOffByDefault()
+    {
+        FieldInfo enabled = typeof(BotCpuMeter).GetField(nameof(BotCpuMeter.Enabled));
+        Assert.That(enabled, Is.Not.Null, "a field, not a property: H1 costs one bool read");
+        Assert.That(enabled!.IsPublic && enabled.IsStatic && !enabled.IsInitOnly && !enabled.IsLiteral, Is.True);
+        Assert.That(enabled.FieldType, Is.EqualTo(typeof(bool)));
+        Assert.That(BotCpuMeter.Enabled, Is.False);
+    }
+
+    [Test]
+    public void OffTheGameLoopHandsThePoolTheCallersDelegateAndMetersNothing()
+    {
+        BotCpuMeter.Enable();
+        BotCpuMeter.Disable();
+        GameLoop.ActiveService = nameof(NpcService);
+        List<ABrain> brains = [Bot(autonomous: true).Brain, BrainOf(Npc(Make<StandardMobBrain>()))];
+        int ran = 0;
+        Action<ABrain> action = _ => ran++;
+        int slots = SlotCount();
+        BotCpuTotals before = BotCpuMeter.TakeSnapshot();
+        object threadSlot = "not read";
+
+        // On a new thread, which has no slot yet: an off call must not make one.
+        Exception failure = OnNewThread(() =>
+        {
+            GameLoop.ExecuteForEach(brains, brains.Count, action);
+            threadSlot = ThreadSlotField.GetValue(null);
+        });
+
+        Assert.That(failure, Is.Null);
+        Assert.That(_pool.Given, Is.SameAs(action));
+        Assert.That(ran, Is.EqualTo(2));
+        Assert.That(threadSlot, Is.Null, "no slot for the thread");
+        Assert.That(SlotCount(), Is.EqualTo(slots));
+        Assert.That(Values(BotCpuMeter.TakeSnapshot()), Is.EqualTo(Values(before)));
+    }
+
+    [Test]
+    public void OffTheGameLoopAllocatesNothing()
+    {
+        List<ABrain> brains = [Bot(autonomous: true).Brain];
+        Action<ABrain> action = static _ => { };
+        GameLoop.ExecuteForEach(brains, brains.Count, action); // warm-up
+        long before = GC.GetAllocatedBytesForCurrentThread();
+        GameLoop.ExecuteForEach(brains, brains.Count, action);
+        Assert.That(GC.GetAllocatedBytesForCurrentThread() - before, Is.Zero);
+    }
+
+    [Test]
+    public void OnEachItemRunsOnceAndChargesOneCallToItsKindAndStage()
+    {
+        BotCpuMeter.Enable();
+        GameBot bot = Bot(autonomous: true);
+        GamePlayer player = Player(Make<GameClient>());
+        GameBot companion = Bot(autonomous: false, player);
+        List<ABrain> brains =
+            [bot.Brain, companion.Brain, BrainOf(Npc(Make<StandardMobBrain>())), BrainOf(Pet(player))];
+        List<GameClient> clients =
+        [
+            Client(GameClient.eClientState.Playing, GameObject.eObjectState.Active),
+            Client(GameClient.eClientState.CharScreen, GameObject.eObjectState.Active),
+        ];
+        Dictionary<object, int> runs = new();
+        Action<ABrain> think = brain => runs[brain] = runs.GetValueOrDefault(brain) + 1;
+        Action<GameClient> begin = client => runs[client] = runs.GetValueOrDefault(client) + 1;
+        BotCpuTotals before = BotCpuMeter.TakeSnapshot();
+
+        GameLoop.ActiveService = nameof(NpcService);
+        GameLoop.ExecuteForEach(brains, brains.Count, think);
+        Assert.That(_pool.Given, Is.Not.SameAs(think));
+        GameLoop.ActiveService = nameof(ClientService) + "." + nameof(ClientService.BeginTick);
+        GameLoop.ExecuteForEach(clients, clients.Count, begin);
+        Assert.That(_pool.Given, Is.Not.SameAs(begin));
+
+        Charged charged = Since(before);
+        Assert.That(brains.Select(brain => runs.GetValueOrDefault(brain)), Is.EqualTo(new[] { 1, 1, 1, 1 }));
+        Assert.That(clients.Select(client => runs.GetValueOrDefault(client)), Is.EqualTo(new[] { 1, 1 }));
+        Assert.Multiple(() =>
+        {
+            Assert.That(charged.Calls(BotCpuKind.Gamebot, BotCpuStage.Npc), Is.EqualTo(1));
+            Assert.That(charged.Calls(BotCpuKind.Companion, BotCpuStage.Npc), Is.EqualTo(1));
+            Assert.That(charged.Calls(BotCpuKind.Monster, BotCpuStage.Npc), Is.EqualTo(1));
+            Assert.That(charged.Calls(BotCpuKind.Player, BotCpuStage.Pets), Is.EqualTo(1));
+            Assert.That(charged.Calls(BotCpuKind.Player, BotCpuStage.ClientBegin), Is.EqualTo(1));
+            Assert.That(charged.Calls(BotCpuKind.Unattributed, BotCpuStage.ClientBegin), Is.EqualTo(1));
+            Assert.That(charged.AllCalls, Is.EqualTo(6));
+            Assert.That(charged.Presence(BotCpuKind.Companion), Is.EqualTo(1));
+            Assert.That(charged.Presence(BotCpuKind.Monster), Is.EqualTo(1));
+            Assert.That(charged.Presence(BotCpuKind.Player), Is.EqualTo(1));
+            Assert.That(charged.AllPresence, Is.EqualTo(3));
+        });
+    }
+
+    [Test]
+    public void OnACallWithNothingToRunIsPassedThroughUnwrapped()
+    {
+        BotCpuMeter.Enable();
+        GameLoop.ActiveService = nameof(NpcService);
+        Action<int> action = _ => Assert.Fail("no item runs");
+        BotCpuTotals before = BotCpuMeter.TakeSnapshot();
+        GameLoop.ExecuteForEach(new List<int>(), 0, action);
+        Assert.That(_pool.Given, Is.SameAs(action), "an empty list");
+        _pool.Given = null;
+        GameLoop.ExecuteForEach(new List<int> { 1, 2 }, 0, action);
+        Assert.That(_pool.Given, Is.SameAs(action), "nothing below toExclusive");
+        Assert.That(_pool.Calls, Is.EqualTo(2));
+        Assert.That(Values(BotCpuMeter.TakeSnapshot()), Is.EqualTo(Values(before)));
+    }
+
+    [Test]
+    public void EachRunHasTheNextNumberAndAnEmptyPerBotTableWhileTheSlotsKeepTheirTotals()
+    {
+        int first = BotCpuMeter.Enable();
+        Assert.That(BotCpuMeter.Enabled, Is.True);
+        Assert.That(BotCpuMeter.RunNumber, Is.EqualTo(first));
+        GameLoop.ActiveService = nameof(NpcService);
+        GameBot bot = Bot(autonomous: true);
+        GameLoop.ExecuteForEach(new List<ABrain> { bot.Brain }, 1, static _ => { });
+        Assert.That(BotCpuMeter.Counters().Select(pair => pair.Key), Is.EqualTo(new[] { bot }));
+        BotCpuTotals firstRun = BotCpuMeter.TakeSnapshot();
+
+        BotCpuMeter.Disable();
+        Assert.That(BotCpuMeter.Enabled, Is.False);
+        // Off, the report still reads the closed run's counters for its last window.
+        Assert.That(BotCpuMeter.Counters().Select(pair => pair.Key), Is.EqualTo(new[] { bot }));
+        Assert.That(BotCpuMeter.RunNumber, Is.EqualTo(first));
+
+        int second = BotCpuMeter.Enable();
+        Assert.That(second, Is.EqualTo(first + 1));
+        Assert.That(BotCpuMeter.RunNumber, Is.EqualTo(second));
+        Assert.That(BotCpuMeter.Counters(), Is.Empty);
+        Assert.That(Values(BotCpuMeter.TakeSnapshot()), Is.EqualTo(Values(firstRun)), "slots are never zeroed");
+    }
+
+    [Test]
+    public void WhenTheSetupThrowsEveryItemRunsOnceUnmeteredWithTheCallersDelegate()
+    {
+        BotCpuMeter.Enable();
+        GameLoop.ActiveService = nameof(NpcService);
+        StageHookField.SetValue(null, (Func<string, BotCpuStage>)(_ => throw new InvalidOperationException("stage")));
+        List<ABrain> brains = [Bot(autonomous: true).Brain, BrainOf(Npc(Make<StandardMobBrain>()))];
+        Dictionary<ABrain, int> runs = new();
+        Action<ABrain> action = brain => runs[brain] = runs.GetValueOrDefault(brain) + 1;
+        BotCpuTotals before = BotCpuMeter.TakeSnapshot();
+
+        Assert.DoesNotThrow(() => GameLoop.ExecuteForEach(brains, brains.Count, action));
+        Assert.That(_pool.Given, Is.SameAs(action));
+        Assert.That(brains.Select(brain => runs.GetValueOrDefault(brain)), Is.EqualTo(new[] { 1, 1 }));
+        // Again: the warning is not written twice, and the call runs the same way.
+        Assert.DoesNotThrow(() => GameLoop.ExecuteForEach(brains, brains.Count, action));
+        Assert.That(brains.Select(brain => runs.GetValueOrDefault(brain)), Is.EqualTo(new[] { 2, 2 }));
+        Assert.That(Values(BotCpuMeter.TakeSnapshot()), Is.EqualTo(Values(before)));
+    }
+
+    [TestCase(null)]
+    [TestCase("")]
+    public void ANullOrEmptyActiveServiceIsOther(string activeService)
+    {
+        BotCpuMeter.Enable();
+        GameLoop.ActiveService = activeService;
+        BotCpuTotals before = BotCpuMeter.TakeSnapshot();
+        Assert.DoesNotThrow(() => GameLoop.ExecuteForEach(new List<int> { 1, 2 }, 2, static _ => { }));
+        Assert.That(Since(before).Calls(BotCpuKind.Unattributed, BotCpuStage.Other), Is.EqualTo(2));
+    }
+
+    // A service as upstream's are: its Tick runs what was posted to it, as NpcService.Tick does first.
+    private sealed class PostingService : GameServiceBase
+    {
+        public override void Tick() => ProcessPostedActionsParallel();
+    }
+
+    // Posted actions reach the meter through their service's own GameLoop.ExecuteForEach call
+    // (ECS-Services/GameServiceBase.cs:62), over PostedAction items, which are private: the meter cannot read who
+    // posted them or for whom (3.6). Each is unattributed in the stage the game loop set for the service, even one
+    // whose state is a bot.
+    [TestCase(nameof(GameLoopService), BotCpuStage.GameLoop)]
+    [TestCase(nameof(NpcService), BotCpuStage.Npc)]
+    [TestCase(nameof(DailyQuestService), BotCpuStage.Quests)]
+    public void APostedActionIsUnattributedInItsServicesStage(string profileKey, BotCpuStage stage)
+    {
+        BotCpuMeter.Enable();
+        PostingService service = new();
+        GameBot bot = Bot(autonomous: true);
+        List<object> ran = [];
+        service.Post(state => ran.Add(state), bot);
+        service.Post(state => ran.Add(state), 7);
+        BotCpuTotals before = BotCpuMeter.TakeSnapshot();
+
+        GameLoop.ActiveService = profileKey; // as GameLoop's tick sets it before the service's step
+        service.Tick();
+
+        Charged charged = Since(before);
+        Assert.Multiple(() =>
+        {
+            Assert.That(ran, Is.EqualTo(new object[] { bot, 7 }), "each action ran once");
+            Assert.That(_pool.Calls, Is.EqualTo(1));
+            Assert.That(_pool.Given.Method.DeclaringType, Is.Not.EqualTo(typeof(GameServiceBase)),
+                "the pool got the meter's wrapper, not the service's own callback");
+            Assert.That(charged.Calls(BotCpuKind.Unattributed, stage), Is.EqualTo(2));
+            Assert.That(charged.AllCalls, Is.EqualTo(2), "nothing else");
+            Assert.That(charged.AllPresence, Is.Zero);
+            Assert.That(BotCpuMeter.Counters(), Is.Empty, "no bot's counter");
+        });
+    }
+
+    [Test]
+    public void TheOwnerIsReadBeforeTheCallback()
+    {
+        BotCpuMeter.Enable();
+        GameLoop.ActiveService = nameof(NpcService);
+        GameBot bot = Bot(autonomous: true);
+        List<ABrain> brains = [bot.Brain, BrainOf(Npc(Make<StandardMobBrain>()))];
+        BotCpuTotals before = BotCpuMeter.TakeSnapshot();
+
+        GameLoop.ExecuteForEach(brains, brains.Count, static brain => brain.Body = null);
+
+        Charged charged = Since(before);
+        Assert.That(brains.Select(brain => brain.Body), Is.All.Null, "each callback ran");
+        Assert.That(charged.Calls(BotCpuKind.Gamebot, BotCpuStage.Npc), Is.EqualTo(1));
+        Assert.That(charged.Calls(BotCpuKind.Monster, BotCpuStage.Npc), Is.EqualTo(1));
+        Assert.That(charged.Presence(BotCpuKind.Monster), Is.EqualTo(1));
+        Assert.That(BotCpuMeter.Counters().Single(pair => pair.Key == bot).Value.Calls, Is.EqualTo(1));
+    }
+
+    [Test]
+    public void AnItemWhoseOwnerThrowsIsUnattributedAndStillRunsOnce()
+    {
+        BotCpuMeter.Enable();
+        GameLoop.ActiveService = nameof(NpcService);
+        List<ABrain> brains = [Make<ThrowingBrain>()];
+        int ran = 0;
+        BotCpuTotals before = BotCpuMeter.TakeSnapshot();
+
+        Assert.DoesNotThrow(() => GameLoop.ExecuteForEach(brains, brains.Count, _ => ran++));
+
+        Charged charged = Since(before);
+        Assert.That(ran, Is.EqualTo(1));
+        Assert.That(charged.Calls(BotCpuKind.Unattributed, BotCpuStage.Npc), Is.EqualTo(1));
+        Assert.That(charged.AllCalls, Is.EqualTo(1));
+        Assert.That(charged.AllPresence, Is.Zero);
+        Assert.That(BotCpuMeter.Counters(), Is.Empty);
+    }
+
+    [Test]
+    public void AnExceptionFromACallbackReachesTheCallerUnchanged()
+    {
+        BotCpuMeter.Enable();
+        GameLoop.ActiveService = nameof(TimerService);
+        InvalidOperationException thrown = new("callback");
+        Exception caught = Assert.Throws<InvalidOperationException>(() =>
+            GameLoop.ExecuteForEach(new List<int> { 1 }, 1, _ => throw thrown));
+        Assert.That(caught, Is.SameAs(thrown));
+    }
+
+    [Test]
+    public void EachBotsItemsAddToItsOwnCounterAndAPetsToItsOwners()
+    {
+        BotCpuMeter.Enable();
+        GameLoop.ActiveService = nameof(NpcService);
+        GameBot first = Bot(autonomous: true);
+        GameBot second = Bot(autonomous: true);
+        GamePlayer player = Player(Make<GameClient>());
+        GameBot companion = Bot(autonomous: false, player);
+        List<ABrain> brains =
+        [
+            first.Brain, second.Brain, BrainOf(Pet(first)), companion.Brain, BrainOf(Pet(player)),
+            BrainOf(Npc(Make<StandardMobBrain>())),
+        ];
+        long spin = Stopwatch.Frequency / 10_000; // 0.1 ms
+        BotCpuTotals before = BotCpuMeter.TakeSnapshot();
+
+        GameLoop.ExecuteForEach(brains, brains.Count, _ => Spin(spin));
+
+        Charged charged = Since(before);
+        Dictionary<GameObject, BotCpuCounter> counters =
+            BotCpuMeter.Counters().ToDictionary(pair => pair.Key, pair => pair.Value);
+        Assert.That(counters.Keys, Is.EquivalentTo(new GameObject[] { first, second, companion }), "bots only");
+        Assert.Multiple(() =>
+        {
+            Assert.That(counters[first].Calls, Is.EqualTo(2), "its brain and its pet's");
+            Assert.That(counters[second].Calls, Is.EqualTo(1));
+            Assert.That(counters[companion].Calls, Is.EqualTo(1));
+            Assert.That(counters[first].Ticks, Is.GreaterThanOrEqualTo(2 * spin));
+            Assert.That(counters[second].Ticks, Is.GreaterThanOrEqualTo(spin));
+            Assert.That(counters[first].Kind, Is.EqualTo(BotCpuKind.Gamebot));
+            Assert.That(counters[companion].Kind, Is.EqualTo(BotCpuKind.Companion));
+            Assert.That(counters.Values.Select(counter => counter.LastTicks + counter.LastCalls), Is.All.Zero,
+                "written by the report only");
+            // A bot's ticks are those its items added to the slot.
+            Assert.That(counters[first].Ticks + counters[second].Ticks,
+                Is.EqualTo(charged.Ticks(BotCpuKind.Gamebot, BotCpuStage.Npc) +
+                    charged.Ticks(BotCpuKind.Gamebot, BotCpuStage.Pets)));
+            Assert.That(counters[companion].Ticks, Is.EqualTo(charged.Ticks(BotCpuKind.Companion, BotCpuStage.Npc)));
+        });
+    }
+
+    [Test]
+    public void AnItemThatAllocatesChargesItsBytesToItsKindAndAnIntListChargesNone()
+    {
+        BotCpuMeter.Enable();
+        GameLoop.ActiveService = nameof(NpcService);
+        GameBot bot = Bot(autonomous: true);
+        BotCpuTotals before = BotCpuMeter.TakeSnapshot();
+
+        GameLoop.ExecuteForEach(new List<ABrain> { bot.Brain }, 1, static _ => _sink = new byte[1000]);
+        GameLoop.ExecuteForEach(new List<int> { 1, 2, 3 }, 3, static _ => { });
+
+        Charged charged = Since(before);
+        Assert.That(charged.Bytes(BotCpuKind.Gamebot, BotCpuStage.Npc), Is.GreaterThanOrEqualTo(1000));
+        Assert.That(charged.Calls(BotCpuKind.Unattributed, BotCpuStage.Npc), Is.EqualTo(3));
+        Assert.That(charged.Bytes(BotCpuKind.Unattributed, BotCpuStage.Npc), Is.Zero);
+    }
+
+    [Test]
+    public void TheMeterAllocatesForEachCallNotForEachItem()
+    {
+        BotCpuMeter.Enable();
+        GameLoop.ActiveService = nameof(NpcService);
+        GameBot bot = Bot(autonomous: true);
+        GamePlayer player = Player(Make<GameClient>());
+        List<ABrain> one = [bot.Brain];
+        List<ABrain> many =
+            [.. Enumerable.Range(0, 20).SelectMany(_ => new[] { bot.Brain, BrainOf(Pet(bot)), BrainOf(Pet(player)) })];
+        Action<ABrain> action = static _ => { };
+
+        long Cost(List<ABrain> items)
+        {
+            long before = GC.GetAllocatedBytesForCurrentThread();
+            GameLoop.ExecuteForEach(items, items.Count, action);
+            return GC.GetAllocatedBytesForCurrentThread() - before;
+        }
+
+        Cost(many); // warm-up: the thread's slot, the owner readers, each bot's counter
+        long perCall = Cost(one);
+        Assert.That(perCall, Is.GreaterThan(0), "one wrapper and its delegate");
+        Assert.That(Cost(many), Is.EqualTo(perCall));
+    }
+
+    [Test]
+    public void ASnapshotAddsUpTheSlotOfEveryThreadThatRanAnItem()
+    {
+        BotCpuMeter.Enable();
+        GameLoop.ActiveService = nameof(TimerService);
+        GameLoop.ExecuteForEach(new List<int> { 1 }, 1, static _ => { }); // this thread's slot, if it had none
+        int slots = SlotCount();
+        BotCpuTotals before = BotCpuMeter.TakeSnapshot();
+        object otherSlot = null;
+
+        GameLoop.ExecuteForEach(new List<int> { 1, 2 }, 2, static _ => { });
+        Exception failure = OnNewThread(() =>
+        {
+            GameLoop.ExecuteForEach(new List<int> { 3 }, 1, static _ => { });
+            otherSlot = ThreadSlotField.GetValue(null);
+        });
+
+        Assert.That(failure, Is.Null);
+        Assert.That(Since(before).Calls(BotCpuKind.Unattributed, BotCpuStage.Timer), Is.EqualTo(3));
+        Assert.That(SlotCount(), Is.EqualTo(slots + 1), "the new thread registered its slot");
+        var registered = (List<long[]>)SlotsField.GetValue(null);
+        lock (registered!)
+            Assert.That(registered, Has.Some.SameAs(otherSlot));
+        Assert.That(((long[])otherSlot)!.Length, Is.EqualTo(BotCpuTotals.SlotLength));
+    }
+
+    [Test]
+    public void ASlotHasEachCellAndPresenceCountOnceBetween64BytesOfPaddingAtEachEnd()
+    {
+        Assert.That(BotCpuTotals.SlotLength, Is.EqualTo(401));
+        List<int> indexes = [];
+        foreach (BotCpuKind kind in Enum.GetValues<BotCpuKind>())
+        {
+            foreach (BotCpuStage stage in Enum.GetValues<BotCpuStage>())
+                indexes.AddRange(Enumerable.Range(BotCpuTotals.CellIndex(kind, stage), 3));
+            indexes.Add(BotCpuTotals.PresenceIndex(kind));
+        }
+
+        Assert.That(indexes, Is.Unique);
+        Assert.That(indexes, Has.Count.EqualTo(385));
+        Assert.That(indexes.Min(), Is.EqualTo(8));
+        Assert.That(indexes.Max(), Is.EqualTo(401 - 8 - 1));
+    }
+
+    [Test]
+    public void TheTotalsAreTheSumsOfTheSlotsAndReadingThemChangesNoSlot()
+    {
+        long[] a = new long[BotCpuTotals.SlotLength];
+        long[] b = new long[BotCpuTotals.SlotLength];
+        int cell = BotCpuTotals.CellIndex(BotCpuKind.Monster, BotCpuStage.Movement);
+        (a[cell], a[cell + 1], a[cell + 2]) = (5, 2, 300);
+        (b[cell], b[cell + 1], b[cell + 2]) = (7, 1, 0);
+        a[BotCpuTotals.PresenceIndex(BotCpuKind.Monster)] = 30;
+        b[BotCpuTotals.PresenceIndex(BotCpuKind.Monster)] = 12;
+        long[] aBefore = (long[])a.Clone();
+        long[] bBefore = (long[])b.Clone();
+
+        BotCpuTotals totals = BotCpuTotals.Sum([a, b]);
+
+        Assert.That(a, Is.EqualTo(aBefore));
+        Assert.That(b, Is.EqualTo(bBefore));
+        Assert.That(totals.Ticks(BotCpuKind.Monster, BotCpuStage.Movement), Is.EqualTo(12));
+        Assert.That(totals.Calls(BotCpuKind.Monster, BotCpuStage.Movement), Is.EqualTo(3));
+        Assert.That(totals.Bytes(BotCpuKind.Monster, BotCpuStage.Movement), Is.EqualTo(300));
+        Assert.That(totals.Presence(BotCpuKind.Monster), Is.EqualTo(42));
+        Assert.That(Values(totals).Sum(), Is.EqualTo(12 + 3 + 300 + 42), "nothing else");
+
+        // The report builds its windows from plain values.
+        BotCpuTotals built = new();
+        built.Add(BotCpuKind.Monster, BotCpuStage.Movement, 12, 3, 300);
+        built.AddPresence(BotCpuKind.Monster, 42);
+        Assert.That(Values(built), Is.EqualTo(Values(totals)));
+        Assert.That(Values(new BotCpuTotals()), Is.All.Zero);
+    }
+
+    [Test]
+    public void ACounterKeepsItsHotFieldsBetween64BytesOfPaddingAndIsSmall()
+    {
+        Assert.That(typeof(BotCpuCounter).IsExplicitLayout, Is.True);
+        FieldInfo[] fields =
+            typeof(BotCpuCounter).GetFields(BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic);
+        int Offset(FieldInfo field) => field.GetCustomAttribute<FieldOffsetAttribute>()!.Value;
+        int ticks = Offset(typeof(BotCpuCounter).GetField(nameof(BotCpuCounter.Ticks))!);
+        int calls = Offset(typeof(BotCpuCounter).GetField(nameof(BotCpuCounter.Calls))!);
+        Assert.That(ticks, Is.GreaterThanOrEqualTo(64));
+        Assert.That(calls, Is.EqualTo(ticks + 8));
+        IEnumerable<FieldInfo> cold =
+            fields.Where(field => field.Name is not (nameof(BotCpuCounter.Ticks) or nameof(BotCpuCounter.Calls)));
+        Assert.That(cold.Select(Offset), Is.All.GreaterThanOrEqualTo(calls + 8 + 64));
+
+        long before = GC.GetAllocatedBytesForCurrentThread();
+        BotCpuCounter counter = new(BotCpuKind.Companion);
+        long size = GC.GetAllocatedBytesForCurrentThread() - before;
+        Assert.That(size, Is.LessThan(200));
+        Assert.That(counter.Kind, Is.EqualTo(BotCpuKind.Companion));
+        Assert.That(new[] { counter.Ticks, counter.Calls, counter.LastTicks, counter.LastCalls }, Is.All.Zero);
     }
 }
