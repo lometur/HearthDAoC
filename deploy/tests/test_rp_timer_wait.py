@@ -118,7 +118,8 @@ class EntrypointTests(unittest.TestCase):
         self.assertIn('--bot-rp-timer-wait "${HEARTHDAOC_BOT_RP_TIMER_WAIT-on}"', self.command)
         r = self.run_entrypoint_line()
         self.assertEqual((r.returncode, r.stdout, r.stderr),
-                         (0, "GM-only commands: /tele;/tc\nShrouded Isles start choice: on\nBot realm point timer wait: on\n", ""))
+                         (0, "GM-only commands: /tele;/tc\nShrouded Isles start choice: on\nBot realm point timer wait: on\n"
+                             "Bot CPU meter: off\n", ""))
         self.assertEqual(row(self.db, sp.RP_WAIT_KEY), ("server", sp.RP_WAIT_DESCRIPTION, "False", "True"))
 
     def test_off_in_any_case_turns_it_off(self):

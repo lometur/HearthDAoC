@@ -62,6 +62,8 @@ namespace DOL.GS
 
         public static void ExecuteForEach<T>(List<T> items, int toExclusive, Action<T> action)
         {
+            // HearthDAoC: the per-kind CPU meter (#137) times each callback while it is on; off, this is one bool read.
+            if (HearthDAoC.BotCpuMeter.Enabled) { HearthDAoC.BotCpuMeter.ExecuteForEach(_threadPool, items, toExclusive, action); return; }
             _threadPool.ExecuteForEach(items, toExclusive, action);
         }
 
