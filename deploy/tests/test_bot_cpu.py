@@ -1,9 +1,10 @@
 """The bot CPU meter (spec docs/fork/specs/2026-10-14-bot-cpu-meter-design.md, 6.2).
 
 While the meter is on, each game-loop callback is timed and charged to the kind of its owner and to its stage. The hot
-path is unit-tested (UT_BotCpuMeter), through the real hook H1 in GameLoop.ExecuteForEach; the hook's shape in the
-upstream file, the upstream facts the meter mirrors (the stage of each profile key, the pool's entry point, the member
-each item's owner is read from) and the upstream file's line endings need the source, so these check it.
+path is unit-tested (UT_BotCpuMeter), through the real hook H1 in GameLoop.ExecuteForEach and hook H6's fleet scope;
+the hooks' shape in the upstream files, the upstream facts the meter mirrors (the stage of each profile key, the pool's
+entry point, the member each item's owner is read from, the one nested call inside the fleet scope) and the upstream
+files' line endings need the source, so these check it.
 """
 import os
 import re
@@ -19,11 +20,21 @@ LOOP = os.path.join(GAME_SERVER, "Managers", "GameLoop")
 GL = os.path.join(LOOP, "GameLoop.cs")
 POOL = os.path.join(LOOP, "GameLoopThreadPool.cs")
 MT = os.path.join(LOOP, "GameLoopThreadPoolMultiThreaded.cs")
+NS = os.path.join(GAME_SERVER, "ECS-Services", "NpcService.cs")
+CPP = os.path.join(GAME_SERVER, "bots", "autonomous", "AutonomousCampPlanningPipeline.cs")
 
 # Hook H1 (spec 3.1): while the meter is on, it gets the pool call; off, one bool read before the unchanged call.
 GUARD = ("if (HearthDAoC.BotCpuMeter.Enabled) { HearthDAoC.BotCpuMeter.ExecuteForEach(_threadPool, items, toExclusive, "
          "action); return; }")
 POOL_CALL = "_threadPool.ExecuteForEach(items, toExclusive, action);"
+
+# Hook H6 (spec 3.5): NpcService.Tick's GameBot fleet planning, between the posted actions and the brains, in a scope
+# charged to gamebot / Fleet.
+BEGIN_FLEET = "long fleetStart = HearthDAoC.BotCpuMeter.BeginFleet();"
+END_FLEET = "HearthDAoC.BotCpuMeter.EndFleet(fleetStart); // HearthDAoC: end of the fleet scope."
+FLEET_PLANNING = ["AutonomousBotRegistry.PrepareBrainTick();", "AutonomousWorldBotController.PrepareRvrPlanningTick();",
+                  "AutonomousBotGroupCoordinator.PrepareCoordinatorTick();",
+                  "AutonomousWorldBotController.PrepareCampPlanningTick();"]
 
 
 def source(path):
@@ -54,6 +65,23 @@ def type_body(text, header):
     return text[start:found.start() if found else len(text)]
 
 
+def upstream_lines(pattern):
+    """{path under GameServer/: [each line matching the pattern, stripped]} over every file under GameServer/ outside
+    the fork's scripts/hearthdaoc/ folder."""
+    found = {}
+    for folder, _, names in os.walk(GAME_SERVER):
+        if folder == FORK or folder.startswith(FORK + os.sep):
+            continue
+        for name in names:
+            path = os.path.join(folder, name)
+            with open(path, "rb") as f:
+                text = f.read().decode("utf-8", errors="replace")
+            hits = [line.strip() for line in text.splitlines() if re.search(pattern, line)]
+            if hits:
+                found[os.path.relpath(path, GAME_SERVER).replace(os.sep, "/")] = hits
+    return found
+
+
 class HookTests(unittest.TestCase):
     def test_h1_hands_the_pool_call_to_the_meter_while_it_is_on(self):
         body = between(source(GL),
@@ -64,6 +92,28 @@ class HookTests(unittest.TestCase):
         # The comment, the guard, then upstream's call, unchanged: nothing else in the method.
         self.assertEqual(statements[1:], [GUARD, POOL_CALL])
         self.assertTrue(statements[0].startswith("// HearthDAoC: the per-kind CPU meter (#137)"), statements[0])
+
+    def test_h6_scopes_the_gamebot_fleet_planning(self):
+        tick = between(source(NS), "public override void Tick()", "GameLoop.ExecuteForEach(")
+        marked(self, tick, BEGIN_FLEET)
+        statements = [line.strip() for line in tick.split("\n")]
+        first = statements.index("ProcessPostedActionsParallel();")
+        # The posted actions, the comment, BeginFleet, the four planning calls in their order, EndFleet with its
+        # trailing mark: nothing else in the scope.
+        self.assertTrue(statements[first + 1].startswith("// HearthDAoC: the per-kind CPU meter (#137)"),
+                        statements[first + 1])
+        self.assertEqual(statements[first + 2:first + 8], [BEGIN_FLEET, *FLEET_PLANNING, END_FLEET])
+        for call in FLEET_PLANNING + [END_FLEET]:
+            self.assertEqual(tick.count(call), 1, call)
+        # Then the brains.
+        self.assertLess(tick.index(END_FLEET), tick.index("ServiceObjectStore.UpdateAndGetAll<ABrain>"))
+
+    def test_the_meter_is_in_no_other_upstream_file(self):
+        # The upstream lines are H1's guard in GL and H6's two calls in NS (spec 5.2), nothing else.
+        self.assertEqual(upstream_lines("BotCpu"), {
+            "Managers/GameLoop/GameLoop.cs": [GUARD],
+            "ECS-Services/NpcService.cs": [BEGIN_FLEET, END_FLEET],
+        })
 
 
 class UpstreamFactTests(unittest.TestCase):
@@ -103,6 +153,11 @@ class UpstreamFactTests(unittest.TestCase):
                       source(POOL))
         # The loop threads' names, which the process line reads (spec 3.9).
         self.assertIn('Name = $"{GameLoop.THREAD_NAME}_Worker_{i}",', source(MT))
+        # The process line finds the camp planner's thread by this name; renamed, campThreadCpuPct would read 0.0.
+        self.assertIn('_campBuilder ??= new("CampSnapshotPlanner", BuildCampCatalogDraft);', source(CPP))
+        # Its builder names its thread with that name as it is (Managers/GameLoop/BackgroundSnapshotBuilder.cs:28).
+        self.assertIn("_worker = new Thread(Run) { Name = name, IsBackground = true };",
+                      source(os.path.join(LOOP, "BackgroundSnapshotBuilder.cs")))
 
     # The member each item's owner is read from (spec 3.3), and what the kind of an owner tests: (file, type, member).
     OWNERS = [
@@ -137,6 +192,18 @@ class UpstreamFactTests(unittest.TestCase):
          "public static int PopulationForBrainTick =>"),
     ]
 
+    def test_the_nested_call_stays_inside_the_fleet_scope(self):
+        # The camp planning runs the scope's one nested call (spec 3.5), over int items, which have no owner and so go
+        # to gamebot / Fleet; it is reached only from H6's scope in NpcService.Tick.
+        cpp = source(CPP)
+        self.assertEqual(cpp.count("GameLoop.ExecuteForEach("), 1)
+        self.assertIn("GameLoop.ExecuteForEach(ProjectionWork, ProjectionWork.Count, ProjectCamp);", cpp)
+        self.assertIn("private static readonly List<int> ProjectionWork = new(128);", cpp)
+        self.assertEqual(upstream_lines(r"\bPrepareCampPlanningTick\b"), {
+            "bots/autonomous/AutonomousCampPlanningPipeline.cs": ["public static void PrepareCampPlanningTick()"],
+            "ECS-Services/NpcService.cs": ["AutonomousWorldBotController.PrepareCampPlanningTick();"],
+        })
+
     def test_each_owner_is_read_from_the_member_the_meter_names(self):
         for path, header, member in self.OWNERS:
             with self.subTest(path=path, member=member):
@@ -152,6 +219,18 @@ class EndingsTests(unittest.TestCase):
         self.assertFalse(raw.startswith(endings.BOM))
         hooks = [line for line in raw.split(b"\n") if b"HearthDAoC" in line]
         self.assertEqual(len(hooks), 2)
+        for line in hooks:
+            self.assertTrue(line.endswith(b"\r"), line)
+
+    def test_the_npc_service_keeps_its_bom_and_crlf(self):
+        # NS has a BOM and CRLF throughout (spec 5.2); the hook's three lines end CRLF too.
+        endings.check(self, NS)
+        with open(NS, "rb") as f:
+            raw = f.read()
+        self.assertTrue(raw.startswith(endings.BOM))
+        self.assertEqual(raw.count(b"\n"), raw.count(b"\r\n"), "CRLF throughout")
+        hooks = [line for line in raw.split(b"\n") if b"HearthDAoC" in line]
+        self.assertEqual(len(hooks), 3)
         for line in hooks:
             self.assertTrue(line.endswith(b"\r"), line)
 

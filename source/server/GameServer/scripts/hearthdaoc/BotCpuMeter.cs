@@ -13,8 +13,9 @@ namespace DOL.GS.HearthDAoC;
 // HearthDAoC: the bot CPU meter's hot path (#137; spec docs/fork/specs/2026-10-14-bot-cpu-meter-design.md). While the
 // meter is on, each game-loop callback is timed and charged to the kind of its owner (2.5, 3.3) and to its stage (3.4),
 // so the owner can compare the average CPU of each kind of bot. Hook H1 in GameLoop.ExecuteForEach hands each call to
-// BotCpuMeter.ExecuteForEach while the meter is on (3.1). BotCpuMeter has no static field initializer and no static
-// constructor (5.1): nothing in it runs or allocates while the meter is off.
+// BotCpuMeter.ExecuteForEach while the meter is on (3.1), and hook H6 in NpcService.Tick scopes the GameBot fleet
+// planning with BeginFleet and EndFleet (3.5). BotCpuMeter has no static field initializer and no static constructor
+// (5.1): nothing in it runs or allocates while the meter is off.
 
 /// <summary>
 /// The player-bot contract (2.5): a <see cref="GamePlayer"/> whose client implements this marker is counted as
@@ -184,8 +185,9 @@ public sealed class BotCpuCounter
     public BotCpuCounter(BotCpuKind kind) => Kind = kind;
 }
 
-/// <summary>The meter's hot path: the switch and its runs, the wrapper hook H1 hands each call to, the per-thread slots
-/// and the per-bot counters it charges, the stage of a profile key, the kind of an owner and what each item charges.
+/// <summary>The meter's hot path: the switch and its runs, the wrapper hook H1 hands each call to, the fleet scope of
+/// hook H6, the per-thread slots and the per-bot counters they charge, the stage of a profile key, the kind of an owner
+/// and what each item charges.
 /// </summary>
 public static class BotCpuMeter
 {
@@ -218,6 +220,14 @@ public static class BotCpuMeter
 
     // A test hook (6.1, "Setup fallback"): set, it replaces StageOf in a call's setup. Null on the server.
     private static Func<string, BotCpuStage> _stageHook;
+
+    // The fleet scope (3.5), read and written by the game-loop thread only: the "in fleet" flag, the run the scope
+    // began in, that thread's allocated bytes when it began, and the time and bytes of the nested calls inside it.
+    private static bool _inFleet;
+    private static int _fleetRun;
+    private static long _fleetBytes;
+    private static long _fleetNestedTicks;
+    private static long _fleetNestedBytes;
 
     /// <summary>The number of the current run, or of the last one once off; 0 before the first.</summary>
     public static int RunNumber => Volatile.Read(ref _run);
@@ -270,50 +280,146 @@ public static class BotCpuMeter
     }
 
     /// <summary>
+    /// Hook H6's start (3.5, 5.1): off, 0 and nothing else; on, the fleet scope begins (<see cref="EndFleet"/> ends
+    /// it). <c>NpcService.Tick</c> calls it on the game-loop thread before the GameBot fleet planning.
+    /// </summary>
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    public static long BeginFleet() => Enabled ? BeginFleetCore() : 0;
+
+    /// <summary>
+    /// Hook H6's end (3.5, 5.1): with the <paramref name="start"/> <see cref="BeginFleet"/> returned, ends the scope;
+    /// with 0 (begun while off) does nothing.
+    /// </summary>
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    public static void EndFleet(long start)
+    {
+        if (start != 0)
+            EndFleetCore(start);
+    }
+
+    // The scope begins (3.5): a stale scope (its EndFleet never ran) is dropped with its nested sums; the run is
+    // noted, then this thread's allocated bytes and the time, last, so the meter's own work stays out of the scope.
+    // The flag goes on for the calls inside it. Returns the time, never 0, which EndFleet takes for "no scope".
+    [MethodImpl(MethodImplOptions.NoInlining)]
+    private static long BeginFleetCore()
+    {
+        _fleetNestedTicks = 0;
+        _fleetNestedBytes = 0;
+        _fleetRun = Volatile.Read(ref _run);
+        _fleetBytes = GC.GetAllocatedBytesForCurrentThread();
+        long start = Stopwatch.GetTimestamp();
+        _inFleet = true;
+        return start != 0 ? start : 1;
+    }
+
+    // The scope ends (3.5): the flag goes off whatever Enabled is now, so a scope cut by off never leaves it set. The
+    // scope is charged only while the meter is still on and in the run it began in (off, or off and on, inside it
+    // drops it): gamebot / Fleet, one call, with its time and this thread's bytes less the nested calls', whose items
+    // the wrappers charged already. Fleet counts for no bot. Never throws into the loop: with no slot the scope is left
+    // uncharged, as an item is (3.2).
+    [MethodImpl(MethodImplOptions.NoInlining)]
+    private static void EndFleetCore(long start)
+    {
+        long ticks = Stopwatch.GetTimestamp() - start - _fleetNestedTicks;
+        long bytes = GC.GetAllocatedBytesForCurrentThread() - _fleetBytes - _fleetNestedBytes;
+        bool charge = _inFleet && Volatile.Read(ref Enabled) && _fleetRun == Volatile.Read(ref _run);
+        _inFleet = false;
+        if (!charge)
+            return;
+
+        long[] slot;
+        try
+        {
+            slot = _threadSlot ?? RegisterSlot();
+        }
+        catch (Exception)
+        {
+            return;
+        }
+
+        int cell = BotCpuTotals.CellIndex(BotCpuKind.Gamebot, BotCpuStage.Fleet);
+        slot[cell] += ticks;
+        slot[cell + 1]++;
+        slot[cell + 2] += bytes;
+    }
+
+    /// <summary>
     /// Hook H1's call while the meter is on (3.1). On the game-loop thread, once per call: reads the stage from
-    /// <see cref="GameLoop.ActiveService"/>, builds one wrapper that carries it and the run's per-bot table to the
-    /// worker threads, and hands the wrapper to the pool's own <see cref="GameLoopThreadPool.ExecuteForEach{T}"/>. A
-    /// call with nothing to run is passed through unwrapped. The setup never throws: on an exception, after one
-    /// warning, the pool gets the caller's own delegate, so each item still runs once, unmetered. An exception from the
-    /// pool or a callback reaches the caller unchanged.
+    /// <see cref="GameLoop.ActiveService"/> and whether the call is inside this run's fleet scope (3.5), builds one
+    /// wrapper that carries both and the run's per-bot table to the worker threads, and hands the wrapper to the pool's
+    /// own <see cref="GameLoopThreadPool.ExecuteForEach{T}"/>. A call inside the scope is timed on this thread, with
+    /// its bytes, from before its wrapper is built to the pool's return or throw, barrier wait included, and that is
+    /// taken out of the scope's own work, as its items are charged by the wrapper. A call with nothing to run is passed
+    /// through unwrapped. The setup never throws: on an exception, after one warning, the pool gets the caller's own
+    /// delegate, so each item still runs once, unmetered (inside the scope, as part of its own work). An exception from
+    /// the pool or a callback reaches the caller unchanged.
     /// </summary>
     public static void ExecuteForEach<T>(GameLoopThreadPool pool, List<T> items, int toExclusive, Action<T> action)
     {
         Action<T> run = action;
+        bool nested = false;
+        long start = 0;
+        long bytes = 0;
         try
         {
             // No table yet: Enabled was set without Enable, and nothing could be charged to a bot.
             ConditionalWeakTable<GameObject, BotCpuCounter> counters = Volatile.Read(ref _counters);
             if (items != null && Math.Min(items.Count, toExclusive) > 0 && counters != null)
             {
+                // A flag left by a scope of an earlier run is not this run's (3.5).
+                nested = _inFleet && _fleetRun == Volatile.Read(ref _run);
+                if (nested)
+                {
+                    bytes = GC.GetAllocatedBytesForCurrentThread();
+                    start = Stopwatch.GetTimestamp();
+                }
+
                 string profileKey = GameLoop.ActiveService;
                 BotCpuStage stage = _stageHook != null ? _stageHook(profileKey) : StageOf(profileKey);
                 if ((uint)stage >= BotCpuTotals.StageCount)
                     stage = BotCpuStage.Other;
-                run = new Metered<T>(action, stage, counters).Run;
+                run = new Metered<T>(action, stage, nested, counters).Run;
             }
         }
         catch (Exception exception)
         {
             run = action;
+            nested = false;
             WarnSetup(exception);
         }
 
-        pool.ExecuteForEach(items, toExclusive, run);
+        if (!nested)
+        {
+            pool.ExecuteForEach(items, toExclusive, run);
+            return;
+        }
+
+        try
+        {
+            pool.ExecuteForEach(items, toExclusive, run);
+        }
+        finally
+        {
+            _fleetNestedTicks += Stopwatch.GetTimestamp() - start;
+            _fleetNestedBytes += GC.GetAllocatedBytesForCurrentThread() - bytes;
+        }
     }
 
-    // The wrapper of one call (3.2), made on the game-loop thread with the call's stage and the run's per-bot table:
-    // the worker threads read neither GameLoop.ActiveService nor a static.
+    // The wrapper of one call (3.2), made on the game-loop thread with the call's stage, whether it is inside the
+    // fleet scope, and the run's per-bot table: the worker threads read neither GameLoop.ActiveService nor a static.
     private sealed class Metered<T>
     {
         private readonly Action<T> _action;
         private readonly BotCpuStage _stage;
+        private readonly bool _fleet;
         private readonly ConditionalWeakTable<GameObject, BotCpuCounter> _counters;
 
-        internal Metered(Action<T> action, BotCpuStage stage, ConditionalWeakTable<GameObject, BotCpuCounter> counters)
+        internal Metered(Action<T> action, BotCpuStage stage, bool fleet,
+            ConditionalWeakTable<GameObject, BotCpuCounter> counters)
         {
             _action = action;
             _stage = stage;
+            _fleet = fleet;
             _counters = counters;
         }
 
@@ -329,7 +435,7 @@ public static class BotCpuMeter
             try
             {
                 slot = _threadSlot ?? RegisterSlot();
-                BotCpuCharge charge = Classify(item, _stage, false, AutonomousPlayerPilot.IsActive);
+                BotCpuCharge charge = Classify(item, _stage, _fleet, AutonomousPlayerPilot.IsActive);
                 cell = BotCpuTotals.CellIndex(charge.Kind, charge.Stage);
                 if (charge.Presence)
                     presence = BotCpuTotals.PresenceIndex(charge.Kind);

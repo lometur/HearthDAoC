@@ -25,10 +25,13 @@ namespace DOL.GS
         public override void Tick()
         {
             ProcessPostedActionsParallel();
+            // HearthDAoC: the per-kind CPU meter (#137) charges the GameBot fleet planning below to gamebot, stage Fleet.
+            long fleetStart = HearthDAoC.BotCpuMeter.BeginFleet();
             AutonomousBotRegistry.PrepareBrainTick();
             AutonomousWorldBotController.PrepareRvrPlanningTick();
             AutonomousBotGroupCoordinator.PrepareCoordinatorTick();
             AutonomousWorldBotController.PrepareCampPlanningTick();
+            HearthDAoC.BotCpuMeter.EndFleet(fleetStart); // HearthDAoC: end of the fleet scope.
             int lastValidIndex;
 
             try

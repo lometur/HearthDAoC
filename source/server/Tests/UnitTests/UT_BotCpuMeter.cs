@@ -24,7 +24,8 @@ namespace DOL.GS.Tests;
 // and what each item charges: its kind, its stage, the bot whose counter it adds to and its presence (3.3, 3.8), with
 // game objects built without their constructors and their fields set by reflection. Then the real hook H1 (3.1, 3.2,
 // 3.7, 3.10, 3.11): GameLoop's pool is a recording pool, and while the meter is on each item runs once and is charged
-// to its thread's slot and its bot's counter; off, the pool gets the caller's own delegate.
+// to its thread's slot and its bot's counter; off, the pool gets the caller's own delegate. Then hook H6's fleet scope
+// (3.5, 5.1): the GameBot fleet planning's own work and its nested call's items go to gamebot / Fleet, counted once.
 [TestFixture, NonParallelizable]
 public sealed class UT_BotCpuMeter
 {
@@ -56,6 +57,7 @@ public sealed class UT_BotCpuMeter
     private static readonly FieldInfo StageHookField = typeof(BotCpuMeter).GetField("_stageHook", HiddenStatic)!;
     private static readonly FieldInfo SlotsField = typeof(BotCpuMeter).GetField("_slots", HiddenStatic)!;
     private static readonly FieldInfo ThreadSlotField = typeof(BotCpuMeter).GetField("_threadSlot", HiddenStatic)!;
+    private static readonly FieldInfo InFleetField = typeof(BotCpuMeter).GetField("_inFleet", HiddenStatic)!;
 
     private GameServer _savedServer;
     private GameLoopThreadPool _savedPool;
@@ -75,11 +77,12 @@ public sealed class UT_BotCpuMeter
         ThreadPoolField.SetValue(null, _pool);
     }
 
-    // A failing test never leaves the meter on, or the setup's test hook set, for the next (6.1).
+    // A failing test never leaves the meter on, a fleet scope open or the setup's test hook set, for the next (6.1).
     [TearDown]
     public void RestoreGlobals()
     {
         BotCpuMeter.Disable();
+        InFleetField.SetValue(null, false);
         StageHookField.SetValue(null, null);
         ThreadPoolField.SetValue(null, _savedPool);
         GameLoop.ActiveService = _savedActiveService;
@@ -1225,5 +1228,261 @@ public sealed class UT_BotCpuMeter
         Assert.That(size, Is.LessThan(200));
         Assert.That(counter.Kind, Is.EqualTo(BotCpuKind.Companion));
         Assert.That(new[] { counter.Ticks, counter.Calls, counter.LastTicks, counter.LastCalls }, Is.All.Zero);
+    }
+
+    // The fleet scope and hook H6 (3.5, 5.1): NpcService.Tick runs the GameBot fleet planning between BeginFleet and
+    // EndFleet, as these tests do. The scope's own work and the items of its nested call (the camp planning's int
+    // items, which have no owner) go to gamebot / Fleet, and the nested call's time is taken out of the scope's, so
+    // nothing is counted twice.
+
+    private static readonly long Millisecond = Stopwatch.Frequency / 1000;
+
+    private static bool InFleet => (bool)InFleetField.GetValue(null)!;
+
+    // A pool that runs the items on a thread of its own and waits for it, as the multi-threaded pool's workers do.
+    private sealed class WorkerPool : GameLoopThreadPool
+    {
+        public override void ExecuteForEach<T>(List<T> items, int toExclusive, Action<T> action)
+        {
+            Exception failure = OnNewThread(() =>
+            {
+                int count = Math.Min(items.Count, toExclusive);
+                for (int i = 0; i < count; i++)
+                    action(items[i]);
+            });
+            if (failure != null)
+                throw failure;
+        }
+
+        public override void Dispose() { }
+    }
+
+    [TestCase(nameof(BotCpuMeter.BeginFleet))]
+    [TestCase(nameof(BotCpuMeter.EndFleet))]
+    public void TheFleetScopesCallsInline(string name)
+    {
+        MethodInfo method = typeof(BotCpuMeter).GetMethod(name)!;
+        Assert.That(method.MethodImplementationFlags & MethodImplAttributes.AggressiveInlining,
+            Is.EqualTo(MethodImplAttributes.AggressiveInlining), "off, H6 is a bool read and a test of a local (5.1)");
+    }
+
+    [Test]
+    public void OffBeginFleetReturnsZeroAndEndFleetOfZeroChargesNothing()
+    {
+        BotCpuMeter.Enable();
+        BotCpuMeter.Disable();
+        GameLoop.ActiveService = nameof(NpcService);
+        BotCpuTotals before = BotCpuMeter.TakeSnapshot();
+
+        long fleetStart = BotCpuMeter.BeginFleet();
+
+        Assert.That(fleetStart, Is.Zero);
+        Assert.That(InFleet, Is.False);
+        BotCpuMeter.EndFleet(fleetStart);
+        Assert.That(Values(BotCpuMeter.TakeSnapshot()), Is.EqualTo(Values(before)));
+
+        // Turned on inside a scope begun while off: its nested items are charged as outside any scope, and
+        // EndFleet(0) charges nothing.
+        BotCpuMeter.Enable();
+        GameLoop.ExecuteForEach(new List<int> { 1, 2 }, 2, static _ => { });
+        BotCpuMeter.EndFleet(fleetStart);
+        Charged charged = Since(before);
+        Assert.That(charged.Calls(BotCpuKind.Unattributed, BotCpuStage.Npc), Is.EqualTo(2));
+        Assert.That(charged.AllCalls, Is.EqualTo(2));
+    }
+
+    [Test]
+    public void OffTheFleetScopeAllocatesNothing()
+    {
+        BotCpuMeter.EndFleet(BotCpuMeter.BeginFleet()); // warm-up
+        long before = GC.GetAllocatedBytesForCurrentThread();
+        BotCpuMeter.EndFleet(BotCpuMeter.BeginFleet());
+        Assert.That(GC.GetAllocatedBytesForCurrentThread() - before, Is.Zero);
+    }
+
+    [Test]
+    public void OnTheFleetScopeItselfAllocatesNothing()
+    {
+        BotCpuMeter.Enable();
+        BotCpuMeter.EndFleet(BotCpuMeter.BeginFleet()); // warm-up: this thread's slot, if it had none
+        long before = GC.GetAllocatedBytesForCurrentThread();
+        BotCpuMeter.EndFleet(BotCpuMeter.BeginFleet());
+        Assert.That(GC.GetAllocatedBytesForCurrentThread() - before, Is.Zero);
+    }
+
+    [Test]
+    public void TheFleetIsTheScopesOwnWorkPlusItsNestedItemsCountedOnce()
+    {
+        BotCpuMeter.Enable();
+        GameLoop.ActiveService = nameof(NpcService);
+        List<int> projections = [1, 2, 3];
+        Action<int> project = static _ => Spin(2 * Millisecond);
+        BotCpuTotals before = BotCpuMeter.TakeSnapshot();
+
+        // As NpcService.Tick: the scope's own serial work (about 1 ms), and the camp planning's nested call over its
+        // int items (3 × about 2 ms), which the recording pool runs inline.
+        long wallStart = Stopwatch.GetTimestamp();
+        long fleetStart = BotCpuMeter.BeginFleet();
+        Assert.That(InFleet, Is.True);
+        Spin(Millisecond);
+        GameLoop.ExecuteForEach(projections, projections.Count, project);
+        BotCpuMeter.EndFleet(fleetStart);
+        long wall = Stopwatch.GetTimestamp() - wallStart;
+
+        Charged charged = Since(before);
+        long fleet = charged.Ticks(BotCpuKind.Gamebot, BotCpuStage.Fleet);
+        Assert.Multiple(() =>
+        {
+            Assert.That(fleetStart, Is.Not.Zero);
+            Assert.That(InFleet, Is.False, "EndFleet clears the flag");
+            Assert.That(fleet, Is.GreaterThanOrEqualTo(6 * Millisecond), "the nested items' own times");
+            // Counted twice (the nested call inside the scope's time, and its items again) it would be about 13 ms.
+            Assert.That(fleet, Is.LessThanOrEqualTo(wall * 1.05), "no more than the scope's wall time");
+            Assert.That(charged.Calls(BotCpuKind.Gamebot, BotCpuStage.Fleet), Is.EqualTo(4), "3 items and the scope");
+            Assert.That(charged.AllCalls, Is.EqualTo(4), "nothing else");
+            Assert.That(BotCpuMeter.Counters(), Is.Empty, "Fleet counts for no bot");
+        });
+    }
+
+    [Test]
+    public void TheFleetsBytesAreTheScopesOwnPlusItsNestedItemsCountedOnce()
+    {
+        BotCpuMeter.Enable();
+        GameLoop.ActiveService = nameof(NpcService);
+        List<int> projections = [1, 2, 3];
+        Action<int> project = static _ => _sink = new byte[1000];
+        GameLoop.ExecuteForEach(new List<int> { 0 }, 1, project); // warm-up, outside any scope
+        BotCpuTotals before = BotCpuMeter.TakeSnapshot();
+
+        long fleetStart = BotCpuMeter.BeginFleet();
+        _sink = new byte[1000];
+        GameLoop.ExecuteForEach(projections, projections.Count, project);
+        BotCpuMeter.EndFleet(fleetStart);
+
+        long bytes = Since(before).Bytes(BotCpuKind.Gamebot, BotCpuStage.Fleet);
+        Assert.That(bytes, Is.GreaterThanOrEqualTo(4 * 1000), "the scope's own 1,000 and the 3 items' 1,000 each");
+        // Counted twice, the items' 3,000 bytes would be in the scope's bytes too.
+        Assert.That(bytes, Is.LessThan(4 * 1000 + 3 * 1000));
+    }
+
+    [Test]
+    public void ANestedItemOnAWorkerThreadIsStillFleet()
+    {
+        // Only the game-loop thread reads the flag: the wrapper carries it to the worker threads (3.1).
+        BotCpuMeter.Enable();
+        GameLoop.ActiveService = nameof(NpcService);
+        ThreadPoolField.SetValue(null, new WorkerPool());
+        BotCpuTotals before = BotCpuMeter.TakeSnapshot();
+
+        long fleetStart = BotCpuMeter.BeginFleet();
+        GameLoop.ExecuteForEach(new List<int> { 1, 2 }, 2, static _ => { });
+        BotCpuMeter.EndFleet(fleetStart);
+
+        Charged charged = Since(before);
+        Assert.That(charged.Calls(BotCpuKind.Gamebot, BotCpuStage.Fleet), Is.EqualTo(3), "2 items and the scope");
+        Assert.That(charged.AllCalls, Is.EqualTo(3));
+    }
+
+    [Test]
+    public void OffInsideTheScopeDropsItAndClearsTheFlagAndTheNextRunStartsClean()
+    {
+        BotCpuMeter.Enable();
+        GameLoop.ActiveService = nameof(NpcService);
+        BotCpuTotals before = BotCpuMeter.TakeSnapshot();
+
+        long fleetStart = BotCpuMeter.BeginFleet();
+        BotCpuMeter.Disable(); // /botcpu off, inside the scope
+        BotCpuMeter.EndFleet(fleetStart);
+
+        Assert.That(InFleet, Is.False, "a scope cut by off never leaves the flag set");
+        Assert.That(Values(BotCpuMeter.TakeSnapshot()), Is.EqualTo(Values(before)), "the scope is not charged");
+
+        // The next run: an int batch outside any scope is unattributed, and the next scope is Fleet again.
+        BotCpuMeter.Enable();
+        before = BotCpuMeter.TakeSnapshot();
+        GameLoop.ExecuteForEach(new List<int> { 1, 2 }, 2, static _ => { });
+        Charged outside = Since(before);
+        Assert.That(outside.Calls(BotCpuKind.Unattributed, BotCpuStage.Npc), Is.EqualTo(2));
+        Assert.That(outside.AllCalls, Is.EqualTo(2));
+
+        before = BotCpuMeter.TakeSnapshot();
+        fleetStart = BotCpuMeter.BeginFleet();
+        GameLoop.ExecuteForEach(new List<int> { 1, 2 }, 2, static _ => { });
+        BotCpuMeter.EndFleet(fleetStart);
+        Charged inside = Since(before);
+        Assert.That(inside.Calls(BotCpuKind.Gamebot, BotCpuStage.Fleet), Is.EqualTo(3), "2 items and the scope");
+        Assert.That(inside.AllCalls, Is.EqualTo(3));
+    }
+
+    [Test]
+    public void OffAndOnInsideTheScopeDropsItWithItsNestedItems()
+    {
+        BotCpuMeter.Enable();
+        GameLoop.ActiveService = nameof(NpcService);
+        long fleetStart = BotCpuMeter.BeginFleet();
+        BotCpuMeter.Disable();
+        BotCpuMeter.Enable(); // off, then on: a new run, inside the old run's scope
+        BotCpuTotals before = BotCpuMeter.TakeSnapshot();
+
+        GameLoop.ExecuteForEach(new List<int> { 1, 2 }, 2, static _ => { });
+        BotCpuMeter.EndFleet(fleetStart);
+
+        // The scope belongs to the closed run: neither its own work nor its nested items are the new run's Fleet.
+        Charged charged = Since(before);
+        Assert.That(InFleet, Is.False);
+        Assert.That(charged.Calls(BotCpuKind.Unattributed, BotCpuStage.Npc), Is.EqualTo(2));
+        Assert.That(charged.AllCalls, Is.EqualTo(2));
+    }
+
+    [Test]
+    public void ANestedCallThatThrowsStillAddsItsTimeToTheScopeAndTheExceptionReachesTheCaller()
+    {
+        BotCpuMeter.Enable();
+        GameLoop.ActiveService = nameof(NpcService);
+        InvalidOperationException thrown = new("projection");
+        // Warm-up, outside any scope: a process's first exception takes milliseconds to unwind.
+        Assert.Throws<InvalidOperationException>(() =>
+            GameLoop.ExecuteForEach(new List<int> { 1 }, 1, _ => throw new InvalidOperationException("warm-up")));
+        BotCpuTotals before = BotCpuMeter.TakeSnapshot();
+
+        long fleetStart = BotCpuMeter.BeginFleet();
+        Spin(Millisecond);
+        Exception caught = Assert.Throws<InvalidOperationException>(() =>
+            GameLoop.ExecuteForEach(new List<int> { 1 }, 1, _ =>
+            {
+                Spin(20 * Millisecond);
+                throw thrown;
+            }));
+        BotCpuMeter.EndFleet(fleetStart);
+
+        Charged charged = Since(before);
+        Assert.That(caught, Is.SameAs(thrown), "unchanged");
+        // The item that threw is charged to nothing (its callback did not return), and the nested call's 20 ms are
+        // still taken out of the scope: the scope's own work is about 1 ms, not 21.
+        Assert.That(charged.Calls(BotCpuKind.Gamebot, BotCpuStage.Fleet), Is.EqualTo(1), "the scope only");
+        Assert.That(charged.AllCalls, Is.EqualTo(1));
+        Assert.That(charged.Ticks(BotCpuKind.Gamebot, BotCpuStage.Fleet), Is.GreaterThanOrEqualTo(Millisecond));
+        Assert.That(charged.Ticks(BotCpuKind.Gamebot, BotCpuStage.Fleet), Is.LessThan(20 * Millisecond));
+    }
+
+    [Test]
+    public void BeginFleetReplacesAStaleScope()
+    {
+        BotCpuMeter.Enable();
+        GameLoop.ActiveService = nameof(NpcService);
+        BotCpuTotals before = BotCpuMeter.TakeSnapshot();
+
+        // A scope whose EndFleet never ran (on the server, a throw there stops it), with a nested call of about 5 ms.
+        long stale = BotCpuMeter.BeginFleet();
+        GameLoop.ExecuteForEach(new List<int> { 1 }, 1, static _ => Spin(5 * Millisecond));
+        long fleetStart = BotCpuMeter.BeginFleet();
+        Spin(Millisecond);
+        BotCpuMeter.EndFleet(fleetStart);
+        BotCpuMeter.EndFleet(stale); // the flag is already clear: nothing
+
+        Charged charged = Since(before);
+        Assert.That(charged.Calls(BotCpuKind.Gamebot, BotCpuStage.Fleet), Is.EqualTo(2), "the item and the new scope");
+        // The new scope's own 1 ms, not less the stale scope's 5 ms nested call.
+        Assert.That(charged.Ticks(BotCpuKind.Gamebot, BotCpuStage.Fleet), Is.GreaterThanOrEqualTo(6 * Millisecond));
     }
 }
