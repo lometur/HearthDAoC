@@ -155,7 +155,11 @@ namespace DOL.GS.Commands
                 Vector3.DistanceSquared(current, desired) >= 1)
             {
                 Vector3? floor = nav.GetClosestPoint(zone, desired, 16, 16, 64, nav.DefaultFilters);
-                if (floor.HasValue && Vector3.DistanceSquared(floor.Value, desired) <= 4 &&
+                // HearthDAoC: the floor may lie up to one voxel (24) above or below the step, as corners do (see above):
+                // a player bot (#137) by Cotswold found it 5 units above the corner and stood there for good.
+                if (floor.HasValue &&
+                    Vector2.DistanceSquared(new(floor.Value.X, floor.Value.Y), new(desired.X, desired.Y)) <= 4 &&
+                    Math.Abs(floor.Value.Z - desired.Z) <= 24 &&
                     Vector3.Distance(current, floor.Value) <= distance + 2 &&
                     nav.HasLineOfSight(zone, current, floor.Value, nav.DefaultFilters)) snapped = floor;
             }

@@ -148,6 +148,42 @@ public sealed class UT_PlayerBotDriver
         Assert.That(PlayerTravelPath.HasReachedCorner(new(493135, 592932, 1832), new(493130, 592938, 1824)), Is.True);
     }
 
+    // The promotion check after the run 1 rerun (2026-10-21): by Cotswold the surface mover returned the bot's own spot,
+    // and the mesh floor at the next corner lay 5 units above the corner (Z 1826 against 1821), within one voxel. The
+    // fallback wanted 2 units, so the bot stood there for good. Coordinates are moved into the test zone (480000/580000
+    // less). A floor more than a voxel away is another surface, a bridge or a roof: no step.
+    [TestCase(5f, true)] [TestCase(24f, true)] [TestCase(40f, false)]
+    public void AStepOntoTheFloorAVoxelAboveTheCornerIsTaken(float rise, bool moves)
+    {
+        var (region, zone) = World();
+        var mesh = new EdgeMesh
+        {
+            FloorRise = rise,
+            Corners = new[] { new Vector3(15139, 13283, 1821), new Vector3(15175, 13306, 1821), new Vector3(15309, 13390, 1820) }
+        };
+        Assert.That(new PlayerTravelPath().TryStep(region, zone, mesh.Corners[0], mesh.Corners[^1], 47.75f, 0, mesh,
+            out Vector3 position, out string failure), Is.True, failure);
+        Assert.That(position, moves ? Is.EqualTo(mesh.Corners[1] + new Vector3(0, 0, rise)) : Is.EqualTo(mesh.Corners[0]));
+    }
+
+    // The surface mover never moves; the mesh floor lies FloorRise above any point asked about.
+    private sealed class EdgeMesh : PathfindingMgrBase
+    {
+        public float FloorRise;
+        public Vector3[] Corners;
+        public override bool HasNavmesh(Zone zone) => true;
+        public override PathfindingResult GetPathStraight(Zone zone, Vector3 start, Vector3 end,
+            EDtPolyFlags[] filters, Span<WrappedPathfindingNode> destination)
+        {
+            for (int i = 0; i < Corners.Length; i++) destination[i] = new(Corners[i], EDtPolyFlags.Walk);
+            return new(PathfindingStatus.PathFound, Corners.Length);
+        }
+        public override Vector3? GetMoveAlongSurface(Zone zone, Vector3 start, Vector3 end, EDtPolyFlags[] filters) => start;
+        public override Vector3? GetClosestPoint(Zone zone, Vector3 position, float xRange, float yRange, float zRange,
+            EDtPolyFlags[] filters) => position + new Vector3(0, 0, FloorRise);
+        public override bool HasLineOfSight(Zone zone, Vector3 start, Vector3 end, EDtPolyFlags[] filters) => true;
+    }
+
     // A camp a bot has no corridor to is checked once: the next try 2 minutes later takes the next nearest monsters,
     // instead of the same five for the rest of the run (review of 76e41cf).
     [Test]
