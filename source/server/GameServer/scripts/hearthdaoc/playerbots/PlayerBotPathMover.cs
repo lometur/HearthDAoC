@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.Diagnostics;
+using System.Linq;
 using System.Numerics;
 using DOL.GS.Commands;
 
@@ -107,6 +108,31 @@ public sealed class PlayerBotPathMover
         {
             PlayerBotDriverReport.AddMover(Stopwatch.GetTimestamp() - started);
         }
+    }
+
+    /// <summary>For the logs, at a block: what the navmesh says here. The floor under the bot, the straight path's first
+    /// corners toward the goal, and one step toward the first corner (the surface move, the floor under it and the line
+    /// of sight to it, as PlayerTravelPath.TryStep checks them, PTP:143-160).</summary>
+    public string Probe(Vector3 goal)
+    {
+        Zone zone = _player.CurrentZone;
+        if (zone == null || !Nav.HasNavmesh(zone)) return "navmesh=none";
+        IPathfindingMgr nav = Nav;
+        Vector3 here = new(_player.X, _player.Y, _player.Z);
+        static string P(Vector3? v) => v is Vector3 p ? $"({p.X:0},{p.Y:0},{p.Z:0})" : "none";
+        Vector3? floor = nav.GetClosestPoint(zone, here, 16, 16, 64, nav.DefaultFilters);
+        WrappedPathfindingNode[] nodes = new WrappedPathfindingNode[8];
+        PathfindingResult result = nav.GetPathStraight(zone, here, goal, nav.DefaultFilters, nodes);
+        int count = Math.Min(result.NodeCount, nodes.Length);
+        string corners = string.Join("->", nodes.Take(Math.Min(count, 4)).Select(n => P(n.Position) + (n.Flags == EDtPolyFlags.Walk ? "" : $"[{n.Flags}]")));
+        Vector3? corner = nodes.Take(count).Select(n => (Vector3?)n.Position).FirstOrDefault(c => Vector3.Distance(c.Value, here) > 16);
+        if (corner == null) return $"floor={P(floor)} path={result.Status}/{result.NodeCount} corners={corners}";
+        Vector3 desired = PlayerTravelPath.Advance(here, corner.Value, 47);
+        Vector3? surface = nav.GetMoveAlongSurface(zone, here, desired, nav.DefaultFilters);
+        Vector3? under = nav.GetClosestPoint(zone, desired, 16, 16, 64, nav.DefaultFilters);
+        bool los = under.HasValue && nav.HasLineOfSight(zone, here, under.Value, nav.DefaultFilters);
+        return $"floor={P(floor)} path={result.Status}/{result.NodeCount} corners={corners} step={P(desired)} " +
+               $"surface={P(surface)} stepFloor={P(under)} los={los}";
     }
 
     public void Stop(long now)
