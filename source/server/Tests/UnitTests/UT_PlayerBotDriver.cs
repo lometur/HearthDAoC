@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Linq;
 using System.Net.Sockets;
 using System.Numerics;
 using System.Reflection;
@@ -122,6 +123,20 @@ public sealed class UT_PlayerBotDriver
     [TestCase(2, 0, ConColor.ORANGE)] [TestCase(4, 0, ConColor.RED)] [TestCase(6, 0, ConColor.PURPLE)]
     public void MaximumTargetCon(int group, int deaths, ConColor expected) =>
         Assert.That(PlayerBotDriver.MaximumTargetCon(group, deaths), Is.EqualTo(expected));
+
+    // Run 1 (2026-10-21): two deaths capped the bots at green for good, and nothing cons green to a level-1 player
+    // (ConLevels.cs:22: level 0 is blue, 1 yellow), so the Hibernia bot roamed for 2 hours at 35 XP.
+    [Test]
+    public void NothingConsGreenToALevelOnePlayer() =>
+        Assert.That(Enumerable.Range(0, 128).Select(level => ConLevels.GetConColor(ConLevels.GetConLevel(1, level))),
+            Has.None.EqualTo(ConColor.GREEN));
+
+    // Nothing in reach fits the death cap: keep just enough steps for the safest monster there, as a GameBot falls
+    // back to the safest camp (AWBC:3422-3437). The steps only go down.
+    [TestCase(ConColor.BLUE, 2, 1)] [TestCase(ConColor.YELLOW, 3, 0)] [TestCase(ConColor.GREEN, 2, 2)]
+    [TestCase(ConColor.BLUE, 0, 0)] [TestCase(ConColor.GREEN, 5, 2)]
+    public void DeathStepsForTheSafestMonsterInReach(ConColor safest, int deaths, int expected) =>
+        Assert.That(PlayerBotDriver.DeathStepsFor(safest, 1, deaths), Is.EqualTo(expected));
 
     // The roster's classes have no power pool, so ManaPercent reads 0 (GameLiving.cs:2753): only health and endurance count.
     [TestCase((byte)100, 0, (byte)0, (byte)100, false)] [TestCase((byte)49, 0, (byte)0, (byte)100, true)]

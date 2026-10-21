@@ -40,7 +40,9 @@ public sealed class PlayerBotErrandTask : IPlayerBotTask
                 }
                 GameNPC npc = _errands.Npc(action.Target);
                 if (npc == null) { state.Mover.Stop(now); return true; }
-                state.Mover.StepToward(new Vector3(npc.X, npc.Y, npc.Z), Math.Max(16, action.Range - 24), now);
+                if (state.Mover.StepToward(new Vector3(npc.X, npc.Y, npc.Z), Math.Max(16, action.Range - 24), now)
+                    is PlayerBotStepResult.Blocked)
+                    _errands.WalkBlocked(npc, state.Mover.LastBlock, now);
                 return true;
             case ErrandActionKind.Level:
                 return false;

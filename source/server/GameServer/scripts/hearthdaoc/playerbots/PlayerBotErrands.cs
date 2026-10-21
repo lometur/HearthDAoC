@@ -21,6 +21,7 @@ public sealed class PlayerBotErrands
     private const int MaxAttempts = 5;                      // the same action at the same quest step, class and level
     private const long WalkLimitMs = 15 * 60 * 1000;        // toward one target
     private const int DeathsBeforeFallback = 2;             // on the way to Captain Falron
+    private const long BlockedLineMs = 30_000;              // at most one "blocked" line per 30 s
     private const long QuestFixedXp = 10, QuestCopper = 42; // DataQuest 20206: RewardXP "0|10", RewardMoney "0|42"
 
     private readonly GamePlayer _bot;
@@ -30,7 +31,7 @@ public sealed class PlayerBotErrands
     private bool _acceptDue;
     private long _lastWhisperAt = -60_000;
     private ErrandTarget _walkTarget;
-    private long _walkSince, _deathTick;
+    private long _walkSince, _deathTick, _nextBlockedLine;
     private int _trainerWalkDeaths;
 
     public bool Finished { get; private set; }
@@ -78,6 +79,16 @@ public sealed class PlayerBotErrands
         }
 
         return action;
+    }
+
+    /// <summary>The walk to an NPC was blocked (PlayerBotPathMover.LastBlock says why): one line per 30 s, with both
+    /// positions (run 1 failed "Olorustos not reached in 15 min" with no trace of where the bot stood).</summary>
+    public void WalkBlocked(GameNPC npc, string why, long now)
+    {
+        if (npc == null || now < _nextBlockedLine) return;
+        _nextBlockedLine = now + BlockedLineMs;
+        Line($"blocked to=\"{npc.Name}\" at=({_bot.X},{_bot.Y},{_bot.Z}) npc=({npc.X},{npc.Y},{npc.Z}) " +
+             $"distance={_bot.GetDistanceTo(npc)} zone={_bot.CurrentZone?.ID} why=\"{why}\"");
     }
 
     /// <summary>The NPC an action is about (for the driver's Walk), or null.</summary>

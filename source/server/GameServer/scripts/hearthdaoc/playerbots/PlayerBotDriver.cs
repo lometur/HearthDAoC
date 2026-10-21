@@ -57,6 +57,7 @@ public sealed class PlayerBotState
     public Vector3? RoamDestination;
     public ushort LastRegion;
     public int LastLevel, DeathSafetySteps, ErrorsLogged;
+    public long RoamingSince, NextIdleLine;          // PLAYER_BOT_IDLE
     public long LastExperience, UnreachableUntil, NextTargetRefreshTick, NextLootTick, NextLosTick, NextStyleTick,
         NextCombatChoiceTick, NextNeighbourCountTick, NextProgressCheckTick, LastProgressTick, ProgressExperience, ProgressMoney;
     public Vector3 ProgressPosition;
@@ -91,6 +92,7 @@ public static class PlayerBotDriver
     public const int ProgressCheckMilliseconds = 10_000;     // the pilot checked every tick (APP:585-604)
     public const int MeaningfulMoveDistance = 96;
     public const int DeathReleaseDelayMilliseconds = 10_000; // APP:29, :575-581
+    public const int IdleLineMilliseconds = 5 * 60_000;
     public static readonly long StuckMilliseconds = (long)AutonomousStuckWatchdog.StuckThreshold.TotalMilliseconds; // 15 min
 
     private static readonly ConcurrentDictionary<GamePlayer, PlayerBotState> _states = new();
@@ -223,6 +225,7 @@ public static class PlayerBotDriver
             else if (state.Task.Tick(state, now))
             {
                 state.Activity = PlayerBotActivity.Task;
+                state.RoamingSince = 0;
                 if (state.Target != null) Disengage(state, player);                     // the next defence picks afresh
                 return;
             }
@@ -235,7 +238,8 @@ public static class PlayerBotDriver
         if (player.IsSitting) player.Sit(false);                                         // 12
         TryLoot(state, player, now);                                                     // 13. APP:403-414
         RefreshTarget(state, player, now);                                               // 14
-        if (state.Target == null) { Roam(state, player, now); return; }                  // 15
+        if (state.Target == null) { Roam(state, player, now); ReportIdle(state, player, now); return; } // 15
+        state.RoamingSince = 0;
         Engage(state, player, now);                                                      // 16
     }
 
@@ -338,12 +342,13 @@ public static class PlayerBotDriver
 
     private static GameNPC FindWithin(PlayerBotState state, GamePlayer player, ushort radius, long now)
     {
-        GameNPC best = null;
-        int bestScore = int.MaxValue;
+        GameNPC best = null, safest = null;
+        int bestScore = int.MaxValue, safestScore = int.MaxValue;
+        ConColor cap = MaximumTargetCon(1, state.DeathSafetySteps), safestCon = ConColor.PURPLE;
         bool leashed = Leashed(state, player);
         foreach (GameNPC npc in player.GetNPCsInRadius(radius))
         {
-            if (!IsExperienceTarget(npc) || !IsValidTarget(player, npc, state.DeathSafetySteps) ||
+            if (!IsExperienceTarget(npc) || !IsValidTarget(player, npc, 0) ||
                 npc == state.Unreachable && now < state.UnreachableUntil)
                 continue;
             ConColor con = ConLevels.GetConColor(player.GetConLevel(npc));
@@ -351,9 +356,12 @@ public static class PlayerBotDriver
                 leashed && Vector3.Distance(new(npc.X, npc.Y, npc.Z), state.Anchor) > LeashRadius + RoamRadius)
                 continue;
             int score = TargetScore(player.GetDistanceTo(npc), con);                    // AWBC:3100
-            if (score < bestScore) { best = npc; bestScore = score; }
+            if (con <= cap) { if (score < bestScore) { best = npc; bestScore = score; } }
+            else if (con < safestCon || con == safestCon && score < safestScore) { safest = npc; safestCon = con; safestScore = score; }
         }
-        return best;
+        if (best != null || safest == null || radius < SearchRadius) return best;
+        state.DeathSafetySteps = DeathStepsFor(safestCon, 1, state.DeathSafetySteps);    // nothing in reach fits the death cap
+        return safest;
     }
 
     // Self-defence: the nearest monster that is hitting the bot (its AttackerTracker, as BotGroupSupport.UnderAttack
@@ -404,6 +412,12 @@ public static class PlayerBotDriver
         ConColor natural = groupSize switch { >= 6 => ConColor.PURPLE, >= 4 => ConColor.RED, >= 2 => ConColor.ORANGE, _ => ConColor.YELLOW };
         return (ConColor)Math.Max((int)ConColor.GREEN, (int)natural - deathSteps);
     }
+
+    /// <summary>The death steps to keep when nothing in reach fits the lowered cap: just enough for the safest monster
+    /// there, as a GameBot falls back to the safest camp (AWBC:3422-3437). The pilot never lowers them (APP:558, :567),
+    /// and nothing cons green to a level-1 player (ConLevels.cs:22), so run 1's bots stopped hunting after two deaths.</summary>
+    public static int DeathStepsFor(ConColor safest, int groupSize, int deathSteps) =>
+        Math.Min(deathSteps, Math.Max(0, (int)MaximumTargetCon(groupSize, 0) - (int)safest));
 
     // APP:186-187 for a class with a power pool. The roster's three classes have none (ManaStat UNDEFINED,
     // MaxManaCalculator.cs:32-51), so ManaPercent reads 0 (GameLiving.cs:2753) and the pilot's rule would sit them forever.
@@ -469,6 +483,28 @@ public static class PlayerBotDriver
         state.Activity = PlayerBotActivity.Roaming;
         if (state.Mover.StepToward(state.RoamDestination.Value, 20, now) is PlayerBotStepResult.Blocked or PlayerBotStepResult.Arrived)
             state.RoamDestination = null;
+    }
+
+    // A bot that has found no target for 5 minutes says why, once per 5 minutes: run 1's bots roamed for over an hour
+    // and the minute line could not tell the death cap from a start area they had outgrown.
+    private static void ReportIdle(PlayerBotState state, GamePlayer player, long now)
+    {
+        if (state.RoamingSince == 0) { (state.RoamingSince, state.NextIdleLine) = (now, now + IdleLineMilliseconds); return; }
+        if (now < state.NextIdleLine) return;
+        state.NextIdleLine = now + IdleLineMilliseconds;
+        int[] byCon = new int[7];                                                        // GREY .. PURPLE
+        int outsideLeash = 0;
+        foreach (GameNPC npc in player.GetNPCsInRadius(SearchRadius))
+        {
+            if (!IsExperienceTarget(npc) || !IsAttackable(player, npc)) continue;
+            byCon[Math.Clamp((int)ConLevels.GetConColor(player.GetConLevel(npc)) + 3, 0, 6)]++;
+            if (Vector3.Distance(new(npc.X, npc.Y, npc.Z), state.Anchor) > LeashRadius + RoamRadius) outsideLeash++;
+        }
+        if (Log.IsInfoEnabled)
+            Log.Info($"PLAYER_BOT_IDLE bot={player.Name} level={player.Level} minutes={(now - state.RoamingSince) / 60_000} " +
+                     $"deathSteps={state.DeathSafetySteps} cap={MaximumTargetCon(1, state.DeathSafetySteps)} " +
+                     $"fromAnchor={(int)Vector3.Distance(new(player.X, player.Y, player.Z), state.Anchor)} " +
+                     $"grey/green/blue/yellow/orange/red/purple={string.Join('/', byCon)} outsideLeash={outsideLeash}");
     }
 
     private static Vector3 PickRoamPoint(GamePlayer player, Vector3 centre)

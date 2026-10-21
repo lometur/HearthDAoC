@@ -27,6 +27,9 @@ public sealed class PlayerBotPathMover
     private long _lastStepTick, _lastUpdateTick;
     private int _stalledSteps;
 
+    /// <summary>Why the last Blocked came (the corridor's failure text, "stalled" or "no zone"); for the logs.</summary>
+    public string LastBlock { get; private set; } = string.Empty;
+
     public PlayerBotPathMover(GamePlayer player, IPathfindingMgr nav = null) { _player = player; _nav = nav; }
     private IPathfindingMgr Nav => _nav ?? PathfindingProvider.Instance;
 
@@ -69,8 +72,9 @@ public sealed class PlayerBotPathMover
             _lastStepTick = now;
             if (step < 1) { Stop(now); return PlayerBotStepResult.Waiting; }
             if (!TryComputeNext(Nav, _player.CurrentRegion, _player.CurrentZone, _path, current, goal, stopDistance, step, now,
-                    out Vector3 next, out _))
+                    out Vector3 next, out string failure))
             {
+                LastBlock = failure;
                 Stop(now);
                 PlayerBotDriverReport.Blocked();
                 return PlayerBotStepResult.Blocked;
@@ -80,13 +84,14 @@ public sealed class PlayerBotPathMover
                 if (++_stalledSteps < StallSteps) return PlayerBotStepResult.Moving;
                 _stalledSteps = 0;
                 _path.Clear();
+                LastBlock = "stalled";
                 Stop(now);
                 PlayerBotDriverReport.Blocked();
                 return PlayerBotStepResult.Blocked;
             }
             _stalledSteps = 0;
             Zone zone = _player.CurrentRegion?.GetZone((int)next.X, (int)next.Y);
-            if (zone == null) { Stop(now); return PlayerBotStepResult.Blocked; }       // as APP:531-536
+            if (zone == null) { LastBlock = "no zone"; Stop(now); return PlayerBotStepResult.Blocked; } // as APP:531-536
             _player.Heading = _player.GetHeading((int)next.X, (int)next.Y);
             _player.CurrentSpeed = _player.MaxSpeed;
             _player.X = (int)Math.Round(next.X);
