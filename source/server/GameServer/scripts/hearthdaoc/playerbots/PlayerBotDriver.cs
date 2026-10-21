@@ -424,7 +424,7 @@ public static class PlayerBotDriver
 
     /// <summary>The death steps to keep when nothing in reach fits the lowered cap: just enough for the safest monster
     /// there, as a GameBot falls back to the safest camp (AWBC:3422-3437). The pilot never lowers them (APP:558, :567),
-    /// and nothing cons green to a level-1 player (ConLevels.cs:22), so run 1's bots stopped hunting after two deaths.</summary>
+    /// and nothing cons green to a level-1 player (ConLevels.cs:20), so run 1's bots stopped hunting after two deaths.</summary>
     public static int DeathStepsFor(ConColor safest, int groupSize, int deathSteps) =>
         Math.Min(deathSteps, Math.Max(0, (int)MaximumTargetCon(groupSize, 0) - (int)safest));
 

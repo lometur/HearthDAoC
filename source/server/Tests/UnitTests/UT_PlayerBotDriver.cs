@@ -125,7 +125,7 @@ public sealed class UT_PlayerBotDriver
         Assert.That(PlayerBotDriver.MaximumTargetCon(group, deaths), Is.EqualTo(expected));
 
     // Run 1 (2026-10-21): two deaths capped the bots at green for good, and nothing cons green to a level-1 player
-    // (ConLevels.cs:22: level 0 is blue, 1 yellow), so the Hibernia bot roamed for 2 hours at 35 XP.
+    // (ConLevels.cs:20: level 0 is blue, 1 yellow), so the Hibernia bot roamed for 2 hours at 35 XP.
     [Test]
     public void NothingConsGreenToALevelOnePlayer() =>
         Assert.That(Enumerable.Range(0, 128).Select(level => ConLevels.GetConColor(ConLevels.GetConLevel(1, level))),
