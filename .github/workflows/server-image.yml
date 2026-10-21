@@ -116,7 +116,7 @@ jobs:
         run: |
           # The server build copies config/serverconfig.xml; use the same loopback placeholder as the image build.
           cp deploy/serverconfig.build.xml source/server/CoreServer/config/serverconfig.xml
-          dotnet test source/server/Tests/Tests.csproj --nologo --filter "FullyQualifiedName~UT_CommandPrivLevelOverrides|FullyQualifiedName~UT_SiStartChoice|FullyQualifiedName~UT_ClassicBattlegrounds|FullyQualifiedName~UT_DataQuestDependency|FullyQualifiedName~UT_DataQuestDeliveryItem|FullyQualifiedName~UT_DataQuestOffers|FullyQualifiedName~UT_QuestJournal|FullyQualifiedName~UT_DataQuestWhisper|FullyQualifiedName~UT_QuestNames|FullyQualifiedName~UT_ClassicQuestsExtra|FullyQualifiedName~UT_ClassicQuestsChoice|FullyQualifiedName~UT_LinkedCamps|FullyQualifiedName~UT_EpicChain|FullyQualifiedName~UT_QuestIndicatorProbe|FullyQualifiedName~UT_QuestIndicators|FullyQualifiedName~UT_IndicatorSentStore|FullyQualifiedName~UT_RpTimerWait|FullyQualifiedName~UT_RpTimerWaitScript|FullyQualifiedName~UT_RelicPadAttackers|FullyQualifiedName~UT_QuestGrants|FullyQualifiedName~UT_BotCpuMeter|FullyQualifiedName~UT_BotCpuReport|FullyQualifiedName~UT_BotCpuScript"
+          dotnet test source/server/Tests/Tests.csproj --nologo --filter "FullyQualifiedName~UT_CommandPrivLevelOverrides|FullyQualifiedName~UT_SiStartChoice|FullyQualifiedName~UT_ClassicBattlegrounds|FullyQualifiedName~UT_DataQuestDependency|FullyQualifiedName~UT_DataQuestDeliveryItem|FullyQualifiedName~UT_DataQuestOffers|FullyQualifiedName~UT_QuestJournal|FullyQualifiedName~UT_DataQuestWhisper|FullyQualifiedName~UT_QuestNames|FullyQualifiedName~UT_ClassicQuestsExtra|FullyQualifiedName~UT_ClassicQuestsChoice|FullyQualifiedName~UT_LinkedCamps|FullyQualifiedName~UT_EpicChain|FullyQualifiedName~UT_QuestIndicatorProbe|FullyQualifiedName~UT_QuestIndicators|FullyQualifiedName~UT_IndicatorSentStore|FullyQualifiedName~UT_RpTimerWait|FullyQualifiedName~UT_RpTimerWaitScript|FullyQualifiedName~UT_RelicPadAttackers|FullyQualifiedName~UT_QuestGrants|FullyQualifiedName~UT_BotCpuMeter|FullyQualifiedName~UT_BotCpuReport|FullyQualifiedName~UT_BotCpuScript|FullyQualifiedName~UT_HeadlessClient|FullyQualifiedName~UT_PlayerBotPlan|FullyQualifiedName~UT_PlayerBotDriver|FullyQualifiedName~UT_PlayerBotErrands"
 
       - name: CLI integration tests
         env:
@@ -141,6 +141,19 @@ jobs:
           img="ghcr.io/${{ github.repository_owner }}/hearthdaoc:$TAG"
           docker tag hearthdaoc:ci "$img"
           docker push "$img"
+
+      # HearthDAoC proto (#137, branch proto/player-bots only): a manual run (Run workflow on this branch) also pushes
+      # the tested image as ghcr.io/lometur/hearthdaoc:proto-<first 7 of the commit>, for the owner's throwaway second
+      # server. Off main "Release to publish" computes no release, so no release tag, bundle or GitHub release is
+      # made, release-assets is skipped, and ./hdc update never sees this tag.
+      - name: Prototype image (manual run off main)
+        if: github.event_name == 'workflow_dispatch' && github.ref != 'refs/heads/main'
+        run: |
+          echo "${{ secrets.GITHUB_TOKEN }}" | docker login ghcr.io -u "${{ github.actor }}" --password-stdin
+          img="ghcr.io/${{ github.repository_owner }}/hearthdaoc:proto-${GITHUB_SHA::7}"
+          docker tag hearthdaoc:ci "$img"
+          docker push "$img"
+          echo "::notice::pushed $img"
   release-assets:
     needs: test-build-publish
     if: needs.test-build-publish.outputs.release != ''
