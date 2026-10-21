@@ -216,7 +216,8 @@ public static class BotCpuScript
     /// <c>-</c>; so are those of a minute the timer closes between those joins and the event. A stop from the game
     /// loop's own error catch runs on the <c>GameLoop</c> thread, which then stays listed: <c>loopThreadsCpuPct</c> and
     /// <c>loopWaitMs</c> cover that thread alone, <c>campThreadCpuPct</c> is 0, and the ended workers' and camp
-    /// thread's CPU is in <c>offLoopCpuPct</c>.
+    /// thread's CPU is in <c>offLoopCpuPct</c>. The allocation counter is the exception to the 0: one that did not
+    /// move, or went back, is stuck, so <c>allocMBSec</c> is <c>-</c> (3.9).
     /// </summary>
     public static BotCpuProcess ProcessWindow(BotCpuProcessSample earlier, BotCpuProcessSample later, double seconds)
     {
@@ -283,9 +284,12 @@ public static class BotCpuScript
         double? throttledMs = earlier.ThrottledUsec is long throttledStart && later.ThrottledUsec is long throttledEnd
             ? Positive(throttledEnd - throttledStart) / 1000.0
             : null;
-        double? allocMBSec = seconds > 0
-            ? Positive(later.AllocatedBytes - earlier.AllocatedBytes) / (double)BytesPerMB / seconds
-            : null;
+        // A running server always allocates, the meter's own report among it, so an allocation counter that did not
+        // move is stuck, not a quiet window: under Server GC's dynamic heap count (DATAS), .NET 10 adds up the heaps in
+        // service only, and after the GC takes heaps out of service the counter stands still, minutes to hours, until
+        // the heaps left catch up or the others come back (dotnet/runtime#122299; fixed for .NET 11 by #131069).
+        long allocated = later.AllocatedBytes - earlier.AllocatedBytes;
+        double? allocMBSec = seconds > 0 && allocated > 0 ? allocated / (double)BytesPerMB / seconds : null;
 
         return new BotCpuProcess(later.Cores, processCpuPct, loopThreadsCpuPct, campThreadCpuPct, loopWaitMs,
             throttledMs, Math.Max(0, (later.GcPause - earlier.GcPause).TotalMilliseconds),
@@ -949,7 +953,8 @@ public readonly record struct BotCpuThreadSample(BotCpuThreadRole Role, BotCpuSc
 /// <param name="ThrottledUsec"><c>throttled_usec</c> of the container's <c>cpu.stat</c>.</param>
 /// <param name="GcPause"><see cref="GC.GetTotalPauseDuration"/>.</param>
 /// <param name="Gen2"><c>GC.CollectionCount(2)</c>.</param>
-/// <param name="AllocatedBytes"><c>GC.GetTotalAllocatedBytes(false)</c>: all allocation in the process.</param>
+/// <param name="AllocatedBytes"><c>GC.GetTotalAllocatedBytes(false)</c>: all allocation in the process. It never goes
+/// back, but under Server GC's dynamic heap count it can stand still for minutes or hours (3.9).</param>
 /// <param name="HeapBytes"><c>GC.GetTotalMemory(false)</c>, as <c>SERVER_STALL</c> reads it; no forced collection.
 /// </param>
 /// <param name="RssKB"><c>VmRSS</c> of <c>/proc/self/status</c>, kB.</param>

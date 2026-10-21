@@ -199,10 +199,11 @@ becomes `_`. The goal's activity text, the level and the region are in `/botcpu 
 | `loopWaitMs` | time the loop threads were ready to run but waited for a CPU | ms, integer |
 | `throttledMs` | container CPU throttling | ms, integer |
 | `gcPauseMs`, `gen2` | GC pause time and full collections in the window | ms, integer; count |
-| `allocMBSec` | all allocation in the process | MB/s, 1 decimal |
+| `allocMBSec` | all allocation in the process; `-` in a window the runtime's counter stood still in (3.9) | MB/s, 1 decimal |
 | `heapMB`, `rssMB` | managed heap (`GC.GetTotalMemory(false)`, as `SERVER_STALL` reads it, `Managers/GameLoop/GameLoopWorkMetrics.cs:93`) and resident memory; no forced collection | MB, integer |
 
-A value the platform can't give (Windows, a file missing in the container, or a schedstat that reads 0, 3.9) is `-`.
+A value the platform can't give (Windows, a file missing in the container, a schedstat that reads 0, or an
+allocation counter that stood still, 3.9) is `-`.
 
 `heapMB` is `GC.GetTotalMemory(false)`, as in `SERVER_STALL` `heapMB` and `SERVER_GC_PAUSE` `totalMemoryMB`
 (`Managers/GameLoop/ServerMemoryDiagnostics.cs:413`), not `SERVER_MEMORY`'s `heapMB` (:155, the heap at the last
@@ -645,6 +646,7 @@ window's 60 s closes the window.
 | `loopWaitMs` | schedstat (est. on the owner's kernel), second field (time spent waiting on a run queue), loop threads | preemption: wall time a callback may include. It can include throttled time (a throttled thread stays runnable, est.): do not add it to `throttledMs` |
 | `throttledMs` | `/sys/fs/cgroup/cpu.stat`, `throttled_usec` (cgroup v2; present inside the container, est.) | container throttling |
 | `gcPauseMs`, `gen2` | `GC.GetTotalPauseDuration()`, `GC.CollectionCount(2)` | GC pauses inside callbacks |
+| `allocMBSec` | `GC.GetTotalAllocatedBytes(false)` | the GC's load, next to `gcPauseMs`; `-` while the counter stands still (below) |
 | `tps` | `GameLoop.GameLoopTime` and `TickDuration` (3.8) | must be 30.0 for a fair minute |
 
 - **Wall time, not pure CPU.** Each callback is timed by `Stopwatch`, so time a thread was preempted, throttled or
@@ -663,6 +665,26 @@ window's 60 s closes the window.
 - **A schedstat that says nothing.** Where the kernel keeps no scheduler statistics, the file still exists and reads
   `0 0 0` (est.). A first field of 0 for a running loop thread therefore counts as unavailable: `loopThreadsCpuPct`,
   `offLoopCpuPct`, `campThreadCpuPct` and `loopWaitMs` are then `-`, not 0.
+- **An allocation counter that stands still.** Under Server GC (`source/server/CoreServer/CoreServer.csproj:20`)
+  the runtime's dynamic heap count (DATAS, on by default since .NET 9; the project does not turn it off) takes GC
+  heaps out of service when the load eases and brings them back when it rises. .NET 10's
+  `GC.GetTotalAllocatedBytes` adds up the heaps in service only, so taking heaps out lowers the sum by all they ever
+  allocated, and the `false` read, which never returns less than it did before, stands still while the server
+  allocates MBs a second (dotnet/runtime#122299; fixed for .NET 11 by #131069, not in .NET 10 as of 2026-10-20).
+  It stands still until the heaps still in service have allocated as much again as the ones taken out, or until
+  the heaps come back: minutes to hours (on the live server, 18:11-18:31 and from 19:06 for over an hour on
+  2026-10-20). A running server always allocates, the meter's own report among it, so a window the counter did not
+  move in has `allocMBSec` `-`, not 0.0; that is usually also the window the heaps went out in. When all the heaps
+  come back, the window they come back in carries the `-` run's allocation as well: spread it over the run and that
+  window. When only some come back, it carries only their part. When the counter moves again on its own first, the
+  run's allocation is not counted, and the heaps' later return shows as one jump that was not allocated in that
+  window. `GC.GetTotalAllocatedBytes(true)` is no cure: it adds up the same
+  heaps, so it falls by gigabytes when they go and jumps back when they return, and it stops every managed thread
+  for the read. Two reads the stall does not touch: the kind lines' allocation (exact, game-loop callbacks only)
+  and `SERVER_MEMORY`'s `topAllocations`, from the runtime's allocation events
+  (`Managers/GameLoop/ServerMemoryDiagnostics.cs:415-423`): its first entry's MB/min ÷ its % × 100 is the
+  process's MB a minute. `SERVER_MEMORY`'s `allocMBperMin` reads the same counter (:129-131) and has the same
+  fault; that file is upstream's and stays as it is.
 
 ### 3.10 Per-bot counters, the spread and the top 5
 
@@ -918,6 +940,8 @@ given and runs the items in order, and sets `GameLoop.ActiveService`. `[TearDown
   `GameLoop` and `GameLoop_Worker` are loop threads, `GameLoop_Watchd` and `GameLoop_BusyWa` are not,
   `CampSnapshotPla` is the camp thread; `cpu.stat` gives `throttled_usec`; `/proc/self/status` gives `VmRSS`; an empty
   or missing file gives `-`.
+- The process window: an allocation counter that did not move, or went back, gives `allocMBSec=-`, the window's
+  other values still given; one that moved 6 MB in 60 s gives 0.1 (3.9).
 - The stop time: a stop at 14:32 stops at the first second at or after it; `on` with no minutes clears it; `on 30` on
   a running meter writes the `on` line again.
 - The CSV: a file over 50 MB is renamed `.1` (an older `.1` replaced) before the next append, and the new file gets
@@ -1127,6 +1151,9 @@ Short, for the live server; the prototype's full rules are in cpu §5 and README
 - **The prototype's contract** (2.5): a player bot whose client neither implements `IPlayerBotClient` nor derives
   from `BotDummyClient` is counted as `player`; one not registered in `ClientService`, or not playing, has its costs
   charged with `n` 0 (`msPerBotSec=-`).
+- **`allocMBSec` stalls on .NET 10** (3.9): `-` while the runtime's allocation counter stands still, minutes to
+  hours, and a high minute after may carry them. The kind lines and `SERVER_MEMORY`'s `topAllocations` are not
+  affected.
 - **A report fault turns the meter off** (3.7): the log shows `BOT_CPU_ERROR` and `off source=error`, and the open
   window is lost. The server goes on; `/botcpu on` starts a new run.
 - **Upstream churn:** five marked lines in GL (OpenDAoC's game loop) and NS. A sync that moves them fails the source
@@ -1198,7 +1225,8 @@ the code check.
     repeated, stage columns as whole-kind totals from the raw ticks; renamed `.1` above 50 MB or when its header is
     not the current one.
 22. **Process line:** the fields of 2.1; loop threads found by their `comm` names; the camp planner thread reported
-    on its own; `tps` from game time; a schedstat of 0 reads as `-`.
+    on its own; `tps` from game time; a schedstat of 0 reads as `-`, and so does an allocation counter that did not
+    move (3.9).
 23. **`BOT_CPU_STATE` lines** for every on and off (and a stop-time change), with the GM's name; `off source=error`
     after a `BOT_CPU_ERROR` line.
 24. **File split:** `BotCpuMeter.cs`, `BotCpuReport.cs`, `BotCpuScript.cs`, `BotCpuCommand.cs`; tests
