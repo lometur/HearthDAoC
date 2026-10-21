@@ -1,6 +1,7 @@
 using System;
 using System.Diagnostics;
 using System.Globalization;
+using System.Runtime.CompilerServices;
 using System.Threading;
 using DOL.Logging;
 
@@ -24,10 +25,21 @@ public static class PlayerBotDriverReport
         _ldCancelled, _errors;
     private static int _maxLevel;
     private static Timer _timer;
+    private static readonly ConditionalWeakTable<GameLiving, StrongBox<long>> _countedLives = new();
 
     public static void AddTick(long stopwatchTicks) { Interlocked.Increment(ref _ticks); Interlocked.Add(ref _tickStopwatch, stopwatchTicks); }
     public static void AddMover(long stopwatchTicks) => Interlocked.Add(ref _moverStopwatch, stopwatchTicks);
-    public static void Kill() => Interlocked.Increment(ref _kills);
+    // One kill per monster life (its SpawnTick, set at each AddToWorld, GameObject.cs:614), however many player bots
+    // fought it: each bot whose engaged target dies reports it, and a start row's bots share their monsters (runs 2-3).
+    // False when another bot already counted this life.
+    public static bool Kill(GameLiving monster)
+    {
+        StrongBox<long> counted = _countedLives.GetValue(monster, _ => new StrongBox<long>(long.MinValue));
+        long life = monster.SpawnTick;
+        if (Interlocked.Exchange(ref counted.Value, life) == life) return false;
+        Interlocked.Increment(ref _kills);
+        return true;
+    }
     public static void Death() => Interlocked.Increment(ref _deaths);
     public static void Experience(long amount) => Interlocked.Add(ref _experience, amount);
     public static void Blocked() => Interlocked.Increment(ref _blocked);

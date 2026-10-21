@@ -54,7 +54,8 @@ public sealed class PlayerBotErrands
             return new ErrandAction(ErrandActionKind.Done);
 
         ErrandView view = See(now);
-        CountDeath(view);
+        if (CountDeath(view))
+            return new ErrandAction(ErrandActionKind.Wait); // the view is Falron's: the next See looks Master Astyp up
         ErrandAction action = Guard(PlayerBotErrandPlan.Decide(view, _trainer), view, now);
 
         switch (action.Kind)
@@ -215,15 +216,19 @@ public sealed class PlayerBotErrands
 
     // Think never sees the bot dead: the driver handles a death before its task (PlayerBotDriver.Think steps 6 and 10).
     // So a death shows as a new DeathTick (set in ProcessDeath, GamePlayer.cs:5953) at the first think after the release.
-    private void CountDeath(in ErrandView view)
+    // True when it fell back to Master Astyp: Npc(Trainer) reads only NPCs a See has looked up, so this think's view and
+    // lookups are still Falron's.
+    private bool CountDeath(in ErrandView view)
     {
         if (_bot.DeathTick == _deathTick)
-            return;
+            return false;
         _deathTick = _bot.DeathTick;
         Line($"died level={view.Level} walkingTo={_walkTarget}");
-        if (_walkTarget == ErrandTarget.Trainer && _trainer == PlayerBotErrandPlan.Falron
-            && ++_trainerWalkDeaths >= DeathsBeforeFallback)
-            FallBack($"died {_trainerWalkDeaths} times on the way to Captain Falron");
+        if (_walkTarget != ErrandTarget.Trainer || _trainer != PlayerBotErrandPlan.Falron
+            || ++_trainerWalkDeaths < DeathsBeforeFallback)
+            return false;
+        FallBack($"died {_trainerWalkDeaths} times on the way to Captain Falron");
+        return true;
     }
 
     // The Mercenary trainer at Campacorentin Station, 499 units from Master Lorik: the same keyword, gift and code path.

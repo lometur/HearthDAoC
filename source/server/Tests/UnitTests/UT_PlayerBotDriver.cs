@@ -14,8 +14,8 @@ using NUnit.Framework;
 namespace DOL.GS.Tests;
 
 // HearthDAoC proto (#137): the player-bot driver's pure parts, its timer's meter charge, the mover's step maths and
-// corridor use, the never-throw tick, and the report line. Helpers copied from UT_BotCpuMeter.cs:98-130 and
-// UT_PlayerTravel.cs:27-58, :103-109.
+// corridor use, the never-throw tick, the report line and its one kill per monster life. Helpers copied from
+// UT_BotCpuMeter.cs:98-130 and UT_PlayerTravel.cs:27-58, :103-109.
 [TestFixture, NonParallelizable]
 public sealed class UT_PlayerBotDriver
 {
@@ -133,6 +133,19 @@ public sealed class UT_PlayerBotDriver
     [TestCase(1000, ConColor.YELLOW, 1000)] [TestCase(1000, ConColor.BLUE, 1220)] [TestCase(700, ConColor.GREEN, 1140)]
     public void TargetScore(int distance, ConColor con, int expected) =>
         Assert.That(PlayerBotDriver.TargetScore(distance, con), Is.EqualTo(expected));
+
+    // Every bot engaged with a monster reports its death; bots on one start row share monsters (runs 2-3).
+    [Test]
+    public void AMonsterLifeCountsOneKillHoweverManyBotsFoughtIt()
+    {
+        var monster = (GameNPC)RuntimeHelpers.GetUninitializedObject(typeof(GameNPC));
+        monster.SpawnTick = 0;                                                          // never respawned
+        Assert.That(PlayerBotDriverReport.Kill(monster), Is.True);
+        Assert.That(PlayerBotDriverReport.Kill(monster), Is.False, "a second bot that fought it");
+        monster.SpawnTick = 300_000;                                                    // respawned (GameObject.cs:614)
+        Assert.That(PlayerBotDriverReport.Kill(monster), Is.True);
+        Assert.That(PlayerBotDriverReport.Kill((GameNPC)RuntimeHelpers.GetUninitializedObject(typeof(GameNPC))), Is.True, "another monster");
+    }
 
     [Test]
     public void TryComputeNext()

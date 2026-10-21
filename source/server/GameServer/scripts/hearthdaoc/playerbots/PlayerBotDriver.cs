@@ -65,11 +65,12 @@ public sealed class PlayerBotState
 
 // HearthDAoC #137 spike: a thin copy of the /bot pilot's think (bots/autonomous/AutonomousPlayerPilot.cs:229-374) for a
 // player bot: no quickbar file, pets, party, HUD or saves. Each bot is ticked every 250 ms by its own timer. It
-// keeps the bot alive, rests, loots, picks a monster the way a GameBot does (AutonomousWorldBotController.cs:3050-3148,
-// no camp), walks with PlayerBotPathMover, faces, sets "target in view" from the navmesh, and casts or swings. It
-// writes no database rows on the loop; autosave and logout save. It runs in TimerService's phase, in parallel with
-// every other timer (the bot's own regeneration and release timers too), so the player's position, heading, target,
-// sitting and areas change there instead of in ClientService's packet phase; attacks and casts are only requested.
+// keeps the bot alive, rests, loots, fights back a monster that hits it, else picks one the way a GameBot does
+// (AutonomousWorldBotController.cs:3050-3148, no camp), walks with PlayerBotPathMover, faces, sets "target in view"
+// from the navmesh, and casts or swings. It writes no database rows on the loop; autosave and logout save. It runs in
+// TimerService's phase, in parallel with every other timer (the bot's own regeneration and release timers too), so the
+// player's position, heading, target, sitting and areas change there instead of in ClientService's packet phase;
+// attacks and casts are only requested.
 public static class PlayerBotDriver
 {
     private static readonly Logger Log = LoggerManager.Create(typeof(PlayerBotDriver));
@@ -210,6 +211,7 @@ public static class PlayerBotDriver
             return;
         }
         CountNeighbours(state, player, now);                                             // 9. once a minute
+        SettleTarget(state, player);                                                     //    a fight that ended counts, task or not
         if (state.Task != null)                                                          // 10
         {
             if (state.Task.Finished)
@@ -221,11 +223,11 @@ public static class PlayerBotDriver
             else if (state.Task.Tick(state, now))
             {
                 state.Activity = PlayerBotActivity.Task;
+                if (state.Target != null) Disengage(state, player);                     // the next defence picks afresh
                 return;
             }
         }
-        if (!player.InCombat && (NeedsRest(player.HealthPercent, player.MaxMana, player.ManaPercent, player.EndurancePercent) ||
-                                 player.IsSitting && !Recovered(player)))
+        if (!player.InCombat && WantsRest(player))
         {
             Rest(state, player, now);                                                    // 11. APP:290-296
             return;
@@ -300,18 +302,31 @@ public static class PlayerBotDriver
         player.OnHeadingPacketReceived();                                                // GP:874-877 -> PMC:151-154
     }
 
+    // Drops a target that died or is no longer fair game (an attacker stays fair game whatever its con).
+    private static void SettleTarget(PlayerBotState state, GamePlayer player)
+    {
+        if (state.Target == null || IsValidTarget(player, state.Target, state.DeathSafetySteps) || IsAttacking(player, state.Target))
+            return;
+        if (state.Engaged && !state.Target.IsAlive) PlayerBotDriverReport.Kill(state.Target);
+        state.Target = null;
+        state.Engaged = false;
+    }
+
+    private static void Disengage(PlayerBotState state, GamePlayer player)
+    {
+        player.attackComponent.StopAttack();
+        player.StopCurrentSpellcast();
+        state.Target = null;
+        state.Engaged = false;
+    }
+
     private static void RefreshTarget(PlayerBotState state, GamePlayer player, long now)
     {
-        if (state.Target != null && !IsValidTarget(player, state.Target, state.DeathSafetySteps))
-        {
-            if (state.Engaged && !state.Target.IsAlive) PlayerBotDriverReport.Kill();
-            state.Target = null;
-            state.Engaged = false;
-        }
         bool fighting = state.Engaged && (player.attackComponent.AttackState || player.IsCasting || player.InCombat);
         if (state.Target != null && (fighting || now < state.NextTargetRefreshTick)) return;  // keep a target while fighting it
         state.NextTargetRefreshTick = now + TargetRefreshMilliseconds;
-        GameNPC found = FindWithin(state, player, ImmediateSearchRadius, now) ?? FindWithin(state, player, SearchRadius, now); // AWBC:3148
+        GameNPC found = Attacker(state, player, now) ??                                    // self-defence first
+            FindWithin(state, player, ImmediateSearchRadius, now) ?? FindWithin(state, player, SearchRadius, now); // AWBC:3148
         if (found == state.Target) return;
         state.Target = found;
         state.Engaged = false;
@@ -339,10 +354,38 @@ public static class PlayerBotDriver
         return best;
     }
 
+    // Self-defence: the nearest monster that is hitting the bot (its AttackerTracker, as BotGroupSupport.UnderAttack
+    // reads it), whatever its con and wherever the leash is. The pilot's filter alone left the bot roaming or resting
+    // while an orange monster killed it, and each death lowered its con cap further.
+    private static GameNPC Attacker(PlayerBotState state, GamePlayer player, long now)
+    {
+        GameNPC best = null;
+        int bestDistance = int.MaxValue;
+        foreach (GameLiving living in player.attackComponent.AttackerTracker.Attackers)
+        {
+            if (living is not GameNPC npc || !IsAttacking(player, npc) || npc == state.Unreachable && now < state.UnreachableUntil)
+                continue;
+            int distance = player.GetDistanceTo(npc);
+            if (distance < bestDistance) { best = npc; bestDistance = distance; }
+        }
+        return best;
+    }
+
+    /// <summary>For a task (the errands): true while the bot has a fight to finish, a monster hitting it or the one it
+    /// is engaged with; then the task gives the think to the driver, which fights that one and seeks no other.</summary>
+    public static bool UnderAttack(PlayerBotState state, long now) =>
+        (state.Engaged && state.Target != null && state.Player.InCombat) || Attacker(state, state.Player, now) != null;
+
+    private static bool IsAttacking(GamePlayer player, GameLiving target) =>
+        target is GameNPC npc && npc.TargetObject == player && IsAttackable(player, npc);
+
     private static bool IsValidTarget(GamePlayer player, GameLiving target, int deathSteps) =>   // APP:447-463, group size 1
+        IsAttackable(player, target) && !player.IsObjectGreyCon(target) &&
+        ConLevels.GetConColor(player.GetConLevel(target)) <= MaximumTargetCon(1, deathSteps);
+
+    private static bool IsAttackable(GamePlayer player, GameLiving target) =>
         target != null && target != player && target.IsAlive && target.ObjectState is GameObject.eObjectState.Active &&
         target.CurrentRegion == player.CurrentRegion && GameServer.ServerRules.IsAllowedToAttack(player, target, true) &&
-        !player.IsObjectGreyCon(target) && ConLevels.GetConColor(player.GetConLevel(target)) <= MaximumTargetCon(1, deathSteps) &&
         (target is not GameNPC npc || (npc.Flags & (GameNPC.eFlags.PEACE | GameNPC.eFlags.CANTTARGET)) == 0);
 
     // A copy of AutonomousWorldBotController.IsExperienceMonster (AWBC:4855-4861, private there).
@@ -364,6 +407,12 @@ public static class PlayerBotDriver
     // MaxManaCalculator.cs:32-51), so ManaPercent reads 0 (GameLiving.cs:2753) and the pilot's rule would sit them forever.
     public static bool NeedsRest(byte healthPercent, int maxMana, byte manaPercent, byte endurancePercent) =>
         AutonomousPlayerPilot.ShouldRest(healthPercent, maxMana > 0 ? manaPercent : (byte)100, endurancePercent);
+
+    /// <summary>Low, or sitting and not yet full (APP:290-291 without the combat check): the driver rests once out of
+    /// combat, and a task that walks lets it.</summary>
+    public static bool WantsRest(GamePlayer player) =>
+        NeedsRest(player.HealthPercent, player.MaxMana, player.ManaPercent, player.EndurancePercent) ||
+        player.IsSitting && !Recovered(player);
 
     public static int TargetScore(int distance, ConColor con) => distance + Math.Abs((int)con) * ConPenalty;
     public static int MeleeStopDistance(int attackRange) => Math.Max(48, (attackRange > 0 ? attackRange : 128) - 48);
