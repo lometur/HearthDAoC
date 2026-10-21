@@ -328,7 +328,8 @@ public sealed class BotCpuSince
 /// <param name="ThrottledMs"><c>throttledMs</c>: the container's CPU throttling, ms.</param>
 /// <param name="GcPauseMs"><c>gcPauseMs</c>: GC pause time, ms.</param>
 /// <param name="Gen2"><c>gen2</c>: full collections.</param>
-/// <param name="AllocMBSec"><c>allocMBSec</c>: all allocation in the process, MB per s.</param>
+/// <param name="AllocMBSec"><c>allocMBSec</c>: all allocation in the process, MB per s; null when the runtime's
+/// counter did not move in the window, as it then is stuck (3.9).</param>
 /// <param name="HeapMB"><c>heapMB</c>: the managed heap, <c>GC.GetTotalMemory(false)</c>, MB.</param>
 /// <param name="RssMB"><c>rssMB</c>: resident memory, MB.</param>
 public sealed record BotCpuProcess(int Cores, double? ProcessCpuPct, double? LoopThreadsCpuPct,

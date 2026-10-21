@@ -572,7 +572,39 @@ public sealed class UT_BotCpuScript
         Assert.That(process.ThrottledMs, Is.EqualTo(0));
         Assert.That(process.GcPauseMs, Is.EqualTo(0));
         Assert.That(process.Gen2, Is.EqualTo(0));
-        Assert.That(process.AllocMBSec, Is.EqualTo(0));
+
+        // But not the allocation: a counter that went back is stuck, not a quiet window (3.9).
+        Assert.That(process.AllocMBSec, Is.Null);
+    }
+
+    [Test]
+    public void AnAllocationCounterThatDidNotMoveIsADashNotZero()
+    {
+        // 3.9: under Server GC's dynamic heap count (DATAS), .NET 10's GC.GetTotalAllocatedBytes(false) stands still
+        // for minutes or hours after the GC takes heaps out of service, while the server allocates MBs a second
+        // (dotnet/runtime#122299). A running server always allocates, so a counter that did not move is -, not 0.0;
+        // the window's other values are still given.
+        BotCpuProcessSample earlier = new(4, Ms(1_000), null, ThrottledUsec: null, GcPause: Ms(100), Gen2: 3,
+            AllocatedBytes: 7_000_000_000, HeapBytes: 100 * MB, RssKB: null);
+        BotCpuProcessSample stuck = earlier with { ProcessCpu = Ms(61_000), GcPause = Ms(211), HeapBytes = 120 * MB };
+
+        BotCpuProcess process = BotCpuScript.ProcessWindow(earlier, stuck, 60);
+
+        Assert.That(process.AllocMBSec, Is.Null);
+        Assert.That(process.ProcessCpuPct, Is.EqualTo(100.0).Within(1e-9));
+        Assert.That(process.GcPauseMs, Is.EqualTo(111).Within(1e-9));
+        Assert.That(process.HeapMB, Is.EqualTo(120));
+        BotCpuWindow window = BotCpuReport.Window(new BotCpuTotals(), 60, 1_000_000_000, 60_000, 1000.0 / 30,
+            default, []);
+        Assert.That(BotCpuReport.ProcessLine(window, process), Is.EqualTo(
+            "BOT_CPU_PROCESS win=60 tps=30.0 cores=4 processCpuPct=100.0 loopThreadsCpuPct=- offLoopCpuPct=- " +
+            "campThreadCpuPct=- chargedPct=0.0 callsSec=0 loopWaitMs=- throttledMs=- gcPauseMs=111 gen2=0 " +
+            "allocMBSec=- heapMB=120 rssMB=-"));
+
+        // Any move is a rate: the smallest the runtime's counter moves by is a whole allocation buffer, so there is no
+        // threshold. 6 MB in 60 s is 0.1 MB/s.
+        Assert.That(BotCpuScript.ProcessWindow(earlier, stuck with { AllocatedBytes = 7_000_000_000 + 6 * MB }, 60)
+            .AllocMBSec, Is.EqualTo(0.1).Within(1e-9));
     }
 
     [Test]

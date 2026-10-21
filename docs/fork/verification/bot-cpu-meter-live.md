@@ -37,7 +37,7 @@ treat it as a possible bug and post it on #137.
 | 1. The update | The release adds the setting, off, and a default start changes nothing | `.env` has `HEARTHDAOC_BOT_CPU=off`; "Bot CPU meter: off" once in the start output; no meter line in the log; `SERVER_WORK` as before | "on" anywhere, a `BOT_CPU_STATE` line, or no "Bot CPU meter" line |
 | 2. Turn it on | `/botcpu` works for a GM | The two replies quoted in the check | "No such command (/botcpu)", or only the usage lines |
 | 3. The lines | It writes a block of lines every minute | A block each minute, with `gamebot` `n` about your bot count | No lines after 2 minutes; `BOT_CPU_ERROR` or `off source=error` |
-| 4. Sanity | Its numbers agree with the kernel's | Usually `chargedPct` < `loopThreadsCpuPct` < `processCpuPct` | `chargedPct` higher while the waits are small; `-` on the minutes of a running server |
+| 4. Sanity | Its numbers agree with the kernel's | Usually `chargedPct` < `loopThreadsCpuPct` < `processCpuPct` | `chargedPct` higher while the waits are small; `-` for the thread values on the minutes of a running server (`allocMBSec=-` is no fail: check 4) |
 | 5. In chat | Chat shows the same minute as the log | The same numbers as the log's last block | Other numbers for the same minute |
 | 6. The CSV | The CSV gets its rows | A header, then a row per minute and kind | No file, or no new rows |
 | 7. Overhead | It costs little | `samples` about 1,800 a minute, `overBudget` not higher, `avgMsSum` within the estimate | `samples` falls or `overBudget` rises while on; `avgMsSum` up by more than the estimate is a softer sign, as bot activity moves |
@@ -79,7 +79,7 @@ BOT_CPU lines, so `grep BOT_CPU` shows it too, but it is not a line of the meter
 |---|---|---|
 | `BOT_CPU` | every minute, one per kind with anything charged, in the kind order above | `n` (the kind's average count), `msPerBotSec` (the average CPU per bot, in ms per second: 1.0 is 0.1% of one core), `msSec` (the whole kind), and after the `\|` the stages, per bot; `unattributed` has `n=-`, and its stages are ms per second for the whole kind |
 | `BOT_CPU_TOP` | every minute, one per bot kind with a bot charged | the 5 costliest bots, `rank=name:ms per s`, with each GameBot's goal |
-| `BOT_CPU_PROCESS` | every minute | the whole process: `tps`, `processCpuPct`, `loopThreadsCpuPct`, `chargedPct`, `callsSec`, `loopWaitMs`, `throttledMs`, `gcPauseMs` and more; `-` for a value the platform can't give, and for the four thread values (`loopThreadsCpuPct`, `offLoopCpuPct`, `campThreadCpuPct`, `loopWaitMs`) in the window a normal server stop writes, as those threads have ended |
+| `BOT_CPU_PROCESS` | every minute | the whole process: `tps`, `processCpuPct`, `loopThreadsCpuPct`, `chargedPct`, `callsSec`, `loopWaitMs`, `throttledMs`, `gcPauseMs` and more; `-` for a value the platform can't give, and for the four thread values (`loopThreadsCpuPct`, `offLoopCpuPct`, `campThreadCpuPct`, `loopWaitMs`) in the window a normal server stop writes, as those threads have ended; `allocMBSec=-` in a minute the runtime's allocation counter stood still (check 4) |
 | `BOT_CPU_COMPARE` | every minute, for `player/gamebot` while both have `n` of 1.0 or more (also `playerbot/gamebot` and `piloted/gamebot`, which have no bots today) | `cpu`, the ratio of the two kinds' `msPerBotSec`; `alloc`, `calls` and `usPerCall` |
 | `BOT_CPU_STATE` | each time it turns on or off, or its stop time changes | `on source=property` (at start), `on source=command by=<GM> minutes=<m or ->`, `off source=command by=<GM>`, `off source=timer`, `off source=stop` (server stop), `off source=error` |
 | `BOT_CPU_ERROR` | a fault in the meter's report, just before `off source=error` (a Warn line) | what failed: post it on #137. The server goes on, and `/botcpu on` starts the meter again |
@@ -162,6 +162,14 @@ minutes):
 docker exec hearthdaoc-server sh -c 'cat $(ls -tr /data/logs/server*)' | grep SERVER_GC_PAUSE | tail -20
 docker exec hearthdaoc-server sh -c 'cat $(ls -tr /data/logs/server*)' | grep "SERVER_MEMORY " | tail -3
 ```
+
+`allocMBSec=-` is the .NET 10 runtime, not the meter, and no fail. When the GC takes some of its heaps out of
+service, the runtime's allocation counter stops, for minutes or hours, until the heaps left have caught up or the
+others come back (the spec's section 3.9). A minute well above the others can follow, carrying some or all of the
+`-` minutes, or a jump with no `-` before it. For the server's allocation, read `topAllocations` on the
+`SERVER_MEMORY` line above instead: its first entry's MB/min ÷ its % × 100 is the whole server's MB a minute (÷ 60
+for MB/s). That line's own `allocMBperMin` reads the same counter, so it can be 0 or too low there too. The release
+before this fix wrote `allocMBSec=0.0` in those minutes.
 
 Result:
 
