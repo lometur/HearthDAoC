@@ -323,10 +323,12 @@ public static class PlayerBotDriver
     private static void RefreshTarget(PlayerBotState state, GamePlayer player, long now)
     {
         bool fighting = state.Engaged && (player.attackComponent.AttackState || player.IsCasting || player.InCombat);
-        if (state.Target != null && (fighting || now < state.NextTargetRefreshTick)) return;  // keep a target while fighting it
-        state.NextTargetRefreshTick = now + TargetRefreshMilliseconds;
+        bool searchDue = now >= state.NextTargetRefreshTick;
+        if (state.Target != null && (fighting || !searchDue)) return;  // keep a target while fighting it
+        if (searchDue) state.NextTargetRefreshTick = now + TargetRefreshMilliseconds;
+        // Self-defence every think; the rings only every 2 s, so an idle bot doesn't scan 5,000 units 4 times a second
         GameNPC found = Attacker(state, player, now) ??                                    // self-defence first
-            FindWithin(state, player, ImmediateSearchRadius, now) ?? FindWithin(state, player, SearchRadius, now); // AWBC:3148
+            (searchDue ? FindWithin(state, player, ImmediateSearchRadius, now) ?? FindWithin(state, player, SearchRadius, now) : null); // AWBC:3148
         if (found == state.Target) return;
         state.Target = found;
         state.Engaged = false;
