@@ -1,0 +1,214 @@
+using System;
+using System.Collections.Generic;
+using System.Net.Sockets;
+using System.Numerics;
+using System.Reflection;
+using System.Runtime.CompilerServices;
+using DOL.Database;
+using DOL.GS.Commands;
+using DOL.GS.HearthDAoC;
+using DOL.GS.HearthDAoC.PlayerBots;
+using DOL.GS.ServerRules;
+using NUnit.Framework;
+
+namespace DOL.GS.Tests;
+
+// HearthDAoC proto (#137): the player-bot driver's pure parts, its timer's meter charge, the mover's step maths and
+// corridor use, the never-throw tick, and the report line. Helpers copied from UT_BotCpuMeter.cs:98-130 and
+// UT_PlayerTravel.cs:27-58, :103-109.
+[TestFixture, NonParallelizable]
+public sealed class UT_PlayerBotDriver
+{
+    private const BindingFlags Hidden = BindingFlags.Instance | BindingFlags.NonPublic;
+
+    private sealed class TestServer : GameServer
+    {
+        protected override IObjectDatabase DataBaseImpl => EmptyDatabase;
+        protected override IServerRules ServerRulesImpl => new NormalServerRules();
+    }
+    private static readonly IObjectDatabase EmptyDatabase =
+        DispatchProxy.Create<IObjectDatabase, DOL.UnitTests.UT_AutonomousLootFlow.EmptyReadDatabase>();
+    private GameServer _previousServer;
+    [SetUp] public void SetUp()
+    {
+        _previousServer = GameServer.Instance;
+        GameServer.LoadTestDouble((TestServer)RuntimeHelpers.GetUninitializedObject(typeof(TestServer)));
+    }
+    [TearDown] public void TearDown() => GameServer.LoadTestDouble(_previousServer);
+
+    private sealed class TestPlayerBotClient : GameClient, IPlayerBotClient
+    {
+        public TestPlayerBotClient() : base((Socket)null) { }
+    }
+
+    private sealed class Mesh : PathfindingMgrBase
+    {
+        public bool Available = true;
+        public bool Blocked;
+        public PathfindingStatus Status = PathfindingStatus.PathFound;
+        public Vector3[] Corners;
+        public int Searches;
+        public override bool HasNavmesh(Zone zone) => Available;
+        public override PathfindingResult GetPathStraight(Zone zone, Vector3 start, Vector3 end,
+            EDtPolyFlags[] filters, Span<WrappedPathfindingNode> destination)
+        {
+            Searches++;
+            Vector3[] route = Corners ?? new[] { start, end };
+            for (int i = 0; i < route.Length; i++) destination[i] = new(route[i], EDtPolyFlags.Walk);
+            return new(Status, route.Length);
+        }
+        public override Vector3? GetMoveAlongSurface(Zone zone, Vector3 start, Vector3 end, EDtPolyFlags[] filters) => Blocked ? start : end;
+        public override bool HasLineOfSight(Zone zone, Vector3 start, Vector3 end, EDtPolyFlags[] filters) => !Blocked;
+    }
+
+    private static (Region Region, Zone Zone) World()
+    {
+        var region = (Region)RuntimeHelpers.GetUninitializedObject(typeof(Region));
+        Zone zone = new(region, 1, "Test", 0, 0, 65536, 65536, 1, false, 0, false, 0, 0, 0, 0, 0);
+        typeof(Region).GetField("m_zones", Hidden).SetValue(region, new List<Zone> { zone });
+        return (region, zone);
+    }
+
+    private static GamePlayer Player(GameClient client)
+    {
+        GamePlayer player = (GamePlayer)RuntimeHelpers.GetUninitializedObject(typeof(GamePlayer));
+        typeof(GamePlayer).GetField("m_client", Hidden)!.SetValue(player, client);
+        return player;
+    }
+
+    private static void SetState(GameClient client, GameClient.eClientState state) =>
+        typeof(GameClient).GetField("<ClientState>k__BackingField", Hidden)!.SetValue(client, state);
+
+    [Test]
+    public void TheDriverTimerIsChargedToItsPlayerBot()
+    {
+        GamePlayer bot = Player(new TestPlayerBotClient());
+        BotCpuCharge charge = BotCpuMeter.Classify<ECSGameTimer>(new PlayerBotDriverTimer(bot, null), BotCpuStage.Timer, false, _ => false);
+        Assert.That((charge.Kind, charge.Stage, charge.Bot, charge.Presence), Is.EqualTo((BotCpuKind.Playerbot, BotCpuStage.Timer, (GameObject)bot, false)));
+        GamePlayer human = Player((GameClient)RuntimeHelpers.GetUninitializedObject(typeof(GameClient)));
+        Assert.That(BotCpuMeter.Classify<ECSGameTimer>(new PlayerBotDriverTimer(human, null), BotCpuStage.Timer, false, _ => false).Kind,
+            Is.EqualTo(BotCpuKind.Player));
+    }
+
+    [Test]
+    public void TheDriverTimerConstructorDoesNotStartIt() =>
+        Assert.That(new PlayerBotDriverTimer(Player(new TestPlayerBotClient()), null).IsAlive, Is.False);   // TimerService.cs:80, :110-117
+
+    [TestCase((short)191, 250L, 47.75f)] [TestCase((short)191, 400L, 76.4f)] [TestCase((short)191, 0L, 47.75f)]
+    [TestCase((short)191, 600L, 47.75f)] [TestCase((short)191, -5L, 47.75f)] [TestCase((short)0, 250L, 0f)] [TestCase((short)-1, 250L, 0f)]
+    public void StepLength(short speed, long elapsed, float expected) =>
+        Assert.That(PlayerBotPathMover.StepLength(speed, elapsed), Is.EqualTo(expected).Within(0.001));
+
+    [Test]
+    public void StepsStayUnderTheSpeedHackBound()   // PlayerMovementMonitor.cs:96-103
+    {
+        foreach (short speed in new short[] { 50, 191, 300, 600 })
+            for (long elapsed = 1; elapsed <= 500; elapsed++)
+            {
+                long used = elapsed > 2 * PlayerBotDriver.TickMilliseconds ? PlayerBotDriver.TickMilliseconds : elapsed;
+                double bound = speed * 1.15 * (used + 1000.0 / 30) / 1000;
+                Assert.That(PlayerBotPathMover.StepLength(speed, elapsed), Is.LessThanOrEqualTo(bound), $"{speed} {elapsed}");
+            }
+    }
+
+    [TestCase(128, 80)] [TestCase(0, 80)] [TestCase(160, 112)] [TestCase(60, 48)]
+    public void MeleeStopDistanceStaysInsideMeleeRange(int range, int expected)
+    {
+        Assert.That(PlayerBotDriver.MeleeStopDistance(range), Is.EqualTo(expected));
+        if (range >= 96) Assert.That(PlayerBotDriver.MeleeStopDistance(range), Is.LessThan(Math.Max(range, 128)));
+    }
+
+    [TestCase(1, 0, ConColor.YELLOW)] [TestCase(1, 1, ConColor.BLUE)] [TestCase(1, 5, ConColor.GREEN)]
+    [TestCase(2, 0, ConColor.ORANGE)] [TestCase(4, 0, ConColor.RED)] [TestCase(6, 0, ConColor.PURPLE)]
+    public void MaximumTargetCon(int group, int deaths, ConColor expected) =>
+        Assert.That(PlayerBotDriver.MaximumTargetCon(group, deaths), Is.EqualTo(expected));
+
+    // The roster's classes have no power pool, so ManaPercent reads 0 (GameLiving.cs:2753): only health and endurance count.
+    [TestCase((byte)100, 0, (byte)0, (byte)100, false)] [TestCase((byte)49, 0, (byte)0, (byte)100, true)]
+    [TestCase((byte)100, 0, (byte)0, (byte)19, true)] [TestCase((byte)100, 120, (byte)21, (byte)100, true)]
+    [TestCase((byte)100, 120, (byte)22, (byte)100, false)]
+    public void NeedsRestIgnoresPowerWithoutAPowerPool(byte health, int maxMana, byte mana, byte endurance, bool expected) =>
+        Assert.That(PlayerBotDriver.NeedsRest(health, maxMana, mana, endurance), Is.EqualTo(expected));
+
+    [TestCase(1000, ConColor.YELLOW, 1000)] [TestCase(1000, ConColor.BLUE, 1220)] [TestCase(700, ConColor.GREEN, 1140)]
+    public void TargetScore(int distance, ConColor con, int expected) =>
+        Assert.That(PlayerBotDriver.TargetScore(distance, con), Is.EqualTo(expected));
+
+    [Test]
+    public void TryComputeNext()
+    {
+        var (region, zone) = World();
+        // No navmesh: a straight surface step.
+        var flat = new Mesh { Available = false };
+        Assert.That(PlayerBotPathMover.TryComputeNext(flat, region, zone, new PlayerTravelPath(), Vector3.Zero, new(1000, 0, 0), 0, 47.75f, 0,
+            out Vector3 next, out _), Is.True);
+        Assert.That(next.X, Is.EqualTo(47.75f).Within(0.001));
+        // Never inside the stop radius.
+        Assert.That(PlayerBotPathMover.TryComputeNext(flat, region, zone, new PlayerTravelPath(), Vector3.Zero, new(100, 0, 0), 80, 47.75f, 0,
+            out next, out _), Is.True);
+        Assert.That(next.X, Is.EqualTo(20).Within(0.001));
+        // Far: the corridor turns the corner (UT_PlayerTravel.cs:151), one search.
+        var mesh = new Mesh { Corners = new[] { new Vector3(100, 100, 0), new Vector3(100, 500, 0), new Vector3(600, 500, 0) } };
+        var path = new PlayerTravelPath();
+        Vector3 current = mesh.Corners[0];
+        for (int tick = 0; tick < 4; tick++)
+        {
+            Assert.That(PlayerBotPathMover.TryComputeNext(mesh, region, zone, path, current, mesh.Corners[^1], 0, 47.75f, tick * 250,
+                out next, out string failure), Is.True, failure);
+            Assert.That(next.X, Is.EqualTo(100), "Do not cut the corner.");
+            current = next;
+        }
+        Assert.That(mesh.Searches, Is.EqualTo(1));
+        // Near: no corridor search.
+        var near = new Mesh();
+        Assert.That(PlayerBotPathMover.TryComputeNext(near, region, zone, new PlayerTravelPath(), Vector3.Zero, new(200, 0, 0), 0, 47.75f, 0,
+            out next, out _), Is.True);
+        Assert.That((near.Searches, next.X), Is.EqualTo((0, 47.75f)));
+        // Blocked: false after two replans (PTP:97-105).
+        var blocked = new Mesh { Blocked = true };
+        path = new PlayerTravelPath();
+        for (int i = 0; i < 3; i++)
+            Assert.That(PlayerBotPathMover.TryComputeNext(blocked, region, zone, path, new(100, 100, 0), new(1000, 1000, 0), 0, 47.75f, i * 15000,
+                out _, out _), Is.True);
+        Assert.That(PlayerBotPathMover.TryComputeNext(blocked, region, zone, path, new(100, 100, 0), new(1000, 1000, 0), 0, 47.75f, 45000,
+            out _, out _), Is.False);
+    }
+
+    [Test]
+    public void TickStopsWithoutAClientAndNeverThrows()
+    {
+        Assert.That(PlayerBotDriver.Tick(null), Is.EqualTo(0));
+        var state = new PlayerBotState(Player(null));
+        Assert.That(PlayerBotDriver.Tick(state), Is.EqualTo(0));
+        Assert.That(state.Stopped, Is.True);
+    }
+
+    [Test]
+    public void TickWhileLoadingOnlyKeepsAlive()
+    {
+        var client = new TestPlayerBotClient();
+        SetState(client, GameClient.eClientState.WorldEnter);
+        GamePlayer player = Player(client);
+        player.ObjectState = GameObject.eObjectState.Active;
+        player.movementComponent = new PlayerMovementComponent(player);
+        player.LastPositionUpdatePacketReceivedTime = -1;
+        var state = new PlayerBotState(player);
+        Assert.That(PlayerBotDriver.Tick(state), Is.EqualTo(PlayerBotDriver.TickMilliseconds));
+        Assert.That(player.LastPositionUpdatePacketReceivedTime, Is.EqualTo(GameLoop.GameLoopTime));
+        Assert.That(state.Activity, Is.EqualTo(PlayerBotActivity.Waiting));
+    }
+
+    [Test]
+    public void ReportFormat()
+    {
+        var w = new PlayerBotDriverWindow(60, 30, 7200, 180.0, 55.8, 0, 1, 6, 7, 12, 0, 4, 0, 41, 1, 3, 4, 12850, 2, 0, 0, 0,
+            8.7, 0.0, 0, 12, 218);
+        Assert.That(PlayerBotDriverReport.Format(w), Is.EqualTo(
+            "PLAYER_BOT_DRIVER win=60 bots=30 ticksPerBotSec=4.0 thinkMsPerBotSec=0.069 moverMsPerBotSec=0.031 waiting=0 dead=1 " +
+            "resting=6 hunting=7 fighting=12 casting=0 roaming=4 task=0 kills=41 deaths=1 levelUps=3 maxLevel=4 xp=12850 blocked=2 " +
+            "stuck=0 ldCancelled=0 errors=0 nearPlayerBots=8.7 nearGamebots=0.0 gamebotFidelity=0/12/218"));
+        string empty = PlayerBotDriverReport.Format(new PlayerBotDriverWindow { Seconds = 60 });
+        Assert.That(empty, Does.Contain("bots=0 ticksPerBotSec=- thinkMsPerBotSec=- moverMsPerBotSec=-"));
+        Assert.That(empty, Does.Contain("nearPlayerBots=- nearGamebots=-"));
+    }
+}

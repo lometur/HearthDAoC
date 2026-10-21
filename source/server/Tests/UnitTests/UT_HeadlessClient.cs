@@ -5,6 +5,7 @@ using System.Numerics;
 using System.Reflection;
 using System.Runtime.CompilerServices;
 using DOL.Database;
+using DOL.Events;
 using DOL.GS.HearthDAoC;
 using DOL.GS.HearthDAoC.PlayerBots;
 using DOL.GS.PacketHandler;
@@ -194,6 +195,33 @@ public sealed class UT_HeadlessClient
         Assert.That(player.TempProperties.GetProperty<string>(DialogResponseHandler.GROUP_INVITE_KEY), Is.EqualTo("Leader"));
         Assert.That(client.AnswerInvite(true), Is.True);
         Assert.That(client.PendingAnswers, Is.EqualTo(1));
+    }
+
+    [Test]
+    public void A_player_loaded_after_the_quit_was_posted_never_enters_the_world()
+    {
+        // The Player setter raises PlayerLoaded (GameClient.cs:73); WorldInit adds only an Inactive player (:26).
+        GameEventMgr.AddHandler(GameClientEvent.PlayerLoaded, HeadlessClient.OnPlayerLoaded);
+        try
+        {
+            HeadlessClient quitting = Client();
+            typeof(HeadlessClient).GetField("_quitPosted", Hidden)!.SetValue(quitting, 1);
+            GamePlayer ghost = Player(quitting);
+            ghost.ObjectState = GameObject.eObjectState.Inactive;
+            quitting.Player = ghost;
+            Assert.That(quitting.QuitPosted, Is.True);
+            Assert.That(ghost.ObjectState, Is.EqualTo(GameObject.eObjectState.Deleted));
+
+            HeadlessClient loading = Client();
+            GamePlayer bot = Player(loading);
+            bot.ObjectState = GameObject.eObjectState.Inactive;
+            loading.Player = bot;
+            Assert.That(bot.ObjectState, Is.EqualTo(GameObject.eObjectState.Inactive));
+        }
+        finally
+        {
+            GameEventMgr.RemoveHandler(GameClientEvent.PlayerLoaded, HeadlessClient.OnPlayerLoaded);
+        }
     }
 
     [Test]

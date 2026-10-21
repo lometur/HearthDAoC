@@ -5,6 +5,7 @@ using System.Net.Sockets;
 using System.Reflection;
 using System.Threading;
 using DOL.Database;
+using DOL.Events;
 using DOL.GS.PacketHandler;
 using DOL.GS.PacketHandler.Client.v168;
 using DOL.Logging;
@@ -54,6 +55,7 @@ public sealed class HeadlessClient : GameClient, IPlayerBotClient
     public long Heartbeats { get; private set; }
     public int Entries { get; private set; }
     public string LogoutReason => _logoutReason;
+    public bool QuitPosted => Volatile.Read(ref _quitPosted) != 0;
     public HeadlessInbox Inbox { get; } = new();
     public bool RegionChangePending => _regionChangePending;
     public int PendingAnswers => _losAnswers.Count + _dialogAnswers.Count;
@@ -290,6 +292,25 @@ public sealed class HeadlessClient : GameClient, IPlayerBotClient
         if (ClientState is eClientState.Disconnected || Interlocked.Exchange(ref _quitPosted, 1) != 0)
             return;
         ClientService.Instance.Post(static client => client.QuitOnGameLoop(), this);
+    }
+
+    // GameClientEvent.PlayerLoaded, raised inside the GameClient.Player setter (GameClient.cs:73) when WorldInit's load
+    // ends (:168). WorldInit checks the client state before its await (WorldInitRequestHandler.cs:15), not after, so a
+    // bot whose quit was posted while it loaded (login timeout, spawner abort) would still be added to the world, a
+    // ghost nothing ticks. A Deleted player makes WorldInit return before WorldEnter and AddToWorld (:26), and the
+    // guild drops the online member the load added (GamePlayer.cs:10243; a quit drops it at :970). The spawner
+    // registers this while player bots are on.
+    public static void OnPlayerLoaded(DOLEvent e, object sender, EventArgs args)
+    {
+        if (sender is not HeadlessClient client || !client.QuitPosted && client.ClientState is not eClientState.Disconnected)
+            return;
+        GamePlayer player = client.Player;
+        if (player?.ObjectState is not GameObject.eObjectState.Inactive)
+            return;
+        player.ObjectState = GameObject.eObjectState.Deleted;
+        player.Guild?.RemoveOnlineMember(player);
+        if (Log.IsWarnEnabled)
+            Log.Warn($"PLAYER_BOT load dropped {client.Account?.Name} {player.Name} reason={client.LogoutReason}");
     }
 
     private void QuitOnGameLoop()
