@@ -32,7 +32,8 @@ public sealed class PlayerBotErrands
     private bool _acceptDue;
     private long _lastWhisperAt = -60_000;
     private ErrandTarget _walkTarget;
-    private long _walkSince, _deathTick, _nextBlockedLine;
+    private long _walkSince, _deathTick, _nextBlockedLine, _nextWalkLine;
+    private Vector3 _walkLineAt;
     private int _trainerWalkDeaths;
 
     public bool Finished { get; private set; }
@@ -91,6 +92,20 @@ public sealed class PlayerBotErrands
         _nextBlockedLine = now + BlockedLineMs;
         Line($"blocked to=\"{npc.Name}\" at=({_bot.X},{_bot.Y},{_bot.Z}) npc=({npc.X},{npc.Y},{npc.Z}) " +
              $"distance={_bot.GetDistanceTo(npc)} zone={_bot.CurrentZone?.ID} why=\"{mover.LastBlock}\" {mover.Probe(goal)}");
+    }
+
+    /// <summary>A walk that moves: one line per 30 s with how far the bot got since the last line, in a straight line
+    /// and along its steps, and the mover's live cursor and probe (the walk to Captain Falron crawled, 6,000 of 35,000
+    /// units in 15 minutes, with no block to log).</summary>
+    public void WalkProgress(GameNPC npc, PlayerBotPathMover mover, Vector3 goal, long now)
+    {
+        if (npc == null || now < _nextWalkLine) return;
+        _nextWalkLine = now + BlockedLineMs;
+        Vector3 here = new(_bot.X, _bot.Y, _bot.Z);
+        Line($"walking to=\"{npc.Name}\" at=({_bot.X},{_bot.Y},{_bot.Z}) distance={_bot.GetDistanceTo(npc)} " +
+             $"progress={(int)Vector3.Distance(here, _walkLineAt)} zone={_bot.CurrentZone?.ID} {mover.WalkReport()} " +
+             $"probe: {mover.Probe(goal)}");
+        _walkLineAt = here;
     }
 
     /// <summary>The NPC an action is about (for the driver's Walk), or null.</summary>

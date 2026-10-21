@@ -27,9 +27,21 @@ public sealed class PlayerBotPathMover
     private Vector3 _lastApplied;
     private long _lastStepTick, _lastUpdateTick;
     private int _stalledSteps;
+    private int _walkSteps;                            // WalkReport: steps and distance since its last call
+    private double _walked;
 
     /// <summary>Why the last Blocked came (the corridor's failure text, "stalled" or "no zone"); for the logs.</summary>
     public string LastBlock { get; private set; } = string.Empty;
+
+    /// <summary>For the errand's walk line: the steps and distance since the last call, and the live corridor cursor
+    /// (the promotion check's walk to Captain Falron covered 6,000 of 35,000 units in 15 minutes, with no block).</summary>
+    public string WalkReport()
+    {
+        string report = $"steps={_walkSteps} walked={_walked:0} avgStep={(_walkSteps == 0 ? 0 : _walked / _walkSteps):0.0} " +
+                        $"live: {Cursor(_path)}";
+        (_walkSteps, _walked) = (0, 0);
+        return report;
+    }
 
     public PlayerBotPathMover(GamePlayer player, IPathfindingMgr nav = null) { _player = player; _nav = nav; }
     private IPathfindingMgr Nav => _nav ?? PathfindingProvider.Instance;
@@ -91,6 +103,8 @@ public sealed class PlayerBotPathMover
                 return PlayerBotStepResult.Blocked;
             }
             _stalledSteps = 0;
+            _walkSteps++;
+            _walked += Vector3.Distance(current, next);
             Zone zone = _player.CurrentRegion?.GetZone((int)next.X, (int)next.Y);
             if (zone == null) { LastBlock = "no zone"; Stop(now); return PlayerBotStepResult.Blocked; } // as APP:531-536
             _player.Heading = _player.GetHeading((int)next.X, (int)next.Y);
