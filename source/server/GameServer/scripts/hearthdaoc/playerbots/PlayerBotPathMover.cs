@@ -132,7 +132,21 @@ public sealed class PlayerBotPathMover
         Vector3? under = nav.GetClosestPoint(zone, desired, 16, 16, 64, nav.DefaultFilters);
         bool los = under.HasValue && nav.HasLineOfSight(zone, here, under.Value, nav.DefaultFilters);
         return $"floor={P(floor)} path={result.Status}/{result.NodeCount} corners={corners} step={P(desired)} " +
-               $"surface={P(surface)} stepFloor={P(under)} los={los}";
+               $"surface={P(surface)} stepFloor={P(under)} los={los} goalZone={_player.CurrentRegion?.GetZone((int)goal.X, (int)goal.Y)?.ID} " +
+               Cursor();
+    }
+
+    // The corridor cursor's own state (PlayerTravelPath is upstream's; read only, by reflection, for this log line).
+    private string Cursor()
+    {
+        const System.Reflection.BindingFlags Hidden = System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic;
+        static string P(Vector3? v) => v is Vector3 p ? $"({p.X:0},{p.Y:0},{p.Z:0})" : "none";
+        object Field(string name) => typeof(PlayerTravelPath).GetField(name, Hidden)?.GetValue(_path);
+        var queue = Field("_nodes") as Queue<WrappedPathfindingNode>;
+        string next = queue == null ? "?" : string.Join("->", queue.Take(4).Select(n => P(n.Position)));
+        return $"cursor: nodes={queue?.Count} next={next} seamExit={P(Field("_seamExit") as Vector3?)} " +
+               $"crossing={Field("_crossingSeam")} zone={(Field("_zone") as Zone)?.ID} goal={P(Field("_goal") as Vector3?)} " +
+               $"replans={Field("_replans")}";
     }
 
     public void Stop(long now)
