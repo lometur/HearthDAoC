@@ -121,7 +121,7 @@ public sealed class PlayerBotPathMover
         Vector3 here = new(_player.X, _player.Y, _player.Z);
         static string P(Vector3? v) => v is Vector3 p ? $"({p.X:0},{p.Y:0},{p.Z:0})" : "none";
         Vector3? floor = nav.GetClosestPoint(zone, here, 16, 16, 64, nav.DefaultFilters);
-        WrappedPathfindingNode[] nodes = new WrappedPathfindingNode[8];
+        WrappedPathfindingNode[] nodes = new WrappedPathfindingNode[512];   // as TryBuildCorridor (PTP:52); 8 gave BufferTooSmall/52
         PathfindingResult result = nav.GetPathStraight(zone, here, goal, nav.DefaultFilters, nodes);
         int count = Math.Min(result.NodeCount, nodes.Length);
         string corners = string.Join("->", nodes.Take(Math.Min(count, 4)).Select(n => P(n.Position) + (n.Flags == EDtPolyFlags.Walk ? "" : $"[{n.Flags}]")));
