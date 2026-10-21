@@ -71,6 +71,9 @@ namespace DOL.GS
         {
             try
             {
+                // HearthDAoC: a player bot's client (#137 spike) has no socket: no receive, ping or idle check; it runs its own login steps.
+                if (client is HearthDAoC.PlayerBots.HeadlessClient headless) { headless.OnClientServiceBeginTick(); return; }
+
                 switch (client.ClientState)
                 {
                     case GameClient.eClientState.NotConnected:
@@ -164,6 +167,9 @@ namespace DOL.GS
 
         private static void Send(GameClient client)
         {
+            // HearthDAoC: a player bot's client (#137 spike) has no packet processor: nothing to send, in any state.
+            if (client is HearthDAoC.PlayerBots.HeadlessClient) return;
+
             long startTick = MonotonicTime.NowMs;
             client.PacketProcessor.SendPendingPackets();
             long stopTick = MonotonicTime.NowMs;
