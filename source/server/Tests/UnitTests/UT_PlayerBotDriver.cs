@@ -138,6 +138,16 @@ public sealed class UT_PlayerBotDriver
     public void DeathStepsForTheSafestMonsterInReach(ConColor safest, int deaths, int expected) =>
         Assert.That(PlayerBotDriver.DeathStepsFor(safest, 1, deaths), Is.EqualTo(expected));
 
+    // Runs r1-r1h (2026-10-21): on the switchback stairs by Master Lorik the two corners at their foot (Z 1795) counted as
+    // reached from the stairs 37 units above, so the bot made for the next corner, under the stairs, along the stair
+    // surface: it climbed back to the top and stalled there until the errand failed after 15 minutes.
+    [Test]
+    public void ACornerAStairFlightBelowIsNotReached()
+    {
+        Assert.That(PlayerTravelPath.HasReachedCorner(new(493135, 592932, 1832), new(493114, 592931, 1795)), Is.False);
+        Assert.That(PlayerTravelPath.HasReachedCorner(new(493135, 592932, 1832), new(493130, 592938, 1824)), Is.True);
+    }
+
     // The roster's classes have no power pool, so ManaPercent reads 0 (GameLiving.cs:2753): only health and endurance count.
     [TestCase((byte)100, 0, (byte)0, (byte)100, false)] [TestCase((byte)49, 0, (byte)0, (byte)100, true)]
     [TestCase((byte)100, 0, (byte)0, (byte)19, true)] [TestCase((byte)100, 120, (byte)21, (byte)100, true)]

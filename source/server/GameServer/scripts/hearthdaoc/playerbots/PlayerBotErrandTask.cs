@@ -42,7 +42,7 @@ public sealed class PlayerBotErrandTask : IPlayerBotTask
                 if (npc == null) { state.Mover.Stop(now); return true; }
                 Vector3 goal = new(npc.X, npc.Y, npc.Z);
                 if (state.Mover.StepToward(goal, Math.Max(16, action.Range - 24), now) is PlayerBotStepResult.Blocked)
-                    _errands.WalkBlocked(npc, state.Mover.LastBlock, now, () => state.Mover.Probe(goal) + " steps: " + state.Mover.Steps());
+                    _errands.WalkBlocked(npc, state.Mover.LastBlock, now, () => state.Mover.Probe(goal));
                 return true;
             case ErrandActionKind.Level:
                 return false;

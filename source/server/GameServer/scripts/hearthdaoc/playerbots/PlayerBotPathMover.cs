@@ -31,21 +31,6 @@ public sealed class PlayerBotPathMover
     /// <summary>Why the last Blocked came (the corridor's failure text, "stalled" or "no zone"); for the logs.</summary>
     public string LastBlock { get; private set; } = string.Empty;
 
-    // The last 16 steps (from, to, result), for the blocked line: run r1f's first replayed step moved 47.7 units from
-    // the stall point, yet every blocked line found the bot back on it.
-    private readonly string[] _trace = new string[40];
-    private int _traceNext;
-    private static readonly System.Reflection.FieldInfo NodesField =
-        typeof(PlayerTravelPath).GetField("_nodes", System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic);
-    private void Trace(Vector3 from, Vector3 to, string what)
-    {
-        string peek = NodesField?.GetValue(_path) is Queue<WrappedPathfindingNode> q && q.TryPeek(out var n)
-            ? $"[{q.Count}:{n.Position.X:0},{n.Position.Y:0},{n.Position.Z:0}]" : "[0]";
-        _trace[_traceNext++ % _trace.Length] = $"{GameLoop.GameLoopTime % 100_000}:({from.X:0},{from.Y:0},{from.Z:0})>({to.X:0},{to.Y:0},{to.Z:0}){what}{peek}";
-    }
-    public string Steps() => string.Join(" ", Enumerable.Range(0, _trace.Length)
-        .Select(i => _trace[(_traceNext + i) % _trace.Length]).Where(t => t != null));
-
     public PlayerBotPathMover(GamePlayer player, IPathfindingMgr nav = null) { _player = player; _nav = nav; }
     private IPathfindingMgr Nav => _nav ?? PathfindingProvider.Instance;
 
@@ -82,7 +67,7 @@ public sealed class PlayerBotPathMover
         try
         {
             Vector3 current = new(_player.X, _player.Y, _player.Z);
-            if (Vector3.DistanceSquared(current, _lastApplied) > TeleportResetDistance * TeleportResetDistance) { _path.Clear(); Trace(_lastApplied, current, "T"); }
+            if (Vector3.DistanceSquared(current, _lastApplied) > TeleportResetDistance * TeleportResetDistance) _path.Clear();
             if (Vector3.Distance(current, goal) <= stopDistance) { Stop(now); return PlayerBotStepResult.Arrived; }
             float step = StepLength(_player.MaxSpeed, now - _lastStepTick);
             _lastStepTick = now;
@@ -91,14 +76,12 @@ public sealed class PlayerBotPathMover
                     out Vector3 next, out string failure))
             {
                 LastBlock = failure;
-                Trace(current, current, "F");
                 Stop(now);
                 PlayerBotDriverReport.Blocked();
                 return PlayerBotStepResult.Blocked;
             }
             if (Vector3.DistanceSquared(next, current) < 1)
             {
-                Trace(current, next, "S");
                 if (++_stalledSteps < StallSteps) return PlayerBotStepResult.Moving;
                 _stalledSteps = 0;
                 _path.Clear();
@@ -118,7 +101,6 @@ public sealed class PlayerBotPathMover
             UpdateZoneAndAreas(zone);                       // PPUH order: position, areas, then OnPositionUpdateFromPacket (PPUH:30-31)
             _player.OnPositionUpdateFromPacket();           // GP:869-872 -> PMC:104-143
             _lastApplied = new(_player.X, _player.Y, _player.Z);
-            Trace(current, _lastApplied, "M");
             _lastUpdateTick = now;
             return PlayerBotStepResult.Moving;
         }
