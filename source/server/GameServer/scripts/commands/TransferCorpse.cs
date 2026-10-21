@@ -5,7 +5,8 @@ namespace DOL.GS.Commands
 {
     [CmdAttribute(
         "&transfercorpse",
-        new string[] {"&tc"},
+        // HearthDAoC: no "/tc" alias; OfflineDAoC's /tc (teleport to the Realm Exchange) owns it, and the duplicate
+        // key made ScriptMgr.LoadCommands log an ArgumentException at every start (whichever loaded second lost).
         ePrivLevel.Player, // Set to player.
         "/transfercorpse <Keep name> ie: /transfercorpse dun crauchon")]
     public class transfercorpseCommandHandler : AbstractCommandHandler, ICommandHandler
