@@ -5,6 +5,7 @@ using System.Diagnostics;
 using System.Linq;
 using System.Numerics;
 using DOL.Events;
+using DOL.GS.Commands;
 using DOL.GS.Keeps;
 using DOL.GS.Styles;
 using DOL.Logging;
@@ -57,7 +58,7 @@ public sealed class PlayerBotState
     public Vector3? RoamDestination;
     public ushort LastRegion;
     public int LastLevel, DeathSafetySteps, ErrorsLogged;
-    public long RoamingSince, NextIdleLine;          // PLAYER_BOT_IDLE
+    public long RoamingSince, NextIdleLine, NextRelocateTick; // PLAYER_BOT_IDLE, PLAYER_BOT_RELOCATE
     public long LastExperience, UnreachableUntil, NextTargetRefreshTick, NextLootTick, NextLosTick, NextStyleTick,
         NextCombatChoiceTick, NextNeighbourCountTick, NextProgressCheckTick, LastProgressTick, ProgressExperience, ProgressMoney;
     public Vector3 ProgressPosition;
@@ -93,6 +94,8 @@ public static class PlayerBotDriver
     public const int MeaningfulMoveDistance = 96;
     public const int DeathReleaseDelayMilliseconds = 10_000; // APP:29, :575-581
     public const int IdleLineMilliseconds = 5 * 60_000;
+    public const int RelocateAfterMilliseconds = 2 * 60_000; // no target this long: the hunting ground is outgrown
+    public const int RelocateCandidates = 5;                 // corridor checks per try
     public static readonly long StuckMilliseconds = (long)AutonomousStuckWatchdog.StuckThreshold.TotalMilliseconds; // 15 min
 
     private static readonly ConcurrentDictionary<GamePlayer, PlayerBotState> _states = new();
@@ -238,7 +241,13 @@ public static class PlayerBotDriver
         if (player.IsSitting) player.Sit(false);                                         // 12
         TryLoot(state, player, now);                                                     // 13. APP:403-414
         RefreshTarget(state, player, now);                                               // 14
-        if (state.Target == null) { Roam(state, player, now); ReportIdle(state, player, now); return; } // 15
+        if (state.Target == null)                                                        // 15
+        {
+            RelocateIfOutgrown(state, player, now);
+            Roam(state, player, now);
+            ReportIdle(state, player, now);
+            return;
+        }
         state.RoamingSince = 0;
         Engage(state, player, now);                                                      // 16
     }
@@ -505,6 +514,40 @@ public static class PlayerBotDriver
                      $"deathSteps={state.DeathSafetySteps} cap={MaximumTargetCon(1, state.DeathSafetySteps)} " +
                      $"fromAnchor={(int)Vector3.Distance(new(player.X, player.Y, player.Z), state.Anchor)} " +
                      $"grey/green/blue/yellow/orange/red/purple={string.Join('/', byCon)} outsideLeash={outsideLeash}");
+    }
+
+    // Run r1b: a level-4 bot found 16 grey monsters and one purple within 5,000 units of its start, and nothing else, so
+    // it roamed. After 2 minutes with no target a bot moves its leash to the nearest monster in its zone it would hunt and
+    // can walk to (a GameBot leaves an outgrown camp for one at its level, AWBC:3244-3300).
+    private static void RelocateIfOutgrown(PlayerBotState state, GamePlayer player, long now)
+    {
+        if (state.RoamingSince == 0 || now - state.RoamingSince < RelocateAfterMilliseconds || now < state.NextRelocateTick ||
+            player.CurrentRegionID != state.AnchorRegion || player.CurrentZone is not Zone zone)
+            return;
+        state.NextRelocateTick = now + RelocateAfterMilliseconds;
+        Vector3 here = new(player.X, player.Y, player.Z);
+        IPathfindingMgr nav = PathfindingProvider.Instance;
+        GameNPC[] nearest = WorldMgr.GetNPCsFromRegion(player.CurrentRegionID)
+            .Where(npc => npc.CurrentZone == zone && IsExperienceTarget(npc) && IsValidTarget(player, npc, 0) &&
+                          AutonomousPlayerPilot.IsEligibleExperienceTarget(ConLevels.GetConColor(player.GetConLevel(npc)),
+                              npc.EffectiveLevel, player.Level, 1))
+            .OrderBy(npc => Vector3.DistanceSquared(new(npc.X, npc.Y, npc.Z), here))
+            .Take(RelocateCandidates)
+            .ToArray();
+        foreach (GameNPC npc in nearest)
+        {
+            Vector3 spot = new(npc.X, npc.Y, npc.Z);
+            if (nav.HasNavmesh(zone) && !PlayerTravelPath.TryBuildCorridor(nav, zone, here, spot, out _)) continue;
+            if (Log.IsInfoEnabled)
+                Log.Info($"PLAYER_BOT_RELOCATE bot={player.Name} level={player.Level} from=({state.Anchor.X:0},{state.Anchor.Y:0}) " +
+                         $"to=({spot.X:0},{spot.Y:0},{spot.Z:0}) distance={(int)Vector3.Distance(here, spot)} " +
+                         $"monster=\"{npc.Name}\" monsterLevel={npc.EffectiveLevel} zone={zone.ID}");
+            state.Anchor = spot;
+            state.RoamDestination = null;
+            return;
+        }
+        if (Log.IsInfoEnabled)
+            Log.Info($"PLAYER_BOT_RELOCATE bot={player.Name} level={player.Level} none checked={nearest.Length} zone={zone.ID}");
     }
 
     private static Vector3 PickRoamPoint(GamePlayer player, Vector3 centre)
