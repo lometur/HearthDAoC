@@ -145,13 +145,13 @@ namespace DOL.GS.Commands
                 return true;
             }
             Vector3 desired = Advance(current, _nodes.Peek().Position, distance);
-            // HearthDAoC: on the real navmesh, the surface move GameBots use, which takes the height of the polygon it
-            // reached (AutonomousNavigationSurface.MoveAlongGround). The plain move is a 2D query: stopped at an edge it
-            // returns the edge's vertex height, and a player bot (#137) by Cotswold bounced about 66 units a step between
-            // two levels and crept at 2 units a second for minutes.
-            Vector3? snapped = nav is LocalPathfindingMgr
-                ? AutonomousNavigationSurface.MoveAlongGround(nav, zone, current, desired)
-                : nav.GetMoveAlongSurface(zone, current, desired, nav.DefaultFilters);
+            // HearthDAoC: on the real navmesh, first the surface move GameBots use, which takes the height of the polygon
+            // it reached (AutonomousNavigationSurface.MoveAlongGround). The plain move is a 2D query: stopped at an edge
+            // it returns the edge's vertex height, and a player bot (#137) by Cotswold bounced about 66 units a step
+            // between two levels and crept at 2 units a second for minutes. The grounded move fails on a polygon edge,
+            // where the plain move and the floor fallback below still apply.
+            Vector3? snapped = (nav is LocalPathfindingMgr ? AutonomousNavigationSurface.MoveAlongGround(nav, zone, current, desired) : null)
+                ?? nav.GetMoveAlongSurface(zone, current, desired, nav.DefaultFilters);
             // At certain polygon edges Detour's local surface mover returns the
             // origin even though its corridor and raycast agree the next step is
             // open (Cotswold stable approach). A normal-speed step is allowed only

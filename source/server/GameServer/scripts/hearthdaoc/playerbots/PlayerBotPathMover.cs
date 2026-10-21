@@ -20,6 +20,7 @@ public sealed class PlayerBotPathMover
     public const int TeleportResetDistance = 256;      // a jump this big (teleport, release, speed-hack correction) drops the corridor
     public const int IdleBroadcastMilliseconds = HeadlessClient.HeartbeatMs; // (est.) < 5 s is proven by PMC:15
     public const int StallSteps = 12;                  // 3 s without progress = blocked
+    public const int ChurnReplans = 2;                 // churning windows in a row that only replan; the next one blocks
 
     private readonly GamePlayer _player;
     private readonly IPathfindingMgr _nav;             // null = PathfindingProvider.Instance (set at start-up, PathfindingProvider.cs:11-32)
@@ -27,6 +28,7 @@ public sealed class PlayerBotPathMover
     private Vector3 _lastApplied;
     private long _lastStepTick, _lastUpdateTick;
     private int _stalledSteps;
+    private readonly PlayerBotChurnWatch _churn = new();
     private int _walkSteps;                            // WalkReport: steps and distance since its last call
     private double _walked;
 
@@ -79,7 +81,11 @@ public sealed class PlayerBotPathMover
         try
         {
             Vector3 current = new(_player.X, _player.Y, _player.Z);
-            if (Vector3.DistanceSquared(current, _lastApplied) > TeleportResetDistance * TeleportResetDistance) _path.Clear();
+            if (Vector3.DistanceSquared(current, _lastApplied) > TeleportResetDistance * TeleportResetDistance)
+            {
+                _path.Clear();
+                _churn.Reset();
+            }
             if (Vector3.Distance(current, goal) <= stopDistance) { Stop(now); return PlayerBotStepResult.Arrived; }
             float step = StepLength(_player.MaxSpeed, now - _lastStepTick);
             _lastStepTick = now;
@@ -103,8 +109,21 @@ public sealed class PlayerBotPathMover
                 return PlayerBotStepResult.Blocked;
             }
             _stalledSteps = 0;
+            float moved = Vector3.Distance(current, next);
             _walkSteps++;
-            _walked += Vector3.Distance(current, next);
+            _walked += moved;
+            if (_churn.Observe(next, moved, now))
+            {
+                _path.Clear();                              // plan again from here (the replay's fresh path from the stuck spot was fine)
+                if (_churn.ChurningWindows > ChurnReplans)
+                {
+                    _churn.Reset();
+                    LastBlock = "churning";
+                    Stop(now);
+                    PlayerBotDriverReport.Blocked();
+                    return PlayerBotStepResult.Blocked;
+                }
+            }
             Zone zone = _player.CurrentRegion?.GetZone((int)next.X, (int)next.Y);
             if (zone == null) { LastBlock = "no zone"; Stop(now); return PlayerBotStepResult.Blocked; } // as APP:531-536
             _player.Heading = _player.GetHeading((int)next.X, (int)next.Y);
@@ -209,4 +228,35 @@ public sealed class PlayerBotPathMover
         player.CurrentAreas = newAreas;
         player.AreaUpdateTick = region.Time + 2000;
     }
+}
+
+/// <summary>Walking that gets nowhere: a 15 s window that walked over 300 units and ended less than a third of that from
+/// where it began. The walk replay of 2026-10-21 took 120 steps of about 81 units every 30 s and got 45-50 units nearer
+/// its goal, bouncing between two levels below a corridor corner; the corridor's own check (16 units in 15 s,
+/// PlayerTravelPath.cs:95-108) counted that as progress and never replanned.</summary>
+public sealed class PlayerBotChurnWatch
+{
+    public const int WindowMilliseconds = 15_000;
+    public const float MinimumWalked = 300;
+
+    private Vector3 _start;
+    private long _since = -1;
+    private float _walked;
+
+    /// <summary>Churning windows in a row; a clean window sets it back to 0.</summary>
+    public int ChurningWindows { get; private set; }
+
+    /// <summary>One applied step; true when it closes a churning window.</summary>
+    public bool Observe(Vector3 position, float step, long now)
+    {
+        if (_since < 0) { (_start, _since, _walked) = (position, now, 0); return false; }
+        _walked += step;
+        if (now - _since < WindowMilliseconds) return false;
+        bool churning = _walked > MinimumWalked && Vector3.Distance(position, _start) * 3 < _walked;
+        (_start, _since, _walked) = (position, now, 0);
+        ChurningWindows = churning ? ChurningWindows + 1 : 0;
+        return churning;
+    }
+
+    public void Reset() => (_since, ChurningWindows) = (-1, 0);
 }

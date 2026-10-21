@@ -166,6 +166,33 @@ public sealed class UT_PlayerBotDriver
         Assert.That(position, moves ? Is.EqualTo(mesh.Corners[1] + new Vector3(0, 0, rise)) : Is.EqualTo(mesh.Corners[0]));
     }
 
+    // The walk replay (2026-10-21): 120 steps of about 81 units every 30 s, 45-50 units nearer the goal. A window of
+    // 15 s that walked over 300 units and ended less than a third of that from where it began is churning.
+    [TestCase(0f, true)] [TestCase(48f, false)] [TestCase(24f, false)] [TestCase(10f, true)]
+    public void AWalkThatGetsNowhereIsChurning(float forwardPerStep, bool churning)
+    {
+        var watch = new PlayerBotChurnWatch();
+        Vector3 at = Vector3.Zero;
+        bool seen = false;
+        for (int tick = 0; tick <= 64; tick++)                                       // 16 s of 250 ms steps
+        {
+            Vector3 next = at + new Vector3(forwardPerStep, tick % 2 == 0 ? 48 : -48, 0);  // sideways back and forth
+            seen |= watch.Observe(next, Vector3.Distance(at, next), tick * 250L);
+            at = next;
+        }
+        Assert.That(seen, Is.EqualTo(churning));
+    }
+
+    [Test]
+    public void AStraightWalkIsNotChurningAndAResetStartsAFreshWindow()
+    {
+        var watch = new PlayerBotChurnWatch();
+        for (int tick = 0; tick <= 64; tick++)
+            Assert.That(watch.Observe(new(tick * 48, 0, 0), 48, tick * 250L), Is.False);
+        watch.Reset();
+        Assert.That(watch.Observe(Vector3.Zero, 48, 60_000), Is.False, "a fresh window, not one from 16 s ago");
+    }
+
     // The surface mover never moves; the mesh floor lies FloorRise above any point asked about.
     private sealed class EdgeMesh : PathfindingMgrBase
     {
