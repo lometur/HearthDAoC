@@ -58,8 +58,12 @@ public sealed class PlayerBotState
     public Vector3? RoamDestination;
     public ushort LastRegion;
     public int LastLevel, DeathSafetySteps, ErrorsLogged;
-    public long RoamingSince, NextIdleLine, NextRelocateTick; // PLAYER_BOT_IDLE, PLAYER_BOT_RELOCATE
+    public long RoamingSince, NextIdleLine, NextRelocateTick; // no target reached since: PLAYER_BOT_IDLE, PLAYER_BOT_RELOCATE
     public readonly HashSet<GameNPC> RelocateRejected = new(); // no corridor to them: not checked again
+    public long AliveSince;                                      // PLAYER_BOT_DEATH: the last release or login
+    public int Attackers;                                        //   and the attackers on the last think alive
+    public long NextBlockedLine;                                 // PLAYER_BOT_BLOCKED
+    public int BlockedSinceLine;
     public long LastExperience, UnreachableUntil, NextTargetRefreshTick, NextLootTick, NextLosTick, NextStyleTick,
         NextCombatChoiceTick, NextNeighbourCountTick, NextProgressCheckTick, LastProgressTick, ProgressExperience, ProgressMoney;
     public Vector3 ProgressPosition;
@@ -95,7 +99,7 @@ public static class PlayerBotDriver
     public const int MeaningfulMoveDistance = 96;
     public const int DeathReleaseDelayMilliseconds = 10_000; // APP:29, :575-581
     public const int IdleLineMilliseconds = 5 * 60_000;
-    public const int RelocateAfterMilliseconds = 2 * 60_000; // no target this long: the hunting ground is outgrown
+    public const int RelocateAfterMilliseconds = 2 * 60_000; // no target reached this long: the hunting ground is outgrown
     public const int RelocateCandidates = 5;                 // corridor checks per try
     public static readonly long StuckMilliseconds = (long)AutonomousStuckWatchdog.StuckThreshold.TotalMilliseconds; // 15 min
 
@@ -204,11 +208,14 @@ public static class PlayerBotDriver
             state.Mover.Reset();
             state.Target = null;
             state.RoamDestination = null;
+            state.RoamingSince = 0;
         }
         ObserveXp(state, player);                            // 5
         if (!player.IsAlive) { HandleDeath(state, player, now); return; }               // 6
+        if (state.DeathRecorded || state.AliveSince == 0) state.AliveSince = now;
         state.DeathRecorded = false;
         state.ReleaseRequested = false;
+        state.Attackers = player.attackComponent.AttackerTracker.Count;                 //    Die clears it (GameLiving.cs:2050)
         if (RecoverIfStuck(state, player, now)) return;                                  // 7
         if (player.IsCrowdControlled)                                                    // 8
         {
@@ -225,6 +232,7 @@ public static class PlayerBotDriver
                 state.Task = null;
                 state.AnchorRegion = player.CurrentRegionID;                             // grind where the task ended
                 state.Anchor = new(player.X, player.Y, player.Z);
+                state.RoamDestination = null;                                            // not a relocation's spot
             }
             else if (state.Task.Tick(state, now))
             {
@@ -270,8 +278,10 @@ public static class PlayerBotDriver
             player.attackComponent.StopAttack();
             player.StopCurrentSpellcast();
             state.Activity = PlayerBotActivity.Hunting;
-            if (state.Mover.StepToward(new(target.X, target.Y, target.Z), stop, now) is PlayerBotStepResult.Blocked)
+            Vector3 goal = new(target.X, target.Y, target.Z);
+            if (state.Mover.StepToward(goal, stop, now) is PlayerBotStepResult.Blocked)
             {
+                ReportBlocked(state, player, "target", goal, now);
                 state.Unreachable = target;
                 state.UnreachableUntil = now + UnreachableSkipMilliseconds;
                 state.Target = null;
@@ -322,6 +332,7 @@ public static class PlayerBotDriver
         if (state.Target == null || IsValidTarget(player, state.Target, state.DeathSafetySteps) || IsAttacking(player, state.Target))
             return;
         if (state.Engaged && !state.Target.IsAlive) PlayerBotDriverReport.Kill(state.Target);
+        else if (!state.Target.IsAlive) state.RoamingSince = 0;  // killed by another before this bot got there: not outgrown
         state.Target = null;
         state.Engaged = false;
     }
@@ -491,11 +502,27 @@ public static class PlayerBotDriver
         else if (state.RoamDestination == null || Vector3.Distance(here, state.RoamDestination.Value) < 80)
             state.RoamDestination = PickRoamPoint(player, leashed ? state.Anchor : here);
         state.Activity = PlayerBotActivity.Roaming;
-        if (state.Mover.StepToward(state.RoamDestination.Value, 20, now) is PlayerBotStepResult.Blocked or PlayerBotStepResult.Arrived)
+        PlayerBotStepResult step = state.Mover.StepToward(state.RoamDestination.Value, 20, now);
+        if (step is PlayerBotStepResult.Blocked) ReportBlocked(state, player, "roam", state.RoamDestination.Value, now);
+        if (step is PlayerBotStepResult.Blocked or PlayerBotStepResult.Arrived)
             state.RoamDestination = null;
     }
 
-    // A bot that has found no target for 5 minutes says why, once per 5 minutes: run 1's bots roamed for over an hour
+    // The rerun of run 1: from level 4 the bots were blocked 18-20 times a minute with no trace of where or why. One line
+    // per bot per minute: the last block, and how many there were since the previous line.
+    private static void ReportBlocked(PlayerBotState state, GamePlayer player, string walk, Vector3 goal, long now)
+    {
+        state.BlockedSinceLine++;
+        if (now < state.NextBlockedLine || !Log.IsInfoEnabled) return;
+        state.NextBlockedLine = now + 60_000;
+        Vector3 here = new(player.X, player.Y, player.Z);
+        Log.Info($"PLAYER_BOT_BLOCKED bot={player.Name} level={player.Level} walk={walk} at=({here.X:0},{here.Y:0},{here.Z:0}) " +
+                 $"goal=({goal.X:0},{goal.Y:0},{goal.Z:0}) distance={(int)Vector3.Distance(here, goal)} zone={player.CurrentZone?.ID} " +
+                 $"why=\"{state.Mover.LastBlock}\" count={state.BlockedSinceLine}");
+        state.BlockedSinceLine = 0;
+    }
+
+    // A bot that has reached no target for 5 minutes says why, once per 5 minutes: run 1's bots roamed for over an hour
     // and the minute line could not tell the death cap from a start area they had outgrown.
     private static void ReportIdle(PlayerBotState state, GamePlayer player, long now)
     {
@@ -528,6 +555,8 @@ public static class PlayerBotDriver
         state.NextRelocateTick = now + RelocateAfterMilliseconds;
         Vector3 here = new(player.X, player.Y, player.Z);
         IPathfindingMgr nav = PathfindingProvider.Instance;
+        if (nav.HasNavmesh(zone) && nav.GetClosestPoint(zone, here, 64, 64, 128, nav.DefaultFilters) == null)
+            return;   // off the mesh here, every corridor fails (PlayerTravelPath.cs:48-50): blame no monster for it
         GameNPC[] nearest = RelocationCandidates(WorldMgr.GetNPCsFromRegion(player.CurrentRegionID)
             .Where(npc => npc.CurrentZone == zone && IsExperienceTarget(npc) && IsValidTarget(player, npc, 0) &&
                           AutonomousPlayerPilot.IsEligibleExperienceTarget(ConLevels.GetConColor(player.GetConLevel(npc)),
@@ -579,11 +608,14 @@ public static class PlayerBotDriver
         state.Activity = PlayerBotActivity.Dead;
         if (!state.DeathRecorded)
         {
+            ReportDeath(state, player, now);
             state.DeathRecorded = true;
             state.DeathSafetySteps++;
             state.Target = null;
             state.Engaged = false;
             state.RoamDestination = null;
+            state.RoamingSince = 0;                                                     // back at the bind point: a fresh start
+            state.RelocateRejected.Clear();
             state.Mover.Reset();
             PlayerBotDriverReport.Death();
         }
@@ -592,6 +624,20 @@ public static class PlayerBotDriver
             state.ReleaseRequested = true;
             player.Release(eReleaseType.Normal, true);                                     // GP:1425
         }
+    }
+
+    // The rerun of run 1 (76e41cf): from level 3 the bots died about once a minute with no trace of what killed them.
+    // The target and its con, the attackers counted on the last think alive, and the time since the release or login.
+    private static void ReportDeath(PlayerBotState state, GamePlayer player, long now)
+    {
+        if (!Log.IsInfoEnabled) return;
+        GameLiving target = state.Target;
+        string fight = target == null ? "target=none" :
+            $"target=\"{target.Name}\" targetLevel={target.EffectiveLevel} " +
+            $"con={ConLevels.GetConColor(player.GetConLevel(target))} engaged={state.Engaged}";
+        Log.Info($"PLAYER_BOT_DEATH bot={player.Name} level={player.Level} at=({player.X},{player.Y},{player.Z}) " +
+                 $"zone={player.CurrentZone?.ID} {fight} attackers={state.Attackers} deathSteps={state.DeathSafetySteps} " +
+                 $"aliveSec={(now - state.AliveSince) / 1000} task={state.Task != null}");
     }
 
     // APP:585-624, changed: every 10 s, no inventory count, no saves; after 15 minutes with no progress, back to the
@@ -618,6 +664,8 @@ public static class PlayerBotDriver
         player.TargetObject = null;
         state.Target = null;
         state.RoamDestination = null;
+        state.RoamingSince = 0;
+        state.RelocateRejected.Clear();
         player.MoveTo(state.AnchorRegion, (int)state.Anchor.X, (int)state.Anchor.Y, (int)state.Anchor.Z, player.Heading);
         state.Mover.Reset();
         state.LastProgressTick = now;
