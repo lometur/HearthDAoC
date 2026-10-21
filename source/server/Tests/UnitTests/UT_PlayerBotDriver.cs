@@ -148,6 +148,20 @@ public sealed class UT_PlayerBotDriver
         Assert.That(PlayerTravelPath.HasReachedCorner(new(493135, 592932, 1832), new(493130, 592938, 1824)), Is.True);
     }
 
+    // A camp a bot has no corridor to is checked once: the next try 2 minutes later takes the next nearest monsters,
+    // instead of the same five for the rest of the run (review of 76e41cf).
+    [Test]
+    public void RelocationSkipsMonstersFoundUnreachable()
+    {
+        int[] distances = { 700, 100, 500, 300, 900, 200, 1100, 400 };
+        var rejected = new HashSet<int>();
+        int[] first = PlayerBotDriver.RelocationCandidates(distances, d => new Vector3(d, 0, 0), Vector3.Zero, rejected, 5);
+        Assert.That(first, Is.EqualTo(new[] { 100, 200, 300, 400, 500 }));
+        rejected.UnionWith(first);
+        Assert.That(PlayerBotDriver.RelocationCandidates(distances, d => new Vector3(d, 0, 0), Vector3.Zero, rejected, 5),
+            Is.EqualTo(new[] { 700, 900, 1100 }));
+    }
+
     // The roster's classes have no power pool, so ManaPercent reads 0 (GameLiving.cs:2753): only health and endurance count.
     [TestCase((byte)100, 0, (byte)0, (byte)100, false)] [TestCase((byte)49, 0, (byte)0, (byte)100, true)]
     [TestCase((byte)100, 0, (byte)0, (byte)19, true)] [TestCase((byte)100, 120, (byte)21, (byte)100, true)]

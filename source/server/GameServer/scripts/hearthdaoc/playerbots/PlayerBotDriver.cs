@@ -59,6 +59,7 @@ public sealed class PlayerBotState
     public ushort LastRegion;
     public int LastLevel, DeathSafetySteps, ErrorsLogged;
     public long RoamingSince, NextIdleLine, NextRelocateTick; // PLAYER_BOT_IDLE, PLAYER_BOT_RELOCATE
+    public readonly HashSet<GameNPC> RelocateRejected = new(); // no corridor to them: not checked again
     public long LastExperience, UnreachableUntil, NextTargetRefreshTick, NextLootTick, NextLosTick, NextStyleTick,
         NextCombatChoiceTick, NextNeighbourCountTick, NextProgressCheckTick, LastProgressTick, ProgressExperience, ProgressMoney;
     public Vector3 ProgressPosition;
@@ -248,8 +249,8 @@ public static class PlayerBotDriver
             ReportIdle(state, player, now);
             return;
         }
-        state.RoamingSince = 0;
         Engage(state, player, now);                                                      // 16
+        if (state.Engaged) state.RoamingSince = 0;   // reached: a target blocked on the way leaves the idle clock running
     }
 
     // A task owns the bot's position while it runs: no leash then.
@@ -527,28 +528,40 @@ public static class PlayerBotDriver
         state.NextRelocateTick = now + RelocateAfterMilliseconds;
         Vector3 here = new(player.X, player.Y, player.Z);
         IPathfindingMgr nav = PathfindingProvider.Instance;
-        GameNPC[] nearest = WorldMgr.GetNPCsFromRegion(player.CurrentRegionID)
+        GameNPC[] nearest = RelocationCandidates(WorldMgr.GetNPCsFromRegion(player.CurrentRegionID)
             .Where(npc => npc.CurrentZone == zone && IsExperienceTarget(npc) && IsValidTarget(player, npc, 0) &&
                           AutonomousPlayerPilot.IsEligibleExperienceTarget(ConLevels.GetConColor(player.GetConLevel(npc)),
-                              npc.EffectiveLevel, player.Level, 1))
-            .OrderBy(npc => Vector3.DistanceSquared(new(npc.X, npc.Y, npc.Z), here))
-            .Take(RelocateCandidates)
-            .ToArray();
+                              npc.EffectiveLevel, player.Level, 1)),
+            npc => new Vector3(npc.X, npc.Y, npc.Z), here, state.RelocateRejected, RelocateCandidates);
         foreach (GameNPC npc in nearest)
         {
             Vector3 spot = new(npc.X, npc.Y, npc.Z);
-            if (nav.HasNavmesh(zone) && !PlayerTravelPath.TryBuildCorridor(nav, zone, here, spot, out _)) continue;
+            if (nav.HasNavmesh(zone) && !PlayerTravelPath.TryBuildCorridor(nav, zone, here, spot, out _))
+            {
+                state.RelocateRejected.Add(npc);
+                continue;
+            }
             if (Log.IsInfoEnabled)
                 Log.Info($"PLAYER_BOT_RELOCATE bot={player.Name} level={player.Level} from=({state.Anchor.X:0},{state.Anchor.Y:0}) " +
                          $"to=({spot.X:0},{spot.Y:0},{spot.Z:0}) distance={(int)Vector3.Distance(here, spot)} " +
                          $"monster=\"{npc.Name}\" monsterLevel={npc.EffectiveLevel} zone={zone.ID}");
             state.Anchor = spot;
-            state.RoamDestination = null;
+            state.RoamDestination = spot;   // walk there: a task bot levelling for its errand has no leash to pull it
+            state.RelocateRejected.Clear();
             return;
         }
         if (Log.IsInfoEnabled)
             Log.Info($"PLAYER_BOT_RELOCATE bot={player.Name} level={player.Level} none checked={nearest.Length} zone={zone.ID}");
     }
+
+    // The nearest candidates not yet found unreachable, so a camp on a ledge or in water is checked once and each try
+    // goes on to the next nearest (review of 76e41cf).
+    public static T[] RelocationCandidates<T>(IEnumerable<T> eligible, Func<T, Vector3> position, Vector3 here,
+        ISet<T> rejected, int count) =>
+        eligible.Where(candidate => !rejected.Contains(candidate))
+            .OrderBy(candidate => Vector3.DistanceSquared(position(candidate), here))
+            .Take(count)
+            .ToArray();
 
     private static Vector3 PickRoamPoint(GamePlayer player, Vector3 centre)
     {

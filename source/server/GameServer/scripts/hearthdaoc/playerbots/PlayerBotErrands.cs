@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.Linq;
+using System.Numerics;
 using DOL.Database;
 using DOL.Events;
 using DOL.GS.PacketHandler;
@@ -81,14 +82,15 @@ public sealed class PlayerBotErrands
         return action;
     }
 
-    /// <summary>The walk to an NPC was blocked (PlayerBotPathMover.LastBlock says why): one line per 30 s, with both
-    /// positions (run 1 failed "Olorustos not reached in 15 min" with no trace of where the bot stood).</summary>
-    public void WalkBlocked(GameNPC npc, string why, long now, Func<string> probe = null)
+    /// <summary>The walk to an NPC was blocked (the mover's LastBlock says why): one line per 30 s, with both positions
+    /// and the mover's probe (run 1 failed "Olorustos not reached in 15 min" with no trace of where the bot stood).
+    /// It takes the mover, not a probe callback, so the errand task's tick allocates nothing.</summary>
+    public void WalkBlocked(GameNPC npc, PlayerBotPathMover mover, Vector3 goal, long now)
     {
         if (npc == null || now < _nextBlockedLine) return;
         _nextBlockedLine = now + BlockedLineMs;
         Line($"blocked to=\"{npc.Name}\" at=({_bot.X},{_bot.Y},{_bot.Z}) npc=({npc.X},{npc.Y},{npc.Z}) " +
-             $"distance={_bot.GetDistanceTo(npc)} zone={_bot.CurrentZone?.ID} why=\"{why}\" {probe?.Invoke()}");
+             $"distance={_bot.GetDistanceTo(npc)} zone={_bot.CurrentZone?.ID} why=\"{mover.LastBlock}\" {mover.Probe(goal)}");
     }
 
     /// <summary>The NPC an action is about (for the driver's Walk), or null.</summary>
