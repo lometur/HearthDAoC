@@ -133,17 +133,26 @@ public sealed class PlayerBotPathMover
         bool los = under.HasValue && nav.HasLineOfSight(zone, here, under.Value, nav.DefaultFilters);
         return $"floor={P(floor)} path={result.Status}/{result.NodeCount} corners={corners} step={P(desired)} " +
                $"surface={P(surface)} stepFloor={P(under)} los={los} goalZone={_player.CurrentRegion?.GetZone((int)goal.X, (int)goal.Y)?.ID} " +
-               Cursor();
+               Replay(zone, here, goal);
+    }
+
+    // One step of a fresh corridor cursor from here, as StepToward takes it after its stall cleared the path.
+    private string Replay(Zone zone, Vector3 here, Vector3 goal)
+    {
+        PlayerTravelPath fresh = new();
+        bool ok = fresh.TryStep(_player.CurrentRegion, zone, here, goal, StepLength(_player.MaxSpeed, PlayerBotDriver.TickMilliseconds),
+            GameLoop.GameLoopTime, Nav, out Vector3 next, out string failure);
+        return $"replay: ok={ok} moved={Vector3.Distance(here, next):0.0} next=({next.X:0},{next.Y:0},{next.Z:0}) failure=\"{failure}\" " + Cursor(fresh);
     }
 
     // The corridor cursor's own state (PlayerTravelPath is upstream's; read only, by reflection, for this log line).
-    private string Cursor()
+    private static string Cursor(PlayerTravelPath path)
     {
         const System.Reflection.BindingFlags Hidden = System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic;
         static string P(Vector3? v) => v is Vector3 p ? $"({p.X:0},{p.Y:0},{p.Z:0})" : "none";
-        object Field(string name) => typeof(PlayerTravelPath).GetField(name, Hidden)?.GetValue(_path);
+        object Field(string name) => typeof(PlayerTravelPath).GetField(name, Hidden)?.GetValue(path);
         var queue = Field("_nodes") as Queue<WrappedPathfindingNode>;
-        string next = queue == null ? "?" : string.Join("->", queue.Take(4).Select(n => P(n.Position)));
+        string next = queue == null ? "?" : string.Join("->", queue.Take(5).Select(n => P(n.Position)));
         return $"cursor: nodes={queue?.Count} next={next} seamExit={P(Field("_seamExit") as Vector3?)} " +
                $"crossing={Field("_crossingSeam")} zone={(Field("_zone") as Zone)?.ID} goal={P(Field("_goal") as Vector3?)} " +
                $"replans={Field("_replans")}";
