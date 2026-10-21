@@ -21,9 +21,7 @@ namespace DOL.GS.HearthDAoC.PlayerBots;
 // /botcpu heap, spec 4.5). A bot that drops out of Playing is never logged in again (F1 must stay visible); the one
 // exception is the quest fighter's single re-login after its errands, in run 1's small plans.
 //
-// Lines marked "// T4" came with the driver (task 4); lines marked "// T5" arrive with the errands (task 5). Until then
-// the lines that need them are commented out behind "//PENDING-T5 " (restore: delete the prefix). Observe's relog cases
-// (T5) stay: they need nothing later, and nothing sets RelogRequested before T5.
+// Lines marked "// T4" came with the driver (task 4), lines marked "// T5" with the errands (task 5).
 public static class PlayerBotSpawner
 {
     public const string LogPrefix = "HEARTHDAOC_PLAYER_BOTS";
@@ -259,13 +257,14 @@ public static class PlayerBotSpawner
         try
         {
             GamePlayer player = c.Player;
-            //PENDING-T5 bool errands = s.Slot.IsQuestFighter && Plan.Total <= ErrandMaxBots;                       // T5
-            //PENDING-T5 if (errands && s.ErrandRelogged)                                                          // T5
-            //PENDING-T5 {
-            //PENDING-T5     PlayerBotErrands.CheckAfterLogin(player);                                             // T5
-            //PENDING-T5     PlayerBotDriver.Start(player);                                                        // T5
-            //PENDING-T5     return;                                                                               // T5
-            //PENDING-T5 }
+            bool errands = s.Slot.IsQuestFighter && Plan.Total <= ErrandMaxBots;                       // T5
+            if (errands && s.ErrandRelogged)                                                          // T5
+            {
+                PlayerBotErrands.CheckAfterLogin(player);                                             // T5
+                if (!PlayerBotDriver.Start(player))                                                   // T5
+                    Log.Warn($"{LogPrefix} driver not started account={s.Slot.AccountName} after=relog");
+                return;                                                                               // T5
+            }
             if (s.SelfTest)
             {
                 // onDone runs on the self-test's timer; a region trip that has not re-entered yet leaves it undriven.
@@ -281,9 +280,9 @@ public static class PlayerBotSpawner
                 Log.Warn($"{LogPrefix} driver not started account={s.Slot.AccountName}");             // T4
                 return;                                                                               // T4
             }
-            //PENDING-T5 if (errands)                                                                              // T5
-            //PENDING-T5     PlayerBotDriver.StateOf(player).Task = new PlayerBotErrandTask(new PlayerBotErrands(player),
-            //PENDING-T5         done => { if (done) s.RelogRequested = true; });                                  // T5
+            if (errands)                                                                              // T5
+                PlayerBotDriver.StateOf(player).Task = new PlayerBotErrandTask(new PlayerBotErrands(player),
+                    done => { if (done) s.RelogRequested = true; });                                  // T5
         }
         catch (Exception exception)
         {
