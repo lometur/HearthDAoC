@@ -148,6 +148,27 @@ public sealed class UT_PlayerBotDriver
         Assert.That(PlayerTravelPath.HasReachedCorner(new(493135, 592932, 1832), new(493130, 592938, 1824)), Is.True);
     }
 
+    // The errand check of 2026-10-21 (cc18c2d): at the top of a descent on the way to Guardian Aron the corridor's next
+    // corner lay at the bot's own spot, 24.4 units below its feet (Z 2157.6 against 2182). A grounded step cannot change
+    // height on the spot, so the bot stalled there for good. A corner within 2 units is reached up to 64 units of height;
+    // one 3 units away keeps the voxel rule. Coordinates are moved into the test zone (480000/580000 less).
+    [Test]
+    public void ACornerStraightBelowTheBotIsReached()
+    {
+        Assert.That(PlayerTravelPath.HasReachedCorner(new(497313, 588390, 2182), new(497313, 588390, 2157.6f)), Is.True);
+        Assert.That(PlayerTravelPath.HasReachedCorner(new(497313, 588390, 2182), new(497316, 588390, 2157.6f)), Is.False);
+        Assert.That(PlayerTravelPath.HasReachedCorner(new(497313, 588390, 2182), new(497313, 588390, 2110)), Is.False);
+
+        var (region, zone) = World();
+        var mesh = new EdgeMesh
+        {
+            Corners = new[] { new Vector3(17313, 8390, 2182), new Vector3(17313, 8390, 2157.6f), new Vector3(17248, 8547, 2038) }
+        };
+        Assert.That(new PlayerTravelPath().TryStep(region, zone, mesh.Corners[0], mesh.Corners[^1], 47.75f, 0, mesh,
+            out Vector3 position, out string failure), Is.True, failure);
+        Assert.That(new Vector2(position.X, position.Y), Is.Not.EqualTo(new Vector2(17313, 8390)), "on toward the next corner");
+    }
+
     // The promotion check after the run 1 rerun (2026-10-21): by Cotswold the surface mover returned the bot's own spot,
     // and the mesh floor at the next corner lay 5 units above the corner (Z 1826 against 1821), within one voxel. The
     // fallback wanted 2 units, so the bot stood there for good. Coordinates are moved into the test zone (480000/580000

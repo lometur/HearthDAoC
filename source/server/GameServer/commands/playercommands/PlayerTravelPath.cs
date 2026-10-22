@@ -36,9 +36,14 @@ namespace DOL.GS.Commands
 
         // HearthDAoC: 24 units of height, not 64. A player bot (#137) on switchback stairs counted the corners at their foot,
         // 37 units below it, as reached, and climbed back up toward the next corner, which lies under the stairs.
-        public static bool HasReachedCorner(Vector3 current, Vector3 corner) =>
-            Vector2.DistanceSquared(new(current.X, current.Y), new(corner.X, corner.Y)) <= 32 * 32 &&
-            Math.Abs(current.Z - corner.Z) <= 24;
+        // A corner within 2 units keeps 64: a step on the floor cannot change height on the spot, and a player bot stood
+        // for good at the top of a descent whose next corner lay at its own spot, 24.4 units below its feet.
+        public static bool HasReachedCorner(Vector3 current, Vector3 corner)
+        {
+            float flat = Vector2.DistanceSquared(new(current.X, current.Y), new(corner.X, corner.Y));
+            float height = Math.Abs(current.Z - corner.Z);
+            return flat <= 32 * 32 && height <= 24 || flat <= 2 * 2 && height <= 64;
+        }
 
         public static bool TryBuildCorridor(IPathfindingMgr nav, Zone zone, Vector3 start, Vector3 goal,
             out List<WrappedPathfindingNode> route)
