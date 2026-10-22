@@ -41,9 +41,12 @@ public sealed class PlayerBotPathMover
     {
         string report = $"steps={_walkSteps} walked={_walked:0} avgStep={(_walkSteps == 0 ? 0 : _walked / _walkSteps):0.0} " +
                         $"live: {Cursor(_path)}";
-        (_walkSteps, _walked) = (0, 0);
+        StartWalkReport();
         return report;
     }
+
+    /// <summary>The next WalkReport counts from here (a walk starts or resumes; steps before it were other walks).</summary>
+    public void StartWalkReport() => (_walkSteps, _walked) = (0, 0);
 
     public PlayerBotPathMover(GamePlayer player, IPathfindingMgr nav = null) { _player = player; _nav = nav; }
     private IPathfindingMgr Nav => _nav ?? PathfindingProvider.Instance;
@@ -69,6 +72,10 @@ public sealed class PlayerBotPathMover
         if (!nav.HasNavmesh(zone) || remaining <= DirectStepRange)
         {
             Vector3 desired = PlayerTravelPath.Advance(current, goal, step);                     // PTP:30-35
+            // The plain move keeps the height of the straight line to the goal inside a polygon, so the last 300 units
+            // follow it, not the floor. The grounded move would fix that, but arrival is judged against the goal's own
+            // height: a target hovering or swimming 80+ units above the floor would then stall the bot under it (review
+            // of 2026-10-21). Kept as is for the spike; the real PR needs both, grounded steps and a floor-based arrival.
             next = nav.GetMoveAlongSurface(zone, current, desired, nav.DefaultFilters) ?? desired; // as APP:516-520
             return true;
         }
@@ -112,7 +119,7 @@ public sealed class PlayerBotPathMover
             float moved = Vector3.Distance(current, next);
             _walkSteps++;
             _walked += moved;
-            if (_churn.Observe(next, moved, now))
+            if (_churn.Observe(next, goal, moved, now))
             {
                 _path.Clear();                              // plan again from here (the replay's fresh path from the stuck spot was fine)
                 if (_churn.ChurningWindows > ChurnReplans)
@@ -200,7 +207,7 @@ public sealed class PlayerBotPathMover
         _lastUpdateTick = now;
     }
 
-    public void Reset() { _path.Clear(); _stalledSteps = 0; }
+    public void Reset() { _path.Clear(); _stalledSteps = 0; _churn.Reset(); }
 
     public void IdleBroadcast(long now)
     {
@@ -230,26 +237,33 @@ public sealed class PlayerBotPathMover
     }
 }
 
-/// <summary>Walking that gets nowhere: a 15 s window that walked over 300 units and ended less than a third of that from
-/// where it began. The walk replay of 2026-10-21 took 120 steps of about 81 units every 30 s and got 45-50 units nearer
-/// its goal, bouncing between two levels below a corridor corner; the corridor's own check (16 units in 15 s,
-/// PlayerTravelPath.cs:95-108) counted that as progress and never replanned.</summary>
+/// <summary>Walking that gets nowhere: a 15 s window of one walk that walked over 300 units and ended less than a third
+/// of that from where it began. The walk replay of 2026-10-21 took 120 steps of about 81 units every 30 s and got 45-50
+/// units nearer its goal, bouncing between two levels below a corridor corner; the corridor's own check (16 units in
+/// 15 s, PlayerTravelPath.cs:95-108) counted that as progress and never replanned. A new goal or a pause starts a new
+/// walk: roaming between random points (a leg of about 1,300 units, 2-3 legs a window) often ends a window near
+/// its start without churning.</summary>
 public sealed class PlayerBotChurnWatch
 {
     public const int WindowMilliseconds = 15_000;
     public const float MinimumWalked = 300;
+    public const float GoalMoved = 64;                 // a goal this far from the window's: a new walk (as PTP:91)
+    public const int PauseMilliseconds = 1_000;        // no step for this long (a fight, a rest, a talk): a new walk
 
-    private Vector3 _start;
-    private long _since = -1;
+    private Vector3 _start, _goal;
+    private long _since = -1, _last;
     private float _walked;
 
-    /// <summary>Churning windows in a row; a clean window sets it back to 0.</summary>
+    /// <summary>Churning windows in a row of one walk; a clean window or a new walk sets it back to 0.</summary>
     public int ChurningWindows { get; private set; }
 
-    /// <summary>One applied step; true when it closes a churning window.</summary>
-    public bool Observe(Vector3 position, float step, long now)
+    /// <summary>One applied step toward goal; true when it closes a churning window.</summary>
+    public bool Observe(Vector3 position, Vector3 goal, float step, long now)
     {
-        if (_since < 0) { (_start, _since, _walked) = (position, now, 0); return false; }
+        if (_since >= 0 && (now - _last > PauseMilliseconds || Vector3.DistanceSquared(goal, _goal) > GoalMoved * GoalMoved))
+            Reset();
+        _last = now;
+        if (_since < 0) { (_start, _goal, _since, _walked) = (position, goal, now, 0); return false; }
         _walked += step;
         if (now - _since < WindowMilliseconds) return false;
         bool churning = _walked > MinimumWalked && Vector3.Distance(position, _start) * 3 < _walked;

@@ -177,21 +177,54 @@ public sealed class UT_PlayerBotDriver
         for (int tick = 0; tick <= 64; tick++)                                       // 16 s of 250 ms steps
         {
             Vector3 next = at + new Vector3(forwardPerStep, tick % 2 == 0 ? 48 : -48, 0);  // sideways back and forth
-            seen |= watch.Observe(next, Vector3.Distance(at, next), tick * 250L);
+            seen |= watch.Observe(next, Goal, Vector3.Distance(at, next), tick * 250L);
             at = next;
         }
         Assert.That(seen, Is.EqualTo(churning));
     }
 
     [Test]
-    public void AStraightWalkIsNotChurningAndAResetStartsAFreshWindow()
+    public void AStraightWalkIsNotChurning()
     {
         var watch = new PlayerBotChurnWatch();
         for (int tick = 0; tick <= 64; tick++)
-            Assert.That(watch.Observe(new(tick * 48, 0, 0), 48, tick * 250L), Is.False);
-        watch.Reset();
-        Assert.That(watch.Observe(Vector3.Zero, 48, 60_000), Is.False, "a fresh window, not one from 16 s ago");
+            Assert.That(watch.Observe(new(tick * 48, 0, 0), Goal, 48, tick * 250L), Is.False);
     }
+
+    // Roaming (the review of 2026-10-21): legs back and forth between two points 1,200 units apart, a new goal each leg.
+    // A 15 s window covers 2-3 legs and often ends near where it began; that is no churning walk.
+    [Test]
+    public void RoamingBetweenGoalsIsNotChurning()
+    {
+        var watch = new PlayerBotChurnWatch();
+        Vector3 a = Vector3.Zero, b = new(1200, 0, 0), at = a;
+        for (int tick = 0, leg = 0; tick < 4 * 120; tick++)                        // 2 minutes of 250 ms steps
+        {
+            Vector3 goal = leg % 2 == 0 ? b : a;
+            Vector3 next = PlayerTravelPath.Advance(at, goal, 48);
+            Assert.That(watch.Observe(next, goal, Vector3.Distance(at, next), tick * 250L), Is.False, $"tick {tick}");
+            at = next;
+            if (at == goal) leg++;
+        }
+    }
+
+    // Two churning windows of one walk, then a new goal, a pause or the mover's Reset: the next walk starts with no
+    // churning windows.
+    [TestCase("goal")] [TestCase("pause")] [TestCase("reset")]
+    public void ANewGoalAPauseOrAResetStartsANewWalk(string how)
+    {
+        var watch = new PlayerBotChurnWatch();
+        long now = 0;
+        for (; now <= 30_000; now += 250)                                            // two windows of sideways bouncing
+            watch.Observe(new(0, now % 500 == 0 ? 48 : -48, 0), Goal, 96, now);
+        Assert.That(watch.ChurningWindows, Is.EqualTo(2));
+        if (how == "pause") watch.Observe(Vector3.Zero, Goal, 96, now + PlayerBotChurnWatch.PauseMilliseconds + 250);
+        else if (how == "goal") watch.Observe(Vector3.Zero, Goal + new Vector3(0, 100, 0), 96, now);
+        else watch.Reset();
+        Assert.That(watch.ChurningWindows, Is.Zero);
+    }
+
+    private static readonly Vector3 Goal = new(100_000, 0, 0);                       // far away: the window never arrives
 
     // The surface mover never moves; the mesh floor lies FloorRise above any point asked about.
     private sealed class EdgeMesh : PathfindingMgrBase

@@ -23,6 +23,7 @@ public sealed class PlayerBotErrands
     private const long WalkLimitMs = 15 * 60 * 1000;        // toward one target
     private const int DeathsBeforeFallback = 2;             // on the way to Captain Falron
     private const long BlockedLineMs = 30_000;              // at most one "blocked" line per 30 s
+    private const long WalkPauseMs = 2_000;                 // no walking step for this long: the walk line starts over
     private const long QuestFixedXp = 10, QuestCopper = 42; // DataQuest 20206: RewardXP "0|10", RewardMoney "0|42"
 
     private readonly GamePlayer _bot;
@@ -32,8 +33,9 @@ public sealed class PlayerBotErrands
     private bool _acceptDue;
     private long _lastWhisperAt = -60_000;
     private ErrandTarget _walkTarget;
-    private long _walkSince, _deathTick, _nextBlockedLine, _nextWalkLine;
+    private long _walkSince, _deathTick, _nextBlockedLine, _nextWalkLine, _lastWalkStep;
     private Vector3 _walkLineAt;
+    private GameNPC _walkLineNpc;
     private int _trainerWalkDeaths;
 
     public bool Finished { get; private set; }
@@ -99,7 +101,16 @@ public sealed class PlayerBotErrands
     /// units in 15 minutes, with no block to log).</summary>
     public void WalkProgress(GameNPC npc, PlayerBotPathMover mover, Vector3 goal, long now)
     {
-        if (npc == null || now < _nextWalkLine) return;
+        if (npc == null) return;
+        bool resumed = npc != _walkLineNpc || now - _lastWalkStep > WalkPauseMs;
+        _lastWalkStep = now;
+        if (resumed)
+        {   // a new walk, or one after a fight, a rest, a death or the grind: its first line counts from here
+            (_walkLineNpc, _walkLineAt, _nextWalkLine) = (npc, new(_bot.X, _bot.Y, _bot.Z), now + BlockedLineMs);
+            mover.StartWalkReport();
+            return;
+        }
+        if (now < _nextWalkLine) return;
         _nextWalkLine = now + BlockedLineMs;
         Vector3 here = new(_bot.X, _bot.Y, _bot.Z);
         Line($"walking to=\"{npc.Name}\" at=({_bot.X},{_bot.Y},{_bot.Z}) distance={_bot.GetDistanceTo(npc)} " +
