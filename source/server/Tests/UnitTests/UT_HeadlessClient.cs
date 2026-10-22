@@ -164,6 +164,19 @@ public sealed class UT_HeadlessClient
     }
 
     [Test]
+    public void A_pooled_packet_sent_to_the_bot_goes_back_to_the_pool()
+    {
+        // Left issued, the tick pool logs and replaces it at its next use (TickPool.cs:28-33).
+        IPacketLib lib = Client().Out;
+        GSUDPPacketOut udp = new() { IssuedTimestamp = 1000 };
+        GSTCPPacketOut tcp = new() { IssuedTimestamp = 1000 };
+        lib.SendUDP(udp);
+        lib.SendTCP(tcp);
+        Assert.That(udp.IssuedTimestamp, Is.Zero);
+        Assert.That(tcp.IssuedTimestamp, Is.Zero);
+    }
+
+    [Test]
     public void A_new_custom_dialog_answers_the_pending_one_no()
     {
         HeadlessClient client = InWorldClient(out GamePlayer player);

@@ -43,7 +43,17 @@ public sealed class HeadlessPacketLib : BotDummyPacketLib, IPacketLib
     }
 
     // Marks that StartLosCheck sent its request (LosCheckHandler.cs:102-107). Read only around that call, on this thread.
-    public new void SendTCP(GSTCPPacketOut packet) => t_packetSent = true;
+    // A sent packet goes back to the tick pool, as for a client without a socket (PacketProcessor.cs:217-220, :240-244):
+    // left issued, the pool logs a warning and allocates a new one at its next use (TickPool.cs:28-33). The other
+    // players' position and heading updates reach a bot here (PlayerPositionUpdateHandler.cs:562-577): 380,000 warnings
+    // in a one-hour run of 30 bots.
+    public new void SendTCP(GSTCPPacketOut packet)
+    {
+        t_packetSent = true;
+        packet.ReleasePooledObject();
+    }
+
+    public new void SendUDP(GSUDPPacketOut packet) => packet.ReleasePooledObject();
 
     // PacketLib168.cs:1557-1567: a new dialog first answers a pending one with 0x00, under the player's lock (#92).
     public new void SendCustomDialog(string msg, CustomDialogResponse callback)
