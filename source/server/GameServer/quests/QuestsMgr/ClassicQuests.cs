@@ -26,8 +26,8 @@ namespace DOL.GS.Quests
     /// </list>
     /// Quest givers keep the normal yellow quest indicator over their heads. Without the file nothing happens.
     /// HearthDAoC: hearthdaoc-quests.json (beside it) adds quests (an entry with <c>Replace</c> replaces upstream's: a
-    /// quest the fork rebuilt) and quest monsters, and its <c>Chat</c> replaces upstream's NPC replies keyword by keyword
-    /// (an empty reply silences one).
+    /// quest the fork rebuilt), quest monsters and their fellows, and its <c>Chat</c> replaces upstream's NPC replies
+    /// keyword by keyword (an empty reply silences one).
     /// </summary>
     public static class ClassicQuests
     {
@@ -178,6 +178,7 @@ namespace DOL.GS.Quests
             public Dictionary<string, Dictionary<string, string>> ClassRewards { get; set; } = new(StringComparer.OrdinalIgnoreCase);
             /// <summary>Fellows of a quest monster: fellow Mob_ID -> the leader's name (Fjall's friends; they walk and
             /// fight with him, QuestFellowBrain).</summary>
+            /// <remarks>HearthDAoC: hearthdaoc-quests.json's join them (Mulgrut Maggot's escort; <see cref="Merge"/>).</remarks>
             public Dictionary<string, string> Fellows { get; set; } = new(StringComparer.Ordinal);
         }
 
@@ -829,8 +830,9 @@ namespace DOL.GS.Quests
         /// <summary>
         /// HearthDAoC: adds the extra file's quests where upstream's file has no entry for the ID (upstream's entry wins,
         /// unless ours says <see cref="QuestInfo.Replace"/>; ours still carries its XpShares and Greets onto upstream's:
-        /// <see cref="ClassicQuestOverlay"/>), and its quest monsters; its <c>Chat</c> replies replace
-        /// upstream's (see <see cref="MergeChat"/>). Returns <paramref name="upstream"/>. A null extra file changes nothing.
+        /// <see cref="ClassicQuestOverlay"/>), and its quest monsters and fellows (ours win on a fellow's Mob_ID); its
+        /// <c>Chat</c> replies replace upstream's (see <see cref="MergeChat"/>). Returns <paramref name="upstream"/>. A null
+        /// extra file changes nothing.
         /// </summary>
         public static Config Merge(Config upstream, Config extra)
         {
@@ -859,6 +861,11 @@ namespace DOL.GS.Quests
                         MarkerMove move = extra.MovedMarkers.FirstOrDefault(m => m?.From != null && m.To != null && m.From == step.Marker);
                         if (move != null) step.Marker = move.To;
                     }
+            // HearthDAoC: the fork's fellows (Mulgrut Maggot's escort, 2026-10-22) join upstream's (Fjall's); ours win on a Mob_ID.
+            if (extra.Fellows != null)
+                foreach (KeyValuePair<string, string> fellow in extra.Fellows)
+                    if (!string.IsNullOrEmpty(fellow.Key) && !string.IsNullOrEmpty(fellow.Value))
+                        (upstream.Fellows ??= new(StringComparer.Ordinal))[fellow.Key] = fellow.Value;
             return upstream;
         }
 

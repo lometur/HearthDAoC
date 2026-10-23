@@ -1,3 +1,4 @@
+using System.Collections.Generic;
 using System.Text.Json;
 using DOL.GS.Quests;
 using NUnit.Framework;
@@ -266,6 +267,57 @@ public sealed class UT_ClassicQuestsExtra
         ClassicQuests.Config merged = ClassicQuests.Merge(Parse(Upstream), Parse(links));
         Assert.That(merged.Links, Has.Count.EqualTo(1));
         Assert.That(merged.Links[0].Members, Is.EqualTo(new[] { "d", "r1", "r2" }));
+    }
+
+    // HearthDAoC (2026-10-22): the fork's Fellows (Mulgrut Maggot's escort, QuestFellowBrain) join upstream's (Fjall's);
+    // ours win on the same Mob_ID.
+    private const string UpstreamFellows = """
+    { "Quests": {}, "Fellows": { "fjall-friend": "Fjall", "shared": "Fjall" } }
+    """;
+
+    [Test]
+    public void TheExtraFilesFellowsJoinUpstreams()
+    {
+        ClassicQuests.Config merged = ClassicQuests.Merge(Parse(UpstreamFellows),
+            Parse("""{ "Fellows": { "zombie-1": "Mulgrut Maggot", "zombie-2": "Mulgrut Maggot" } }"""));
+        Assert.That(merged.Fellows, Is.EquivalentTo(new Dictionary<string, string>
+        {
+            ["fjall-friend"] = "Fjall", ["shared"] = "Fjall",
+            ["zombie-1"] = "Mulgrut Maggot", ["zombie-2"] = "Mulgrut Maggot",
+        }));
+    }
+
+    [Test]
+    public void OurFellowWinsOnTheSameMobId()
+    {
+        ClassicQuests.Config merged = ClassicQuests.Merge(Parse(UpstreamFellows), Parse("""{ "Fellows": { "shared": "Mulgrut Maggot" } }"""));
+        Assert.That(merged.Fellows["shared"], Is.EqualTo("Mulgrut Maggot"));
+    }
+
+    [TestCase("""{ "Fellows": null }""")]
+    [TestCase("""{ }""")]
+    [TestCase("""{ "Fellows": { "": "Mulgrut Maggot", "no-leader": "" } }""")]
+    public void NoFellowsOfOursLeaveUpstreams(string extra)
+    {
+        ClassicQuests.Config merged = ClassicQuests.Merge(Parse(UpstreamFellows), Parse(extra));
+        Assert.That(merged.Fellows, Is.EquivalentTo(new Dictionary<string, string> { ["fjall-friend"] = "Fjall", ["shared"] = "Fjall" }));
+    }
+
+    [Test]
+    public void OurFellowsNeedNoUpstreamFellows()
+    {
+        ClassicQuests.Config merged = ClassicQuests.Merge(Parse("""{ "Quests": {}, "Fellows": null }"""),
+            Parse("""{ "Fellows": { "zombie-1": "Mulgrut Maggot" } }"""));
+        Assert.That(merged.Fellows["zombie-1"], Is.EqualTo("Mulgrut Maggot"));
+    }
+
+    [Test]
+    public void OurFellowsAreLookedUpByTheirExactMobId()
+    {
+        // FellowLeaderName reads the merged list by the fellow's Mob_ID, as upstream's (Ordinal).
+        ClassicQuests.Config merged = ClassicQuests.Merge(Parse("""{ "Quests": {}, "Fellows": null }"""),
+            Parse("""{ "Fellows": { "zombie-1": "Mulgrut Maggot" } }"""));
+        Assert.That(merged.Fellows.ContainsKey("ZOMBIE-1"), Is.False);
     }
 
     // HearthDAoC (0.37 sync, #138): upstream 0.36 pays a classic quest's XP as a share of the player's current level
