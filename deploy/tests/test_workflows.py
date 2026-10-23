@@ -279,7 +279,7 @@ SERVER_UNIT_TESTS = ("dotnet test source/server/Tests/Tests.csproj --nologo --fi
                      '|FullyQualifiedName~UT_QuestGrants'
                      '|FullyQualifiedName~UT_BotCpuMeter|FullyQualifiedName~UT_BotCpuReport|FullyQualifiedName~UT_BotCpuScript'
                      '|FullyQualifiedName~UT_HeadlessClient|FullyQualifiedName~UT_PlayerBotPlan|FullyQualifiedName~UT_PlayerBotDriver|FullyQualifiedName~UT_PlayerBotErrands'
-                     '|FullyQualifiedName~UT_PlayerBotWake'
+                     '|FullyQualifiedName~UT_PlayerBotWake|FullyQualifiedName~UT_PlayerBotSpots'
                      '|FullyQualifiedName~UT_CommandNames"')
 UNIT_TESTS = os.path.join(ROOT, "source", "server", "Tests", "UnitTests")
 
@@ -313,7 +313,7 @@ class ServerUnitTestWorkflowTests(unittest.TestCase):
                                  "UT_QuestGrants",
                                  "UT_BotCpuMeter", "UT_BotCpuReport", "UT_BotCpuScript",
                                  "UT_HeadlessClient", "UT_PlayerBotPlan", "UT_PlayerBotDriver", "UT_PlayerBotErrands",
-                                 "UT_PlayerBotWake",
+                                 "UT_PlayerBotWake", "UT_PlayerBotSpots",
                                  "UT_CommandNames"])
         for name in names:
             with open(os.path.join(UNIT_TESTS, name + ".cs"), encoding="utf-8") as f:

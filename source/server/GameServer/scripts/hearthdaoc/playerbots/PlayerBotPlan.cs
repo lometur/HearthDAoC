@@ -25,7 +25,7 @@ public sealed record PlayerBotPlan(bool On, int Albion, int Midgard, int Hiberni
 {
     public const string EnvironmentVariable = "HEARTHDAOC_PLAYER_BOTS";
     public const string AccountPrefix = "hdbot-"; // '-' fails LoginRequestHandler.cs:254-255: no client can log into or auto-create it
-    public const int MaxPerRealm = 99;
+    public const int MaxPerRealm = 150; // 99 until the #137 lever test: one bot at each of 390 spots (125/132/133)
     public static readonly PlayerBotPlan Off = new(false, 0, 0, 0);
 
     public int Total => Albion + Midgard + Hibernia;

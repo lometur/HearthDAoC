@@ -29,20 +29,21 @@ public sealed class UT_PlayerBotPlan
     }
 
     [TestCase("30", 10, 10, 10)] [TestCase("31", 11, 10, 10)] [TestCase("32", 11, 11, 10)] [TestCase("2", 1, 1, 0)]
-    [TestCase("297", 99, 99, 99)] [TestCase("alb:30", 30, 0, 0)] [TestCase("mid:10, hib:5", 0, 10, 5)]
+    [TestCase("450", 150, 150, 150)] [TestCase("alb:30", 30, 0, 0)] [TestCase("mid:10, hib:5", 0, 10, 5)]
     [TestCase("ALB:1,Mid:1,hib:1", 1, 1, 1)] [TestCase(" hib:0 ", 0, 0, 0)]
+    [TestCase("alb:125,mid:132,hib:133", 125, 132, 133)]                 // the #137 lever test: one bot per spot, 390
     public void Counts(string text, int alb, int mid, int hib)
     {
         PlayerBotPlan plan = PlayerBotPlan.Parse(text);
         Assert.That((plan.On, plan.Albion, plan.Midgard, plan.Hibernia), Is.EqualTo((true, alb, mid, hib)));
     }
 
-    [TestCase("298")] [TestCase("-1")] [TestCase("+3")] [TestCase("alb:100")] [TestCase("alb:1,alb:2")]
+    [TestCase("451")] [TestCase("-1")] [TestCase("+3")] [TestCase("alb:151")] [TestCase("alb:1,alb:2")]
     [TestCase("elf:3")] [TestCase("alb")] [TestCase("alb:x")] [TestCase("30,alb:1")] [TestCase("alb:1,")] [TestCase("on")]
     public void Anything_else_is_refused_naming_the_variable(string text)
     {
         var e = Assert.Throws<FormatException>(() => PlayerBotPlan.Parse(text));
-        Assert.That(e.Message, Does.StartWith("HEARTHDAOC_PLAYER_BOTS must be off, a number of bots from 0 to 297"));
+        Assert.That(e.Message, Does.StartWith("HEARTHDAOC_PLAYER_BOTS must be off, a number of bots from 0 to 450"));
         Assert.That(e.Message, Does.EndWith($"got '{text}'"));
     }
 
@@ -63,9 +64,9 @@ public sealed class UT_PlayerBotPlan
     [Test]
     public void Names_are_unique_and_pass_the_create_and_login_rules()
     {
-        IReadOnlyList<PlayerBotSlot> slots = PlayerBotPlan.Parse("297").Slots();
-        Assert.That(slots.Select(s => s.AccountName).Distinct().Count(), Is.EqualTo(297));
-        Assert.That(slots.Select(s => s.CharacterName).Distinct().Count(), Is.EqualTo(297));
+        IReadOnlyList<PlayerBotSlot> slots = PlayerBotPlan.Parse("450").Slots();
+        Assert.That(slots.Select(s => s.AccountName).Distinct().Count(), Is.EqualTo(450));
+        Assert.That(slots.Select(s => s.CharacterName).Distinct().Count(), Is.EqualTo(450));
         foreach (PlayerBotSlot s in slots)
         {
             Assert.That(Regex.IsMatch(s.AccountName, "^[a-zA-Z0-9]*$"), Is.False, s.AccountName); // LoginRequestHandler.cs:254
@@ -73,6 +74,7 @@ public sealed class UT_PlayerBotPlan
             Assert.That(s.CharacterName.Length, Is.GreaterThanOrEqualTo(3));
         }
         Assert.That(slots[0].CharacterName, Is.EqualTo("Pbotaaaab"));
+        Assert.That(slots[^1].AccountName, Is.EqualTo("hdbot-hib-150"));      // D2 is a minimum width
     }
 
     [Test]

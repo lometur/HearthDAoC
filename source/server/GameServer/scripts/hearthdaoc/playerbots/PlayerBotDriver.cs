@@ -65,6 +65,7 @@ public sealed class PlayerBotState
     public long NextBlockedLine;                                 // PLAYER_BOT_BLOCKED
     public int BlockedSinceLine;
     public long NextWakeScanTick;                                // PlayerBotWake's 3,600-unit scan (the #137 lever)
+    public bool HoldAnchor;                                      // a spot bot (PLAYER_BOT_SPOTS): never relocates
     public long LastExperience, UnreachableUntil, NextTargetRefreshTick, NextLootTick, NextLosTick, NextStyleTick,
         NextCombatChoiceTick, NextNeighbourCountTick, NextProgressCheckTick, LastProgressTick, ProgressExperience, ProgressMoney;
     public Vector3 ProgressPosition;
@@ -551,6 +552,7 @@ public static class PlayerBotDriver
     // can walk to (a GameBot leaves an outgrown camp for one at its level, AWBC:3244-3300).
     private static void RelocateIfOutgrown(PlayerBotState state, GamePlayer player, long now)
     {
+        if (state.HoldAnchor) return;                            // the lever test keeps the bots on their spots
         if (state.RoamingSince == 0 || now - state.RoamingSince < RelocateAfterMilliseconds || now < state.NextRelocateTick ||
             player.CurrentRegionID != state.AnchorRegion || player.CurrentZone is not Zone zone)
             return;

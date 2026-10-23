@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Linq;
 using DOL.Database;
 using DOL.Events;
 using DOL.GS.GameEvents;
@@ -98,6 +99,11 @@ public static class PlayerBotAccounts
         created = true;
         return ch;
     }
+
+    /// <summary>The account's row for this character, the one the login reads (GameClient.cs:114). After a creation
+    /// EnsureCharacter's own object is not it: the account's characters were read again (:95-96).</summary>
+    public static DbCoreCharacter LoginRow(DbAccount account, DbCoreCharacter ch) =>
+        account.Characters?.FirstOrDefault(c => c != null && c.AccountSlot == ch.AccountSlot) ?? ch;
 
     public static bool NameTaken(string name)
     {

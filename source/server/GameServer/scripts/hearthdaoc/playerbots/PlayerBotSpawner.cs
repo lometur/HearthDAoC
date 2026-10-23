@@ -20,8 +20,9 @@ namespace DOL.GS.HearthDAoC.PlayerBots;
 // status line every minute, and one forced full collection at minute 51 for retained heap per bot (the meter has no
 // /botcpu heap, spec 4.5). A bot that drops out of Playing is never logged in again (F1 must stay visible); the one
 // exception is the quest fighter's single re-login after its errands, in run 1's small plans. HEARTHDAOC_PLAYER_BOT_WAKE
-// (player, the default, or gamebot: the #137 lever, PlayerBotWake) is read only when bots are on, so a default start
-// logs nothing (smoke.sh:56); a bad value keeps them off.
+// (player, the default, or gamebot: the #137 lever, PlayerBotWake) and HEARTHDAOC_PLAYER_BOT_SPOTS (a start spots file,
+// PlayerBotSpots) are read only when bots are on, so a default start logs nothing (smoke.sh:56); a bad value or an
+// unreadable file keeps them off. A bot placed at its spot holds it (PlayerBotState.HoldAnchor).
 //
 // Lines marked "// T4" came with the driver (task 4), lines marked "// T5" with the errands (task 5).
 public static class PlayerBotSpawner
@@ -43,6 +44,7 @@ public static class PlayerBotSpawner
     private static readonly object Gate = new();
     private static Timer _timer;
     private static SlotState[] _slots = [];
+    private static PlayerBotSpots _spots = PlayerBotSpots.None;
     private static DateTime _startedUtc, _nextStatusUtc;
     private static bool _readyLogged;
     private static int _ticking, _heapDone;
@@ -59,6 +61,7 @@ public static class PlayerBotSpawner
         public volatile string Error;               // set by StartOnGameLoop when a step fails
         public volatile bool RelogRequested;        // set on the game loop when the errands are done
         public volatile bool ErrandRelogged;        // set by the timer before the re-login is posted
+        public volatile bool Spotted;               // set by StartOnGameLoop: placed at its PLAYER_BOT_SPOTS spot
         public SlotPhase Phase;                     // the timer only, under Gate
         public int Attempts;
         public DateTime LoadingSinceUtc, RetryAtUtc;
@@ -83,8 +86,9 @@ public static class PlayerBotSpawner
         try
         {
             PlayerBotWake.Lever = PlayerBotWake.Parse(Environment.GetEnvironmentVariable(PlayerBotWake.EnvironmentVariable));
+            _spots = PlayerBotSpots.Load(Environment.GetEnvironmentVariable(PlayerBotSpots.EnvironmentVariable));
         }
-        catch (FormatException exception)
+        catch (Exception exception) when (exception is FormatException or IOException or UnauthorizedAccessException)
         {
             Log.Error($"{LogPrefix} error {exception.Message}; player bots stay off");
             Plan = PlayerBotPlan.Off;
@@ -112,7 +116,7 @@ public static class PlayerBotSpawner
         }).ToArray();
         _startedUtc = DateTime.UtcNow;
         _nextStatusUtc = _startedUtc.AddSeconds(StatusEverySeconds);
-        Log.Info(Invariant($"{LogPrefix} plan {Plan.Describe()} slots={_slots.Length} perSecond={LoginsPerSecond} maxLoading={MaxLoading} wake={PlayerBotWake.Describe(PlayerBotWake.Lever)}"));
+        Log.Info(Invariant($"{LogPrefix} plan {Plan.Describe()} slots={_slots.Length} perSecond={LoginsPerSecond} maxLoading={MaxLoading} wake={PlayerBotWake.Describe(PlayerBotWake.Lever)} spots={_spots.Describe()}"));
         GameEventMgr.AddHandler(GameClientEvent.PlayerLoaded, HeadlessClient.OnPlayerLoaded); // no ghost after a timed-out load
         _timer = new Timer(Tick, null, FirstTickMs, 1_000);
     }
@@ -252,7 +256,10 @@ public static class PlayerBotSpawner
             client.EnteredWorld += (c, first) => OnEnteredWorld(s, c, first);
             client.LoggedOut += c => PlayerBotDriver.Stop(c.Player);                                  // T4
             s.Client = client;
-            client.BeginLogin(ch);
+            DbCoreCharacter row = PlayerBotAccounts.LoginRow(account, ch);                            // the one the login reads
+            if (!s.ErrandRelogged && _spots.For(s.Slot) is PlayerBotSpot spot)                        // the start, not the errand's re-login
+                s.Spotted = PlayerBotSpots.Place(spot, row, s.Slot.AccountName, Log);
+            client.BeginLogin(row);
         }
         catch (Exception exception)
         {
@@ -269,11 +276,17 @@ public static class PlayerBotSpawner
         try
         {
             GamePlayer player = c.Player;
+            bool Drive(GamePlayer p)                                                                  // a spot bot holds its spot
+            {
+                if (!PlayerBotDriver.Start(p)) return false;
+                if (s.Spotted && PlayerBotDriver.StateOf(p) is { } state) state.HoldAnchor = true;
+                return true;
+            }
             bool errands = s.Slot.IsQuestFighter && Plan.Total <= ErrandMaxBots;                       // T5
             if (errands && s.ErrandRelogged)                                                          // T5
             {
                 PlayerBotErrands.CheckAfterLogin(player);                                             // T5
-                if (!PlayerBotDriver.Start(player))                                                   // T5
+                if (!Drive(player))                                                                   // T5
                     Log.Warn($"{LogPrefix} driver not started account={s.Slot.AccountName} after=relog");
                 return;                                                                               // T5
             }
@@ -282,12 +295,12 @@ public static class PlayerBotSpawner
                 // onDone runs on the self-test's timer; a region trip that has not re-entered yet leaves it undriven.
                 HeadlessSelfTest.Start(c, done =>                                                     // T4 (T3: Start(c))
                 {
-                    if (!PlayerBotDriver.Start(done.Player))
+                    if (!Drive(done.Player))
                         Log.Warn($"{LogPrefix} driver not started account={s.Slot.AccountName} after=selftest");
                 });
                 return;
             }
-            if (!PlayerBotDriver.Start(player))                                                       // T4
+            if (!Drive(player))                                                                       // T4
             {
                 Log.Warn($"{LogPrefix} driver not started account={s.Slot.AccountName}");             // T4
                 return;                                                                               // T4
