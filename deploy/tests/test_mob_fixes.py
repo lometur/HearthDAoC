@@ -37,6 +37,15 @@ SCHEMA = [
 # A quest row for the synthetic tests only: quest_dialogue (which world_fixes runs too) wants the whole table.
 QUEST_SCHEMA = ("CREATE TABLE DataQuest (ID INTEGER NOT NULL PRIMARY KEY AUTOINCREMENT, Name VARCHAR(255) NOT NULL DEFAULT '', "
                 "FinalRewardItemTemplates TEXT DEFAULT NULL, LastTimeRowUpdated DATETIME NOT NULL DEFAULT '2000-01-01 00:00:00')")
+# Upstream's ZonePoint table (CoreDatabase/Tables/DbZonePoint.cs), for the zone point tests only.
+ZONE_POINT_SCHEMA = ("CREATE TABLE ZonePoint (Id UNSIGNED SMALLINT(5) NOT NULL DEFAULT 0, TargetX INT(11) NOT NULL DEFAULT 0, "
+                     "TargetY INT(11) NOT NULL DEFAULT 0, TargetZ INT(11) NOT NULL DEFAULT 0, "
+                     "TargetRegion UNSIGNED SMALLINT(5) NOT NULL DEFAULT 0, TargetHeading UNSIGNED SMALLINT(5) NOT NULL DEFAULT 0, "
+                     "SourceX INT(11) NOT NULL DEFAULT 0, SourceY INT(11) NOT NULL DEFAULT 0, SourceZ INT(11) NOT NULL DEFAULT 0, "
+                     "SourceRegion UNSIGNED SMALLINT(5) NOT NULL DEFAULT 0, Realm UNSIGNED SMALLINT(5) NOT NULL DEFAULT 0, "
+                     "ClassType TEXT DEFAULT NULL COLLATE NOCASE, "
+                     "LastTimeRowUpdated DATETIME NOT NULL DEFAULT '2000-01-01 00:00:00', "
+                     "ZonePoint_ID VARCHAR(255) NOT NULL DEFAULT '' COLLATE NOCASE, PRIMARY KEY (ZonePoint_ID))")
 OLD = "2000-01-01 00:00:00"
 NOW = "2026-10-10 12:00:00"
 
@@ -110,7 +119,7 @@ class SyntheticTests(unittest.TestCase):
         data = {"fixes": [self.TWO["fixes"][0], dict(self.TWO["fixes"][1], expect={"Name": "x"}, set={"Name": "y"})]}
         line, = self.run_fix(data)
         self.assertEqual(line, "Mob fixes: not applied (fix 2 (Mulgrut reward): another entry of its row also has Name); "
-                               "the monsters, items and quests keep the values they have")
+                               "the monsters, items, quests and zone points keep the values they have")
 
     # The 0.37 sync: a decision made of entries that depend on each other (a carried-only copy made the reward, and the
     # quest's second copy dropped) applies whole or not at all, so it never leaves two real rewards, or none.
@@ -225,11 +234,28 @@ class SyntheticTests(unittest.TestCase):
                          ("alb_belt", NOW))
         self.assertEqual(self.run_fix(data), [])
 
+    def test_a_zone_point_row_is_corrected(self):
+        # The Shrouded Isles portals at their 1.65 spots (2026-10-22): a zone point's source spot, by its Id. Its
+        # target, realm and class stay.
+        self.conn.execute(ZONE_POINT_SCHEMA)
+        self.conn.execute("INSERT INTO ZonePoint (ZonePoint_ID, Id, TargetRegion, TargetX, TargetY, TargetZ, SourceRegion, "
+                          "SourceX, SourceY, SourceZ) VALUES ('ALB SI ENTRANCE', 153, 51, 525818, 542658, 3168, 1, 564976, "
+                          "509200, 2811)")
+        self.conn.commit()
+        data = {"fixes": [{"name": "Albion Shrouded Isles portal", "table": "ZonePoint", "id": 153,
+                           "expect": {"SourceRegion": 1, "SourceX": 564976, "SourceY": 509200, "SourceZ": 2811},
+                           "set": {"SourceX": 462038, "SourceY": 632414, "SourceZ": 1707}, "why": "1.74 notes, 2005"}]}
+        self.assertEqual(self.run_fix(data), ["Mob fixes: 1 corrected: Albion Shrouded Isles portal (ZonePoint 153)"])
+        self.assertEqual(self.conn.execute("SELECT Id, SourceRegion, SourceX, SourceY, SourceZ, TargetRegion, TargetX, TargetY, "
+                                           "TargetZ, Realm, ClassType, LastTimeRowUpdated FROM ZonePoint").fetchall(),
+                         [(153, 1, 462038, 632414, 1707, 51, 525818, 542658, 3168, 0, None, NOW)])
+        self.assertEqual(self.run_fix(data), [])
+
     def test_a_quest_rows_id_is_never_set(self):
         data = {"fixes": [{"name": "Cleric Mulgrut", "table": "DataQuest", "id": 20207, "expect": {"ID": 20207},
                            "set": {"ID": 1}, "why": "Allakhazam"}]}
         self.assertEqual(self.run_fix(data), ["Mob fixes: not applied (fix 1 (Cleric Mulgrut): set changes the row's ID); "
-                                              "the monsters, items and quests keep the values they have"])
+                                              "the monsters, items, quests and zone points keep the values they have"])
         self.assertEqual(self.conn.execute("SELECT ID FROM DataQuest").fetchall(), [(20207,)])
 
     def test_every_npc_template_row_of_the_id_is_corrected(self):
@@ -290,7 +316,7 @@ class SyntheticTests(unittest.TestCase):
         data["fixes"][0]["set"] = {"Lvl": 10}
         data["fixes"][0]["expect"] = {"Lvl": 12}
         self.assertEqual(self.run_fix(data), ["Mob fixes: not applied (fix 1 (Agisthil): Mob has no column Lvl); "
-                                              "the monsters, items and quests keep the values they have"])
+                                              "the monsters, items, quests and zone points keep the values they have"])
 
     def test_a_missing_data_file_is_a_not_applied_line(self):
         with unittest.mock.patch.object(mf, "load_data", side_effect=FileNotFoundError("mob_fixes.json")):
