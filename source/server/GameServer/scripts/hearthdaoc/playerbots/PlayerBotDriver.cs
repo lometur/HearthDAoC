@@ -64,6 +64,7 @@ public sealed class PlayerBotState
     public int Attackers;                                        //   and the attackers on the last think alive
     public long NextBlockedLine;                                 // PLAYER_BOT_BLOCKED
     public int BlockedSinceLine;
+    public long NextWakeScanTick;                                // PlayerBotWake's 3,600-unit scan (the #137 lever)
     public long LastExperience, UnreachableUntil, NextTargetRefreshTick, NextLootTick, NextLosTick, NextStyleTick,
         NextCombatChoiceTick, NextNeighbourCountTick, NextProgressCheckTick, LastProgressTick, ProgressExperience, ProgressMoney;
     public Vector3 ProgressPosition;
@@ -216,6 +217,7 @@ public static class PlayerBotDriver
         state.DeathRecorded = false;
         state.ReleaseRequested = false;
         state.Attackers = player.attackComponent.AttackerTracker.Count;                 //    Die clears it (GameLiving.cs:2050)
+        PlayerBotWake.OnThink(state, player, now);                                       // 6b. the #137 lever's wakes
         if (RecoverIfStuck(state, player, now)) return;                                  // 7
         if (player.IsCrowdControlled)                                                    // 8
         {

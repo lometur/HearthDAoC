@@ -19,7 +19,9 @@ namespace DOL.GS.HearthDAoC.PlayerBots;
 // "off", the default, does nothing at all. Any other value is test-world mode: Discord webhooks off for this run, a
 // status line every minute, and one forced full collection at minute 51 for retained heap per bot (the meter has no
 // /botcpu heap, spec 4.5). A bot that drops out of Playing is never logged in again (F1 must stay visible); the one
-// exception is the quest fighter's single re-login after its errands, in run 1's small plans.
+// exception is the quest fighter's single re-login after its errands, in run 1's small plans. HEARTHDAOC_PLAYER_BOT_WAKE
+// (player, the default, or gamebot: the #137 lever, PlayerBotWake) is read only when bots are on, so a default start
+// logs nothing (smoke.sh:56); a bad value keeps them off.
 //
 // Lines marked "// T4" came with the driver (task 4), lines marked "// T5" with the errands (task 5).
 public static class PlayerBotSpawner
@@ -78,6 +80,16 @@ public static class PlayerBotSpawner
         }
         if (!Plan.On)
             return;
+        try
+        {
+            PlayerBotWake.Lever = PlayerBotWake.Parse(Environment.GetEnvironmentVariable(PlayerBotWake.EnvironmentVariable));
+        }
+        catch (FormatException exception)
+        {
+            Log.Error($"{LogPrefix} error {exception.Message}; player bots stay off");
+            Plan = PlayerBotPlan.Off;
+            return;
+        }
         if (Properties.MAX_PLAYERS > 0 && Plan.Total > Properties.MAX_PLAYERS - MaxPlayersReserve)
         {
             Log.Error(Invariant($"{LogPrefix} error {Plan.Total} bots leave fewer than {MaxPlayersReserve} logins under max_players={Properties.MAX_PLAYERS}; player bots stay off"));
@@ -100,7 +112,7 @@ public static class PlayerBotSpawner
         }).ToArray();
         _startedUtc = DateTime.UtcNow;
         _nextStatusUtc = _startedUtc.AddSeconds(StatusEverySeconds);
-        Log.Info(Invariant($"{LogPrefix} plan {Plan.Describe()} slots={_slots.Length} perSecond={LoginsPerSecond} maxLoading={MaxLoading}"));
+        Log.Info(Invariant($"{LogPrefix} plan {Plan.Describe()} slots={_slots.Length} perSecond={LoginsPerSecond} maxLoading={MaxLoading} wake={PlayerBotWake.Describe(PlayerBotWake.Lever)}"));
         GameEventMgr.AddHandler(GameClientEvent.PlayerLoaded, HeadlessClient.OnPlayerLoaded); // no ghost after a timed-out load
         _timer = new Timer(Tick, null, FirstTickMs, 1_000);
     }

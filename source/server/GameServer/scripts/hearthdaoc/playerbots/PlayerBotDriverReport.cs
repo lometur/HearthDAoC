@@ -14,8 +14,9 @@ public readonly record struct PlayerBotDriverWindow(
     long Kills, long Deaths, long LevelUps, int MaxLevel, long Experience, long Blocked, long Stuck, long LinkDeathsCancelled,
     long Errors, double NearPlayerBots, double NearGamebots, int GamebotNearbyHuman, int GamebotStandard, int GamebotEfficient);
 
-// HearthDAoC #137 spike: one PLAYER_BOT_DRIVER line a minute, from a thread-pool timer off the game loop. The driver
-// times itself (think, mover) because its TimerService row also holds the bot's other timers.
+// HearthDAoC #137 spike: one PLAYER_BOT_DRIVER line a minute, then the lever's PLAYER_BOT_WAKE line, from a thread-pool
+// timer off the game loop. The driver times itself (think, mover) because its TimerService row also holds the bot's
+// other timers.
 public static class PlayerBotDriverReport
 {
     private static readonly Logger Log = LoggerManager.Create(typeof(PlayerBotDriverReport));
@@ -108,6 +109,8 @@ public static class PlayerBotDriverReport
                 Interlocked.Exchange(ref _errors, 0),
                 bots == 0 ? 0 : (double)nearPlayerBots / bots, bots == 0 ? 0 : (double)nearGamebots / bots, human, standard, efficient);
             if (Log.IsInfoEnabled) Log.Info(Format(w));
+            PlayerBotWakeWindow wake = PlayerBotWake.TakeWindow(WindowSeconds);   // its own line: the DRIVER format is pinned
+            if (Log.IsInfoEnabled) Log.Info(PlayerBotWake.Format(wake));
         }
         catch (Exception e)
         {

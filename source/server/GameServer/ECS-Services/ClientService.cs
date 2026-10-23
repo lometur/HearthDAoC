@@ -675,6 +675,8 @@ namespace DOL.GS
 
         private static void OnObjectCreateOrUpdateForPlayer(GamePlayer player, GameObject gameObject)
         {
+            // HearthDAoC: #137 lever (HEARTHDAOC_PLAYER_BOT_WAKE=gamebot): a player bot's update keeps its NPC cache but wakes nothing; PlayerBotWake wakes what a GameBot would.
+            if (!HearthDAoC.PlayerBots.PlayerBotWake.ClientUpdateWakes(player)) { AddObjectToPlayerCache(player, gameObject); return; }
             gameObject.OnUpdateOrCreateForPlayer();
             AddObjectToPlayerCache(player, gameObject);
         }

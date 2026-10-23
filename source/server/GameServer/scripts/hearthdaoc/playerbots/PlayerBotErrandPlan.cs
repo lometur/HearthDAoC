@@ -96,6 +96,22 @@ public static class PlayerBotErrandPlan
         return new ErrandAction(ErrandActionKind.Done);
     }
 
+    /// <summary>The NPC an action faces (#137 lever: PlayerBotErrands wakes it after the action and logs a talk line),
+    /// or None. The accept answers Lorik's offer; the note goes to Aron.</summary>
+    public static ErrandTarget TalkTarget(in ErrandAction action) => action.Kind switch
+    {
+        ErrandActionKind.Whisper or ErrandActionKind.Interact => action.Target,
+        ErrandActionKind.Accept => ErrandTarget.Lorik,
+        ErrandActionKind.Give => ErrandTarget.Aron,
+        _ => ErrandTarget.None,
+    };
+
+    /// <summary>The talk line: the NPC an action faced and whether its brain ran before (PlayerBotWake.BrainState).
+    /// Under the lever, a PASS after "asleep" shows the quest needed no awake brain. It holds neither " FAIL" nor
+    /// "after-login": summarize.py counts the one, promo.sh stops on both.</summary>
+    public static string TalkLine(string npc, ErrandActionKind kind, string brainBefore, bool lever) =>
+        $"talk npc=\"{npc}\" action={kind} brainBefore={brainBefore} lever={PlayerBotWake.Describe(lever)}";
+
     private static ErrandAction Whisper(ErrandTarget target, int distance, long msSinceWhisper, string text)
     {
         if (distance > WhisperRange)

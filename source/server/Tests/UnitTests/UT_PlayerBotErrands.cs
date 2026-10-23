@@ -80,6 +80,31 @@ public sealed class UT_PlayerBotErrands
     [Test] public void AnArmsmanWithTheMercenaryTrainerIsAFailure()
         => Assert.That(Next(View(questStep: -1, level: 5, classId: Armsman), PlayerBotErrandPlan.Astyp).Kind, Is.EqualTo(ErrandActionKind.Fail));
 
+    // The #137 lever: the NPC each action faces, woken after it (PlayerBotWake.Interacting) and named on a talk line.
+    [TestCase(ErrandActionKind.Whisper, ErrandTarget.Lorik, ErrandTarget.Lorik)]
+    [TestCase(ErrandActionKind.Whisper, ErrandTarget.Trainer, ErrandTarget.Trainer)]
+    [TestCase(ErrandActionKind.Interact, ErrandTarget.Olorustos, ErrandTarget.Olorustos)]
+    [TestCase(ErrandActionKind.Interact, ErrandTarget.Trainer, ErrandTarget.Trainer)]
+    [TestCase(ErrandActionKind.Accept, ErrandTarget.None, ErrandTarget.Lorik)]
+    [TestCase(ErrandActionKind.Give, ErrandTarget.None, ErrandTarget.Aron)]
+    [TestCase(ErrandActionKind.Walk, ErrandTarget.Aron, ErrandTarget.None)]
+    [TestCase(ErrandActionKind.Equip, ErrandTarget.None, ErrandTarget.None)]
+    [TestCase(ErrandActionKind.DeclineDialog, ErrandTarget.None, ErrandTarget.None)]
+    [TestCase(ErrandActionKind.Done, ErrandTarget.None, ErrandTarget.None)]
+    public void TheBotTalksToTheNpcItsActionFaces(ErrandActionKind kind, ErrandTarget target, ErrandTarget talksTo)
+        => Assert.That(PlayerBotErrandPlan.TalkTarget(new ErrandAction(kind, target)), Is.EqualTo(talksTo));
+
+    [Test]
+    public void TheTalkLineSaysWhetherTheBrainRanBefore()
+    {
+        string line = PlayerBotErrandPlan.TalkLine("Master Lorik", ErrandActionKind.Whisper, "asleep", lever: true);
+        Assert.That(line, Is.EqualTo("talk npc=\"Master Lorik\" action=Whisper brainBefore=asleep lever=gamebot"));
+        Assert.That(PlayerBotErrandPlan.TalkLine("Guardian Aron", ErrandActionKind.Give, "awake", lever: false),
+            Is.EqualTo("talk npc=\"Guardian Aron\" action=Give brainBefore=awake lever=player"));
+        // summarize.py counts " FAIL"; promo.sh stops on "after-login|FAIL".
+        Assert.That(line, Does.Not.Contain(" FAIL").And.Not.Contain("after-login"));
+    }
+
     [Test]
     public void TheRangesSitInsideTheServers()
     {

@@ -62,6 +62,8 @@ public sealed class PlayerBotErrands
         if (CountDeath(view))
             return new ErrandAction(ErrandActionKind.Wait); // the view is Falron's: the next See looks Master Astyp up
         ErrandAction action = Guard(PlayerBotErrandPlan.Decide(view, _trainer), view, now);
+        GameNPC talkTo = Npc(PlayerBotErrandPlan.TalkTarget(action));
+        string brainBefore = PlayerBotWake.BrainState(talkTo);   // before the action: the lever's runtime proof
 
         switch (action.Kind)
         {
@@ -82,6 +84,11 @@ public sealed class PlayerBotErrands
                 break;
         }
 
+        if (talkTo != null)
+        {
+            PlayerBotWake.Interacting(_bot, talkTo);
+            Line(PlayerBotErrandPlan.TalkLine(talkTo.Name, action.Kind, brainBefore, PlayerBotWake.Lever));
+        }
         return action;
     }
 
