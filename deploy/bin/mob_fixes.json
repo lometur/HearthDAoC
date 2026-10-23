@@ -681,6 +681,21 @@
    "expect": {"TargetName": "Bline;1|Thol Dunnin;1|Ley Manton;1"},
    "set": {"TargetName": "Bline Tengit;1|Thol Dunnin;1|Ley Manton;1"},
    "why": "Traveler's Way 7, step 1 (#126): the supplies come from the Humberton merchant Bline Tengit (Allakhazam q370, 2002-09-22: \"Bline is his FIRST name!! he stands outside the door\"; WarCry 67, 2004-07-14), not from the level-5 \"Bline\" upstream's generator put at the bindstone (archived, quest_camps.json). A merchant's interact still counts for the step (GameMerchant.Interact runs GameNPC's first)."
+  },
+  {"name": "Albion Shrouded Isles portal", "table": "ZonePoint", "id": 153, "group": "the Shrouded Isles portals' 1.65 spots",
+   "expect": {"SourceRegion": 1, "SourceX": 564976, "SourceY": 509200, "SourceZ": 2811},
+   "set": {"SourceX": 462038, "SourceY": 632414, "SourceZ": 1707},
+   "why": "The Shrouded Isles portal stood on the Avalon Marsh pier near Adribard's Retreat until patch 1.74 moved the portals \"outside the main cities near Cotswold, Mularn, and Mag Mell\" and offered scrolls \"to the old portal locations near Adribard's Retreat, Nalliten, and Connla\" (Mythic's 1.74 release notes, February 2005); upstream's row has its source at the 1.74 spot by Cotswold, where upstream 0.35 added portal art and a walk-on pad. The client's own line there sends zone point 153 (dat009 ZONEJUMP row 1: loc 44155,18011 to 44338,18018, Z 1713 to 1906), so only the source moves, where bots, /travel and /stables go to cross; the target in the Isle of Glass stays, and zone point 154 already leads back there. Our choice: X,Y the line's middle (loc 44246,18014), Z the pier's deck on the server's navmesh (UT_SiPortalPlatformProbe, 2026-10-22)."
+  },
+  {"name": "Midgard Shrouded Isles portal", "table": "ZonePoint", "id": 165, "group": "the Shrouded Isles portals' 1.65 spots",
+   "expect": {"SourceRegion": 100, "SourceX": 808830, "SourceY": 725039, "SourceZ": 4882},
+   "set": {"SourceX": 771504, "SourceY": 835882, "SourceZ": 4707},
+   "why": "The Shrouded Isles portal stood in Gotar north-east of Nalliten until patch 1.74 moved the portals \"outside the main cities near Cotswold, Mularn, and Mag Mell\" and offered scrolls \"to the old portal locations near Adribard's Retreat, Nalliten, and Connla\" (Mythic's 1.74 release notes, February 2005); upstream's row has its source at the 1.74 spot by Mularn, where upstream 0.35 added portal art and a walk-on pad. The client's own line there sends zone point 165 (dat103 ZONEJUMP row 3: loc 50532,33020 to 50685,33111, Z 4700 to 4850), so only the source moves, where bots, /travel and /stables go to cross; the target in Aegir's Landing stays, and zone point 166 already leads back there. Our choice: X,Y the line's middle (loc 50608,33066), Z the ground under the Aegir teleporter's arch on the server's navmesh (UT_SiPortalPlatformProbe, 2026-10-22)."
+  },
+  {"name": "Hibernia Shrouded Isles portal", "table": "ZonePoint", "id": 167, "group": "the Shrouded Isles portals' 1.65 spots",
+   "expect": {"SourceRegion": 200, "SourceX": 348198, "SourceY": 492819, "SourceZ": 5240},
+   "set": {"SourceX": 309863, "SourceY": 644828, "SourceZ": 4881},
+   "why": "The Shrouded Isles portal stood in Shannon Estuary across the lake from Connla until patch 1.74 moved the portals \"outside the main cities near Cotswold, Mularn, and Mag Mell\" and offered scrolls \"to the old portal locations near Adribard's Retreat, Nalliten, and Connla\" (Mythic's 1.74 release notes, February 2005); upstream's row has its source at the 1.74 spot by Mag Mell, where upstream 0.35 added portal art and a walk-on pad. The client's own line there sends zone point 167 (csv202 ZONEJUMP row 1: loc 23103,30483 to 23183,30374, Z 4880 to 5041), so only the source moves, where bots, /travel and /stables go to cross; the target in Domnann stays, and zone point 168 already leads back there. Our choice: X,Y the line's middle (loc 23143,30428), Z the portal platform's floor on the server's navmesh (UT_SiPortalPlatformProbe, 2026-10-22)."
   }
  ]
 }

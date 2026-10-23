@@ -380,8 +380,9 @@ class DataFileTests(unittest.TestCase):
 
 AGISTHIL = "fe76247d-ab9e-5a21-b66a-f629e577c87b"
 FRUND = "3ce2271f-b9f6-4504-b55a-250da35504ba"
-# The reward decisions made of entries that depend on each other (the 0.37 sync; test_quest_rewards finds them): a
-# carried-only copy made the reward, or priced, and the quest's other copy dropped. Each applies whole or not at all.
+# The decisions made of entries that depend on each other, each applied whole or not at all: the reward decisions (the
+# 0.37 sync; test_quest_rewards finds them: a carried-only copy made the reward, or priced, and the quest's other copy
+# dropped), and the three realms' Shrouded Isles portals moved together to their 1.65 spots (test_si_portals).
 GROUPS = {
     "Zombie Problem's stone": ["Cloudy Green Stone (ItemTemplate cq_alb_cloudy_green_stone)",
                                "Cloudy Green Stone (ItemTemplate cq_cloudy_green_stone)",
@@ -396,6 +397,9 @@ GROUPS = {
                                           "Herbalist's Hauberk of Ivy (ItemTemplate cq_herbalist_s_hauberk_of_ivy)"],
     "Hunt for Slith's tail": ["Hunt for Slith (DataQuest 20021)", "Slith's Tail (ItemTemplate cq_slith_s_tail)",
                               "Slith's Tail (the reward) (ItemTemplate sliths_tail)"],
+    "the Shrouded Isles portals' 1.65 spots": ["Albion Shrouded Isles portal (ZonePoint 153)",
+                                               "Midgard Shrouded Isles portal (ZonePoint 165)",
+                                               "Hibernia Shrouded Isles portal (ZonePoint 167)"],
 }
 
 
@@ -433,7 +437,7 @@ class RealFileTests(unittest.TestCase):
         self.assertNotIn("left as they are", lines[0])
         self.assertNotIn("group", lines[0])
 
-    def test_the_groups_are_the_reward_decisions_of_several_entries(self):
+    def test_the_groups_are_the_decisions_of_several_entries(self):
         self.assertEqual(groups(self.data), GROUPS)
 
     def test_every_row_holds_the_files_values(self):

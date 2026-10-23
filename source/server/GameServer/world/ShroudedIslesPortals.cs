@@ -29,18 +29,14 @@ namespace DOL.GS
         public static readonly ushort[] EntranceIds = [153, 165, 167];
         public const long ReuseMilliseconds = 5_000;
 
-        /// <summary>
-        /// The walkable floor at each portal effect, measured on the navmesh built from this
-        /// client (UT_SiPortalPlatformProbe, 2026-10-05). The stored zone point heights (2811,
-        /// 4882, 5240) came from a different town layout and are not where the platform is.
-        /// Players and bots use the portal by standing on its platform, like on the SI side.
-        /// </summary>
-        public static readonly Dictionary<ushort, Vector3> Pads = new()
-        {
-            [153] = new(564976, 509200, 2694), // Cotswold: low pad, like the Isle of Glass one
-            [165] = new(808830, 725039, 4815), // Mularn: the platform floor under the arch (5141 is the arch top)
-            [167] = new(348198, 492819, 5290), // Mag Mell: low pad, like the Domnann one
-        };
+        // HearthDAoC: no walk-on pads. The Shrouded Isles portals are the client's own 1.65 portals on the Avalon
+        // Marsh pier, in Gotar and in Shannon Estuary, whose jump lines send these same zone points, and
+        // deploy/bin/mob_fixes.json moves the zone points' source spots there (2026-10-22). Upstream's pads were at
+        // the 1.74 town spots, on the navmesh floor UT_SiPortalPlatformProbe measured:
+        // [153] = (564976, 509200, 2694) Cotswold, [165] = (808830, 725039, 4815) Mularn,
+        // [167] = (348198, 492819, 5290) Mag Mell. With none, OnServerStarted adds no area and bots cross at the
+        // zone point's source, as at every other zone point.
+        public static readonly Dictionary<ushort, Vector3> Pads = new();
         public const int PadRadius = 96;
         public const int PadHeightTolerance = 60;
 

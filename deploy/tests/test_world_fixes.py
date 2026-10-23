@@ -316,12 +316,12 @@ class FixesTests(unittest.TestCase):
             "decayed zombie, Mulgrut Maggot's second decayed zombie, Mulgrut Maggot's putrid zombie; paths added: "
             "Mulgrut Maggot's walk (12 points); archived in fork_removed_mobs: the generated Bline (1), the standing "
             "Martley (1)",
-            "Mob fixes: 123 corrected: Agisthil (Mob fe76247d-ab9e-5a21-b66a-f629e577c87b), Agisthil (NpcTemplate 12070), "
+            "Mob fixes: 126 corrected: Agisthil (Mob fe76247d-ab9e-5a21-b66a-f629e577c87b), Agisthil (NpcTemplate 12070), "
             "Frund (NpcTemplate 12165), Frund (Mob 3ce2271f-b9f6-4504-b55a-250da35504ba), "
             "Cloudy Green Stone (ItemTemplate cq_alb_cloudy_green_stone), "
             "Cloudy Green Stone (ItemTemplate cq_cloudy_green_stone), Flint Knife (ItemTemplate cq_flint_knife), "
             "Flinthead Club (ItemTemplate cq_flinthead_club), Flint Dirk (ItemTemplate cq_flint_dirk), "
-            "Lady Leana (DataQuest 20022) and 113 more",
+            "Lady Leana (DataQuest 20022) and 116 more",
             "Route fixes: 138 bridge crossings of 59 horse routes given points on the deck: 12 on the Magical "
             "Bridge's north arch (Black Mtns. South), 12 on the Magical Bridge's south arch (Black Mtns. South), 26 "
             "on PKB (the Prydwen Keep bridge in Camelot Hills), 4 on the Cotswold bridgehouse (Camelot Hills), 4 on "

@@ -223,8 +223,10 @@ Mulgrut", two stones per hog tail, four flint weapons per chert) hand it once, a
 from each class's own trainer, not the Cabalist trainer Magus Agyfen; the rest of the Guild of Shadows epic as the
 period had it: Sir Dillus in the renegade tower, Delfina a level-45 Tylwyth Teg huntress with two rangers by her fire,
 the isolationist courier in his camp, period levels, Master Eadig for the Infiltrator's chain, Magus Agyfen for the
-Cabalist's 40, and the item icons; and Mulgrut Maggot back in the Camelot Hills cemetery, attacking on sight
-(`deploy/bin/mob_fixes.json`; each entry says why, with its source). After each start, `./hdc fixes` shows `Mob fixes: N corrected: ...` when rows were
+Cabalist's 40, and the item icons; Mulgrut Maggot back in the Camelot Hills cemetery, attacking on sight; and the
+three Shrouded Isles entrances (zone points 153, 165 and 167) crossed at their 1.65 portals on the Avalon Marsh pier, in
+Gotar and in Shannon Estuary, where bots, `/travel` and `/stables` now go, not at the town spots in Cotswold, Mularn
+and Mag Mell (`deploy/bin/mob_fixes.json`; each entry says why, with its source). After each start, `./hdc fixes` shows `Mob fixes: N corrected: ...` when rows were
 changed, and nothing when they are up to date. There is no marker: a row (a `Mob` row, the `NpcTemplate` rows of
 a template, an `ItemTemplate` row, a `DataQuest` row or the `ZonePoint` rows of an Id) changes only while it still holds every value upstream shipped, so a monster you changed yourself is
 kept; kept rows are named at every start (`M left as they are (they hold neither upstream's values nor this
@@ -232,7 +234,8 @@ file's): Frund (Mob 3ce2...)`). The entries that together decide one quest's rew
 made the reward and the quest's second copy dropped) form a group, which changes only whole: if one of its rows
 holds neither value, none of them changes, so a quest never hands two real rewards, or none, and the start log
 names the group at every start (`1 group left as it is (...): Strange Bedfellows' reward (Perfect Life Stone
-(ItemTemplate cq_perfect_life_stone))`). If it fails (for example, a column the file names is not in the table), the start
+(ItemTemplate cq_perfect_life_stone))`). The three Shrouded Isles entrances are one group too: if you moved one
+yourself, none of them moves. If it fails (for example, a column the file names is not in the table), the start
 log says `Mob fixes: not applied (...)`, the rows keep the values they have, and it tries again at the next
 start.
 

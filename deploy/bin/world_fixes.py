@@ -36,11 +36,12 @@
    adds NPCs the period had (Lieutenant Cian, made like Lieutenant Brude; Mulgrut Maggot's escort), archives rows it
    didn't (the generated Bline, the standing Martley) into fork_removed_mobs, and adds the walks the period gave quest
    monsters (paths: Mulgrut Maggot's, between the Camelot Hills cemetery and the tall stone).
-9. Period corrections to monsters, items and quests (levels, spots, prices, rewards; level 11's thieves Frund and
-   Agisthil first, then the ten classic quests that handed their reward twice, then the Guild of Shadows epic's
-   givers, monsters and item icons): mob_fixes.py, from mob_fixes.json, after the camps (it moves rows of
-   them), under its own savepoint like the steps before it. No marker: at every start it changes a row only while it
-   still holds the values upstream shipped, and names the rows that hold neither those nor the file's.
+9. Period corrections to monsters, items, quests and zone points (levels, spots, prices, rewards; level 11's thieves
+   Frund and Agisthil first, then the ten classic quests that handed their reward twice, then the Guild of Shadows
+   epic's givers, monsters and item icons, then the three Shrouded Isles entrances crossed at their 1.65 portals on the
+   Avalon Marsh pier, in Gotar and in Shannon Estuary): mob_fixes.py, from mob_fixes.json, after the camps (it moves
+   rows of them), under its own savepoint like the steps before it. No marker: at every start it changes a row only
+   while it still holds the values upstream shipped, and names the rows that hold neither those nor the file's.
 10. Points along the bridge decks of the horse routes (owner 2026-10-13: horses swam under the Magical Bridge arches
    north of Camelot and under PKB, where a route crosses on one bank-to-bank segment): route_fixes.py, from
    route_fixes.json, under its own savepoint like the steps before it. No marker: at every start it adds a crossing's
