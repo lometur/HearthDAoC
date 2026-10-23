@@ -207,7 +207,14 @@ remove with `/mob remove` stay removed. The same file adds Lieutenant Cian besid
 Fortress's north wall and archives two rows the period didn't have (the generated "Bline" beside the merchant Bline
 Tengit, and the standing Martley, who now appears at the neophytes' camp). Four of these camps are linked: attack
 Delfina, Sir Dillus, the isolationist courier or the Savant and their companions join in (`Links` in
-`hearthdaoc-quests.json`; remove a group there to switch it off).
+`hearthdaoc-quests.json`; remove a group there to switch it off). It also gives level 5 "Cleric Mulgrut"'s Mulgrut
+Maggot his escort (two decayed zombies and a putrid zombie that follow him and fight with him: `Fellows` in
+`hearthdaoc-quests.json`) and his walk (the path `HDC_Mulgrut_CemeteryToMenhir`: around the Camelot Hills cemetery,
+out to the tall stone on the hill north-east and back). The first start after that update adds `added: ..., Mulgrut
+Maggot's first decayed zombie, Mulgrut Maggot's second decayed zombie, Mulgrut Maggot's putrid zombie; paths added:
+Mulgrut Maggot's walk (12 points)` to the line. A walk whose PathID is taken, or a walker already on another path, is
+named there (`not added: ...`, `left on another path: ...`). To stop his walk, target him and type `/mob path` with
+no name (it clears his PathID); he then roams up to 500 around his spawn.
 
 **Mob fixes.** Period corrections to upstream's monsters, items and quests, from the quest archives: level 11's thieves
 Frund and Agisthil are level 10, Frund stands at the red dwarf camp beside Agisthil, "Zombie Problem"'s Cloudy Green
@@ -216,8 +223,8 @@ Mulgrut", two stones per hog tail, four flint weapons per chert) hand it once, a
 from each class's own trainer, not the Cabalist trainer Magus Agyfen; the rest of the Guild of Shadows epic as the
 period had it: Sir Dillus in the renegade tower, Delfina a level-45 Tylwyth Teg huntress with two rangers by her fire,
 the isolationist courier in his camp, period levels, Master Eadig for the Infiltrator's chain, Magus Agyfen for the
-Cabalist's 40, and the item icons (`deploy/bin/mob_fixes.json`; each
-entry says why, with its source). After each start, `./hdc fixes` shows `Mob fixes: N corrected: ...` when rows were
+Cabalist's 40, and the item icons; and Mulgrut Maggot back in the Camelot Hills cemetery, attacking on sight
+(`deploy/bin/mob_fixes.json`; each entry says why, with its source). After each start, `./hdc fixes` shows `Mob fixes: N corrected: ...` when rows were
 changed, and nothing when they are up to date. There is no marker: a row (a `Mob` row, the `NpcTemplate` rows of
 a template, an `ItemTemplate` row or a `DataQuest` row) changes only while it still holds every value upstream shipped, so a monster you changed yourself is
 kept; kept rows are named at every start (`M left as they are (they hold neither upstream's values nor this

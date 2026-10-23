@@ -312,14 +312,16 @@ class FixesTests(unittest.TestCase):
             "17 restored; Shadows_50: 0 finished carried, 0 removed, 0 epic vests recharged",
             "Quest dialogue: 142 quests rewritten",
             "Quest camps: copied back from upstream's archive: Delfina's camp (22), the isolationist camp (39), "
-            "the Ellyll Seer's village (30), Lieutenant Grimarth (1); added: Lieutenant Cian; archived in "
-            "fork_removed_mobs: the generated Bline (1), the standing Martley (1)",
-            "Mob fixes: 121 corrected: Agisthil (Mob fe76247d-ab9e-5a21-b66a-f629e577c87b), Agisthil (NpcTemplate 12070), "
+            "the Ellyll Seer's village (30), Lieutenant Grimarth (1); added: Lieutenant Cian, Mulgrut Maggot's first "
+            "decayed zombie, Mulgrut Maggot's second decayed zombie, Mulgrut Maggot's putrid zombie; paths added: "
+            "Mulgrut Maggot's walk (12 points); archived in fork_removed_mobs: the generated Bline (1), the standing "
+            "Martley (1)",
+            "Mob fixes: 123 corrected: Agisthil (Mob fe76247d-ab9e-5a21-b66a-f629e577c87b), Agisthil (NpcTemplate 12070), "
             "Frund (NpcTemplate 12165), Frund (Mob 3ce2271f-b9f6-4504-b55a-250da35504ba), "
             "Cloudy Green Stone (ItemTemplate cq_alb_cloudy_green_stone), "
             "Cloudy Green Stone (ItemTemplate cq_cloudy_green_stone), Flint Knife (ItemTemplate cq_flint_knife), "
             "Flinthead Club (ItemTemplate cq_flinthead_club), Flint Dirk (ItemTemplate cq_flint_dirk), "
-            "Lady Leana (DataQuest 20022) and 111 more",
+            "Lady Leana (DataQuest 20022) and 113 more",
             "Route fixes: 138 bridge crossings of 59 horse routes given points on the deck: 12 on the Magical "
             "Bridge's north arch (Black Mtns. South), 12 on the Magical Bridge's south arch (Black Mtns. South), 26 "
             "on PKB (the Prydwen Keep bridge in Camelot Hills), 4 on the Cotswold bridgehouse (Camelot Hills), 4 on "
@@ -345,6 +347,8 @@ class FixesTests(unittest.TestCase):
                          [("classic-battlegrounds-v2",), ("epic-chains-v1",), ("quest-camp:delfina",),
                           ("quest-camp:ellyll-seer",), ("quest-camp:generated-bline",), ("quest-camp:grimarth",),
                           ("quest-camp:isolationists",), ("quest-camp:lieutenant-cian",),
+                          ("quest-camp:mulgrut-escort-1",), ("quest-camp:mulgrut-escort-2",),
+                          ("quest-camp:mulgrut-escort-3",), ("quest-camp:mulgrut-walk",),
                           ("quest-camp:standing-martley",)])
         self.assertEqual(self.q("SELECT Value FROM ServerProperty WHERE `Key`='disabled_classes'"), [("33;34;39;58-62",)])
         self.assertEqual(self.q("SELECT RaceID FROM StartupLocation WHERE ClassID=20 ORDER BY RaceID"), [(1,), (4,), (13,)])

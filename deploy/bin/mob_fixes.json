@@ -108,6 +108,22 @@
    "why": "Allakhazam (archived 2004-11-01): \"You receive a Belt of Animation from Mulgrut Maggot!\"; upstream's generator made two templates of the item from the guide's \"You receive ...\" line and put both in the final reward, which DataQuest hands in full, so the quest gave two (owner 2026-10-11: two Belts of Animation from Cleric Mulgrut). Kept: the realm template, which delves \"Classic quest reward (Cleric Mulgrut)\"; the plain one delves \"Classic quest reward ((quest item))\"."
   },
   {
+   "name": "Mulgrut Maggot",
+   "table": "Mob",
+   "id": "d5913594-869f-5d90-bcea-fce428f63926",
+   "expect": {"Region": 1, "X": 570194, "Y": 524831, "Z": 2619, "Heading": 947, "RoamingRange": 0},
+   "set": {"X": 565958, "Y": 528471, "Z": 2168, "Heading": 3043, "RoamingRange": 500},
+   "why": "Level 5 \"Cleric Mulgrut\": he spawned in the Camelot Hills graveyard west of Prydwen Keep (Allakhazam: the cemetery, \"18k, 45.5k\", 2003-12-18; bdodaoc 17694, 45711 in 2004 and 17203, 45711 in 2005; \"He commonly spawns inside the graveyard\", Allakhazam cmob 1273, 2001-10-30) and \"wanders oup to the top of the hill and back\" (2002-03-12): deploy/bin/quest_camps.json gives him that walk (mulgrut-walk) and his escort. This is the spot of upstream's own archived Mulgrut (38199e50, loc 17094, 45143); upstream's row stood still on the wooded hill 5.6k north-east. RoamingRange 500 (our choice) applies only if his walk is ever removed: the server never roams an NPC that has a path. deploy/hearthdaoc-quests.json moves the quest's map marker with him."
+  },
+  {
+   "name": "Mulgrut Maggot",
+   "table": "NpcTemplate",
+   "id": 12373,
+   "expect": {"AggroLevel": 0, "AggroRange": 0},
+   "set": {"AggroLevel": 51, "AggroRange": 500},
+   "why": "Level 5 \"Cleric Mulgrut\": \"he will attack you on sight, he will not wait for you to strike first\" (2002-02-26), and his company is \"high-aggro and will follow mulgrut around\" (Allakhazam cmob 1273, 2001-10-30). Upstream's template, his row's only, never attacks (0/0). Our choice of values: the large skeletons' around the tall stone (template 12368: 51/500), of his faction (63, Undead), so players and gamebots he doesn't see as gray are attacked."
+  },
+  {
    "name": "Search for Sil",
    "table": "DataQuest",
    "id": 20208,
