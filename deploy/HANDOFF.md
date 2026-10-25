@@ -213,8 +213,18 @@ Maggot his escort (two decayed zombies and a putrid zombie that follow him and f
 out to the tall stone on the hill north-east and back). The first start after that update adds `added: ..., Mulgrut
 Maggot's first decayed zombie, Mulgrut Maggot's second decayed zombie, Mulgrut Maggot's putrid zombie; paths added:
 Mulgrut Maggot's walk (12 points)` to the line. A walk whose PathID is taken, or a walker already on another path, is
-named there (`not added: ...`, `left on another path: ...`). To stop his walk, target him and type `/mob path` with
-no name (it clears his PathID); he then roams up to 500 around his spawn.
+named there (`not added: ...`, `left on another path: ...`). To stop his walk, clear his PathID with the server
+stopped; he then roams up to 500 around his spawn in the cemetery, the walk is not put back, and the start log stays
+quiet. Not with `/mob path` and no name: that also saves where he stands and the way he faces as his spawn, so done
+while he walks it moves his spawn for good, and every start then names him as left as he is. With your
+`HEARTHDAOC_TAG`:
+```bash
+./hdc stop
+docker run --rm --network none --user 1000:1000 -v hearthdaoc-data:/data --entrypoint sqlite3 \
+  ghcr.io/lometur/hearthdaoc:<HEARTHDAOC_TAG> /data/world/opendaoc.sqlite3.db \
+  "UPDATE Mob SET PathID='' WHERE Mob_ID='d5913594-869f-5d90-bcea-fce428f63926'"
+./hdc up
+```
 
 **Mob fixes.** Period corrections to upstream's monsters, items and quests, from the quest archives: level 11's thieves
 Frund and Agisthil are level 10, Frund stands at the red dwarf camp beside Agisthil, "Zombie Problem"'s Cloudy Green

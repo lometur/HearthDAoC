@@ -10,6 +10,7 @@ classic-quests.json (HDC_CLASSIC_QUESTS) merged with the fork's file, as Classic
 """
 import math
 import os
+import re
 import shutil
 import sqlite3
 import sys
@@ -38,6 +39,9 @@ ESCORT = {  # Mob_ID: (name, level, size, speed, melee damage type, its template
     "ccc4a788-1356-5a60-86ac-ff5c1d9709e4": ("putrid zombie", 4, 45, 180, 2, (None, None)),
 }
 DAILY_QUEST = 20207
+HANDOFF = os.path.join(DEPLOY, "HANDOFF.md")
+# HANDOFF.md's way to stop his walk, with the server stopped (StopTheWalkDocsTests).
+STOP_THE_WALK = f"UPDATE Mob SET PathID='' WHERE Mob_ID='{MULGRUT}'"
 
 
 def distance(a, b):
@@ -181,6 +185,54 @@ class MulgrutTests(unittest.TestCase):
         again = wf.apply(self.db)
         self.assertFalse([line for line in again if line.startswith("Quest camps:")], again)
         self.assertFalse([line for line in again if "Mulgrut" in line], again)
+
+    def next_start(self, sql, *params):
+        """The start log after `sql` on a copy of this world (the server stopped), and his row then."""
+        with tempfile.TemporaryDirectory() as tmp:
+            db = os.path.join(tmp, "world.db")
+            shutil.copyfile(self.db, db)
+            conn = sqlite3.connect(db)
+            with conn:
+                conn.execute(sql, params)
+            conn.close()
+            lines = wf.apply(db)
+            conn = sqlite3.connect(db)
+            try:
+                row = conn.execute("SELECT Region, X, Y, Z, Heading, RoamingRange, COALESCE(PathID, '') FROM Mob "
+                                   "WHERE Mob_ID=?", (MULGRUT,)).fetchone()
+            finally:
+                conn.close()
+        return lines, row
+
+    def test_clearing_his_path_id_stops_his_walk_and_keeps_the_start_quiet(self):
+        # The HANDOFF's way: his row keeps the file's values, and the walk is not put back (the camp's marker).
+        lines, row = self.next_start(STOP_THE_WALK)
+        self.assertFalse([line for line in lines if "Mulgrut" in line], lines)
+        self.assertEqual(row, (*SPAWN, 3043, 500, ""))
+
+    def test_mob_path_while_he_walks_would_move_his_spawn_for_good(self):
+        # Why not `/mob path` with no name: it saves his whole row (GameNPC.SaveIntoDatabase), with where he stands
+        # and the way he faces, so done by the stone it makes that his spawn, which mob_fixes then keeps as the
+        # owner's and names at every start.
+        lines, row = self.next_start("UPDATE Mob SET PathID='', X=573930, Y=519750, Z=2571, Heading=1200 "
+                                     "WHERE Mob_ID=?", MULGRUT)
+        self.assertEqual(row, (1, 573930, 519750, 2571, 1200, 500, ""))
+        self.assertTrue([line for line in lines if "left as they are" in line and MULGRUT in line], lines)
+
+
+class StopTheWalkDocsTests(unittest.TestCase):
+    """Where the fork tells the owner how to stop Mulgrut's walk, it clears his PathID in the world database with the
+    server stopped, not with `/mob path` and no name, which also saves his live position and heading as his spawn
+    (the review, 2026-10-25)."""
+
+    def test_the_handoff_clears_his_path_id_with_the_server_stopped(self):
+        with open(HANDOFF, encoding="utf-8-sig") as f:
+            told = [p for p in re.split(r"\n\s*\n", f.read()) if "stop his walk" in p.lower()]
+        self.assertEqual(len(told), 1, told)
+        self.assertIn(STOP_THE_WALK, told[0])
+        self.assertLess(told[0].index("./hdc stop"), told[0].index(STOP_THE_WALK))
+        self.assertLess(told[0].index(STOP_THE_WALK), told[0].index("./hdc up"))
+        self.assertNotRegex(told[0], r"(?i)type `/mob path`")
 
 
 if __name__ == "__main__":
