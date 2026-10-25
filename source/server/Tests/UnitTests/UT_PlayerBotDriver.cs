@@ -367,6 +367,61 @@ public sealed class UT_PlayerBotDriver
         Assert.That(state.Activity, Is.EqualTo(PlayerBotActivity.Waiting));
     }
 
+    // --- the level-matched run's casting (levelmatch/DESIGN.md 2.7) ---
+
+    private static Spell Damage(string type, int level, double damage) =>
+        new(new DbSpell { SpellID = 900_000 + level * 1_000 + (int)damage, Name = $"{type}{level}", Type = type,
+            Target = "Enemy", Damage = damage, Range = 1500, CastTime = 2.5 }, level);   // as UT_ParryBuffEffect.cs:15
+
+    [Test]
+    public void A_direct_hit_beats_damage_over_time_then_the_level_then_the_damage()
+    {
+        Spell dot20 = Damage("DamageOverTime", 20, 40), dd15 = Damage("DirectDamage", 15, 60),
+              dd20 = Damage("DirectDamage", 20, 70), bolt20 = Damage("Bolt", 20, 90);
+        Assert.That((PlayerBotDriver.Better(dd15, dot20), PlayerBotDriver.Better(dot20, dd15)), Is.EqualTo((true, false)));
+        Assert.That((PlayerBotDriver.Better(dd20, dd15), PlayerBotDriver.Better(bolt20, dd20), PlayerBotDriver.Better(dd20, bolt20)),
+            Is.EqualTo((true, true, false)));
+        Spell flatDot = Damage("DamageOverTimeNoVariance", 25, 60);
+        Assert.That((PlayerBotDriver.Better(dd15, flatDot), PlayerBotDriver.Better(flatDot, dot20)), Is.EqualTo((true, true)));
+    }
+
+    [Test]
+    public void The_cast_watch_allows_three_fruitless_requests_then_swings()
+    {
+        (int a, byte m, bool s) = PlayerBotDriver.WatchCast(false, 0, 0, 100);
+        Assert.That((a, m, s), Is.EqualTo((1, (byte)100, false)));
+        (a, m, s) = PlayerBotDriver.WatchCast(true, a, m, 100);
+        (a, m, s) = PlayerBotDriver.WatchCast(true, a, m, 100);
+        Assert.That((a, s), Is.EqualTo((3, false)));
+        Assert.That(PlayerBotDriver.WatchCast(true, a, m, 100), Is.EqualTo((4, (byte)100, true)));
+        Assert.That(PlayerBotDriver.WatchCast(true, 3, 100, 80), Is.EqualTo((1, (byte)80, false)));   // it hurt: a new run
+        Assert.That(PlayerBotDriver.WatchCast(false, 3, 100, 100), Is.EqualTo((1, (byte)100, false))); // a new target
+    }
+
+    // A player at a level with its skill caches set as GetAllUsableSkills / GetAllUsableListSpells hold them
+    // (GamePlayer.cs:3394-3447; non-empty, so neither rebuilds).
+    private static GamePlayer Caster(int level, List<(Skill, Skill)> usable, List<(SpellLine, List<Skill>)> listSpells)
+    {
+        GamePlayer player = Player(null);
+        typeof(GamePlayer).GetField("m_dbCharacter", Hidden)!.SetValue(player, new DbCoreCharacter { Level = level });
+        typeof(GamePlayer).GetField("_usableSkills", Hidden)!.SetValue(player, usable);
+        typeof(GamePlayer).GetField("_usableListSpells", Hidden)!.SetValue(player, listSpells);
+        return player;
+    }
+
+    [Test]
+    public void A_hybrids_damage_spell_comes_from_its_usable_skills()          // REVIEW-FIXES 19: Paladin, Thane
+    {
+        var storm = new SpellLine("Stormcalling", "Stormcalling", Specs.Stormcalling, false);
+        Spell dd20 = Damage("DirectDamage", 20, 70), dd30 = Damage("DirectDamage", 30, 90), dot25 = Damage("DamageOverTime", 25, 60);
+        GamePlayer thane = Caster(28, [(dd20, storm), (dd30, storm), (dot25, storm), (storm, null)], [(storm, [])]);
+        Assert.That(PlayerBotDriver.BestDamageSpellName(thane), Is.EqualTo("DirectDamage20:20"));   // 30 is above its level
+        var fire = new SpellLine("Fire", "Fire", Specs.Fire_Magic, true);
+        GamePlayer wizard = Caster(40, [(storm, null)], [(fire, [dot25, Damage("Bolt", 35, 120)])]);
+        Assert.That(PlayerBotDriver.BestDamageSpellName(wizard), Is.EqualTo("Bolt35:35"));
+        Assert.That(PlayerBotDriver.BestDamageSpellName(Caster(40, [(storm, null)], [(fire, [])])), Is.EqualTo("-"));
+    }
+
     [Test]
     public void ReportFormat()
     {

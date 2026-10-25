@@ -66,6 +66,11 @@ public sealed class PlayerBotState
     public int BlockedSinceLine;
     public long NextWakeScanTick;                                // PlayerBotWake's 3,600-unit scan (the #137 lever)
     public bool HoldAnchor;                                      // a spot bot (PLAYER_BOT_SPOTS): never relocates
+    public long SpellBlockedUntil;                               // the cast watch (levelmatch): swing, not cast, until then
+    public GameLiving CastTarget;                                //   the target of the current run of requests,
+    public int CastAttempts;                                     //   how many, and its health at the first
+    public byte CastHealthMark;
+    public int CastFailures;                                     // PLAYER_BOT_TALLY: watch trips since login
     public long LastExperience, UnreachableUntil, NextTargetRefreshTick, NextLootTick, NextLosTick, NextStyleTick,
         NextCombatChoiceTick, NextNeighbourCountTick, NextProgressCheckTick, LastProgressTick, ProgressExperience, ProgressMoney;
     public Vector3 ProgressPosition;
@@ -104,6 +109,8 @@ public static class PlayerBotDriver
     public const int RelocateAfterMilliseconds = 2 * 60_000; // no target reached this long: the hunting ground is outgrown
     public const int RelocateCandidates = 5;                 // corridor checks per try
     public static readonly long StuckMilliseconds = (long)AutonomousStuckWatchdog.StuckThreshold.TotalMilliseconds; // 15 min
+    public const int MaxFruitlessCasts = 3;                  // the cast watch (levelmatch/DESIGN.md 2.7)
+    public const int SpellBlockMilliseconds = 10_000;        // (inf.) a few swings, then the spell again
 
     private static readonly ConcurrentDictionary<GamePlayer, PlayerBotState> _states = new();
 
@@ -273,7 +280,7 @@ public static class PlayerBotDriver
         GameLiving target = state.Target;
         player.TargetObject = target;                         // before AttackRange: MeleeAttackRange reads TargetObject (GP:5320-5335)
         int distance = player.GetDistanceTo(target);
-        bool canCast = state.Spell != null && player.ManaPercent >= 18;               // APP:670
+        bool canCast = state.Spell != null && player.ManaPercent >= 18 && now >= state.SpellBlockedUntil;   // APP:670 + the watch
         int stop = canCast ? SpellStopDistance(player.castingComponent.CalculateSpellRange(state.Spell))
                            : MeleeStopDistance(player.attackComponent.AttackRange);
         if (distance > stop)
@@ -304,8 +311,20 @@ public static class PlayerBotDriver
             player.IsWithinRadius(target, player.castingComponent.CalculateSpellRange(state.Spell)))
         {
             player.attackComponent.StopAttack();
-            if (player.CastSpell(state.Spell, state.SpellLine))                         // APP:345-353 without the Animist policy
-                state.NextCombatChoiceTick = now + Math.Max(900, state.Spell.CastTime + 250);
+            (state.CastAttempts, state.CastHealthMark, bool stalled) =
+                WatchCast(state.CastTarget == target, state.CastAttempts, state.CastHealthMark, target.HealthPercent);
+            state.CastTarget = target;
+            if (stalled || !player.CastSpell(state.Spell, state.SpellLine))             // APP:345-353 without the Animist policy
+            {
+                // CastSpell only queues the request (CastingComponent.cs:116-144); range and sight fail later
+                // (SpellHandler.cs:681, :694, :731). A run of requests that hurt nothing: swing instead for a while.
+                state.SpellBlockedUntil = now + SpellBlockMilliseconds;
+                state.CastAttempts = 0;
+                state.CastFailures++;
+                state.Activity = PlayerBotActivity.Fighting;
+                return;                                                                 // the next think walks into melee
+            }
+            state.NextCombatChoiceTick = now + Math.Max(900, state.Spell.CastTime + 250);
             state.Activity = PlayerBotActivity.Casting;
         }
         else if (!player.IsCasting)
@@ -319,6 +338,15 @@ public static class PlayerBotDriver
                 player.attackComponent.RequestStartAttack(target);                      // AttackComponent.cs:491-496
             state.Activity = PlayerBotActivity.Fighting;
         }
+    }
+
+    /// <summary>The cast watch, one request on: (attempts, health mark, stalled). A new target, or one hurt since the
+    /// mark, starts a new run; more than MaxFruitlessCasts requests that leave it at the mark have stalled.</summary>
+    public static (int Attempts, byte Mark, bool Stalled) WatchCast(bool sameTarget, int attempts, byte mark, byte health)
+    {
+        if (!sameTarget || health < mark) (attempts, mark) = (0, health);
+        attempts++;
+        return (attempts, mark, attempts > MaxFruitlessCasts);
     }
 
     public static void Face(GamePlayer player, GameObject target)
@@ -361,6 +389,8 @@ public static class PlayerBotDriver
         state.Target = found;
         state.Engaged = false;
         state.NextLosTick = 0;
+        state.SpellBlockedUntil = 0;                                                       // a new target clears the watch
+        state.CastTarget = null;
         (state.Spell, state.SpellLine) = found == null ? (null, null) : FindDamageSpell(player);
     }
 
@@ -458,26 +488,43 @@ public static class PlayerBotDriver
     public static int MeleeStopDistance(int attackRange) => Math.Max(48, (attackRange > 0 ? attackRange : 128) - 48);
     public static int SpellStopDistance(int spellRange) => Math.Max(145, spellRange - 80);   // APP:320
 
-    // APP:667-692 without the quickbar, the Animist policy, the range filter (checked at cast time) and the mana check.
-    private static (Spell, SpellLine) FindDamageSpell(GamePlayer player)
+    // APP:667-692 without the quickbar, the Animist policy, the range filter (checked at cast time) and the mana check. A
+    // list caster's spells are in its spell lines; a hybrid's (Paladin, Thane...) are among its usable skills, each with
+    // its line (GamePlayerUtils.cs:544-560; REVIEW-FIXES 19).
+    internal static (Spell, SpellLine) FindDamageSpell(GamePlayer player)
     {
         Spell best = null;
         SpellLine bestLine = null;
-        foreach ((SpellLine line, List<Skill> skills) in player.GetAllUsableListSpells())
+        void Consider(Spell spell, SpellLine line)
         {
-            foreach (Spell spell in skills.OfType<Spell>())
-            {
-                if (!spell.IsHarmful || spell.Damage <= 0 || spell.Range <= 0 || spell.NeedInstrument || spell.Level > player.Level)
-                    continue;
-                if (best == null || spell.Level > best.Level || spell.Level == best.Level && spell.Damage > best.Damage)
-                {
-                    best = spell;
-                    bestLine = line;
-                }
-            }
+            if (!spell.IsHarmful || spell.Damage <= 0 || spell.Range <= 0 || spell.NeedInstrument || spell.Level > player.Level)
+                return;
+            if (best == null || Better(spell, best)) { best = spell; bestLine = line; }
         }
+        foreach ((SpellLine line, List<Skill> skills) in player.GetAllUsableListSpells())
+            foreach (Spell spell in skills.OfType<Spell>())
+                Consider(spell, line);
+        foreach ((Skill skill, Skill parent) in player.GetAllUsableSkills())
+            if (skill is Spell spell && parent is SpellLine line)
+                Consider(spell, line);
         return (best, bestLine);
     }
+
+    /// <summary>A direct hit over damage over time (a DoT kills slowly and, with the watch, reads as fruitless), then the
+    /// higher level, then the more damage.</summary>
+    public static bool Better(Spell candidate, Spell best)
+    {
+        bool dot = IsDamageOverTime(candidate), bestDot = IsDamageOverTime(best);
+        if (dot != bestDot) return !dot;
+        if (candidate.Level != best.Level) return candidate.Level > best.Level;
+        return candidate.Damage > best.Damage;
+    }
+
+    private static bool IsDamageOverTime(Spell spell) =>
+        spell.SpellType is eSpellType.DamageOverTime or eSpellType.DamageOverTimeNoVariance;
+
+    public static string BestDamageSpellName(GamePlayer player) =>
+        FindDamageSpell(player).Item1 is Spell s ? FormattableString.Invariant($"{s.Name.Replace(' ', '_')}:{s.Level}") : "-";
 
     // APP:694-710 without the quickbar filter.
     private static void QueueUsableStyle(GamePlayer player)
