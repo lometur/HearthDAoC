@@ -386,7 +386,7 @@ public sealed class UT_PlayerBotWake
     }
 
     [Test]
-    public void A_think_under_the_lever_wakes_the_target_and_scans_only_when_due()
+    public void A_think_under_the_lever_wakes_the_target_before_the_scan_is_due()
     {
         PlayerBotWake.Lever = true;
         Bot bot = PlayerBot();
@@ -395,6 +395,21 @@ public sealed class UT_PlayerBotWake
         PlayerBotWake.OnThink(state, bot, Now);
         Assert.That((target.Wakes, state.NextWakeScanTick, PlayerBotWake.BrainState(target)), Is.EqualTo((1, Now + 1, "waking")));
         Assert.That(PlayerBotWake.TakeWindow(60), Is.EqualTo(new PlayerBotWakeWindow(60, true, 0, 1, 0, 0, 0, 1, 0, 0)));
+    }
+
+    // The GameBot cadence, not one scan per 250 ms think. The double has no region, so the scan finds no NPC
+    // (GameObject.cs:939-940): only the bookkeeping is under test.
+    [Test]
+    public void A_due_scan_runs_once_then_waits_for_the_gamebot_cadence()
+    {
+        PlayerBotWake.Lever = true;
+        Bot bot = PlayerBot(objectId: 7);
+        PlayerBotState state = State(null, nextScan: Now);
+        PlayerBotWake.OnThink(state, bot, Now);
+        PlayerBotWake.OnThink(state, bot, Now + 250);                     // the next think
+        Assert.That((state.NextWakeScanTick, PlayerBotWake.TakeWindow(60).Scans), Is.EqualTo((Now + 1_257, 1L)));   // 1,250 + 7 % 500
+        PlayerBotWake.OnThink(state, bot, Now + 1_257);
+        Assert.That((state.NextWakeScanTick, PlayerBotWake.TakeWindow(60).Scans), Is.EqualTo((Now + 2 * 1_257, 1L)));
     }
 
     // --- the NPC talked to ---
