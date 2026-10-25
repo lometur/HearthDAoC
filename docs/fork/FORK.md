@@ -270,12 +270,17 @@ stays the same, and doesn't import `mpk.py`):
 **Why stored blocks.** The appliers must write exactly the bytes the `after` hash pins, on Linux (Python's zlib)
 and on Windows (PowerShell 5.1 on .NET Framework, whose `DeflateStream` compresses differently from zlib).
 Stored blocks are the one zlib encoding both write byte for byte alike, and every inflater reads them (the
-client too, which the owner's check after the release shows: the three home zones load). The cost is size: the
+client too, which the owner's in-game check shows: the three home zones load). The cost is size: the
 three archives grow about 3.6 times (25086 to 91119, 14670 to 53841, 26361 to 96194 bytes), which is harmless. The prototype that settled the encoding
 (`~/tmp/hearthdaoc-period/scripts/repack_proto.py` on the owner's machine, 2026-10-22, in memory on the player's
 own files) gave the after hashes the committed set pins: `41976bf7…`, `d5e7552a…`, `7406b52d…`. The appliers'
 tests (`test_appliers.py`, both appliers) check the same bytes at the 64 KiB block boundaries, and
-`test_build_si_portals.py` runs both appliers on copies of the real files.
+`test_build_si_portals.py` runs both appliers on copies of the real files. Those PowerShell runs use PowerShell 7
+(`pwsh` on .NET 8, in CI and locally); Windows PowerShell 5.1 on .NET Framework, which players run, has not run
+the archive code yet (only its syntax is checked, by `test_appliers.py`). A difference there is safe:
+`patch-client.ps1` builds every new file and checks its `after` hash before the first write, so it exits non-zero
+with nothing changed, `connect-hearthdaoc.bat` warns, and the game starts with upstream's town art. A Windows
+client's first start that prints `Patched:` for the three archives and the model shows it works.
 
 **Rebuilding them.** `client/patches/build_si_portals.py` (the generator; a change to it alone makes no release)
 reads the four client files and writes both sets: it finds the one `SI Portal Visual` line of each fixtures and
