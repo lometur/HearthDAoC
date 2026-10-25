@@ -311,6 +311,7 @@ public sealed class UT_PlayerBotWake
         Bot bot = PlayerBot();
         Mob target = Npc(), clicked = Npc(), first = Npc(), second = Npc();
         bot.TargetObject = clicked;
+        clicked.TargetObject = bot;                                     // not the driver's, but it fights the bot
         var into = new List<(GameNPC, PlayerBotWakeKind)>();
         PlayerBotWake.CollectAlways(bot, target, [first, bot, second], into);
         Assert.That(into, Is.EqualTo(new List<(GameNPC, PlayerBotWakeKind)>
@@ -332,12 +333,28 @@ public sealed class UT_PlayerBotWake
             { (target, PlayerBotWakeKind.Target), (other, PlayerBotWakeKind.Attacker) }));
     }
 
+    // The driver lets a target go (unreachable, no longer fair game, a task takes over) without clearing the client
+    // target, and a killed monster respawns as the same object: that NPC is no longer the bot's business.
+    [Test]
+    public void Every_think_leaves_a_client_target_the_driver_let_go()
+    {
+        Bot bot = PlayerBot();
+        Mob dropped = Npc();
+        bot.TargetObject = dropped;
+        var into = new List<(GameNPC, PlayerBotWakeKind)>();
+        PlayerBotWake.CollectAlways(bot, null, null, into);
+        Assert.That(into, Is.Empty);
+        dropped.TargetObject = bot;                                     // until it comes for the bot
+        PlayerBotWake.CollectAlways(bot, null, null, into);
+        Assert.That(into, Is.EqualTo(new List<(GameNPC, PlayerBotWakeKind)> { (dropped, PlayerBotWakeKind.Target) }));
+    }
+
     [TestCase("dead")] [TestCase("deleted")] [TestCase("another region")] [TestCase("beyond 6,000")]
     public void Every_think_skips_a_target_that_is_gone_or_out_of_sight(string why)
     {
         Bot bot = PlayerBot();
         Mob target = Npc(x: WorldMgr.VISIBILITY_DISTANCE), clicked = Npc(x: WorldMgr.VISIBILITY_DISTANCE);
-        bot.TargetObject = clicked;
+        (bot.TargetObject, clicked.TargetObject) = (clicked, bot);
         var into = new List<(GameNPC, PlayerBotWakeKind)>();
         PlayerBotWake.CollectAlways(bot, target, null, into);
         Assert.That(into, Has.Count.EqualTo(2), "at 6,000 exactly both are in sight");

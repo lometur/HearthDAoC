@@ -72,12 +72,16 @@ public static class PlayerBotWake
     }
 
     /// <summary>Woken every think: the driver's target and the client-side target while the bot could see them (same
-    /// region, within VISIBILITY_DISTANCE, as ClientService.UpdateNpcs would send them), and the attackers.</summary>
+    /// region, within VISIBILITY_DISTANCE, as ClientService.UpdateNpcs would send them), and the attackers. The
+    /// client-side target only while it is the driver's or targets the bot: the driver lets a target go without
+    /// clearing TargetObject (PlayerBotDriver Engage's unreachable branch, SettleTarget, Disengage), and a killed
+    /// monster respawns as the same object (GameNPC.RespawnTimerCallback).</summary>
     public static void CollectAlways(GamePlayer bot, GameLiving target, IEnumerable<GameLiving> attackers,
         List<(GameNPC Npc, PlayerBotWakeKind Kind)> into)
     {
         AddInSight(into, bot, target as GameNPC);
-        AddInSight(into, bot, bot.TargetObject as GameNPC);
+        if (bot.TargetObject is GameNPC clicked && (clicked == target || clicked.TargetObject == bot))
+            AddInSight(into, bot, clicked);
         if (attackers != null)
             foreach (GameLiving living in attackers)
                 Add(into, living as GameNPC, PlayerBotWakeKind.Attacker);
