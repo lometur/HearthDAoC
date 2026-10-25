@@ -22,6 +22,7 @@ old names (`odc`, `OFFLINEDAOC_*`, `offlinedaoc-*`) as written at the time.
 | Player setup, and Linux client updates at launch (see Client updates) | `client/`, `deploy/build_bundles.sh` (the bundle's `VERSION`) | none |
 | Classic character creation and splash (client patch set) | `client/patches/`, `client/windows/patch-client.*` | none: patches each player's own client files (see Client patches) |
 | Window layout for new characters (client patch set, owner's choice 2026-10-11: new characters only) | `client/patches/layout.py` (the generator), `client/patches/default-layout.json`, applied by the same launchers and appliers, tests `client/patches/tests/test_layout.py` | none: puts the owner's character Charles Martel's layout (1920x1080, no hotkeys) at the top of each player's own `default.ini`, which the client reads for a character that has no settings file yet; characters that have one keep theirs (see Client patches, The default layout) |
+| The Shrouded Isles portals in the client: no portal art at the 1.74 town spots, and the 2002 look of the Albion portal (two client patch sets, owner's choice 2026-10-22: the 1.65 spots and the original look) | `client/patches/build_si_portals.py` (the generator), `client/patches/si-portals.json`, `client/patches/si-portal-art.json`, the `mpk-text-replace` and `remove` operations and `"retired"` sets in `client/patches/patchset.py` and `client/windows/patch-client.ps1`, applied by the same launchers, tests `client/patches/tests/test_build_si_portals.py` | none: rewrites three of each player's own zone archives without upstream's six town portal rows, and moves the 2006 Albion model aside (see The Shrouded Isles portals, under Client patches); the server side is the row "The Shrouded Isles portals at their 1.65 spots" |
 | Leveling spawns (owner's choice) | `deploy/bin/spawns.py`, `hdc spawns`; the twin removal run by `deploy/bin/world_fixes.py` (every start); tests `deploy/tests/test_spawns.py` | none: restores rows upstream's setup archived in `offline_classic165_removed_mobs`. Its "creature still in the world" check compares names without case, so it brought back twins of named quest monsters: an "arawnite messenger" 170 units from level 20's "Arawnite Messenger", and quests then matched a kill's name exactly, so killing it counted for nothing (owner test 2026-10-10; quests now match names without case, see "Quest targets and givers match a spawn's name without case", but the twins stay left out as duplicates). The restore leaves out an archived row within 1000 units (X, Y) of a live monster whose name differs from its own only in case and is a quest's kill target (a stage of StepType 0 or 1, the name part of TargetName, without case); on the clean 0.35 world that is the messenger at levels 1-20 (12,873 restored), with six "cornwall hunter" near the Cornwall hunters at 1-25 (14,840), 14 at 1-50. A world an earlier restore gave twins loses them at its next start: only rows listed in `fork_restored_mobs`, removed from `Mob` and untracked as `hdc spawns undo` does, so they stay in the archive ("Restored spawns: N twins of quest targets removed ..."). On the clean 0.37b world the restore brings back 12,873 rows at levels 1-20 and 14,908 at 1-25 |
 | Duplicate townspeople in the world data (every start) | `deploy/bin/world_fixes.py` (`remove_duplicate_townspeople`, `DUPLICATE_ROWS`), tests `deploy/tests/test_world_fixes.py` | none: removes the plain `GameNPC` copy of Ley Manton and Tria Ellowis standing exactly on their `GameMerchant`, archived in `fork_removed_mobs` (FixId `duplicate-townspeople`); Albion's two town merchants showed twice in game (owner test 2026-10-09). The same for the second Master Graent in Prydwen Keep (#101, owner 2026-10-11): upstream has the fighter trainer twice, 770 units apart; the row among the merchants just outside (`1e0dc1a7-…`, no NPC template) goes, archived the same way, only while it holds upstream's values (name, class, spot) and the one in the keep's middle structure (`deecddf1-…`, by the healer and the town crier) is in the world, so that one is never removed. A world the earlier fix already cleaned prints `Duplicate townspeople removed, archived in fork_removed_mobs: Master Graent` at its next start. Until the sync to upstream 0.37b it also removed the realm-0 level-49 "commander" (`4609f55b-…`, PackageID `BestiaryG9`) on the Albion Commander's spot by Camelot's north gate (owner 2026-10-13: it attacked and killed them); upstream's 0.36 world no longer has him, nor the six realm-0 "innocent" in Dodens Gruva beside Midgard's own, so the fix names him no more. A scan of the world finds no realm-0 row within 3,000 units of a realm NPC of its name (`test_no_monster_stands_by_a_realm_npc_of_its_name`) |
 | Classic battlegrounds 15-35, world data (once per world, marker `classic-battlegrounds-v2`) | `deploy/bin/battlegrounds.py` (run by `deploy/bin/world_fixes.py`) | none: on the 0.35 world it levels all four central keeps (upstream's Dun Abermenai and Dun Murdaigean included) and their gates, adds the portal keep guards, and six wall casters and a hastener in each of upstream's two keeps, and removes the Atlas leftovers ([spec](specs/2026-10-07-classic-battlegrounds-design.md), section 7). Upstream's 0.36 world ships Dun Abermenai's and Dun Murdaigean's gates at Health 2545 with State 0, which the server loads closed but damaged (67% and 44%); step 3 puts those gates at their full health, 3800 and 5800, with State 1 (sync to 0.37b, 2026-10-18) |
@@ -68,31 +69,36 @@ listed here, so upstream syncs can account for it:
 The patch set `client/patches/classic-creation.json` gives the OfflineDAoC 0.35 classic client a classic
 character creation screen and the HearthDAoC loading splash (sub-project 2, see
 [its spec](specs/2026-10-06-classic-character-creation-design.md)). The patch set
-`client/patches/default-layout.json` gives new characters a window layout (The default layout, below). Both hold
-only SHA-256 hashes, byte and text edits and our own code, never an EA file. The launchers apply each at every
-launch, just before the game starts, so files that something put back (a repair, OfflineDAoC's own launcher, an
-update) are patched again:
+`client/patches/default-layout.json` gives new characters a window layout (The default layout, below). The
+patch sets `client/patches/si-portals.json` and `client/patches/si-portal-art.json` take upstream's Shrouded Isles
+portal art out of the 1.74 town spots and give the Albion portal its 2002 look (The Shrouded Isles portals,
+below). All hold only SHA-256 hashes, byte and text edits and our own code, never an EA file. The launchers apply
+each at every launch, just before the game starts, in that order, so files that something put back (a repair,
+OfflineDAoC's own launcher, an update) are patched again:
 
 - Linux: `setup.sh` installs the bundle's `patches/` (`apply_patches.py`, `patchset.py`, `classic-creation.json`,
-  `default-layout.json`, `splash.mpk`) as `<dest>/patches`, a fresh copy on every run, and applies each set from
-  there. `play.sh` runs `<dest>/patches/apply_patches.py` once for each set before every launch.
+  `default-layout.json`, `si-portals.json`, `si-portal-art.json`, `splash.mpk`) as `<dest>/patches`, a fresh copy
+  on every run, and applies each set from there. `play.sh` runs `<dest>/patches/apply_patches.py` once for each set
+  before every launch.
 - Windows: `connect-hearthdaoc.bat` runs `patch-client.ps1` (`client/windows/`, same rules as the Linux
   applier) from its own folder once for each set before every start of `connect.exe`. `patch-client.bat` runs it
   by hand, once for each set with the player's options (`-Restore`, `-Check`), or once for the set `-PatchSet`
   names; for example once as administrator when the install is under Program Files.
 
 A refusal is all or nothing for a set, so each set is applied by a run of its own and reported on its own: one
-refused or failed never stops the other (the b edition's client gets the layout, and a `default.ini` changed by
-hand doesn't stop classic creation). An already patched client is only read. Exit 3 (a client file the set
-doesn't know) starts the game without that set, with one line on Linux; any other failure warns and still starts
-it. Without the installed patches (`<dest>/patches`, or `patch-client.ps1` next to the .bat), or without a set's
-JSON, the launchers don't apply it: that is how a player opts out of a set, after a restore of it (the player
-guide says how). Both appliers refuse any other client file, such as the b edition's `game.dll` or an older
-or newer upstream client's, and then change nothing. Both keep each original as `<file>.hearthdaoc-orig` and put it back with `--restore` /
-`-Restore`, but only over the patched file: when a file has changed since it was patched (for example a newer
-upstream client), the restore says so and changes nothing. A set's optional `"refused"` text is what follows
-"Not patched: <file> is not the file this HearthDAoC release supports " for a refused file (which clients those
-are, and what the player gets instead); without it, the appliers print classic creation's.
+refused or failed never stops the others (the b edition's client gets the layout, and a `default.ini` changed by
+hand doesn't stop classic creation). A set with `"retired": true` is restored instead of applied by a run without
+`--check` / `-Check`, so a release takes a set back with no launcher change (The Shrouded Isles portals, below). An
+already patched client is only read. Exit 3 (a client file the set doesn't know) starts the game without that set,
+with one line on Linux; any other failure warns and still starts it. Without the installed patches
+(`<dest>/patches`, or `patch-client.ps1` next to the .bat), or without a set's JSON, the launchers don't apply it:
+that is how a player opts out of a set, after a restore of it (the player guide says how). Both appliers refuse any
+other client file, such as the b edition's `game.dll` or an older or newer upstream client's, and then change
+nothing. Both keep each original as `<file>.hearthdaoc-orig` and put it back with `--restore` / `-Restore`, but only
+over the patched file: when a file has changed since it was patched (for example a newer upstream client), the
+restore says so and changes nothing. A set's optional `"refused"` text is what follows "Not patched: <file> is not
+the file this HearthDAoC release supports " for a refused file (which clients those are, and what the player gets
+instead); without it, the appliers print classic creation's.
 
 | What is patched | Where | Why |
 |---|---|---|
@@ -217,6 +223,100 @@ rules, fails). `HDC_LAYOUT_FROM` adds the check against Charles's own file: the 
 reads every value of that file but the hotkeys and the looking-for-group level range. Only 1920x1080 has the
 layout (other sizes would need scaled blocks: untested). Not yet checked in game.
 
+### The Shrouded Isles portals
+
+The server has the three portals at their 1.65 spots (the server-code row "The Shrouded Isles portals at their
+1.65 spots"), so the client art upstream 0.35 added at the 1.74 town spots marks a portal that takes no one
+anywhere. Upstream's tool (`tools/claude-version/si_portal_visuals.py`) appended one fixture row and one nif row,
+each named `SI Portal Visual <zone>` and each the last line of its entry, to each realm's home zone archive, and
+repacked it:
+
+- `si-portals.json` takes those six rows out again: two `mpk-text-replace` operations per archive, on
+  `zones/Zone000/csv000.mpk` (`fixtures.csv`, `nifs.csv`), `zones/zone100/csv100.mpk` (`FIXTURES.CSV`,
+  `NIFS.CSV`) and `zones/zone200/csv200.mpk` (`fixtures.csv`, `NIFS.CSV`). Each entry is then the base client's
+  (82685, 4383, 46233, 4506, 87013 and 6029 bytes); every other entry is kept byte for byte.
+- `si-portal-art.json` moves `Newtowns/zones/Nifs/bavteleporter.npk` (the 2006 remake, which the client loads
+  before `zones/Nifs`) aside with a `remove` operation, so the client loads `zones/Nifs/BAvTeleporter.npk`, the
+  2002 model with its purple flames, wherever the Albion portal model stands (after the first set, only at
+  Caer Gothwaite). Our client has no 2006 Midgard or Hibernia portal model: those are 2002 already.
+
+Both sets hold only the six rows (the text to remove, from upstream's tool), the four files' hashes and the
+`remove` operation; the rebuilt archives are made on the player's machine from the player's own files. Every
+edition gets both: the zone files are the same in `classic` and `b`.
+
+**The operations** (format 1, in both appliers; `patchset.py` holds the archive code, so the bundle's file list
+stays the same, and doesn't import `mpk.py`):
+
+- `{"op": "mpk-text-replace", "entry": ..., "find": ..., "replace": ...}`: the bytes must be an MPK archive; the
+  one file in it named `entry` (exactly, case included: the archives differ) gets `text-replace`'s edit (on its
+  content as Latin-1, `find` exactly once). The archive is then rebuilt the same way every time: the header
+  (`MPAK`, the byte 2, then the directory's CRC-32 and compressed size, the name's compressed size and the file
+  count, each byte XORed with its index) is written anew; the compressed archive name is copied; every other
+  file keeps its compressed bytes, CRC-32, 256-byte name field (bytes after the NUL included), timestamp and
+  flags; the edited one keeps its name field, timestamp and flags and is written as zlib stored blocks (`78 01`,
+  blocks of at most 65535 bytes, each `BFINAL`, `LEN` and `~LEN` little-endian and the bytes, one empty block for
+  no data, then the Adler-32 big-endian) with its new size and CRC-32; every record gets the running total of the
+  earlier files' sizes as `mem` (as upstream's packer writes it) and its offset, the files following each other
+  in directory order; the directory is written as stored blocks too. Only the CRC-32 of the directory and of the
+  edited file are checked: the `before` hash pins the rest. A second operation on the same archive copies what
+  the first wrote, so two give the bytes of one rebuild with both edits.
+- `{"op": "remove"}` with `"after": "absent"` (its only operation): the file is renamed over
+  `<file>.hearthdaoc-orig`, never written; a missing file counts as patched, also on a client that never had
+  it; a restore renames a verified backup back where the file is missing. A present file with another hash is
+  refused (exit 3), and a restore refuses one ("changed").
+- `"retired": true` (a set-level boolean): a run without `--check` / `-Check` restores the set, as `--restore` /
+  `-Restore` does; `--check` still reports the patch states.
+
+**Why stored blocks.** The appliers must write exactly the bytes the `after` hash pins, on Linux (Python's zlib)
+and on Windows (PowerShell 5.1 on .NET Framework, whose `DeflateStream` compresses differently from zlib).
+Stored blocks are the one zlib encoding both write byte for byte alike, and every inflater reads them (the
+client too, which the owner's check after the release shows: the three home zones load). The cost is size: the
+three archives grow about 3.6 times (25086 to 91119, 14670 to 53841, 26361 to 96194 bytes), which is harmless. The prototype that settled the encoding
+(`~/tmp/hearthdaoc-period/scripts/repack_proto.py` on the owner's machine, 2026-10-22, in memory on the player's
+own files) gave the after hashes the committed set pins: `41976bf7…`, `d5e7552a…`, `7406b52d…`. The appliers'
+tests (`test_appliers.py`, both appliers) check the same bytes at the 64 KiB block boundaries, and
+`test_build_si_portals.py` runs both appliers on copies of the real files.
+
+**Rebuilding them.** `client/patches/build_si_portals.py` (the generator; a change to it alone makes no release)
+reads the four client files and writes both sets: it finds the one `SI Portal Visual` line of each fixtures and
+nifs entry (in any case), requires it to be the last line with its CRLF, and takes the `after` hashes from
+`patchset.transform`. CI fetches the four files with the others and fails ("SI portal patch sets match a
+rebuild") when a committed set differs from a rebuild; `test_build_si_portals.py` checks the sets against the
+files (`HDC_CLIENT_FILES`). The `before` hashes are the 0.36b package's
+(`source/tools/release-baselines/0.36/0.36b-package.sha256`), which the 0.37 game patch keeps; OfflineDAoC 0.35's
+copies were not available to compare, so a 0.35 client whose files differ is refused (exit 3: nothing changed,
+the game starts with upstream's art). From the repository root:
+
+```bash
+c="$(mktemp -d)"  # EA files from the pinned release, verified; never commit or share them
+for f in zones/Zone000/csv000.mpk zones/zone100/csv100.mpk zones/zone200/csv200.mpk \
+    Newtowns/zones/Nifs/bavteleporter.npk; do
+  python3 tools/linux/odaoc_fetch.py --lock deploy/upstream.lock extract "runtime/client-opendaoc/app/$f" "$c/$f"
+done
+python3 client/patches/build_si_portals.py --client "$c" --out-dir client/patches
+HDC_CLIENT_FILES="$c" python3 -m unittest discover -s client/patches/tests -t client/patches
+rm -rf "$c"
+```
+
+**Switching to the 2006 look** (the owner may, server-wide; there is no per-player setting) is one small release:
+set `ALBION_LOOK = "2006"` in `build_si_portals.py` (and the line of `test_build_si_portals.py` that pins the
+shipped look), rebuild, and commit the JSON, which then says `"retired": true`. Every client that has the set
+applied gets the model back from its backup at its next start: on Linux `setup.sh` builds the client afresh at
+the update (the model comes from the base client and the release, and there is nothing to restore), on Windows
+`connect-hearthdaoc.bat` restores it at the first start after the player copies the release's files. Switching
+back is `"2002"` again. The portals stay at the 1.65 spots either way: moving them back to the towns is a revert
+of the server change, a separate decision.
+
+**Never drop a set that has shipped; retire it.** A Linux release without a set gets the client's own files back,
+since `setup.sh` builds the client afresh (`test_setup.py` checks it for the art set). But nothing runs a set that
+is gone on a Windows client: its files stay patched (the 2006 model stays aside as
+`bavteleporter.npk.hearthdaoc-orig`) for good.
+
+Known leftovers (#163): the in-game maps still label the portal at the town spots (the client's map files, not
+patched), and the server's navmeshes keep upstream's platforms there. If the owner's pre-check P2 shows no purple
+flames on the Avalon Marsh pier, the pier's global 2006 copy (`zones/Nifs/avpier.npk`) would be a second `remove`
+entry of the art set, so that the client loads `zones/ZONE009/Nifs/AVPIER.npk`: not done.
+
 ## Client updates
 
 Linux clients update at launch, after asking the player. Windows players still copy the new files by hand.
@@ -278,7 +378,11 @@ update, even one that changed only the server.
    upstream ships patches on the same base, a new version changes only the version, tag, commit and `patch`; when
    it ships a new full base, drop `patch`. `ServerFilesLockTests` (`deploy/tests/test_init_world.py`) fails when
    the server source names a `classic-*.json` file that the lock does not list, or the other way round.
-3. Rebuild the client patch set (see Client patches above) and commit it on the same branch if it changed.
+3. Rebuild the client patch sets (see Client patches above) and commit them on the same branch if they changed.
+   A new upstream `csv000`, `csv100` or `csv200` archive or `bavteleporter.npk` fails the SI portal rebuild check:
+   rebuild the two sets (The Shrouded Isles portals). If upstream took its town portal rows out itself, the
+   generator finds no `SI Portal Visual` line and stops; then take `si-portals.json` out of the bundle and the
+   launchers (the new release's files replace the patched ones on every client).
 4. Check the fork's world fixes and hooks against the new release. Run the tests with `HDC_TEST_WORLD` set
    to the new clean classic world (for a patch release, the base release's world with the patch's world update
    applied) and `HDC_CLASSIC_QUESTS` to the new release's `runtime/server/classic-quests.json`, for a patch

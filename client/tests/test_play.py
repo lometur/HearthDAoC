@@ -43,6 +43,17 @@ INI = b"[Panels-800x600]\r\nVersion=1\r\n[Chat]\r\nChannelVer=1\r\n"
 INI_PATCHED = b"[Panels-1920x1080]\r\nVersion=1\r\n" + INI
 LAYOUT_NOTE = ("play.sh: HearthDAoC's default layout doesn't support this client's default.ini; new characters start "
                "with the game's standard window layout.\n")
+# A fake zone archive and the 2006 Albion portal model, with sets in the shape of client/patches/si-portals.json and
+# si-portal-art.json (a text edit stands in for the archive edit, which client/patches/tests cover).
+ARCHIVE_PATH, MODEL_PATH = "zones/Zone000/csv000.mpk", "Newtowns/zones/Nifs/bavteleporter.npk"
+PORTAL_ROW = "455,SI Portal Visual 000,bavteleporter.NIF\r\n"
+ARCHIVE = b"10,Our Tree,ourtree.nif\r\n" + PORTAL_ROW.encode()
+ARCHIVE_PATCHED = b"10,Our Tree,ourtree.nif\r\n"
+MODEL = b"the 2006 portal model"
+SI_NOTE = ("play.sh: HearthDAoC's Shrouded Isles portal fix doesn't support this client's zone files; upstream's portal "
+           "art stays in Cotswold, Mularn and Mag Mell (it takes you nowhere).\n")
+ART_NOTE = ("play.sh: HearthDAoC's Albion portal look doesn't support this client's portal model; the Albion Shrouded "
+            "Isles portal keeps the look it has.\n")
 
 
 def sha(data):
@@ -354,6 +365,136 @@ class LaunchPatchTests(FakeSteamTestCase):
                 else:
                     self.assert_unpatched()
                     self.assertEqual(self.default_ini(), INI_PATCHED)
+
+
+class ShroudedIslesLaunchTests(FakeSteamTestCase):
+    """play.sh applies si-portals.json and si-portal-art.json, each on its own, after the other sets; a retired art
+    set (a release that takes the 2002 look back) is restored at the next launch."""
+
+    def setUp(self):
+        super().setUp()
+        self.save_login()
+        self.client = os.path.join(self.dest, "client")
+        self.patches = os.path.join(self.dest, "patches")
+        self.archive = os.path.join(self.client, *ARCHIVE_PATH.split("/"))
+        self.model = os.path.join(self.client, *MODEL_PATH.split("/"))
+        write_bytes(self.archive, ARCHIVE)
+        write_bytes(self.model, MODEL)
+        os.makedirs(self.patches)
+        for name in ("apply_patches.py", "patchset.py"):
+            shutil.copy(os.path.join(PATCHES, name), self.patches)
+        self.write_si_sets()
+
+    def write_si_sets(self, archive_before=sha(ARCHIVE), model_before=sha(MODEL), retired=False):
+        portals = {"format": 1, "name": "si-portals", "client": "test fixture",
+                   "refused": "(our test's). The town portal art stays.",
+                   "files": [{"path": ARCHIVE_PATH, "before": archive_before, "after": sha(ARCHIVE_PATCHED),
+                              "ops": [{"op": "text-replace", "find": PORTAL_ROW, "replace": ""}]}]}
+        art = {"format": 1, "name": "si-portal-art", "client": "test fixture",
+               "refused": "(our test's). The portal keeps its 2006 look.", **({"retired": True} if retired else {}),
+               "files": [{"path": MODEL_PATH, "before": model_before, "after": "absent", "ops": [{"op": "remove"}]}]}
+        for name, data in (("si-portals.json", portals), ("si-portal-art.json", art)):
+            with open(os.path.join(self.patches, name), "w", encoding="utf-8") as f:
+                json.dump(data, f, indent=1)
+
+    def assert_launched_once(self, r):
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertEqual(len(self.launches()), 1, self.launches())
+
+    def result(self, r):
+        """(exit code, stdout, stderr), without the line the fake Proton's prefix gives at every launch."""
+        out = "".join(line for line in r.stdout.splitlines(True) if not line.startswith("Creating the Proton prefix"))
+        return r.returncode, out, r.stderr
+
+    def test_both_sets_apply_on_their_own_and_a_patched_client_is_only_read(self):
+        r = self.run_play()
+        self.assert_launched_once(r)
+        self.assertEqual(r.stderr, "")
+        self.assertEqual(self.result(r)[1], f"Patched: {ARCHIVE_PATH} (original saved as {ARCHIVE_PATH}.hearthdaoc-orig)\n"
+                                            f"Patched: {MODEL_PATH} (original saved as {MODEL_PATH}.hearthdaoc-orig)\n")
+        self.assertEqual(read(self.archive), ARCHIVE_PATCHED)
+        self.assertFalse(os.path.exists(self.model))
+        self.assertEqual(read(self.model + ".hearthdaoc-orig"), MODEL)
+        before = snapshot(self.client)
+        r = self.run_play()
+        self.assertEqual(self.result(r), (0, "", ""))
+        self.assertEqual(snapshot(self.client), before)
+
+    def test_a_refused_portal_set_gives_one_short_note_and_the_art_set_still_applies(self):
+        write_bytes(self.archive, b"another release's zone archive")
+        r = self.run_play()
+        self.assert_launched_once(r)
+        self.assertEqual(r.stderr, SI_NOTE)
+        self.assertEqual(self.result(r)[1], f"Patched: {MODEL_PATH} (original saved as {MODEL_PATH}.hearthdaoc-orig)\n")
+        self.assertEqual(read(self.archive), b"another release's zone archive")
+
+    def test_a_refused_art_set_gives_one_short_note_and_the_portal_set_still_applies(self):
+        write_bytes(self.model, b"another release's portal model")
+        r = self.run_play()
+        self.assert_launched_once(r)
+        self.assertEqual(r.stderr, ART_NOTE)
+        self.assertEqual(read(self.archive), ARCHIVE_PATCHED)
+        self.assertEqual(read(self.model), b"another release's portal model")
+
+    def test_a_retired_art_set_puts_the_2006_model_back_at_the_next_launch(self):
+        self.assert_launched_once(self.run_play())
+        self.write_si_sets(retired=True)  # what a release that switches to the 2006 look installs
+        r = self.run_play()
+        self.assertEqual(self.result(r), (0, f"Restored: {MODEL_PATH}\n", ""))
+        self.assertEqual(read(self.model), MODEL)
+        self.assertFalse(os.path.exists(self.model + ".hearthdaoc-orig"))
+        self.assertEqual(read(self.archive), ARCHIVE_PATCHED)  # the portal fix stays
+        before = snapshot(self.client)
+        r = self.run_play()  # nothing to say from then on
+        self.assertEqual(self.result(r), (0, "", ""))
+        self.assertEqual(snapshot(self.client), before)
+        self.assertEqual(len(self.launches()), 3)
+
+    def test_a_retired_art_set_that_cannot_be_restored_gives_one_short_note(self):
+        self.assert_launched_once(self.run_play())
+        self.write_si_sets(retired=True)
+        write_bytes(self.model, b"a model put there by hand")  # the backup stays: "changed", exit 3
+        r = self.run_play()
+        self.assertEqual(self.result(r), (0, "", ART_NOTE))
+        self.assertEqual(read(self.model + ".hearthdaoc-orig"), MODEL)
+        self.assertEqual(len(self.launches()), 2)
+
+    def test_a_failed_set_warns_and_the_game_still_launches(self):
+        for name, warning in (
+                ("si-portals.json", "play.sh: Warning: HearthDAoC's Shrouded Isles portal fix could not be applied "
+                                    "(apply_patches.py exit 2), so upstream's portal art may still stand in Cotswold, "
+                                    "Mularn and Mag Mell. The game starts anyway."),
+                ("si-portal-art.json", "play.sh: Warning: HearthDAoC's Albion portal look could not be applied "
+                                       "(apply_patches.py exit 2), so the Albion Shrouded Isles portal may not have "
+                                       "this release's look. The game starts anyway.")):
+            with self.subTest(name):
+                self.write_si_sets()
+                with open(os.path.join(self.patches, name), "w", encoding="utf-8") as f:
+                    f.write('{"format": 2}')
+                r = self.run_play()
+                self.assertEqual(r.returncode, 0, r.stderr)
+                self.assertIn(warning, r.stderr)
+                self.assertEqual(r.stderr.count("could not be applied"), 1)
+        self.assertEqual(len(self.launches()), 2)
+
+    def test_the_four_sets_run_in_order_before_the_game(self):
+        # A stand-in applier that fails like a client folder it can't write (exit 1), for each set: a dialog each.
+        for name in ("classic-creation.json", "default-layout.json"):
+            write(os.path.join(self.patches, name), "{}")
+        with open(os.path.join(self.patches, "apply_patches.py"), "w", encoding="utf-8") as f:
+            f.write("import sys\nsys.exit(1)\n")
+        bin_dir = os.path.join(self.tmp.name, "bin")
+        write(os.path.join(bin_dir, "zenity"), f'#!/bin/sh\nprintf "zenity %s\\n" "$*" >> "{self.calls}"\n',
+              executable=True)
+        r = self.run_play(DISPLAY=":99", PATH=bin_dir + os.pathsep + os.environ["PATH"])
+        self.assert_launched_once(r)
+        with open(self.calls, encoding="utf-8") as f:
+            calls = f.read().splitlines()
+        names = ["HearthDAoC's client patches", "HearthDAoC's default layout", "HearthDAoC's Shrouded Isles portal fix",
+                 "HearthDAoC's Albion portal look"]
+        self.assertEqual([next(name for name in names if f"{name} could not be applied" in line)
+                          for line in calls if line.startswith("zenity ")], names)
+        self.assertTrue(calls[-1].count("connect.exe"), calls)
 
 
 # A stand-in for the next release's setup.sh: it logs its arguments, one per line, and the folder it runs

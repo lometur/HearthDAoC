@@ -44,11 +44,13 @@ mkdir -p "$c/patches" "$c/windows/patches"
 cp "$root"/client/README.md "$root"/client/linux/setup.sh "$root"/client/linux/play.sh.in \
    "$root"/tools/linux/odaoc_fetch.py "$root"/deploy/upstream.lock "$c/"
 echo "$tag" > "$c/VERSION"  # the release: setup.sh saves it, and play.sh offers the newer ones
-# Client patches (classic character creation and splash, the default layout for new characters): our patch data,
-# the appliers and our splash.mpk.
-cp "$root"/client/patches/{classic-creation.json,default-layout.json,apply_patches.py,patchset.py,splash.mpk} "$c/patches/"
+# Client patches (classic character creation and splash, the default layout for new characters, the Shrouded Isles
+# portals and the Albion portal's look): our patch data, the appliers and our splash.mpk.
+cp "$root"/client/patches/{classic-creation.json,default-layout.json,si-portals.json,si-portal-art.json} "$c/patches/"
+cp "$root"/client/patches/{apply_patches.py,patchset.py,splash.mpk} "$c/patches/"
 cp "$root"/client/windows/{connect-hearthdaoc.bat,patch-client.bat,patch-client.ps1} "$c/windows/"
-cp "$root"/client/patches/{classic-creation.json,default-layout.json,splash.mpk} "$c/windows/patches/"
+cp "$root"/client/patches/{classic-creation.json,default-layout.json,si-portals.json,si-portal-art.json,splash.mpk} \
+   "$c/windows/patches/"
 # The client's content ID, in the bundle and beside it on the release: play.sh doesn't offer a newer release with
 # the installed one, since only the server changed. SHA-256 of the bundled files' SHA-256 sums and paths (as
 # sha256sum prints them, in path order), without VERSION, which only names the release.

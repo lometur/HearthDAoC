@@ -25,6 +25,7 @@ WINDOWS = os.path.join(os.path.dirname(PATCHES), "windows")
 APPLY_PY = os.path.join(PATCHES, "apply_patches.py")
 PS1 = os.path.join(WINDOWS, "patch-client.ps1")
 BAT = os.path.join(WINDOWS, "patch-client.bat")
+CONNECT_BAT = os.path.join(WINDOWS, "connect-hearthdaoc.bat")
 PWSH = os.environ.get("HDC_PWSH") or shutil.which("pwsh")
 MISSING_MESSAGE = "Not patched: {path} is missing from the client folder.\n"
 GONE_MESSAGE = ("Not restored: {path} is missing from the client folder; the saved original is kept as "
@@ -608,7 +609,7 @@ class PowerShellApplierTests(ApplierCases, unittest.TestCase):
 
 class WindowsFilesTests(unittest.TestCase):
     def test_windows_files_are_ascii_with_crlf_line_ends(self):
-        for path in (PS1, BAT):
+        for path in (PS1, BAT, CONNECT_BAT):
             with self.subTest(os.path.basename(path)):
                 data = read(path)
                 data.decode("ascii")  # Windows PowerShell 5.1 reads a script without a BOM as ANSI
@@ -619,13 +620,24 @@ class WindowsFilesTests(unittest.TestCase):
         # Once for each patch set with the player's options, or once for the one -PatchSet names; how it
         # chooses runs under Wine in client/tests/test_windows_bat.sh.
         text = read(BAT).decode("ascii")
-        for name in ("classic-creation.json", "default-layout.json"):
+        for name in ("classic-creation.json", "default-layout.json", "si-portals.json", "si-portal-art.json"):
             self.assertIn('powershell -NoProfile -ExecutionPolicy Bypass -File "%~dp0patch-client.ps1" '
                           f'-PatchSet "%~dp0patches\\{name}" %*\r\n', text)
         self.assertIn('powershell -NoProfile -ExecutionPolicy Bypass -File "%~dp0patch-client.ps1" %*\r\n', text)
         self.assertIn('set "RC=%ERRORLEVEL%"\r\n', text)
         self.assertIn(" pause\r\n", text)  # only when double-clicked, so the player can read the result
         self.assertIn("\r\nexit /b %RC%\r\n", text)
+
+    def test_connect_bat_runs_the_script_for_each_patch_set_before_the_game(self):
+        # Without options: a retired set is restored by a plain run too. The order and the warnings run under Wine
+        # in client/tests/test_windows_bat.sh.
+        text = read(CONNECT_BAT).decode("ascii")
+        self.assertIn('cmd /d /c powershell -NoProfile -ExecutionPolicy Bypass -File "%~dp0patch-client.ps1"\r\n', text)
+        runs = [text.index('cmd /d /c powershell -NoProfile -ExecutionPolicy Bypass -File "%~dp0patch-client.ps1" '
+                           f'-PatchSet "%~dp0patches\\{name}"\r\n')
+                for name in ("default-layout.json", "si-portals.json", "si-portal-art.json")]
+        self.assertEqual(runs, sorted(runs))
+        self.assertLess(runs[-1], text.index("\r\n:connect\r\n"))
 
     def test_ps1_avoids_powershell_7_only_syntax(self):
         text = read(PS1).decode("ascii")

@@ -1,25 +1,35 @@
 @echo off
 setlocal EnableExtensions DisableDelayedExpansion
-rem Give your OfflineDAoC client HearthDAoC's patches: the classic character creation screen, and
-rem the window layout new characters start with.
+rem Give your OfflineDAoC client HearthDAoC's patches: the classic character creation screen, the
+rem window layout new characters start with, and the Shrouded Isles portals (no portal art in
+rem Cotswold, Mularn and Mag Mell; the 2002 look of the Albion one).
 rem Put this file, patch-client.ps1 and the patches folder next to connect-hearthdaoc.bat
 rem (runtime\client-opendaoc\app of your OfflineDAoC install) and double-click it. Run it again
 rem whenever something puts the original files back. Options go to patch-client.ps1:
 rem -Check only reports, -Restore puts the original files back. It runs patch-client.ps1 once for
-rem each patch set in the patches folder (classic-creation.json, then default-layout.json), each on
-rem its own, or once for the one -PatchSet names. The exit code is the first failed run's, else 0.
+rem each patch set in the patches folder (classic-creation.json, default-layout.json, si-portals.json,
+rem then si-portal-art.json), each on its own, or once for the one -PatchSet names. The exit code is
+rem the first failed run's, else 0.
 rem cmd /d /c runs it so that a batch file named powershell (the tests' stand-in) returns here too.
 set "ONE="
 call :scan %*
-if not exist "%~dp0patches\classic-creation.json" if not exist "%~dp0patches\default-layout.json" set "ONE=1"
+if not exist "%~dp0patches\classic-creation.json" if not exist "%~dp0patches\default-layout.json" if not exist "%~dp0patches\si-portals.json" if not exist "%~dp0patches\si-portal-art.json" set "ONE=1"
 if defined ONE goto one
 set "RC=0"
 if not exist "%~dp0patches\classic-creation.json" goto layout
 cmd /d /c powershell -NoProfile -ExecutionPolicy Bypass -File "%~dp0patch-client.ps1" -PatchSet "%~dp0patches\classic-creation.json" %*
 set "RC=%ERRORLEVEL%"
 :layout
-if not exist "%~dp0patches\default-layout.json" goto done
+if not exist "%~dp0patches\default-layout.json" goto siportals
 cmd /d /c powershell -NoProfile -ExecutionPolicy Bypass -File "%~dp0patch-client.ps1" -PatchSet "%~dp0patches\default-layout.json" %*
+if "%RC%"=="0" set "RC=%ERRORLEVEL%"
+:siportals
+if not exist "%~dp0patches\si-portals.json" goto portalart
+cmd /d /c powershell -NoProfile -ExecutionPolicy Bypass -File "%~dp0patch-client.ps1" -PatchSet "%~dp0patches\si-portals.json" %*
+if "%RC%"=="0" set "RC=%ERRORLEVEL%"
+:portalart
+if not exist "%~dp0patches\si-portal-art.json" goto done
+cmd /d /c powershell -NoProfile -ExecutionPolicy Bypass -File "%~dp0patch-client.ps1" -PatchSet "%~dp0patches\si-portal-art.json" %*
 if "%RC%"=="0" set "RC=%ERRORLEVEL%"
 goto done
 :one
