@@ -1,0 +1,18 @@
+{
+ "format": 1,
+ "name": "si-portal-art",
+ "client": "OfflineDAoC 0.36b and 0.37b (both editions)",
+ "refused": "(OfflineDAoC 0.36b's and 0.37b's). The Albion Shrouded Isles portal keeps its 2006 look.",
+ "files": [
+  {
+   "path": "Newtowns/zones/Nifs/bavteleporter.npk",
+   "before": "dfb6feaffcfefbac45e81377d3d1f4968f978b67cfe0d884cf6dc0a75e31f519",
+   "after": "absent",
+   "ops": [
+    {
+     "op": "remove"
+    }
+   ]
+  }
+ ]
+}

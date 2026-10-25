@@ -19,15 +19,15 @@ TAG = re.compile(r"^v(?P<upstream>\d+(?:\.\d+)*[a-z]?)-hearth\.\d+$")
 
 # Files that end up in the image (deploy/Dockerfile's COPY lines) or the bundles (deploy/build_bundles.sh).
 # Tests, docs, CI and this script don't need a release; the only shipped Markdown files are SHIPPED_DOCS. Nor
-# do the client patch sets' generators (build.py, layout.py), or upstream's MPK tool
-# (source/tools/OfflineDaoc.Mpk) that builds splash.mpk: what they make (client/patches/classic-creation.json,
-# client/patches/default-layout.json, client/patches/splash.mpk) is committed and ships, and CI fails when a patch
-# set differs from what its generator makes.
+# do the client patch sets' generators (build.py, layout.py, build_si_portals.py), or upstream's MPK tool
+# (source/tools/OfflineDaoc.Mpk) that builds splash.mpk: what they make (the patch sets in client/patches and
+# client/patches/splash.mpk) is committed and ships, and CI fails when a patch set differs from what its generator
+# makes.
 RELEASE_PATHS = ("source/server/", "source/tools/OfflineDaoc.Launcher/BotCharacterGenerator.cs",
                  "source/tools/OfflineDaoc.ProgressImport/", "tools/linux/", "deploy/", "client/", ".dockerignore")
 NOT_RELEASE_PATHS = ("source/server/docs/", "deploy/release_tag.py",
                      "client/patches/build.py", "client/patches/pe.py", "client/patches/classdata.py",
-                     "client/patches/layout.py",
+                     "client/patches/layout.py", "client/patches/build_si_portals.py",
                      "client/patches/src/", "client/patches/branding/reletter_splash.py")
 SHIPPED_DOCS = ("deploy/HANDOFF.md", "client/README.md")
 TESTS = re.compile(r"(^|/)tests/", re.IGNORECASE)

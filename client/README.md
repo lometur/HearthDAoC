@@ -6,7 +6,8 @@
 # HearthDAoC player guide
 
 This bundle connects your copy of the game client (OfflineDAoC's) to a HearthDAoC server, and gives
-it a classic character creation screen and a window layout for new characters.
+it a classic character creation screen, a window layout for new characters, and the Shrouded Isles
+portals where they stood in the classic game.
 
 ## Before you start
 
@@ -37,7 +38,10 @@ password appears on the game's command line, and it is saved on your PC as plain
   `Download-OfflineDAoC-v0.37b.zip` and `GET-OFFLINE-DAOC-v0.37b.cmd`. Choose 2 (New install), or 1 to update
   an OfflineDAoC 0.36 install. Not the `c` edition: HearthDAoC doesn't support its new client. An OfflineDAoC 0.35
   install (upstream's `DOWNLOAD-AND-PLAY-v0.35.cmd` or `DOWNLOAD-AND-PLAY-v0.35b.cmd`) also works: the client
-  files HearthDAoC's patches change are the same in 0.35 and 0.37.
+  files the classic creation and default layout patches change are the same in 0.35 and 0.37. Whether 0.35's
+  zone files and Albion portal model are those of 0.36 and 0.37 hasn't been checked; if they aren't, the two
+  Shrouded Isles portal patches change nothing, say "Not patched", and the game starts as before (see
+  Troubleshooting).
 - The Windows feature **.NET Framework 3.5 (includes .NET 2.0 and 3.0)**, turned on; the game's
   `connect.exe` needs it.
 
@@ -51,7 +55,7 @@ password appears on the game's command line, and it is saved on your PC as plain
    This builds a separate client in `~/Games/HearthDAoC`. It downloads about 45 MB of OfflineDAoC
    files, each checked against the official release, installs HearthDAoC's patches in
    `~/Games/HearthDAoC/patches` and applies them. If it warns that the client was set up without
-   HearthDAoC's classic creation patches or default layout, see Troubleshooting: the game still works. It saves these options in
+   one of HearthDAoC's patches, see Troubleshooting: the game still works. It saves these options in
    `~/Games/HearthDAoC/hearthdaoc-client.conf`, for updates.
 3. In Steam: Games → **Add a Non-Steam Game** → Browse → `~/Games/HearthDAoC/play.sh`.
    Leave "Force the use of a specific Steam Play compatibility tool" **unchecked**. Any launch
@@ -146,6 +150,53 @@ remove the layout patch, so that the game stops applying it at each launch:
 
 Updating to a new release brings the layout back; repeat these steps after the update.
 
+## The Shrouded Isles portals
+
+The portals to the Shrouded Isles stand where they stood in the classic game, before patch 1.74 (2005)
+moved them outside the capitals, near Cotswold, Mularn and Mag Mell. Walk into the portal:
+
+| Realm | The portal | It takes you to |
+|---|---|---|
+| Albion | the Avalon Marsh pier near Adribard's Retreat, /loc 44246,18014 | the Isle of Glass, by Caer Gothwaite's harbour |
+| Midgard | Gotar, north-east of Nalliten, /loc 50635,33083 | Aegir's Landing |
+| Hibernia | Shannon Estuary, across the lake from Connla, /loc 23136,30432 | the Grove of Domnann |
+
+The portal on the Isles side takes you back to the same spot. The town teleporters still offer the
+Shrouded Isles too. Near Cotswold, Mularn and Mag Mell, where OfflineDAoC put portals, there is
+nothing any more. The in-game map still names a portal at those three spots: the map is the game's
+own, and these patches don't change it.
+
+The Albion portal (on the Isles side, at Caer Gothwaite) has its 2002 look, with purple flames, like
+the Midgard and Hibernia ones. The look is the same for every player, and there is no setting for it.
+If the server owner chooses the later (2006) look, a HearthDAoC release puts it back for everyone: on
+Linux when you accept the update, on Windows at the first start after you copy the release's files.
+There is nothing else to do.
+
+These are two patches of their own, which every edition gets:
+
+- **The portal fix** (`si-portals.json`) takes the six lines OfflineDAoC added for its town portals out
+  of three zone files (`zones/Zone000/csv000.mpk`, `zones/zone100/csv100.mpk` and
+  `zones/zone200/csv200.mpk`), and keeps each original as `<file>.hearthdaoc-orig`. The new files are
+  larger (`csv000.mpk` goes from 25 KB to 91 KB): the changed parts are written without compression,
+  the one way that gives the same bytes on Linux and Windows.
+- **The portal look** (`si-portal-art.json`) moves `Newtowns/zones/Nifs/bavteleporter.npk`, the 2006
+  model, aside as `bavteleporter.npk.hearthdaoc-orig`, so the game uses its own 2002 model.
+
+The server doesn't need them: without them (a client from before them), you still see OfflineDAoC's
+portals in the towns, but they take you nowhere; the portals above work all the same.
+
+**To take one out,** put its originals back and remove it, so that the game stops applying it at each
+launch (here the portal fix; for the portal look, use `si-portal-art.json`):
+
+- **Linux:** in a terminal, run
+  `python3 ~/Games/HearthDAoC/patches/apply_patches.py --client ~/Games/HearthDAoC/client --patchset ~/Games/HearthDAoC/patches/si-portals.json --restore`
+  and then `rm ~/Games/HearthDAoC/patches/si-portals.json`.
+- **Windows:** open a Command Prompt in `runtime\client-opendaoc\app` (see Going back to the standard
+  creation screen) and run `patch-client.bat -PatchSet patches\si-portals.json -Restore`. Only when it
+  printed `Restored:` for each file, delete `si-portals.json` from the `patches` folder.
+
+Updating to a new release brings it back; repeat these steps after the update.
+
 ## Battlegrounds
 
 The four battlegrounds work as in the classic game. Get the free **Battlegrounds Medallion of
@@ -177,8 +228,8 @@ On Linux, `play.sh` first looks for a newer HearthDAoC release, and asks you bef
 Updating to a new release).
 
 Each time you start the game, `play.sh` (Linux) or `connect-hearthdaoc.bat` (Windows) checks
-HearthDAoC's two patches just before the game starts, each on its own: classic creation, then the
-default layout.
+HearthDAoC's four patches just before the game starts, each on its own: classic creation, the default
+layout, the Shrouded Isles portal fix, then the portal look.
 
 - A client that is already patched is only checked; nothing is written.
 - If something put an original file back (for example a repair of the install, or OfflineDAoC's own
@@ -186,7 +237,9 @@ default layout.
 - When a patch doesn't support your client (classic creation with the `b` edition, for example), it
   changes nothing and the game starts without it, with the standard creation screen or the standard
   layout for new characters. `play.sh` says so in one line; `connect-hearthdaoc.bat` prints
-  "Not patched: …". The other patch is still applied.
+  "Not patched: …". The other patches are still applied.
+- When a release takes a patch back (for example the 2006 portal look, see The Shrouded Isles
+  portals), the next start puts that patch's original files back, once.
 - If a patch fails, you get a warning and the game **still starts**, maybe without that patch. On
   Linux, when you start from Steam, the warning also shows in a window (with `zenity`) or as a
   notification (with `notify-send`). On Windows, the window waits for a key before the game starts.
@@ -229,8 +282,9 @@ release. You can always update by hand the same way: download and unpack the new
 `runtime\client-opendaoc\app` again, replacing the old files. Your `hearthdaoc.cfg` stays. The next
 start of `connect-hearthdaoc.bat` applies the new release's patches.
 
-If you went back to the standard creation screen (below) or the standard layout for new characters
-(above), updating turns them on again: repeat those steps after the update.
+If you went back to the standard creation screen (below), or took out the layout for new characters or
+a Shrouded Isles portal patch (above), updating turns them on again: repeat those steps after the
+update.
 
 ## Going back to the standard creation screen
 
@@ -249,8 +303,9 @@ it at each launch. The default layout for new characters (above) stays.
   each file, delete `classic-creation.json` from the `patches` folder. To get classic creation back,
   copy it from the bundle's `windows\patches` folder again.
 
-To put back the originals of both patches at once, run `patch-client.bat -Restore` on Windows; on
-Linux, run both restore commands.
+To put back the originals of all four patches at once, run `patch-client.bat -Restore` on Windows; on
+Linux, run the restore command once for each patch (with each `--patchset`). The next start applies
+again every patch whose file is still in the `patches` folder.
 
 The restore puts an original back only over the patched file. If a file has changed since it was
 patched (for example a newer client was installed), it says so and restores nothing.
@@ -268,15 +323,21 @@ supports the `default.ini` of both OfflineDAoC editions of 0.35 to 0.37. A `defa
 older or newer upstream client's, isn't patched: new characters start with that file's layout, and the
 game plays normally. To get the layout, put OfflineDAoC's file back (on Linux, run `setup.sh` again).
 
-**Windows: a warning at every start that the client patches or the default layout could not be
-applied.** Usually
+**"Not patched: zones/…/csv000.mpk" (or `csv100.mpk`, `csv200.mpk`, `bavteleporter.npk`), or portal
+art still near Cotswold, Mularn or Mag Mell.** The Shrouded Isles portal patches support the zone files
+and Albion portal model of OfflineDAoC 0.36 and 0.37 (both editions; 0.35's haven't been compared).
+Another client's files aren't changed, and the game plays normally: the town portal art stays but takes
+you nowhere, and the portals at the classic spots work anyway. To get the patches, put OfflineDAoC's
+files back (on Linux, run `setup.sh` again).
+
+**Windows: a warning at every start that one of HearthDAoC's patches could not be applied.** Usually
 Windows doesn't let you change files in your OfflineDAoC folder, for example because it is under
 `C:\Program Files`. Right-click `patch-client.bat` and choose **Run as administrator**, once. Later
 starts only check the patched files, which needs no administrator. If the warning comes back after
 something put the original files back, do it again. Simpler in the long run: install OfflineDAoC in a
 folder you own, such as `C:\Games\OfflineDAoC`, where nothing needs administrator.
 
-**Linux: a warning that the client patches or the default layout could not be applied.** Run
+**Linux: a warning that one of HearthDAoC's patches could not be applied.** Run
 `~/Games/HearthDAoC/play.sh` in a terminal to see the message. Running `setup.sh` again from the bundle installs the patches
 again.
 

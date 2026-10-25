@@ -1,0 +1,65 @@
+{
+ "format": 1,
+ "name": "si-portals",
+ "client": "OfflineDAoC 0.36b and 0.37b (both editions)",
+ "refused": "(OfflineDAoC 0.36b's and 0.37b's zone files). The Shrouded Isles portal art upstream added in Cotswold, Mularn and Mag Mell stays; it takes you nowhere. Use the portals on the Avalon Marsh pier, in Gotar and in Shannon Estuary.",
+ "files": [
+  {
+   "path": "zones/Zone000/csv000.mpk",
+   "before": "7a98e4cd8b065e2a12b3c801ef42c3850951d9a24defcbc5112ab22cc6b77318",
+   "after": "41976bf7f186484337f7a471340a5ef95e75481956702145cc8bc5b5960d24ef",
+   "ops": [
+    {
+     "op": "mpk-text-replace",
+     "entry": "fixtures.csv",
+     "find": "1537,455,SI Portal Visual 000,16112,25872,0,315,100,1,0,0,1,0,0,1563\r\n",
+     "replace": ""
+    },
+    {
+     "op": "mpk-text-replace",
+     "entry": "nifs.csv",
+     "find": "455,SI Portal Visual 000,bavteleporter.NIF,0,0,4194432,0,1,1,0,0,100,100,0,0,0,0,0,256,512,0,0,0,\r\n",
+     "replace": ""
+    }
+   ]
+  },
+  {
+   "path": "zones/zone100/csv100.mpk",
+   "before": "2dd106c75d628d4c3a3d08d6d5f020f84f1fb8d12884fbbf257b0356a6dfcf3d",
+   "after": "d5e7552ad5c66b8e019f1c3830c30c8a9b7296bdc9750c96dd2dba4f3bd10abe",
+   "ops": [
+    {
+     "op": "mpk-text-replace",
+     "entry": "FIXTURES.CSV",
+     "find": "869,455,SI Portal Visual 100,55166,53295,0,247,100,1,0,0,1,0,0,874\r\n",
+     "replace": ""
+    },
+    {
+     "op": "mpk-text-replace",
+     "entry": "NIFS.CSV",
+     "find": "455,SI Portal Visual 100,NAegTeleport.nif,0,0,4227327,0,1,1,0,0,100,100,0,0,0,0,0,0,0,0,0,0,\r\n",
+     "replace": ""
+    }
+   ]
+  },
+  {
+   "path": "zones/zone200/csv200.mpk",
+   "before": "6ea0f1e237ecfb9b353e7088b81a0c774c39f15253e230a53e57e04c6a65573e",
+   "after": "7406b52d8a83d873123a14d68a8aee644cc4a252af7e9b01e0434d7369b82cc4",
+   "ops": [
+    {
+     "op": "mpk-text-replace",
+     "entry": "fixtures.csv",
+     "find": "1549,473,SI Portal Visual 200,28710,9491,0,254,100,1,0,0,1,0,0,1637\r\n",
+     "replace": ""
+    },
+    {
+     "op": "mpk-text-replace",
+     "entry": "NIFS.CSV",
+     "find": "473,SI Portal Visual 200,hibteleport.nif,0,0,255,0,1,1,0,0,100,100,0,0,0,0,0,0,0,0,0,0,\r\n",
+     "replace": ""
+    }
+   ]
+  }
+ ]
+}

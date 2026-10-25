@@ -50,7 +50,8 @@ if [[ -f "$here/CONTENT_ID" ]]; then
     CONTENT_ID="$(head -n 1 "$here/CONTENT_ID" | tr -d '\r' | sed -n '/^[0-9a-f]\{64\}$/p')"
 fi
 # The client patches (client/patches): installed in $DEST/patches, where play.sh applies them at every launch.
-PATCH_FILES=(apply_patches.py patchset.py classic-creation.json default-layout.json splash.mpk)
+PATCH_FILES=(apply_patches.py patchset.py classic-creation.json default-layout.json
+             si-portals.json si-portal-art.json splash.mpk)
 PATCHER="$(find_file patches/apply_patches.py client/patches/apply_patches.py)"  # its own line: set -e sees a failure
 PATCH_SRC="$(dirname "$PATCHER")"
 for f in "${PATCH_FILES[@]}"; do
@@ -78,12 +79,16 @@ echo "Copying your base client (read only) to $DEST/client ..."
 rsync -a --delete --exclude='*.dxvk-cache' --exclude='/logs/' --exclude='/login.log' "$BASE/" "$CLIENT/"
 echo "Fetching the OfflineDAoC $EDITION client files (each verified) ..."
 python3 "$FETCH" --lock "$LOCK" client --edition "$EDITION" --client-dir "$CLIENT"
-# Classic character creation and the HearthDAoC splash (classic-creation.json), and the window layout new
-# characters start with (default-layout.json). A fresh copy of this bundle's patch files replaces $DEST/patches
-# (nothing from an older release is left), and each set is applied from there on its own. Exit 3 means the
-# applier refused a client file that set doesn't know (e.g. the b edition's game.dll) and changed nothing of it:
-# the client works, and the other set is still applied.
-echo "Applying HearthDAoC's client patches (classic character creation, loading splash, default layout) ..."
+# Classic character creation and the HearthDAoC splash (classic-creation.json), the window layout new
+# characters start with (default-layout.json), no Shrouded Isles portal art in Cotswold, Mularn and Mag Mell
+# (si-portals.json) and the 2002 look of the Albion one (si-portal-art.json). A fresh copy of this bundle's
+# patch files replaces $DEST/patches (nothing from an older release is left), and each set is applied from
+# there on its own. Exit 3 means the applier refused a client file that set doesn't know (e.g. the b edition's
+# game.dll) and changed nothing of it: the client works, and the other sets are still applied. A retired set
+# is restored instead; on this freshly built client there is nothing to restore. A release that drops a set
+# from here also gets the client's own file back, since the client is built afresh (docs/fork/FORK.md).
+echo "Applying HearthDAoC's client patches (classic character creation, loading splash, default layout," \
+     "Shrouded Isles portals) ..."
 rm -rf "$DEST/patches.new"
 mkdir "$DEST/patches.new"
 for f in "${PATCH_FILES[@]}"; do cp "$PATCH_SRC/$f" "$DEST/patches.new/"; done
@@ -100,6 +105,8 @@ apply_set() {  # apply_set <patch set> <what the client is set up without when t
 }
 apply_set classic-creation.json "HearthDAoC's classic creation patches"
 apply_set default-layout.json "HearthDAoC's default layout"
+apply_set si-portals.json "HearthDAoC's Shrouded Isles portal fix"
+apply_set si-portal-art.json "HearthDAoC's Albion portal look"
 # A new file renamed over play.sh: a running play.sh (one that is updating itself) goes on reading its own file.
 sed -e "s|@SERVER@|$SERVER|g" -e "s|@EDITION@|$EDITION|g" "$TEMPLATE" > "$DEST/play.sh.new"
 chmod +x "$DEST/play.sh.new"

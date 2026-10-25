@@ -8,19 +8,21 @@ namespace DOL.UnitTests
     [TestFixture]
     public class UT_ShroudedIslesPortalsOct5
     {
+        // HearthDAoC: no pads, the portals are the client's own 1.65 ones (UT_SiPortalsPeriod); upstream's test was
+        // TheThreeEntranceZonePointsHaveAPlatform, with TryGetPad true for each.
         [Test]
-        public void TheThreeEntranceZonePointsHaveAPlatform()
+        public void NoEntranceHasAPad()
         {
             Assert.That(ShroudedIslesPortals.EntranceIds, Is.EquivalentTo(new ushort[] { 153, 165, 167 }));
             foreach (ushort id in ShroudedIslesPortals.EntranceIds)
-                Assert.That(ShroudedIslesPortals.TryGetPad(id, out _), Is.True, $"zone point {id}");
+                Assert.That(ShroudedIslesPortals.TryGetPad(id, out _), Is.False, $"zone point {id}");
             Assert.That(ShroudedIslesPortals.TryGetPad(1, out _), Is.False, "Other zone points are unchanged.");
         }
 
         [Test]
         public void YouUseThePortalFromTheMularnPlatformNotTheGroundBesideIt()
         {
-            ShroudedIslesPortals.TryGetPad(165, out Vector3 pad);
+            Vector3 pad = new(808830, 725039, 4815); // HearthDAoC: upstream's Mularn pad, a literal (Pads is empty)
             Assert.Multiple(() =>
             {
                 Assert.That(ShroudedIslesPortals.IsOnPad(pad, pad + new Vector3(40, -30, 5)), Is.True, "On the platform.");

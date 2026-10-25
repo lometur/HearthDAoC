@@ -14,9 +14,10 @@ import tempfile
 import unittest
 
 from tests.test_layout import STOCK_INI, STOCK_INI_PATCHED, fixture_layout_set
-from tests.test_patchset import (CHANGED_MESSAGE, DLL, DLL_PATCHED, FILES, SPLASH, SPLASH_NEW, STRANGER,
-                                 UNKNOWN_MESSAGE, XML, XML_PATCHED, Fixture, fixture_patchset, read, sha, write,
-                                 write_patchset)
+from tests.test_patchset import (CHANGED_MESSAGE, DLL, DLL_PATCHED, FILES, FIXTURES_CSV, MODEL, MODEL_PATH, NIF_ROW,
+                                 NIFS_CSV, PORTAL_ROW, SPLASH, SPLASH_NEW, STRANGER, UNKNOWN_MESSAGE, XML, XML_PATCHED,
+                                 Fixture, fixture_patchset, make_mpk, mpk_entries, mpk_entry, mpk_op, read, rebuilt,
+                                 remove_set, sha, with_header, write, write_patchset)
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 PATCHES = os.path.dirname(HERE)
@@ -24,6 +25,7 @@ WINDOWS = os.path.join(os.path.dirname(PATCHES), "windows")
 APPLY_PY = os.path.join(PATCHES, "apply_patches.py")
 PS1 = os.path.join(WINDOWS, "patch-client.ps1")
 BAT = os.path.join(WINDOWS, "patch-client.bat")
+CONNECT_BAT = os.path.join(WINDOWS, "connect-hearthdaoc.bat")
 PWSH = os.environ.get("HDC_PWSH") or shutil.which("pwsh")
 MISSING_MESSAGE = "Not patched: {path} is missing from the client folder.\n"
 GONE_MESSAGE = ("Not restored: {path} is missing from the client folder; the saved original is kept as "
@@ -42,10 +44,39 @@ def _op(index, **changes):
     return lambda d: d["files"][index]["ops"][0].update(changes)
 
 
-SHA_RULE = "game.dll: 'after' must be a lower-case SHA-256 or \"source\""
+SHA_RULE = "game.dll: 'after' must be a lower-case SHA-256, \"source\" or \"absent\""
 OFFSET_RULE = "game.dll op 1: offset must be a whole number, 0 or more"
 HEX_RULE = "game.dll op 1: not lower-case hex bytes"
 XML_OP = "pregame/character_customize_stats.xml op 1"
+
+# An MPK archive that mpk-text-replace edits twice, and a file that remove moves aside: the Shrouded Isles sets'
+# shapes (si-portals.json, si-portal-art.json), with our own text.
+ARCHIVE = "zones/zone000/csv000.mpk"
+ARCHIVE_DATA = make_mpk(mpk_entries())
+ARCHIVE_PATCHED = rebuilt(mpk_entries(), {"fixtures.csv": FIXTURES_CSV.replace(PORTAL_ROW.encode(), b""),
+                                          "NIFS.CSV": NIFS_CSV.replace(NIF_ROW.encode(), b"")})
+SI_FILES = [ARCHIVE, MODEL_PATH]
+ENTRY_RULE = "'entry' must be an entry name (1 to 255 Latin-1 characters, no NUL)"
+
+
+def archive_entry(data=ARCHIVE_DATA, after=ARCHIVE_PATCHED, ops=None):
+    return {"path": ARCHIVE, "before": sha(data), "after": sha(after),
+            "ops": ops or [mpk_op("fixtures.csv", PORTAL_ROW), mpk_op("NIFS.CSV", NIF_ROW)]}
+
+
+def fixture_si_set(**changes):
+    data = remove_set(name="si-test")
+    data["files"].insert(0, archive_entry())
+    return dict(data, **changes)
+
+
+def _added(**op):
+    """The fixture patch set with an archive entry whose operation is mpk_op's with these changes."""
+    return lambda d: d["files"].append(archive_entry(ops=[dict(mpk_op("fixtures.csv", PORTAL_ROW), **op)]))
+
+
+def _absent(**changes):
+    return lambda d: d["files"].append(dict(remove_set()["files"][0], **changes))
 
 # name: (change to the fixture patch set, reason printed after "Error: invalid patch set: ")
 INVALID = {
@@ -86,6 +117,29 @@ INVALID = {
                                  "game.dll: \"after\": \"source\" needs exactly one file operation"),
     "refused not text": (lambda d: d.update(refused=["x"]), "{patchset}: 'refused' must be text"),
     "refused null": (lambda d: d.update(refused=None), "{patchset}: 'refused' must be text"),
+    "mpk entry missing": (lambda d: d["files"].append(archive_entry(ops=[{"op": "mpk-text-replace", "find": "x",
+                                                                          "replace": ""}])),
+                          f"{ARCHIVE} op 1: mpk-text-replace needs 'entry'"),
+    "mpk entry not text": (_added(entry=5), f"{ARCHIVE} op 1: {ENTRY_RULE}"),
+    "mpk entry empty": (_added(entry=""), f"{ARCHIVE} op 1: {ENTRY_RULE}"),
+    "mpk entry with a NUL": (_added(entry="a\0b"), f"{ARCHIVE} op 1: {ENTRY_RULE}"),
+    "mpk entry too long": (_added(entry="a" * 256), f"{ARCHIVE} op 1: {ENTRY_RULE}"),
+    "mpk entry outside Latin-1": (_added(entry="—.csv"), f"{ARCHIVE} op 1: {ENTRY_RULE}"),
+    "mpk entry that case-folds into Latin-1": (_added(entry="Ÿ"), f"{ARCHIVE} op 1: {ENTRY_RULE}"),
+    "mpk find empty": (_added(find=""), f"{ARCHIVE} op 1: 'find' is empty"),
+    "mpk replace not text": (_added(replace=None), f"{ARCHIVE} op 1: 'replace' must be text"),
+    "mpk text outside Latin-1": (_added(replace="—"), f"{ARCHIVE} op 1: 'replace' has characters outside Latin-1"),
+    "absent with two operations": (_absent(ops=[{"op": "remove"}, {"op": "remove"}]),
+                                   f"{MODEL_PATH}: \"after\": \"absent\" needs exactly one remove operation"),
+    "absent with another operation": (_absent(ops=[{"op": "append", "data": "00"}]),
+                                      f"{MODEL_PATH}: \"after\": \"absent\" needs exactly one remove operation"),
+    "remove without absent": (_absent(after=sha(b"other")),
+                              f"{MODEL_PATH}: a remove operation needs \"after\": \"absent\""),
+    "absent in capitals": (_absent(after="ABSENT"),
+                           f"{MODEL_PATH}: 'after' must be a lower-case SHA-256, \"source\" or \"absent\""),
+    "retired as text": (lambda d: d.update(retired="true"), "{patchset}: 'retired' must be true or false"),
+    "retired as a number": (lambda d: d.update(retired=1), "{patchset}: 'retired' must be true or false"),
+    "retired null": (lambda d: d.update(retired=None), "{patchset}: 'retired' must be true or false"),
 }
 LAYOUT_PATCHED = "Patched: default.ini (original saved as default.ini.hearthdaoc-orig)\n"
 LAYOUT_REFUSED = ("Not patched: default.ini is not the file this HearthDAoC release supports (for example one changed "
@@ -357,6 +411,151 @@ class ApplierCases:
         self.assertEqual((r.returncode, r.stdout), (0, PATCHED), r.stderr)
         self.assertEqual(read(self.fx.path(FILES[2])), SPLASH_NEW)
 
+    # mpk-text-replace, remove ("after": "absent") and retired sets.
+
+    def write_si(self, data=None, archive=ARCHIVE_DATA, model=MODEL, backup=None):
+        """The archive, the model and its backup (None: no file) in the fixture client, and data (default: the
+        Shrouded Isles test set) as a patch set; its path."""
+        write(self.fx.path(ARCHIVE), archive)
+        for path, content in ((self.fx.path(MODEL_PATH), model), (self.fx.backup(MODEL_PATH), backup)):
+            if content is not None:
+                write(path, content)
+            elif os.path.exists(path):
+                os.remove(path)
+        path = os.path.join(self.fx.bundle, "si-test.json")
+        write_patchset(path, data or fixture_si_set())
+        return path
+
+    def si_state(self):
+        """(archive, its backup, model, its backup): the bytes of each, None for no file."""
+        paths = (self.fx.path(ARCHIVE), self.fx.backup(ARCHIVE), self.fx.path(MODEL_PATH), self.fx.backup(MODEL_PATH))
+        return tuple(read(p) if os.path.exists(p) else None for p in paths)
+
+    def test_mpk_text_replace_and_remove_check_patch_and_restore(self):
+        si = self.write_si()
+        r = self.run_tool("check", patchset=si)
+        self.assertEqual((r.returncode, r.stdout, r.stderr), (0, "".join(f"{f}: unpatched\n" for f in SI_FILES), ""))
+        inode = os.stat(self.fx.path(MODEL_PATH)).st_ino
+        r = self.run_tool(patchset=si)
+        self.assertEqual((r.returncode, r.stdout, r.stderr),
+                         (0, "".join(f"Patched: {f} (original saved as {f}.hearthdaoc-orig)\n" for f in SI_FILES), ""))
+        self.assertEqual(self.si_state(), (ARCHIVE_PATCHED, ARCHIVE_DATA, None, MODEL))  # the same bytes as Python's
+        self.assertEqual(os.stat(self.fx.backup(MODEL_PATH)).st_ino, inode)  # renamed, never written
+        r = self.run_tool("check", patchset=si)
+        self.assertEqual((r.returncode, r.stdout, r.stderr), (0, "".join(f"{f}: patched\n" for f in SI_FILES), ""))
+        before = self.fx.snapshot()
+        r = self.run_tool(patchset=si)
+        self.assertEqual((r.returncode, r.stdout, r.stderr), (0, "".join(f"Already patched: {f}\n" for f in SI_FILES), ""))
+        self.assertEqual(self.fx.snapshot(), before)
+        r = self.run_tool("restore", patchset=si)
+        self.assertEqual((r.returncode, r.stdout, r.stderr), (0, "".join(f"Restored: {f}\n" for f in SI_FILES), ""))
+        self.assertEqual(self.si_state(), (ARCHIVE_DATA, None, MODEL, None))
+
+    def test_a_client_without_the_file_to_remove_counts_as_patched(self):
+        si = self.write_si(model=None)
+        r = self.run_tool("check", patchset=si)
+        self.assertEqual((r.returncode, r.stdout, r.stderr), (0, f"{ARCHIVE}: unpatched\n{MODEL_PATH}: patched\n", ""))
+        r = self.run_tool(patchset=si)
+        self.assertEqual((r.returncode, r.stdout, r.stderr),
+                         (0, f"Patched: {ARCHIVE} (original saved as {ARCHIVE}.hearthdaoc-orig)\n"
+                             f"Already patched: {MODEL_PATH}\n", ""))
+        self.assertEqual(self.si_state(), (ARCHIVE_PATCHED, ARCHIVE_DATA, None, None))
+
+    def test_a_wrong_backup_of_the_file_to_remove_is_replaced_by_the_verified_original(self):
+        si = self.write_si(backup=STRANGER)
+        r = self.run_tool(patchset=si)
+        self.assertEqual((r.returncode, r.stderr), (0, ""), r.stdout)
+        self.assertEqual(self.si_state(), (ARCHIVE_PATCHED, ARCHIVE_DATA, None, MODEL))
+
+    def test_an_unknown_file_to_remove_is_refused_with_exit_3_and_nothing_changed(self):
+        si = self.write_si(data=fixture_si_set(refused="(our test's). The portal keeps its look."), model=STRANGER)
+        before = self.fx.snapshot()
+        r = self.run_tool(patchset=si)
+        self.assertEqual((r.returncode, r.stdout, r.stderr),
+                         (3, f"Not patched: {MODEL_PATH} is not the file this HearthDAoC release supports (our test's). "
+                             "The portal keeps its look.\n", ""))
+        self.assertEqual(self.fx.snapshot(), before)  # the archive, which is fine, isn't patched either
+
+    def test_the_restore_states_of_a_removed_file(self):
+        wrong = f"Not restored: not the original file: {MODEL_PATH}.hearthdaoc-orig. Nothing was changed.\n"
+        nothing = f"Nothing to restore: {MODEL_PATH}\n"
+        cases = [((None, MODEL), (0, f"Restored: {MODEL_PATH}\n"), (MODEL, None)), ((None, None), (0, nothing), None),
+                 ((MODEL, MODEL), (0, nothing), None), ((MODEL, None), (0, nothing), None),
+                 ((STRANGER, None), (0, nothing), None), ((STRANGER, MODEL), (3, CHANGED_MESSAGE.format(path=MODEL_PATH)),
+                                                         None),
+                 ((None, STRANGER), (3, wrong), None), ((MODEL, STRANGER), (3, wrong), None),
+                 ((STRANGER, STRANGER), (3, wrong), None)]
+        for (model, backup), result, after in cases:
+            with self.subTest(model=model, backup=backup):
+                si = self.write_si(data=remove_set(), model=model, backup=backup)
+                r = self.run_tool("restore", patchset=si)
+                self.assertEqual((r.returncode, r.stdout, r.stderr), result + ("",))
+                self.assertEqual(self.si_state()[2:], after or (model, backup))
+
+    def test_mpk_failures_exit_2_and_change_nothing(self):
+        damaged_entry = make_mpk([dict(e, crc=12345) if n == 1 else e for n, e in enumerate(mpk_entries())])
+        op = mpk_op("fixtures.csv", PORTAL_ROW)
+        cases = {
+            "op 1 (mpk-text-replace): not an MPK archive": (b"not an archive", None),
+            "op 1 (mpk-text-replace): the MPK archive is damaged": (with_header(ARCHIVE_DATA, count=5), None),
+            "op 1 (mpk-text-replace): fixtures.csv in the archive is damaged": (damaged_entry, None),
+            "op 1 (mpk-text-replace): the archive has 0 entries named FIXTURES.CSV, not exactly one":
+                (ARCHIVE_DATA, [mpk_op("FIXTURES.CSV", PORTAL_ROW)]),
+            "op 2 (mpk-text-replace): found the text 0 times in fixtures.csv, not exactly once": (ARCHIVE_DATA, [op, op]),
+            f"{ARCHIVE}: the patched file doesn't have the expected SHA-256; nothing changed": (ARCHIVE_DATA, [op]),
+        }
+        for reason, (archive, ops) in cases.items():
+            with self.subTest(reason):
+                si = self.write_si(data=fixture_si_set(files=[archive_entry(data=archive, ops=ops)]), archive=archive)
+                before = self.fx.snapshot()
+                r = self.run_tool(patchset=si)
+                self.assertEqual((r.returncode, r.stdout, r.stderr), (2, "", f"Error: {reason}\n"))
+                self.assertEqual(self.fx.snapshot(), before)
+
+    def test_stored_blocks_at_the_64_kib_boundaries_give_the_same_bytes(self):
+        # Contents of 0, 1, 65535, 65536 and 131071 bytes after the edit, a name field with bytes after its NUL and
+        # Latin-1 text: six operations on one archive, each rebuilding it.
+        tail = "the line to remove\r\n"
+        sizes = (0, 1, 65535, 65536, 2 * 65535 + 1)
+        entries = [mpk_entry(f"e{n}.csv", bytes(i * 7 % 256 for i in range(size)) + tail.encode())
+                   for n, size in enumerate(sizes)]
+        entries.append(mpk_entry("", b"Our Tr\xe9e\r\n", name_field=b"named.csv\0old".ljust(256, b"\0")))
+        archive = make_mpk(entries, cumulative=True)
+        changed = {f"e{n}.csv": e["content"][:-len(tail)] for n, e in enumerate(entries[:-1])}
+        expected = rebuilt(entries, dict(changed, **{"named.csv": b"Our Tr\xe8e\r\n"}))
+        ops = [mpk_op(name, tail) for name in changed] + [mpk_op("named.csv", "Tr\xe9e", "Tr\xe8e")]
+        si = self.write_si(data=fixture_si_set(files=[archive_entry(data=archive, after=expected, ops=ops)]),
+                           archive=archive)
+        r = self.run_tool(patchset=si)
+        self.assertEqual((r.returncode, r.stderr), (0, ""), r.stdout)
+        self.assertEqual(read(self.fx.path(ARCHIVE)), expected)
+
+    def test_a_retired_set_is_restored_by_a_run_without_restore(self):
+        si = self.write_si()
+        self.assertEqual(self.run_tool(patchset=si).returncode, 0)
+        write_patchset(si, fixture_si_set(retired=True))  # a later release takes the set back
+        r = self.run_tool(patchset=si)
+        self.assertEqual((r.returncode, r.stdout, r.stderr), (0, "".join(f"Restored: {f}\n" for f in SI_FILES), ""))
+        self.assertEqual(self.si_state(), (ARCHIVE_DATA, None, MODEL, None))
+        for switches in ((), ("restore",)):
+            r = self.run_tool(*switches, patchset=si)
+            self.assertEqual((r.returncode, r.stdout, r.stderr),
+                             (0, "".join(f"Nothing to restore: {f}\n" for f in SI_FILES), ""))
+        r = self.run_tool("check", patchset=si)  # --check still reports the patch states
+        self.assertEqual((r.returncode, r.stdout, r.stderr), (0, "".join(f"{f}: unpatched\n" for f in SI_FILES), ""))
+        write(self.fx.path(MODEL_PATH), STRANGER)
+        write(self.fx.backup(MODEL_PATH), MODEL)
+        before = self.fx.snapshot()
+        r = self.run_tool(patchset=si)
+        self.assertEqual((r.returncode, r.stdout, r.stderr), (3, CHANGED_MESSAGE.format(path=MODEL_PATH), ""))
+        self.assertEqual(self.fx.snapshot(), before)
+
+    def test_a_set_that_is_not_retired_is_applied(self):
+        si = self.write_si(data=fixture_si_set(retired=False))
+        r = self.run_tool(patchset=si)
+        self.assertEqual((r.returncode, r.stdout, r.stderr),
+                         (0, "".join(f"Patched: {f} (original saved as {f}.hearthdaoc-orig)\n" for f in SI_FILES), ""))
+
 
 class PythonApplierTests(ApplierCases, unittest.TestCase):
     FLAGS = {"client": "--client", "patchset": "--patchset", "bundle": "--bundle",
@@ -410,7 +609,7 @@ class PowerShellApplierTests(ApplierCases, unittest.TestCase):
 
 class WindowsFilesTests(unittest.TestCase):
     def test_windows_files_are_ascii_with_crlf_line_ends(self):
-        for path in (PS1, BAT):
+        for path in (PS1, BAT, CONNECT_BAT):
             with self.subTest(os.path.basename(path)):
                 data = read(path)
                 data.decode("ascii")  # Windows PowerShell 5.1 reads a script without a BOM as ANSI
@@ -421,13 +620,24 @@ class WindowsFilesTests(unittest.TestCase):
         # Once for each patch set with the player's options, or once for the one -PatchSet names; how it
         # chooses runs under Wine in client/tests/test_windows_bat.sh.
         text = read(BAT).decode("ascii")
-        for name in ("classic-creation.json", "default-layout.json"):
+        for name in ("classic-creation.json", "default-layout.json", "si-portals.json", "si-portal-art.json"):
             self.assertIn('powershell -NoProfile -ExecutionPolicy Bypass -File "%~dp0patch-client.ps1" '
                           f'-PatchSet "%~dp0patches\\{name}" %*\r\n', text)
         self.assertIn('powershell -NoProfile -ExecutionPolicy Bypass -File "%~dp0patch-client.ps1" %*\r\n', text)
         self.assertIn('set "RC=%ERRORLEVEL%"\r\n', text)
         self.assertIn(" pause\r\n", text)  # only when double-clicked, so the player can read the result
         self.assertIn("\r\nexit /b %RC%\r\n", text)
+
+    def test_connect_bat_runs_the_script_for_each_patch_set_before_the_game(self):
+        # Without options: a retired set is restored by a plain run too. The order and the warnings run under Wine
+        # in client/tests/test_windows_bat.sh.
+        text = read(CONNECT_BAT).decode("ascii")
+        self.assertIn('cmd /d /c powershell -NoProfile -ExecutionPolicy Bypass -File "%~dp0patch-client.ps1"\r\n', text)
+        runs = [text.index('cmd /d /c powershell -NoProfile -ExecutionPolicy Bypass -File "%~dp0patch-client.ps1" '
+                           f'-PatchSet "%~dp0patches\\{name}"\r\n')
+                for name in ("default-layout.json", "si-portals.json", "si-portal-art.json")]
+        self.assertEqual(runs, sorted(runs))
+        self.assertLess(runs[-1], text.index("\r\n:connect\r\n"))
 
     def test_ps1_avoids_powershell_7_only_syntax(self):
         text = read(PS1).decode("ascii")

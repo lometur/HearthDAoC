@@ -29,18 +29,23 @@ echo "ok - passwords with & | < > ^ ! ) survive saving, loading and the command 
 
 # The patch step: when patch-client.ps1 is next to the .bat, it runs just before connect.exe starts,
 # once for each patch set in the patches folder. A stand-in powershell.cmd in the app folder (cmd
-# finds it before the real one) echoes its arguments and exits with FAKE_LAYOUT_EXIT when its 7th
-# argument (after -PatchSet) is default-layout.json, else with FAKE_PS_EXIT.
+# finds it before the real one) echoes its arguments and exits with FAKE_LAYOUT_EXIT, FAKE_SI_EXIT or
+# FAKE_ART_EXIT when its 7th argument (after -PatchSet) is default-layout.json, si-portals.json or
+# si-portal-art.json, else with FAKE_PS_EXIT.
 save_settings() { printf '"SERVER=192.168.1.64:10301"\r\n"ACCOUNT=Tester1"\r\n"PASSWORD=pw1"\r\n' > "$T/app/hearthdaoc.cfg"; }
 setup_patch() {
     setup; save_settings
     : > "$T/app/patch-client.ps1"; mkdir -p "$T/app/patches"
-    : > "$T/app/patches/classic-creation.json"; : > "$T/app/patches/default-layout.json"
-    printf '@echo off\r\necho stand-in powershell %%*\r\nif /i "%%~nx7"=="default-layout.json" exit /b %%FAKE_LAYOUT_EXIT%%\r\nexit /b %%FAKE_PS_EXIT%%\r\n' > "$T/app/powershell.cmd"
+    for set in classic-creation default-layout si-portals si-portal-art; do : > "$T/app/patches/$set.json"; done
+    printf '%s\r\n' '@echo off' 'echo stand-in powershell %*' \
+        'if /i "%~nx7"=="default-layout.json" exit /b %FAKE_LAYOUT_EXIT%' \
+        'if /i "%~nx7"=="si-portals.json" exit /b %FAKE_SI_EXIT%' \
+        'if /i "%~nx7"=="si-portal-art.json" exit /b %FAKE_ART_EXIT%' 'exit /b %FAKE_PS_EXIT%' > "$T/app/powershell.cmd"
 }
 run_bat() {  # run_bat <classic set's exit code> [folder]: the .bat's output; keys for its pauses come on stdin
-    # LAYOUT_EXIT (default 0) is the default layout set's exit code.
-    (cd "${2:-$T/app}" && FAKE_PS_EXIT="$1" FAKE_LAYOUT_EXIT="${LAYOUT_EXIT:-0}" DRYRUN=1 wine cmd /c connect-hearthdaoc.bat 2>/dev/null <<<$'\n\n' | tr -d '\r')
+    # LAYOUT_EXIT, SI_EXIT and ART_EXIT (default 0) are the other sets' exit codes.
+    (cd "${2:-$T/app}" && FAKE_PS_EXIT="$1" FAKE_LAYOUT_EXIT="${LAYOUT_EXIT:-0}" FAKE_SI_EXIT="${SI_EXIT:-0}" \
+        FAKE_ART_EXIT="${ART_EXIT:-0}" DRYRUN=1 wine cmd /c connect-hearthdaoc.bat 2>/dev/null <<<$'\n\n\n\n' | tr -d '\r')
 }
 line_of() { { grep -nE -m1 -- "$1" <<<"$2" || true; } | cut -d: -f1; }  # line_of <regex> <text>: first matching line number, or nothing
 PATCH_LINE='^powershell -NoProfile -ExecutionPolicy Bypass -File ".*\\app\\patch-client\.ps1"$'
@@ -54,6 +59,10 @@ LAYOUT_LINE='(^|continue\.\.\. )powershell -NoProfile -ExecutionPolicy Bypass -F
 LAYOUT_RAN='^stand-in powershell -NoProfile -ExecutionPolicy Bypass -File ".*\\app\\patch-client\.ps1" -PatchSet ".*\\app\\patches\\default-layout\.json"$'
 CLASSIC_WARNING="^Warning: HearthDAoC's client patches could not be applied .*patch-client\\.bat"
 LAYOUT_WARNING="^Warning: HearthDAoC's default layout could not be applied .*patch-client\\.bat"
+set_line() { echo "(^|continue\\.\\.\\. )powershell -NoProfile -ExecutionPolicy Bypass -File \".*\\\\app\\\\patch-client\\.ps1\" -PatchSet \".*\\\\app\\\\patches\\\\$1\\.json\"\$"; }
+set_ran() { echo "^stand-in powershell -NoProfile -ExecutionPolicy Bypass -File \".*\\\\app\\\\patch-client\\.ps1\" -PatchSet \".*\\\\app\\\\patches\\\\$1\\.json\"\$"; }
+SI_WARNING="^Warning: HearthDAoC's Shrouded Isles portal fix could not be applied .*patch-client\\.bat"
+ART_WARNING="^Warning: HearthDAoC's Albion portal look could not be applied .*patch-client\\.bat"
 
 for code in 0 3 1; do
     setup_patch
@@ -99,6 +108,45 @@ for codes in "0 0" "3 0" "1 0" "0 3" "0 1" "2 1"; do
 done
 echo "ok - the default layout set runs on its own after the classic one, whatever that one gave, and warns on its own"
 
+# The Shrouded Isles sets come next, si-portals.json then si-portal-art.json, each on its own whatever the
+# others gave, before connect.exe; their failures warn on their own. (A retired set needs no option: the
+# script restores it on a plain run.)
+for codes in "0 0 0" "1 0 0" "0 3 0" "0 1 0" "0 0 3" "0 0 2" "2 1 1"; do
+    read -r layout si art <<<"$codes"
+    setup_patch
+    out="$(LAYOUT_EXIT="$layout" SI_EXIT="$si" ART_EXIT="$art" run_bat 0)"
+    layout_ran="$(line_of "$LAYOUT_RAN" "$out")"; connect="$(line_of "$CONNECT_LINE" "$out")"
+    si_shown="$(line_of "$(set_line si-portals)" "$out")"; si_ran="$(line_of "$(set_ran si-portals)" "$out")"
+    art_shown="$(line_of "$(set_line si-portal-art)" "$out")"; art_ran="$(line_of "$(set_ran si-portal-art)" "$out")"
+    [[ -n "$layout_ran" && -n "$si_shown" && -n "$si_ran" && -n "$art_shown" && -n "$art_ran" && -n "$connect" ]] ||
+        fail "exits $codes: a run or the connect line missing: got: $out"
+    (( layout_ran < si_shown && si_shown < si_ran && si_ran < art_shown && art_shown < art_ran && art_ran < connect )) ||
+        fail "exits $codes: the layout set, si-portals.json, si-portal-art.json, then connect.exe: got: $out"
+    si_warning="$(line_of "$SI_WARNING" "$out")"; art_warning="$(line_of "$ART_WARNING" "$out")"
+    if [[ $si == [03] ]]; then
+        [[ -z "$si_warning" ]] || fail "exits $codes: unexpected portal fix warning: got: $out"
+    else
+        [[ -n "$si_warning" ]] && (( si_ran < si_warning && si_warning < art_shown )) ||
+            fail "exits $codes: no portal fix warning between the two runs: got: $out"
+    fi
+    if [[ $art == [03] ]]; then
+        [[ -z "$art_warning" ]] || fail "exits $codes: unexpected portal look warning: got: $out"
+    else
+        [[ -n "$art_warning" ]] && (( art_ran < art_warning && art_warning < connect )) ||
+            fail "exits $codes: no portal look warning before connect.exe: got: $out"
+    fi
+done
+setup_patch
+rm "$T/app/patches/si-portals.json"
+out="$(SI_EXIT=1 run_bat 0)"
+[[ -z "$(line_of 'si-portals\.json' "$out")" && -n "$(line_of "$(set_ran si-portal-art)" "$out")" ]] ||
+    fail "without si-portals.json: got: $out"
+rm "$T/app/patches/si-portal-art.json"
+out="$(ART_EXIT=1 run_bat 0)"
+[[ -z "$(line_of 'si-portal' "$out")" && -n "$(line_of "$LAYOUT_RAN" "$out")" && -n "$(line_of "$CONNECT_LINE" "$out")" ]] ||
+    fail "without the Shrouded Isles sets (an older patches folder): got: $out"
+echo "ok - the Shrouded Isles sets run on their own after the layout set, whatever the others gave, and warn on their own"
+
 # A player who restored a set and deleted its file keeps the game's own: no patch run for it.
 setup_patch
 rm "$T/app/patches/default-layout.json"
@@ -136,43 +184,55 @@ out="$(run_bat 1)"
 ! grep -qi 'powershell' <<<"$out" || fail "without the patches folder: a patch step ran: got: $out"
 echo "ok - without patch-client.ps1, or without the patches folder, there is no patch step"
 
-# patch-client.bat runs patch-client.ps1 once for each patch set (both with the player's options), or once
+# patch-client.bat runs patch-client.ps1 once for each patch set (each with the player's options), or once
 # for the one -PatchSet names, and exits with the first failed run's code. Its window pauses: it was
 # started by name, as from Explorer.
-run_patch_bat() {  # run_patch_bat <classic exit> <layout exit> [args...]: its output, then "exit <code>"
-    local classic="$1" layout="$2"; shift 2
-    (cd "$T/app" && FAKE_PS_EXIT="$classic" FAKE_LAYOUT_EXIT="$layout" wine cmd /c patch-client.bat "$@" 2>/dev/null <<<$'\n' | tr -d '\r'
+run_patch_bat() {  # run_patch_bat <classic exit> <layout exit> <si exit> <art exit> [args...]: its output, then "exit <code>"
+    local classic="$1" layout="$2" si="$3" art="$4"; shift 4
+    (cd "$T/app" && FAKE_PS_EXIT="$classic" FAKE_LAYOUT_EXIT="$layout" FAKE_SI_EXIT="$si" FAKE_ART_EXIT="$art" \
+        wine cmd /c patch-client.bat "$@" 2>/dev/null <<<$'\n' | tr -d '\r'
      echo "exit ${PIPESTATUS[0]}")
 }
 PS1_CALL='^stand-in powershell -NoProfile -ExecutionPolicy Bypass -File "[^"]*\\app\\patch-client\.ps1"'
-CLASSIC_SET=' -PatchSet "[^"]*\\app\\patches\\classic-creation\.json"'
-LAYOUT_SET=' -PatchSet "[^"]*\\app\\patches\\default-layout\.json"'
+set_arg() { echo " -PatchSet \"[^\"]*\\\\app\\\\patches\\\\$1\\.json\""; }  # set_arg <set>: the -PatchSet argument
+SETS="classic-creation default-layout si-portals si-portal-art"
 setup_patch; cp "$HERE/../windows/patch-client.bat" "$T/app/"
-out="$(run_patch_bat 0 0)"
-classic="$(line_of "$PS1_CALL$CLASSIC_SET ?\$" "$out")"; layout="$(line_of "$PS1_CALL$LAYOUT_SET ?\$" "$out")"
-[[ -n "$classic" && -n "$layout" ]] && (( classic < layout )) || fail "patch-client.bat: the classic set, then the layout set: got: $out"
+out="$(run_patch_bat 0 0 0 0)"
+last=0
+for set in $SETS; do
+    at="$(line_of "$PS1_CALL$(set_arg "$set") ?\$" "$out")"
+    [[ -n "$at" ]] && (( last < at )) || fail "patch-client.bat: the four sets in order, $set out of place: got: $out"
+    last="$at"
+done
 grep -qx 'exit 0' <<<"$out" || fail "patch-client.bat: exit 0 expected: got: $out"
-out="$(run_patch_bat 0 0 -Restore)"
-[[ -n "$(line_of "$PS1_CALL$CLASSIC_SET -Restore\$" "$out")" && -n "$(line_of "$PS1_CALL$LAYOUT_SET -Restore\$" "$out")" ]] ||
-    fail "patch-client.bat -Restore: both sets, with -Restore: got: $out"
-out="$(run_patch_bat 0 0 -PatchSet 'patches\default-layout.json' -Restore)"
+out="$(run_patch_bat 0 0 0 0 -Restore)"
+for set in $SETS; do
+    [[ -n "$(line_of "$PS1_CALL$(set_arg "$set") -Restore\$" "$out")" ]] ||
+        fail "patch-client.bat -Restore: every set, with -Restore ($set): got: $out"
+done
+out="$(run_patch_bat 0 0 0 0 -PatchSet 'patches\default-layout.json' -Restore)"
 [[ "$(grep -c '^stand-in powershell' <<<"$out")" == 1 && -n "$(line_of "$PS1_CALL -PatchSet patches.default-layout\.json -Restore\$" "$out")" ]] ||
     fail "patch-client.bat -PatchSet: one run, with the player's options: got: $out"
-for codes in "3 0 3" "0 1 1" "2 1 2" "0 3 3"; do
-    read -r classic layout expected <<<"$codes"
-    out="$(run_patch_bat "$classic" "$layout")"
-    [[ "$(grep -c '^stand-in powershell' <<<"$out")" == 2 ]] || fail "patch-client.bat, exits $classic $layout: both sets run: got: $out"
-    grep -qx "exit $expected" <<<"$out" || fail "patch-client.bat, exits $classic $layout: exit $expected expected: got: $out"
+for codes in "3 0 0 0 3" "0 1 0 0 1" "2 1 0 0 2" "0 3 0 0 3" "0 0 1 2 1" "0 0 0 3 3" "0 0 2 0 2" "0 3 1 0 3"; do
+    read -r classic layout si art expected <<<"$codes"
+    out="$(run_patch_bat "$classic" "$layout" "$si" "$art")"
+    [[ "$(grep -c '^stand-in powershell' <<<"$out")" == 4 ]] || fail "patch-client.bat, exits $codes: every set runs: got: $out"
+    grep -qx "exit $expected" <<<"$out" || fail "patch-client.bat, exits $codes: exit $expected expected: got: $out"
 done
+rm "$T/app/patches/classic-creation.json" "$T/app/patches/default-layout.json"
+out="$(run_patch_bat 0 0 0 1)"
+[[ "$(grep -c '^stand-in powershell' <<<"$out")" == 2 && -n "$(line_of "$PS1_CALL$(set_arg si-portals) ?\$" "$out")" ]] ||
+    fail "patch-client.bat with only the Shrouded Isles sets: those two run: got: $out"
+grep -qx 'exit 1' <<<"$out" || fail "patch-client.bat with only the Shrouded Isles sets: exit 1 expected: got: $out"
 rm -r "$T/app/patches"
-out="$(run_patch_bat 2 2)"
+out="$(run_patch_bat 2 2 2 2)"
 [[ "$(grep -c '^stand-in powershell' <<<"$out")" == 1 && -n "$(line_of "$PS1_CALL ?\$" "$out")" ]] ||
     fail "patch-client.bat without the patches folder: one run, without -PatchSet: got: $out"
 grep -qx 'exit 2' <<<"$out" || fail "patch-client.bat without the patches folder: its exit code: got: $out"
 setup_patch; cp "$HERE/../windows/patch-client.bat" "$T/app/"
 rm -rf "$odd"; cp -r "$T/app" "$odd"
-out="$(cd "$odd" && FAKE_PS_EXIT=0 FAKE_LAYOUT_EXIT=0 wine cmd /c patch-client.bat 2>/dev/null <<<$'\n' | tr -d '\r')"
-for set in classic-creation default-layout; do
+out="$(cd "$odd" && FAKE_PS_EXIT=0 FAKE_LAYOUT_EXIT=0 FAKE_SI_EXIT=0 FAKE_ART_EXIT=0 wine cmd /c patch-client.bat 2>/dev/null <<<$'\n' | tr -d '\r')"
+for set in $SETS; do
     grep -F '\odd & dir ^1 (x)!\patch-client.ps1" -PatchSet "' <<<"$out" | grep -qF "\\odd & dir ^1 (x)!\\patches\\$set.json\"" ||
         fail "patch-client.bat in a folder with & ^ ( ) !: no $set run: got: $out"
 done
