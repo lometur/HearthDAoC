@@ -163,6 +163,31 @@ public sealed class UT_HeadlessClient
         Assert.That(lib.SendLosCheckRequest(null, null, null), Is.False); // not Playing (PacketLib168.cs:1588-1589)
     }
 
+    // G1 (levelmatch/DESIGN.md 1.4, 2.6): BotDummyPacketLib's no-ops left a bot its login skill lists after a level-up or
+    // a training. Through IPacketLib the library now rebuilds both caches as PacketLib168 does (PacketLib168.cs:2162-2168,
+    // :2324-2330). With no specs a rebuild leaves them empty; the login's lists were not.
+    [Test]
+    public void Updating_the_skills_rebuilds_the_bots_skill_caches()
+    {
+        HeadlessClient client = InWorldClient(out GamePlayer player);
+        foreach (string name in new[] { "_usableSkillsLock", "_usableListSpellsLock", "_specializationLock" })
+            typeof(GamePlayer).GetField(name, Hidden)!.SetValue(player, new System.Threading.Lock());
+        typeof(GamePlayer).GetField("m_specialization", Hidden)!.SetValue(player, new Dictionary<string, Specialization>());
+        var login = new SpellLine("Login", "Login", "", true);
+        List<(Skill, Skill)> usable = [(login, null)];
+        List<(SpellLine, List<Skill>)> listSpells = [(login, [])];
+        typeof(GamePlayer).GetField("_usableSkills", Hidden)!.SetValue(player, usable);
+        typeof(GamePlayer).GetField("_usableListSpells", Hidden)!.SetValue(player, listSpells);
+
+        client.Out.SendNonHybridSpellLines();
+        Assert.That(player.GetAllUsableListSpells(), Is.Not.SameAs(listSpells).And.Empty);
+        Assert.That(player.GetAllUsableSkills(), Is.SameAs(usable));
+        client.Out.SendUpdatePlayerSkills(true);
+        Assert.That(player.GetAllUsableSkills(), Is.Not.SameAs(usable).And.Empty);
+        Assert.DoesNotThrow(() => Client().Out.SendUpdatePlayerSkills(true));             // no player yet: nothing
+        Assert.DoesNotThrow(() => Client().Out.SendNonHybridSpellLines());
+    }
+
     [Test]
     public void A_pooled_packet_sent_to_the_bot_goes_back_to_the_pool()
     {

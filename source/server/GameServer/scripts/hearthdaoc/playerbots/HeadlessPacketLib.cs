@@ -10,7 +10,7 @@ namespace DOL.GS.HearthDAoC.PlayerBots;
 // every other member, to BotDummyPacketLib's (interface re-implementation). Every caller reaches it as IPacketLib
 // (GameClient.Out, GameClient.cs:90). Beyond the no-ops it: answers LoS checks from the navmesh; keeps the custom
 // dialog callback as PacketLib168 does; sets the invite keys the dialog handler checks; records quest offers and
-// dialogs for the driver; tells the client about a region change.
+// dialogs for the driver; tells the client about a region change; rebuilds the player's skill caches (G1).
 public sealed class HeadlessPacketLib : BotDummyPacketLib, IPacketLib
 {
     private static readonly Logger Log = LoggerManager.Create(typeof(HeadlessPacketLib));
@@ -114,6 +114,23 @@ public sealed class HeadlessPacketLib : BotDummyPacketLib, IPacketLib
     // GamePlayer.MoveTo to another region ends here (GamePlayer.cs:7983). A real client then sends world init, game
     // open and player init again, and so does the client, from its next BeginTick.
     public new void SendRegionChanged() => _client.OnRegionChanged();
+
+    // G1 (levelmatch/DESIGN.md 1.4): PacketLib168 refreshes the player's usable-skill and spell-line caches as it builds
+    // these packets (PacketLib168.cs:2162-2168, then :2315 -> :2324-2330). BotDummyPacketLib's no-ops (bots/
+    // BotDummyPacketLib.cs:403-405, :699-705) skipped that, so a bot kept its login lists after a level-up or a training
+    // (GamePlayer.cs:3400-3447 return the cached list while it is non-empty). Callers: OnLevelUp (GamePlayer.cs:4771),
+    // /train (train.cs:191), PlayerBotKit.TrainTo and PlayerBotKitGear.Equip.
+    public new void SendUpdatePlayerSkills(bool updateInternalCache)
+    {
+        GamePlayer player = _client.Player;
+        if (player == null)
+            return;
+        player.GetAllUsableSkills(updateInternalCache);
+        SendNonHybridSpellLines();
+        _client.TrainerSkillCache = null;                                           // PacketLib168.cs:2317
+    }
+
+    public new void SendNonHybridSpellLines() => _client.Player?.GetAllUsableListSpells(true);
 
     // The other two members BotDummyPacketLib throws in (bots/BotDummyPacketLib.cs:60-63, :366-369).
     public new void SendChangeGroundTarget(int x, int y, int z) { }
