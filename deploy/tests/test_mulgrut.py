@@ -8,6 +8,7 @@ quest's map marker with him.
 The world tests run world_fixes on a copy of a clean classic world (HDC_TEST_WORLD) and read upstream's
 classic-quests.json (HDC_CLASSIC_QUESTS) merged with the fork's file, as ClassicQuests merges them.
 """
+import json
 import math
 import os
 import re
@@ -40,6 +41,11 @@ ESCORT = {  # Mob_ID: (name, level, size, speed, melee damage type, its template
 }
 DAILY_QUEST = 20207
 HANDOFF = os.path.join(DEPLOY, "HANDOFF.md")
+FORK = os.path.join(os.path.dirname(DEPLOY), "docs", "fork", "FORK.md")
+QUEST_CAMPS = os.path.join(DEPLOY, "bin", "quest_camps.json")
+BOT_GOALS = os.path.join(os.path.dirname(DEPLOY), "source", "server", "GameServer", "bots", "autonomous", "data",
+                         "capnbry_classic_si_goals.json")
+CAMELOT_HILLS = (67 * 8192, 59 * 8192)  # zone 0's offset in region 1 (Zones: OffsetX 67, OffsetY 59)
 # HANDOFF.md's way to stop his walk, with the server stopped (StopTheWalkDocsTests).
 STOP_THE_WALK = f"UPDATE Mob SET PathID='' WHERE Mob_ID='{MULGRUT}'"
 
@@ -233,6 +239,28 @@ class StopTheWalkDocsTests(unittest.TestCase):
         self.assertLess(told[0].index("./hdc stop"), told[0].index(STOP_THE_WALK))
         self.assertLess(told[0].index(STOP_THE_WALK), told[0].index("./hdc up"))
         self.assertNotRegex(told[0], r"(?i)type `/mob path`")
+
+
+class BotCampsDocsTests(unittest.TestCase):
+    """Gamebots don't hunt Mulgrut or his escort (quest monsters), but the group attacks every bot it doesn't see as
+    gray (faction 63's default standing is aggressive: StandardMobBrain.CanAggroTarget), and the bots' goal catalog
+    has low-level camps within his aggro range (500) of his walk's points. A bot camping there gets jumped, fights back
+    and may kill him: FORK.md says so (the review, 2026-10-25)."""
+
+    def test_low_level_bot_camps_lie_within_his_reach_and_fork_md_says_so(self):
+        with open(QUEST_CAMPS, encoding="utf-8") as f:
+            [walk] = [camp for camp in json.load(f)["camps"] if camp.get("path") == PATH]
+        with open(BOT_GOALS, encoding="utf-8") as f:
+            goals = json.load(f)["goals"]
+        near = sorted({(goal["name"], level) for goal in goals if goal["zone_id"] == 0
+                       for level in goal["levels"]
+                       if min(distance((goal["local_x"] + CAMELOT_HILLS[0], goal["local_y"] + CAMELOT_HILLS[1]), p)
+                              for p in walk["points"]) <= 500})
+        self.assertEqual(near, [("decayed zombie", 3), ("skeleton", 2)])
+        with open(FORK, encoding="utf-8") as f:
+            [row] = [line for line in f if PATH in line and line.startswith("| Quest camps")]
+        for words in ("gamebots", "skeletons", "decayed zombies", "may kill him"):
+            self.assertIn(words, row)
 
 
 if __name__ == "__main__":
