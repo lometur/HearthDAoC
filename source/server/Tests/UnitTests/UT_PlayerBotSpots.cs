@@ -271,4 +271,17 @@ public sealed class UT_PlayerBotSpots
         relocate!.Invoke(null, [state, null, now]);                              // returns before it reads the player
         Assert.That(state.NextRelocateTick, Is.Zero);
     }
+
+    [Test]
+    public void A_build_bot_on_its_spot_may_relocate_within_its_zone()        // levelmatch REVIEW-FIXES 2
+    {
+        MethodInfo relocate = typeof(PlayerBotDriver).GetMethod("RelocateIfOutgrown", BindingFlags.Static | BindingFlags.NonPublic);
+        PlayerBotState state = (PlayerBotState)RuntimeHelpers.GetUninitializedObject(typeof(PlayerBotState));
+        state.RoamingSince = 1;
+        state.HoldAnchor = true;
+        state.Kit = new PlayerBotKitPlan(new PlayerBotBuild(40, eCharacterClass.Friar, eRace.Briton), eSpecType.StaffFriar, new BotSpec());
+        long now = 1 + 10L * PlayerBotDriver.RelocateAfterMilliseconds;
+        Assert.That(() => relocate!.Invoke(null, [state, null, now]),            // past the anchor: it reads the player (none here)
+            Throws.InnerException.TypeOf<NullReferenceException>());
+    }
 }

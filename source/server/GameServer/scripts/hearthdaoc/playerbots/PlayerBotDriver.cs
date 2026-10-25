@@ -4,6 +4,7 @@ using System.Collections.Generic;
 using System.Diagnostics;
 using System.Linq;
 using System.Numerics;
+using System.Threading;
 using DOL.Events;
 using DOL.GS.Commands;
 using DOL.GS.Keeps;
@@ -41,6 +42,7 @@ public sealed class PlayerBotState
         LastRegion = AnchorRegion;
         LastLevel = player.Level;
         LastExperience = player.Experience;
+        StartExperience = LastExperience;
     }
     public GamePlayer Player { get; }
     public PlayerBotPathMover Mover { get; }
@@ -65,12 +67,15 @@ public sealed class PlayerBotState
     public long NextBlockedLine;                                 // PLAYER_BOT_BLOCKED
     public int BlockedSinceLine;
     public long NextWakeScanTick;                                // PlayerBotWake's 3,600-unit scan (the #137 lever)
-    public bool HoldAnchor;                                      // a spot bot (PLAYER_BOT_SPOTS): never relocates
+    public bool HoldAnchor;                                      // a spot bot (PLAYER_BOT_SPOTS): never relocates,
+    public PlayerBotKitPlan Kit;                                 //   unless it has a build (levelmatch): TrainTo on level-up
     public long SpellBlockedUntil;                               // the cast watch (levelmatch): swing, not cast, until then
     public GameLiving CastTarget;                                //   the target of the current run of requests,
     public int CastAttempts;                                     //   how many, and its health at the first
     public byte CastHealthMark;
-    public int CastFailures;                                     // PLAYER_BOT_TALLY: watch trips since login
+    public int Kills, Deaths, CastFailures, Retrains;            // PLAYER_BOT_TALLY: this bot's own, since login,
+    public long Gained, StartExperience;                         //   its experience gained, and at login
+    public long NetExperience => Interlocked.Read(ref LastExperience) - StartExperience;   // REVIEW-FIXES 9: losses too
     public long LastExperience, UnreachableUntil, NextTargetRefreshTick, NextLootTick, NextLosTick, NextStyleTick,
         NextCombatChoiceTick, NextNeighbourCountTick, NextProgressCheckTick, LastProgressTick, ProgressExperience, ProgressMoney;
     public Vector3 ProgressPosition;
@@ -362,7 +367,7 @@ public static class PlayerBotDriver
     {
         if (state.Target == null || IsValidTarget(player, state.Target, state.DeathSafetySteps) || IsAttacking(player, state.Target))
             return;
-        if (state.Engaged && !state.Target.IsAlive) PlayerBotDriverReport.Kill(state.Target);
+        if (state.Engaged && !state.Target.IsAlive) { PlayerBotDriverReport.Kill(state.Target); state.Kills++; }
         else if (!state.Target.IsAlive) state.RoamingSince = 0;  // killed by another before this bot got there: not outgrown
         state.Target = null;
         state.Engaged = false;
@@ -599,7 +604,8 @@ public static class PlayerBotDriver
     // can walk to (a GameBot leaves an outgrown camp for one at its level, AWBC:3244-3300).
     private static void RelocateIfOutgrown(PlayerBotState state, GamePlayer player, long now)
     {
-        if (state.HoldAnchor) return;                            // the lever test keeps the bots on their spots
+        if (state.HoldAnchor && state.Kit == null) return;       // the lever test keeps its bots on their spots; a build
+                                                                 // bot leaves an outgrown camp (levelmatch REVIEW-FIXES 2)
         if (state.RoamingSince == 0 || now - state.RoamingSince < RelocateAfterMilliseconds || now < state.NextRelocateTick ||
             player.CurrentRegionID != state.AnchorRegion || player.CurrentZone is not Zone zone)
             return;
@@ -661,6 +667,7 @@ public static class PlayerBotDriver
         {
             ReportDeath(state, player, now);
             state.DeathRecorded = true;
+            state.Deaths++;
             state.DeathSafetySteps++;
             state.Target = null;
             state.Engaged = false;
@@ -766,10 +773,21 @@ public static class PlayerBotDriver
     private static void ObserveXp(PlayerBotState state, GamePlayer player)
     {
         if (player.Level > state.LastLevel)
+        {
             PlayerBotDriverReport.LevelUp(player.Level - state.LastLevel, player.Level);
+            if (state.Kit != null)                                                   // levelmatch: train as a GameBot would
+            {
+                if (PlayerBotKit.TrainTo(player, state.Kit, out string line) > 0) state.Retrains++;
+                if (Log.IsInfoEnabled) Log.Info(line);
+                if (state.Target != null) (state.Spell, state.SpellLine) = FindDamageSpell(player);   // a new spell
+            }
+        }
         long gained = player.Experience - state.LastExperience;
         if (gained > 0)
+        {
             PlayerBotDriverReport.Experience(gained);
+            state.Gained += gained;
+        }
         state.LastLevel = player.Level;
         state.LastExperience = player.Experience;
     }

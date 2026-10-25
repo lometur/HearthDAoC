@@ -15,16 +15,17 @@ public readonly record struct PlayerBotDriverWindow(
     long Errors, double NearPlayerBots, double NearGamebots, int GamebotNearbyHuman, int GamebotStandard, int GamebotEfficient);
 
 // HearthDAoC #137 spike: one PLAYER_BOT_DRIVER line a minute, then the lever's PLAYER_BOT_WAKE line, from a thread-pool
-// timer off the game loop. The driver times itself (think, mover) because its TimerService row also holds the bot's
-// other timers.
+// timer off the game loop, and every TallyEveryWindows windows a PLAYER_BOT_TALLY line per bot (the level-matched run).
+// The driver times itself (think, mover) because its TimerService row also holds the bot's other timers.
 public static class PlayerBotDriverReport
 {
     private static readonly Logger Log = LoggerManager.Create(typeof(PlayerBotDriverReport));
     public const int WindowSeconds = 60;
+    public const int TallyEveryWindows = 5;   // PLAYER_BOT_TALLY at windows 5, 10, ... 60 (levelmatch/DESIGN.md 2.7)
 
     private static long _ticks, _tickStopwatch, _moverStopwatch, _kills, _deaths, _levelUps, _experience, _blocked, _stuck,
         _ldCancelled, _errors;
-    private static int _maxLevel;
+    private static int _maxLevel, _windows;
     private static Timer _timer;
     private static readonly ConditionalWeakTable<GameLiving, StrongBox<long>> _countedLives = new();
 
@@ -63,7 +64,11 @@ public static class PlayerBotDriverReport
         timer.Change(WindowSeconds * 1000, WindowSeconds * 1000);
     }
 
-    public static void Stop() => Interlocked.Exchange(ref _timer, null)?.Dispose();
+    public static void Stop()
+    {
+        Interlocked.Exchange(ref _timer, null)?.Dispose();
+        Interlocked.Exchange(ref _windows, 0);
+    }
 
     private static void Write()
     {
@@ -111,12 +116,26 @@ public static class PlayerBotDriverReport
             if (Log.IsInfoEnabled) Log.Info(Format(w));
             PlayerBotWakeWindow wake = PlayerBotWake.TakeWindow(WindowSeconds);   // its own line: the DRIVER format is pinned
             if (Log.IsInfoEnabled) Log.Info(PlayerBotWake.Format(wake));
+            int window = Interlocked.Increment(ref _windows);
+            if (window % TallyEveryWindows == 0 && Log.IsInfoEnabled)
+                foreach (PlayerBotState s in PlayerBotDriver.States)                   // fields written on the loop: whole-value reads
+                    Log.Info(FormatTally(window, s.Player.Name, s.LastLevel, Volatile.Read(ref s.Kills), Volatile.Read(ref s.Deaths),
+                        Interlocked.Read(ref s.Gained), s.NetExperience, Volatile.Read(ref s.CastFailures),
+                        Volatile.Read(ref s.Retrains), s.Activity));
         }
         catch (Exception e)
         {
             if (Log.IsWarnEnabled) Log.Warn($"PLAYER_BOT_DRIVER report failed: {e.Message}");
         }
     }
+
+    /// <summary>One bot's own counts since its login. Window N's lines follow the N-th DRIVER line: the counts at the end
+    /// of window N (the start of the [N, ...) range summarize.py and legcheck.py use). xp is the gains the DRIVER line sums;
+    /// netXp is its experience now minus at login (REVIEW-FIXES 9: a death's loss shows there).</summary>
+    public static string FormatTally(int window, string bot, int level, int kills, int deaths, long xp, long netXp,
+        int castFailed, int retrained, PlayerBotActivity activity) => string.Create(CultureInfo.InvariantCulture,
+        $"PLAYER_BOT_TALLY window={window} bot={bot} level={level} kills={kills} deaths={deaths} xp={xp} netXp={netXp} " +
+        $"castFailed={castFailed} retrained={retrained} activity={activity}");
 
     public static string Format(PlayerBotDriverWindow w)
     {

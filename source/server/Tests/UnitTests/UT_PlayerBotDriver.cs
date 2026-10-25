@@ -435,4 +435,26 @@ public sealed class UT_PlayerBotDriver
         Assert.That(empty, Does.Contain("bots=0 ticksPerBotSec=- thinkMsPerBotSec=- moverMsPerBotSec=-"));
         Assert.That(empty, Does.Contain("nearPlayerBots=- nearGamebots=-"));
     }
+
+    [Test]
+    public void TallyFormat() => Assert.That(
+        PlayerBotDriverReport.FormatTally(20, "Pbotaaaab", 40, 12, 1, 123456, 120456, 0, 1, PlayerBotActivity.Fighting),
+        Is.EqualTo("PLAYER_BOT_TALLY window=20 bot=Pbotaaaab level=40 kills=12 deaths=1 xp=123456 netXp=120456 castFailed=0 " +
+                   "retrained=1 activity=Fighting"));
+
+    [Test]
+    public void A_bots_tally_keeps_its_gains_and_its_net_experience()      // levelmatch REVIEW-FIXES 9: end minus start
+    {
+        MethodInfo observe = typeof(PlayerBotDriver).GetMethod("ObserveXp", BindingFlags.Static | BindingFlags.NonPublic);
+        GamePlayer player = Player(null);
+        var row = new DbCoreCharacter { Level = 40, Experience = 1_000 };
+        typeof(GamePlayer).GetField("m_dbCharacter", Hidden)!.SetValue(player, row);
+        PlayerBotState state = (PlayerBotState)RuntimeHelpers.GetUninitializedObject(typeof(PlayerBotState));
+        (state.LastLevel, state.LastExperience, state.StartExperience) = (40, 1_000, 1_000);
+        row.Experience = 1_500;
+        observe!.Invoke(null, [state, player]);
+        row.Experience = 1_300;                                                  // a death's loss (none on base-lm)
+        observe.Invoke(null, [state, player]);
+        Assert.That((state.Gained, state.NetExperience, state.Retrains), Is.EqualTo((500L, 300L, 0)));
+    }
 }
