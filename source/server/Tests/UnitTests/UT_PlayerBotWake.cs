@@ -46,8 +46,17 @@ public sealed class UT_PlayerBotWake
         public override void OnAutonomousBotNearby() { Wakes++; base.OnAutonomousBotNearby(); }
     }
 
-    private sealed class Taxi : GameTaxi { public override bool IsAlive => true; }
-    private sealed class Dummy : GameTrainingDummy { public override bool IsAlive => true; }
+    // On the bot (0,0,0 in region 1), so only the exclusion keeps an aggressive brain from waking them.
+    private sealed class Taxi : GameTaxi
+    {
+        public override bool IsAlive => true;
+        public override ushort CurrentRegionID { get => 1; set { } }
+    }
+    private sealed class Dummy : GameTrainingDummy
+    {
+        public override bool IsAlive => true;
+        public override ushort CurrentRegionID { get => 1; set { } }
+    }
 
     private sealed class Bot : GamePlayer
     {
@@ -257,7 +266,7 @@ public sealed class UT_PlayerBotWake
             case "inactive": npc.ObjectState = GameObject.eObjectState.Inactive; break;
             case "deleted": npc.ObjectState = GameObject.eObjectState.Deleted; break;
             case "aggro level 0": brain.Level = 0; break;
-            case "aggro range 0": brain.Range = 0; break;
+            case "aggro range 0": brain.Range = 0; npc.PositionX = 0; break;   // on the bot: only the range rule refuses
             case "outside its aggro range": npc.PositionX = 501; break;
             case "cannot aggro the bot": brain.CanAggro = false; break;
         }
