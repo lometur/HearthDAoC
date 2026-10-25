@@ -16,9 +16,9 @@ namespace DOL.GS.Tests;
 // HearthDAoC proto (#137 level-matched run, levelmatch/DESIGN.md): a bot made at a GameBot's level, class and race. The
 // allocator against GameBot.SpendSpecPoints' numbers (an autonomous GameBot's training, REVIEW-FIXES 5) and
 // VerifySpecPoints' budget, the stats against CharacterStatValidator, gender and race, the specs string and its keys,
-// the retrain and the skill counts. No server and no database (an empty one for GameObject's type initializer, as
+// the retrain, the skill counts, the gear rules and the KIT line. No server and no database (an empty one for GameObject's type initializer, as
 // UT_PlayerBotDriver.cs:26-38, and SkillBase's property names, PetTestLanguageScope): OpenSpecs (SkillBase's career),
-// TrainTo and the login are left to the smoke leg.
+// ApplyToRow's caller, TrainTo, PlayerBotKitGear.Load/Equip and the login are left to the smoke leg.
 [TestFixture, NonParallelizable]
 public sealed class UT_PlayerBotKit
 {
@@ -256,5 +256,109 @@ public sealed class UT_PlayerBotKit
         var fire = new SpellLine("Fire", "Fire", Specs.Fire_Magic, true);
         GamePlayer caster = WithSkills([(style, null)], [(fire, [Spell(3), Spell(4), Spell(5)])]);
         Assert.That((PlayerBotKit.Spells(caster), PlayerBotKit.Styles(caster)), Is.EqualTo((3, 1)));
+    }
+
+    // --- gear (levelmatch/DESIGN.md 2.3) ---
+
+    private static DbItemTemplate Item(string id, int level, int itemType, eObjectType type, int hand = 0, int damage = 0,
+        string classes = "", int requirement = 0) =>
+        new() { Id_nb = id, Name = id, Level = level, Item_Type = itemType, Object_Type = (int)type, Hand = hand,
+                Type_Damage = damage, AllowedClasses = classes, LevelRequirement = requirement, Realm = 1, IsPickable = true };
+
+    [Test]
+    public void Pick_keeps_the_gamebot_window_and_gives_a_bot_the_same_item_each_time()
+    {
+        DbItemTemplate[] items = Enumerable.Range(1, 50).Select(l => Item("torso" + l, l, Slot.TORSO, eObjectType.Plate)).ToArray();
+        for (long seed = 1; seed <= 200; seed++)
+        {
+            DbItemTemplate t = PlayerBotKitGear.Pick(items, 40, seed, Slot.TORSO);
+            Assert.That(t.Level, Is.InRange(34, 40));
+            Assert.That(PlayerBotKitGear.Pick(items.Reverse(), 40, seed, Slot.TORSO), Is.SameAs(t));   // order-free
+        }
+        Assert.That(Enumerable.Range(1, 200).Select(s => PlayerBotKitGear.Pick(items, 40, s, Slot.TORSO).Level).Distinct().Count(), Is.EqualTo(7));
+        Assert.That(PlayerBotKitGear.Pick(items.Where(i => i.Level < 30), 40, 1, Slot.TORSO), Is.Null);
+    }
+
+    [Test]
+    public void Hands_and_classes_follow_the_gamebot_and_companion_rules()
+    {
+        var R = eInventorySlot.RightHandWeapon; var L = eInventorySlot.LeftHandWeapon; var T = eInventorySlot.TwoHandWeapon;
+        Assert.That(PlayerBotKitGear.FitsHand(Item("a", 1, Slot.RIGHTHAND, eObjectType.SlashingWeapon), R, 0), Is.True);
+        Assert.That(PlayerBotKitGear.FitsHand(Item("b", 1, Slot.LEFTHAND, eObjectType.SlashingWeapon), R, 0), Is.True);
+        Assert.That(PlayerBotKitGear.FitsHand(Item("c", 1, Slot.LEFTHAND, eObjectType.LeftAxe, hand: 2), R, 0), Is.False);
+        Assert.That(PlayerBotKitGear.FitsHand(Item("d", 1, Slot.RIGHTHAND, eObjectType.SlashingWeapon), L, 0), Is.False);
+        Assert.That(PlayerBotKitGear.FitsHand(Item("e", 1, Slot.TWOHAND, eObjectType.PolearmWeapon, 1, (int)eWeaponDamageType.Thrust), T, eWeaponDamageType.Slash), Is.False);
+        Assert.That(PlayerBotKitGear.FitsHand(Item("f", 1, Slot.TWOHAND, eObjectType.PolearmWeapon, 1, (int)eWeaponDamageType.Slash), T, eWeaponDamageType.Slash), Is.True);
+        Assert.That(PlayerBotKitGear.FitsClass(Item("g", 30, Slot.TORSO, eObjectType.Plate, classes: "2;1"), 2, 30), Is.True);
+        Assert.That(PlayerBotKitGear.FitsClass(Item("h", 30, Slot.TORSO, eObjectType.Plate, classes: "1"), 2, 30), Is.False);
+        Assert.That(PlayerBotKitGear.FitsClass(Item("i", 30, Slot.TORSO, eObjectType.Plate, requirement: 35), 2, 30), Is.False);
+    }
+
+    private static BotSpec Spec(eSpecType type, eObjectType w1, eObjectType w2 = 0, bool twoHanded = false, eWeaponDamageType damage = 0) =>
+        new() { SpecType = type, WeaponOneType = w1, WeaponTwoType = w2, Is2H = twoHanded, DamageType = damage };
+
+    [Test]
+    public void The_weapon_plan_and_the_active_slot_are_the_gamebots()   // GameBot.cs:3964-4050
+    {
+        var R = eInventorySlot.RightHandWeapon; var L = eInventorySlot.LeftHandWeapon; var T = eInventorySlot.TwoHandWeapon;
+        PlayerBotWeapon W(eObjectType t, eInventorySlot s, eWeaponDamageType d = 0) => new(t, s, d);
+        Assert.That(PlayerBotKitGear.WeaponPlan(Spec(eSpecType.OneHandAndShield, eObjectType.SlashingWeapon), eCharacterClass.Armsman, eClassType.PureTank),
+            Is.EqualTo(new[] { W(eObjectType.SlashingWeapon, R) }));
+        Assert.That(PlayerBotKitGear.WeaponPlan(Spec(eSpecType.TwoHandHybrid, eObjectType.SlashingWeapon, eObjectType.PolearmWeapon, true, eWeaponDamageType.Slash),
+            eCharacterClass.Armsman, eClassType.PureTank),
+            Is.EqualTo(new[] { W(eObjectType.SlashingWeapon, R), W(eObjectType.PolearmWeapon, T, eWeaponDamageType.Slash) }));
+        Assert.That(PlayerBotKitGear.WeaponPlan(Spec(eSpecType.DualWield, eObjectType.ThrustWeapon), eCharacterClass.Mercenary, eClassType.PureTank),
+            Is.EqualTo(new[] { W(eObjectType.ThrustWeapon, R), W(eObjectType.ThrustWeapon, L) }));
+        Assert.That(PlayerBotKitGear.WeaponPlan(Spec(eSpecType.LeftAxe, eObjectType.Axe, eObjectType.LeftAxe), eCharacterClass.Shadowblade, eClassType.PureTank),
+            Is.EqualTo(new[] { W(eObjectType.Axe, R), W(eObjectType.Axe, T), W(eObjectType.LeftAxe, L) }));
+        Assert.That(PlayerBotKitGear.WeaponPlan(Spec(eSpecType.FireWiz, eObjectType.Staff, twoHanded: true), eCharacterClass.Wizard, eClassType.ListCaster),
+            Is.EqualTo(new[] { W(eObjectType.Staff, T) }));
+        Assert.That(PlayerBotKitGear.WeaponPlan(Spec(eSpecType.MendHealer, eObjectType.Hammer), eCharacterClass.Healer, eClassType.Hybrid),
+            Is.EqualTo(new[] { W(eObjectType.Hammer, R), W(eObjectType.Hammer, T) }));
+        Assert.That(PlayerBotKitGear.ActiveSlot(Spec(eSpecType.TwoHandHybrid, eObjectType.SlashingWeapon, eObjectType.TwoHandedWeapon, true),
+            eCharacterClass.Armsman, eClassType.PureTank, 9, true, true), Is.EqualTo(eActiveWeaponSlot.Standard));      // GameBot.cs:4064: 10
+        Assert.That(PlayerBotKitGear.ActiveSlot(Spec(eSpecType.TwoHandHybrid, eObjectType.SlashingWeapon, eObjectType.TwoHandedWeapon, true),
+            eCharacterClass.Armsman, eClassType.PureTank, 30, true, true), Is.EqualTo(eActiveWeaponSlot.TwoHanded));
+        Assert.That(PlayerBotKitGear.ActiveSlot(Spec(eSpecType.FireWiz, eObjectType.Staff, twoHanded: true),
+            eCharacterClass.Wizard, eClassType.ListCaster, 30, false, true), Is.EqualTo(eActiveWeaponSlot.TwoHanded));
+        Assert.That(PlayerBotKitGear.ActiveSlot(Spec(eSpecType.FireWiz, eObjectType.Staff, twoHanded: true),
+            eCharacterClass.Wizard, eClassType.ListCaster, 30, true, false), Is.EqualTo(eActiveWeaponSlot.Standard));   // no staff found
+    }
+
+    [Test]
+    public void A_shield_is_the_shield_abilitys_size_in_a_free_left_hand_of_a_class_that_holds_one()   // REVIEW-FIXES 24
+    {
+        PlayerBotWeapon[] oneHand = [new(eObjectType.SlashingWeapon, eInventorySlot.RightHandWeapon)];
+        PlayerBotWeapon[] dual = [.. oneHand, new(eObjectType.SlashingWeapon, eInventorySlot.LeftHandWeapon)];
+        Assert.That(PlayerBotKitGear.ShieldSize(eCharacterClass.Armsman, 3, oneHand), Is.EqualTo(3));
+        Assert.That(PlayerBotKitGear.ShieldSize(eCharacterClass.Armsman, 0, oneHand), Is.Zero);
+        Assert.That(PlayerBotKitGear.ShieldSize(eCharacterClass.Mercenary, 1, dual), Is.Zero);
+        foreach (eCharacterClass cls in new[] { eCharacterClass.Infiltrator, eCharacterClass.Mercenary, eCharacterClass.Nightshade,
+                     eCharacterClass.Ranger, eCharacterClass.Blademaster, eCharacterClass.Shadowblade, eCharacterClass.Berserker,
+                     eCharacterClass.Savage })                                      // BotEquipment.cs:512-522: the backpack
+            Assert.That(PlayerBotKitGear.ShieldSize(cls, 2, oneHand), Is.Zero, cls.ToString());
+    }
+
+    [TestCase(eRealm.Albion, 3, eObjectType.Studded)] [TestCase(eRealm.Hibernia, 3, eObjectType.Reinforced)]
+    [TestCase(eRealm.Midgard, 4, eObjectType.Chain)] [TestCase(eRealm.Hibernia, 4, eObjectType.Scale)]
+    [TestCase(eRealm.Albion, 5, eObjectType.Plate)] [TestCase(eRealm.Albion, 1, eObjectType.Cloth)] [TestCase(eRealm.Albion, -1, (eObjectType)0)]
+    public void The_armour_type_is_the_gamebots(eRealm realm, int level, eObjectType type) =>
+        Assert.That(PlayerBotKitGear.ArmourType(realm, level), Is.EqualTo(type));
+
+    [Test]
+    public void KitFormat()
+    {
+        var spec = new BotSpec { SpecType = eSpecType.StaffFriar };
+        spec.SpecLines.AddRange([new(Specs.Rejuvenation, 24, 0.5f), new(Specs.Staff, 50, 1.0f), new(Specs.Parry, 18, 0.1f)]);
+        var kit = new PlayerBotKitPlan(new PlayerBotBuild(40, eCharacterClass.Friar, eRace.Briton), eSpecType.StaffFriar, spec);
+        var specs = new Dictionary<string, int> { ["Staff"] = 40, ["Rejuvenation"] = 21, ["Parry"] = 1 };
+        var gear = new PlayerBotKitResult(2, 6, 1, false, 0, "Staff", eActiveWeaponSlot.TwoHanded);
+        Assert.That(PlayerBotKit.Format("hdbot-alb-01", "Pbotaaaab", kit, 40, 10, 1, 51, specs, 1624, 14, 23, "Smite:40", gear), Is.EqualTo(
+            "PLAYER_BOT_KIT account=hdbot-alb-01 name=Pbotaaaab region=51 spotLevel=40 level=40 spotClass=10 class=10 spotRace=1 race=1 " +
+            "choice=StaffFriar plan=Staff:50,Rejuvenation:24,Parry:18 points=1049 budget=1624 specs=Staff:40,Rejuvenation:21 " +
+            "styles=14 spells=23 damageSpell=Smite:40 armourLevel=2 armour=6 weapons=1 shield=0 missing=0 weapon=Staff active=TwoHanded"));
+        var bare = new PlayerBotKitPlan(kit.Build, eSpecType.StaffFriar, new BotSpec { SpecType = eSpecType.StaffFriar });
+        Assert.That(PlayerBotKit.Format("a", "b", bare, 40, 10, 1, 51, new Dictionary<string, int>(), 1624, 0, 0, "-", gear),
+            Does.Contain(" choice=StaffFriar plan=- points=0 budget=1624 specs=- styles=0 "));
     }
 }

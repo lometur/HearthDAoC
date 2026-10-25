@@ -220,4 +220,28 @@ public static class PlayerBotKit
 
     public static Dictionary<string, int> Specs(GamePlayer player) =>
         player.GetSpecList().Where(s => s.Trainable).ToDictionary(s => s.KeyName, s => s.Level, StringComparer.OrdinalIgnoreCase);
+
+    /// <summary>PLAYER_BOT_KIT, once per bot at its first entered world, after the gear: what the login made of the row
+    /// (level, class, race, the specs it loaded, the skills they give) beside the spot's build and the plan's caps
+    /// (REVIEW-FIXES 6).</summary>
+    public static string Format(string account, GamePlayer player, PlayerBotKitPlan kit, PlayerBotKitResult gear) =>
+        Format(account, player.Name, kit, player.Level, player.CharacterClass.ID, (int)player.Race, player.CurrentRegionID,
+            Specs(player), Budget(player.Level, player.CharacterClass.SpecPointsMultiplier), Styles(player), Spells(player),
+            PlayerBotDriver.BestDamageSpellName(player), gear);
+
+    public static string Format(string account, string name, PlayerBotKitPlan kit, int level, int cls, int race, int region,
+        IReadOnlyDictionary<string, int> specs, int budget, int styles, int spells, string damageSpell, PlayerBotKitResult gear)
+    {
+        string plan = string.Join(",", kit.Lines.Where(l => l.Spec != null)
+            .Select(l => Invariant($"{l.Spec.Replace(' ', '_')}:{l.SpecCap}")));
+        string raised = string.Join(",", specs.Where(kv => kv.Value > 1).OrderByDescending(kv => kv.Value)
+            .ThenBy(kv => kv.Key, StringComparer.Ordinal).Select(kv => Invariant($"{kv.Key.Replace(' ', '_')}:{kv.Value}")));
+        return string.Create(CultureInfo.InvariantCulture,
+            $"PLAYER_BOT_KIT account={account} name={name} region={region} spotLevel={kit.Build.Level} level={level} " +
+            $"spotClass={(int)kit.Build.Class} class={cls} spotRace={(int)kit.Build.Race} race={race} choice={kit.Choice} " +
+            $"plan={(plan.Length == 0 ? "-" : plan)} points={specs.Values.Sum(Cost)} budget={budget} " +
+            $"specs={(raised.Length == 0 ? "-" : raised)} styles={styles} spells={spells} damageSpell={damageSpell} " +
+            $"armourLevel={gear.ArmourLevel} armour={gear.Armour} weapons={gear.Weapons} shield={(gear.Shield ? 1 : 0)} " +
+            $"missing={gear.Missing} weapon={gear.Weapon} active={gear.Active}");
+    }
 }
