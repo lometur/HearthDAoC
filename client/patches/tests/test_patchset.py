@@ -1,16 +1,20 @@
 """Tests for the patch-set library (patchset.py) and the Linux applier (apply_patches.py).
 
 Every test builds its own fixture client folder, bundle folder and patch set in a temporary
-directory, so no game file is needed.
+directory, so no game file is needed. The MPK archives are of our own text, written and read here
+independently of patchset.py.
 """
 import hashlib
 import json
 import os
+import re
 import shutil
+import struct
 import subprocess
 import sys
 import tempfile
 import unittest
+import zlib
 from unittest import mock
 
 HERE = os.path.dirname(os.path.abspath(__file__))
@@ -73,6 +77,105 @@ def write_patchset(path, data):
     with open(path, "w", encoding="utf-8") as f:
         json.dump(data, f, indent=1)
         f.write("\n")
+
+
+# MPK archives (client/patches/mpk.py has the layout) of our own text, for mpk-text-replace.
+def zlib_stored(data):
+    """data as a zlib stream of stored blocks: 78 01, blocks of at most 65535 bytes (BFINAL on the last), Adler-32."""
+    out = bytearray(b"\x78\x01")
+    for start in range(0, len(data), 0xFFFF) if data else [0]:
+        block = data[start:start + 0xFFFF]
+        out += bytes([start + 0xFFFF >= len(data)]) + struct.pack("<HH", len(block), 0xFFFF - len(block)) + block
+    return bytes(out + struct.pack(">I", zlib.adler32(data)))
+
+
+def mpk_entry(name, content, ts=1191871001, flags=4, packed=None, name_field=None):
+    """One file of an archive; its zlib stream defaults to level 9, as upstream's packer writes it."""
+    return {"name_field": name_field or name.encode("latin-1").ljust(256, b"\0"), "ts": ts, "flags": flags,
+            "content": content, "packed": zlib.compress(content, 9) if packed is None else packed}
+
+
+def make_mpk(entries, name=b"test.mpk", cumulative=False, packed_dir=None):
+    """An MPK archive. Each entry's mem field is 0, as in the client's own archives, or with cumulative the running
+    total of the earlier entries' sizes, as upstream's packer writes it. packed_dir packs the directory (default:
+    zlib level 9). An entry's "size" or "crc" overrides what its directory record says."""
+    directory, area, total = bytearray(), bytearray(), 0
+    for e in entries:
+        directory += e["name_field"] + struct.pack("<IiIIIII", e["ts"], e["flags"], total if cumulative else 0,
+                                                   e.get("size", len(e["content"])), len(area), len(e["packed"]),
+                                                   e.get("crc", zlib.crc32(e["packed"])))
+        total += len(e["content"])
+        area += e["packed"]
+    packed = (packed_dir or (lambda d: zlib.compress(d, 9)))(bytes(directory))
+    stream = zlib.compress(name, 9)
+    head = struct.pack("<IIII", zlib.crc32(packed), len(packed), len(stream), len(entries))
+    return b"MPAK\x02" + bytes(b ^ i for i, b in enumerate(head)) + stream + packed + bytes(area)
+
+
+def with_header(data, **values):
+    """An archive with some of its header's values (crc, size_dir, size_name, count) replaced."""
+    names = ("crc", "size_dir", "size_name", "count")
+    head = dict(zip(names, struct.unpack("<IIII", bytes(b ^ i for i, b in enumerate(data[5:21])))), **values)
+    return data[:5] + bytes(b ^ i for i, b in enumerate(struct.pack("<IIII", *(head[n] for n in names)))) + data[21:]
+
+
+def parse_mpk(data):
+    """(name stream, packed directory, [entry]) of an MPK archive; fails unless every CRC and size is right."""
+    assert data[:5] == b"MPAK\x02", data[:5]
+    crc, size_dir, size_name, count = struct.unpack("<IIII", bytes(b ^ i for i, b in enumerate(data[5:21])))
+    stream, packed_dir = data[21:21 + size_name], data[21 + size_name:21 + size_name + size_dir]
+    assert zlib.crc32(packed_dir) == crc
+    directory, area = zlib.decompress(packed_dir), data[21 + size_name + size_dir:]
+    assert len(directory) == 284 * count
+    entries = []
+    for k in range(count):
+        raw = directory[284 * k:284 * (k + 1)]
+        ts, flags, mem, size, offset, packed_size, entry_crc = struct.unpack("<IiIIIII", raw[256:])
+        packed = area[offset:offset + packed_size]
+        assert len(packed) == packed_size and zlib.crc32(packed) == entry_crc
+        content = zlib.decompress(packed)
+        assert len(content) == size
+        entries.append({"name_field": raw[:256], "ts": ts, "flags": flags, "mem": mem, "offset": offset,
+                        "packed": packed, "content": content})
+    return stream, packed_dir, entries
+
+
+def rebuilt(entries, changed, name=b"test.mpk"):
+    """What mpk-text-replace must make of make_mpk(entries, name): the entries named in changed ({name: new
+    content}) and the directory as stored blocks, every other entry's zlib stream as it was, mem the running
+    total, and the name field, timestamp and flags of every entry kept."""
+    out = []
+    for e in entries:
+        key = e["name_field"].split(b"\0")[0].decode("latin-1")
+        out.append(dict(e, content=changed[key], packed=zlib_stored(changed[key])) if key in changed else e)
+    return make_mpk(out, name, cumulative=True, packed_dir=zlib_stored)
+
+
+PORTAL_ROW = "3,12,Our Portal Visual,500,600,0,90,100,1,0,0,1,0,0,3\r\n"
+FIXTURES_CSV = ("1,10,Our Tr\xe9e,100,200,0,0,100,1,0,0,1,0,0,1\r\n"
+                "2,11,Our Rock,300,400,0,0,100,1,0,0,1,0,0,2\r\n" + PORTAL_ROW).encode("latin-1")
+NIF_ROW = "12,Our Portal Visual,ourportal.nif,0,0,255,0,1,1,0,0,100,100,0,0,0,0,0,0,0,0,0,0,\r\n"
+NIFS_CSV = ("10,Our Tr\xe9e,ourtree.nif,0,0,255,0,1,1,0,0,100,100,0,0,0,0,0,0,0,0,0,0,\r\n" + NIF_ROW).encode("latin-1")
+ZONEJUMP_CSV = b"1,Our Line,100,200,300,400,0,500,7,1\r\n"
+
+
+def mpk_entries():
+    return [mpk_entry("bound.csv", b"0,1,2,3\r\n" * 40), mpk_entry("fixtures.csv", FIXTURES_CSV),
+            mpk_entry("NIFS.CSV", NIFS_CSV, ts=1059658602), mpk_entry("zonejump.csv", ZONEJUMP_CSV, ts=1191871052)]
+
+
+def mpk_op(entry, find, replace=""):
+    return {"op": "mpk-text-replace", "entry": entry, "find": find, "replace": replace}
+
+
+# A file the "remove" operation moves aside ("after": "absent"), so the client loads another copy.
+MODEL = b"the 2006 portal model"
+MODEL_PATH = "Newtowns/zones/Nifs/model.npk"
+
+
+def remove_set(**changes):
+    entry = {"path": MODEL_PATH, "before": sha(MODEL), "after": "absent", "ops": [{"op": "remove"}]}
+    return dict({"format": 1, "name": "portal-art", "client": "test fixture", "files": [entry]}, **changes)
 
 
 class Fixture:
@@ -166,6 +269,54 @@ class LoadTests(unittest.TestCase):
             with self.subTest(name), self.assertRaises(patchset.PatchError):
                 self.load(data)
 
+    def test_loads_mpk_text_replace_remove_and_retired_sets(self):
+        data = remove_set()
+        data["files"].append({"path": "zones/zone000/csv000.mpk", "before": sha(b"a"), "after": sha(b"b"),
+                              "ops": [mpk_op("fixtures.csv", PORTAL_ROW), mpk_op("NIFS.CSV", "\xe9", "e")]})
+        loaded = self.load(data)
+        self.assertEqual([f["after"] for f in loaded["files"]], ["absent", sha(b"b")])
+        for retired in (True, False):
+            self.assertIs(self.load(dict(data, retired=retired))["retired"], retired)
+
+    def test_rejects_invalid_mpk_text_replace_remove_and_retired_sets(self):
+        def mpk_set(**op):
+            return {"format": 1, "files": [{"path": "csv000.mpk", "before": sha(b"a"), "after": sha(b"b"),
+                                            "ops": [dict(mpk_op("fixtures.csv", PORTAL_ROW), **op)]}]}
+
+        def absent(**entry):
+            data = remove_set()
+            data["files"][0].update(entry)
+            return data
+
+        cases = {
+            "mpk entry missing": (lambda: {"format": 1, "files": [dict(mpk_set()["files"][0], ops=[
+                {"op": "mpk-text-replace", "find": "x", "replace": ""}])]}, "csv000.mpk op 1: mpk-text-replace needs 'entry'"),
+            "mpk entry not text": (lambda: mpk_set(entry=5), "csv000.mpk op 1: 'entry' must be an entry name"),
+            "mpk entry empty": (lambda: mpk_set(entry=""), "csv000.mpk op 1: 'entry' must be an entry name"),
+            "mpk entry with a NUL": (lambda: mpk_set(entry="a\0b"), "csv000.mpk op 1: 'entry' must be an entry name"),
+            "mpk entry outside Latin-1": (lambda: mpk_set(entry="—.csv"), "'entry' must be an entry name"),
+            "mpk entry too long": (lambda: mpk_set(entry="a" * 256), "'entry' must be an entry name"),
+            "mpk find empty": (lambda: mpk_set(find=""), "csv000.mpk op 1: 'find' is empty"),
+            "mpk replace not text": (lambda: mpk_set(replace=None), "csv000.mpk op 1: 'replace' must be text"),
+            "mpk text outside Latin-1": (lambda: mpk_set(find="—"), "'find' has characters outside Latin-1"),
+            "absent with two operations": (lambda: absent(ops=[{"op": "remove"}, {"op": "remove"}]),
+                                           f"{MODEL_PATH}: \"after\": \"absent\" needs exactly one remove operation"),
+            "absent with another operation": (lambda: absent(ops=[{"op": "append", "data": "00"}]),
+                                              f"{MODEL_PATH}: \"after\": \"absent\" needs exactly one remove operation"),
+            "remove without absent": (lambda: absent(after=sha(b"b")),
+                                      f"{MODEL_PATH}: a remove operation needs \"after\": \"absent\""),
+            "absent without a before hash": (lambda: absent(before="absent"),
+                                             f"{MODEL_PATH}: 'before' must be a lower-case SHA-256"),
+            "after in capitals": (lambda: absent(after="ABSENT"), "'after' must be a lower-case SHA-256, "
+                                                                  "\"source\" or \"absent\""),
+            "retired as text": (lambda: remove_set(retired="true"), "'retired' must be true or false"),
+            "retired as a number": (lambda: remove_set(retired=1), "'retired' must be true or false"),
+            "retired null": (lambda: remove_set(retired=None), "'retired' must be true or false"),
+        }
+        for name, (data, reason) in cases.items():
+            with self.subTest(name), self.assertRaisesRegex(patchset.PatchError, re.escape(reason)):
+                self.load(data())
+
     def test_rejects_unreadable_files(self):
         with open(self.path, "w", encoding="utf-8") as f:
             f.write("{ not json")
@@ -214,6 +365,227 @@ class TransformTests(unittest.TestCase):
             self.assertEqual(patchset.transform(SPLASH, ops, bundle), SPLASH_NEW)
             with self.assertRaisesRegex(patchset.PatchError, "bundled file missing"):
                 patchset.transform(SPLASH, [{"op": "file", "source": "other.mpk"}], bundle)
+
+
+class MpkTextReplaceTests(unittest.TestCase):
+    """mpk-text-replace edits one file inside an MPK archive and rebuilds the archive the same way every time."""
+
+    def setUp(self):
+        self.entries = mpk_entries()
+        self.data = make_mpk(self.entries)
+
+    def transform(self, *ops, data=None):
+        return patchset.transform(self.data if data is None else data, list(ops), None)
+
+    def refused(self, reason, *ops, data=None):
+        with self.assertRaises(patchset.PatchError) as cm:
+            self.transform(*ops, data=data)
+        self.assertEqual(str(cm.exception), reason)
+
+    def test_removes_the_line_and_rebuilds_the_archive(self):
+        out = self.transform(mpk_op("fixtures.csv", PORTAL_ROW))
+        new = FIXTURES_CSV.replace(PORTAL_ROW.encode(), b"")
+        self.assertEqual(out, rebuilt(self.entries, {"fixtures.csv": new}))
+        stream, packed_dir, entries = parse_mpk(out)  # every CRC and size checks out
+        self.assertEqual(stream, parse_mpk(self.data)[0])  # the archive's name, as it was
+        self.assertEqual(packed_dir, zlib_stored(zlib.decompress(packed_dir)))
+        self.assertEqual([e["content"] for e in entries], [self.entries[0]["content"], new, NIFS_CSV, ZONEJUMP_CSV])
+        self.assertEqual([e["packed"] for e in entries],
+                         [self.entries[0]["packed"], zlib_stored(new), self.entries[2]["packed"], self.entries[3]["packed"]])
+        sizes = [len(e["content"]) for e in entries]
+        self.assertEqual([e["mem"] for e in entries], [0, sizes[0], sum(sizes[:2]), sum(sizes[:3])])
+        lengths = [len(e["packed"]) for e in entries]
+        self.assertEqual([e["offset"] for e in entries], [0, lengths[0], sum(lengths[:2]), sum(lengths[:3])])
+        self.assertEqual([(e["name_field"], e["ts"], e["flags"]) for e in entries],
+                         [(e["name_field"], e["ts"], e["flags"]) for e in self.entries])
+
+    def test_the_rebuild_is_the_same_every_time(self):
+        op = mpk_op("fixtures.csv", PORTAL_ROW)
+        self.assertEqual(self.transform(op), self.transform(op))
+        # Whatever the archive's own packer wrote (here the running total in mem, and a level 1 directory).
+        other = make_mpk(self.entries, cumulative=True, packed_dir=lambda d: zlib.compress(d, 1))
+        self.assertEqual(self.transform(op, data=other), self.transform(op))
+
+    def test_two_operations_give_the_bytes_of_one_rebuild(self):
+        out = self.transform(mpk_op("fixtures.csv", PORTAL_ROW), mpk_op("NIFS.CSV", NIF_ROW))
+        self.assertEqual(out, rebuilt(self.entries, {"fixtures.csv": FIXTURES_CSV.replace(PORTAL_ROW.encode(), b""),
+                                                     "NIFS.CSV": NIFS_CSV.replace(NIF_ROW.encode(), b"")}))
+
+    def test_stored_blocks_at_0_1_65535_and_65536_bytes(self):
+        tail = "the line to remove\r\n"
+        for size in (0, 1, 65535, 65536):
+            with self.subTest(size=size):
+                body = bytes(i * 7 % 256 for i in range(size))
+                data = make_mpk([mpk_entry("big.csv", body + tail.encode())])
+                packed = parse_mpk(self.transform(mpk_op("big.csv", tail), data=data))[2][0]["packed"]
+                self.assertEqual(zlib.decompress(packed), body)
+                self.assertEqual(packed, zlib_stored(body))
+                self.assertEqual(packed[-4:], struct.pack(">I", zlib.adler32(body)))
+                if size == 0:
+                    self.assertEqual(packed, bytes.fromhex("7801" "010000ffff" "00000001"))
+                elif size == 1:
+                    self.assertEqual(packed, bytes.fromhex("7801" "010100feff" "00" "00010001"))
+                elif size == 65535:
+                    self.assertEqual(packed[:7], bytes.fromhex("7801" "01ffff0000"))
+                    self.assertEqual(len(packed), 2 + 5 + 65535 + 4)
+                else:
+                    self.assertEqual(packed[:7], bytes.fromhex("7801" "00ffff0000"))
+                    self.assertEqual(packed[7 + 65535:7 + 65535 + 5], bytes.fromhex("010100feff"))
+                    self.assertEqual(len(packed), 2 + 5 + 65535 + 5 + 1 + 4)
+
+    def test_the_entry_is_named_exactly_once(self):
+        self.refused("op 1 (mpk-text-replace): the archive has 0 entries named FIXTURES.CSV, not exactly one",
+                     mpk_op("FIXTURES.CSV", PORTAL_ROW))
+        twice = make_mpk(self.entries + [mpk_entry("fixtures.csv", FIXTURES_CSV)])
+        self.refused("op 1 (mpk-text-replace): the archive has 2 entries named fixtures.csv, not exactly one",
+                     mpk_op("fixtures.csv", PORTAL_ROW), data=twice)
+
+    def test_the_text_must_occur_exactly_once_in_that_entry(self):
+        for find, count in (("Our Wall", 0), ("ourportal.nif", 0), ("Our Portal Visual", 1), (",0,0,1,0,0,", 3)):
+            op = mpk_op("fixtures.csv", find)
+            if count == 1:
+                self.transform(op)
+                continue
+            with self.subTest(find=find):
+                self.refused(f"op 1 (mpk-text-replace): found the text {count} times in fixtures.csv, not exactly once",
+                             op)
+        self.refused("op 2 (mpk-text-replace): found the text 0 times in fixtures.csv, not exactly once",
+                     mpk_op("fixtures.csv", PORTAL_ROW), mpk_op("fixtures.csv", PORTAL_ROW))
+
+    def test_refuses_a_file_that_is_not_an_mpk_archive(self):
+        for data in (b"", b"PK\x03\x04 a zip file", b"MPAK\x02" + bytes(15), b"MPAK\x01" + self.data[5:]):
+            with self.subTest(data=data[:8]):
+                self.refused("op 1 (mpk-text-replace): not an MPK archive", mpk_op("fixtures.csv", PORTAL_ROW),
+                             data=data)
+
+    def test_refuses_a_damaged_archive(self):
+        at = 21 + len(zlib.compress(b"test.mpk", 9)) + 3  # a byte of the packed directory
+        damaged = {
+            "a directory byte": self.data[:at] + bytes([self.data[at] ^ 1]) + self.data[at + 1:],
+            "a cut file": self.data[:-3],
+            "a wrong file count": with_header(self.data, count=5),
+            "a wrong directory size": with_header(self.data, size_dir=40),
+            "sizes past the end": with_header(self.data, size_name=1 << 30),
+        }
+        for name, data in damaged.items():
+            with self.subTest(name):
+                self.refused("op 1 (mpk-text-replace): the MPK archive is damaged", mpk_op("fixtures.csv", PORTAL_ROW),
+                             data=data)
+
+    def test_refuses_a_damaged_entry(self):
+        damaged = {
+            "its CRC-32": dict(self.entries[1], crc=12345),
+            "its zlib stream": dict(self.entries[1], packed=b"\x78\x01\x07" + self.entries[1]["packed"][3:]),
+            "its size": dict(self.entries[1], size=len(FIXTURES_CSV) + 1),
+            "a cut stream": dict(self.entries[1], packed=self.entries[1]["packed"][:40]),
+        }
+        for name, entry in damaged.items():
+            with self.subTest(name):
+                data = make_mpk([self.entries[0], entry] + self.entries[2:])
+                self.refused("op 1 (mpk-text-replace): fixtures.csv in the archive is damaged",
+                             mpk_op("fixtures.csv", PORTAL_ROW), data=data)
+
+    def test_keeps_the_name_field_after_its_nul_and_every_latin1_byte(self):
+        field = b"fixtures.csv\0old bytes".ljust(256, b"\0")
+        entries = [mpk_entry("", FIXTURES_CSV, name_field=field)]
+        out = self.transform(mpk_op("fixtures.csv", "Our Tr\xe9e", "Our Tr\xe8e"), data=make_mpk(entries))
+        [entry] = parse_mpk(out)[2]
+        self.assertEqual(entry["name_field"], field)
+        self.assertEqual(entry["content"], FIXTURES_CSV.replace(b"Our Tr\xe9e", b"Our Tr\xe8e"))
+
+
+class RemoveTests(unittest.TestCase):
+    """A file whose "after" is "absent" is patched by moving it over its backup, and restored by moving it back."""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        self.client = os.path.join(self.tmp.name, "client")
+        self.model = os.path.join(self.client, *MODEL_PATH.split("/"))
+        self.backup = self.model + patchset.BACKUP_SUFFIX
+        write(self.model, MODEL)
+        path = os.path.join(self.tmp.name, "portal-art.json")
+        write_patchset(path, remove_set())
+        self.patchset = patchset.load(path)
+
+    def place(self, model, backup):
+        """Put the model and its backup in a state: bytes, or None for no file."""
+        for path, data in ((self.model, model), (self.backup, backup)):
+            if data is None:
+                if os.path.exists(path):
+                    os.remove(path)
+            else:
+                write(path, data)
+
+    def snapshot(self):
+        return {name: read(os.path.join(os.path.dirname(self.model), name))
+                for name in sorted(os.listdir(os.path.dirname(self.model)))}
+
+    def test_status(self):
+        for model, state in ((MODEL, "unpatched"), (None, "patched"), (STRANGER, "unknown")):
+            with self.subTest(state):
+                self.place(model, None)
+                self.assertEqual(patchset.status(self.client, self.patchset, None), [(MODEL_PATH, state)])
+
+    def test_apply_moves_the_file_over_its_backup(self):
+        inode = os.stat(self.model).st_ino
+        self.assertEqual(patchset.apply(self.client, self.patchset, None), [(MODEL_PATH, "patched")])
+        self.assertFalse(os.path.exists(self.model))
+        self.assertEqual(read(self.backup), MODEL)
+        self.assertEqual(os.stat(self.backup).st_ino, inode)  # renamed, never written
+        self.assertEqual(patchset.apply(self.client, self.patchset, None), [(MODEL_PATH, "already")])
+        self.assertEqual(self.snapshot(), {"model.npk.hearthdaoc-orig": MODEL})
+
+    def test_a_client_without_the_file_counts_as_patched(self):
+        self.place(None, None)
+        self.assertEqual(patchset.apply(self.client, self.patchset, None), [(MODEL_PATH, "already")])
+        self.assertEqual(self.snapshot(), {})
+
+    def test_a_wrong_backup_is_replaced_by_the_verified_original(self):
+        write(self.backup, STRANGER)
+        inode = os.stat(self.model).st_ino
+        self.assertEqual(patchset.apply(self.client, self.patchset, None), [(MODEL_PATH, "patched")])
+        self.assertEqual(self.snapshot(), {"model.npk.hearthdaoc-orig": MODEL})
+        self.assertEqual(os.stat(self.backup).st_ino, inode)
+
+    def test_an_unknown_file_is_refused_and_nothing_changes(self):
+        self.place(STRANGER, None)
+        with self.assertRaisesRegex(patchset.PatchError, re.escape(f"refused, nothing changed: {MODEL_PATH} (unknown)")):
+            patchset.apply(self.client, self.patchset, None)
+        self.assertEqual(self.snapshot(), {"model.npk": STRANGER})
+
+    def test_restore_status_reports_each_state(self):
+        cases = [((None, MODEL), "patched"), ((None, None), "no-backup"), ((None, STRANGER), "wrong-backup"),
+                 ((MODEL, MODEL), "original"), ((MODEL, None), "no-backup"), ((MODEL, STRANGER), "wrong-backup"),
+                 ((STRANGER, MODEL), "changed"), ((STRANGER, None), "no-backup"), ((STRANGER, STRANGER), "wrong-backup")]
+        for (model, backup), state in cases:
+            with self.subTest(model=model, backup=backup):
+                self.place(model, backup)
+                self.assertEqual(patchset.restore_status(self.client, self.patchset, None), [(MODEL_PATH, state)])
+
+    def test_restore_moves_the_backup_back(self):
+        patchset.apply(self.client, self.patchset, None)
+        inode = os.stat(self.backup).st_ino
+        self.assertEqual(patchset.restore(self.client, self.patchset, None), [(MODEL_PATH, "restored")])
+        self.assertEqual(self.snapshot(), {"model.npk": MODEL})
+        self.assertEqual(os.stat(self.model).st_ino, inode)
+        self.assertEqual(patchset.restore(self.client, self.patchset, None), [(MODEL_PATH, "not-patched")])
+
+    def test_restore_keeps_the_backup_of_a_file_that_already_is_the_original(self):
+        self.place(MODEL, MODEL)  # e.g. a repair of the install put the file back
+        self.assertEqual(patchset.restore(self.client, self.patchset, None), [(MODEL_PATH, "not-patched")])
+        self.assertEqual(self.snapshot(), {"model.npk": MODEL, "model.npk.hearthdaoc-orig": MODEL})
+
+    def test_restore_refuses_a_changed_file_or_a_wrong_backup_and_changes_nothing(self):
+        for (model, backup), reason in (((STRANGER, MODEL), f"changed since it was patched: {MODEL_PATH}"),
+                                        ((None, STRANGER), f"not the original file: {MODEL_PATH}.hearthdaoc-orig")):
+            with self.subTest(reason):
+                self.place(model, backup)
+                before = self.snapshot()
+                with self.assertRaises(patchset.PatchError) as cm:
+                    patchset.restore(self.client, self.patchset, None)
+                self.assertEqual(str(cm.exception), reason)
+                self.assertEqual(self.snapshot(), before)
 
 
 class ApplyTests(unittest.TestCase):

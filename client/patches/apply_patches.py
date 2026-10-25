@@ -3,11 +3,12 @@
 
     apply_patches.py --client DIR [--patchset FILE] [--bundle DIR] [--restore | --check]
 
-The patch set defaults to classic-creation.json next to this script; default-layout.json, the other
-one, is applied by its own run. Bundled files, such as splash.mpk, are looked up in the patch set's
-folder unless --bundle names another one.
+The patch set defaults to classic-creation.json next to this script; each of the others
+(default-layout.json, si-portals.json, si-portal-art.json) is applied by its own run. Bundled files,
+such as splash.mpk, are looked up in the patch set's folder unless --bundle names another one.
 --check only reports each file's state. --restore puts the backed-up originals back, but only
-over files that are still the patched ones.
+over files that are still the patched ones. A retired set ("retired": true: a release took it
+back) is restored by a run without --check too, so the launchers need no change to take it back.
 
 Exit codes:
   0  patched, already patched or restored (--check: every file is known)
@@ -42,7 +43,7 @@ def run(args):
         print(f"Error: invalid patch set: {e}", file=sys.stderr)
         return 2
     bundle = args.bundle or os.path.dirname(os.path.abspath(args.patchset))
-    if args.restore:
+    if args.restore or (pset.get("retired") and not args.check):
         states = patchset.restore_status(args.client, pset, bundle)
         wrong = [path + patchset.BACKUP_SUFFIX for path, state in states if state == "wrong-backup"]
         if wrong:
