@@ -9,11 +9,15 @@ using DOL.Logging;
 
 namespace DOL.GS.HearthDAoC.PlayerBots;
 
-public sealed record PlayerBotSpot(eRealm Realm, ushort Region, int X, int Y, int? Z);
+public sealed record PlayerBotBuild(byte Level, eCharacterClass Class, eRace Race);
 
-// HearthDAoC #137 lever test: HEARTHDAOC_PLAYER_BOT_SPOTS names a file of "realm|region|x|y[|z]" lines (# comments).
-// The realm is alb/mid/hib, or 1/2/3 as the owner's richer GameBot export writes it (Realm|RegionId|X|Y|Z). The n-th
-// bot of a realm starts and binds at that realm's n-th spot; bots past the list start as before. A Shrouded Isles spot
+public sealed record PlayerBotSpot(eRealm Realm, ushort Region, int X, int Y, int? Z, PlayerBotBuild Build = null);
+
+// HearthDAoC #137 lever test: HEARTHDAOC_PLAYER_BOT_SPOTS names a file of "realm|region|x|y[|z[|level|class|race]]"
+// lines (# comments). The realm is alb/mid/hib, or 1/2/3 as the owner's richer GameBot export writes it
+// (Realm|RegionId|X|Y|Z). The level-matched run adds the GameBot's level, class id and race id (tools/spots.py from
+// gamebot-levels.txt); such a bot is made at that level, class and race (PlayerBotKit). The n-th bot of a realm starts
+// and binds at that realm's n-th spot; bots past the list start as before. A Shrouded Isles spot
 // needs nothing more: no login step compares the region's expansion with the client type (only a move does,
 // RegionChangeRequestHandler.cs:140, jump.cs:433), and the bot's client type is above every region's anyway
 // (HeadlessClient.cs:28).
@@ -26,10 +30,14 @@ public sealed class PlayerBotSpots
 
     private readonly Dictionary<eRealm, List<PlayerBotSpot>> _byRealm;
     public int Count { get; }
+    public int Builds { get; }                    // spots with a level|class|race
+    public byte MaxBuildLevel { get; }            // PlayerBotKitGear.Load reads items up to it
 
     private PlayerBotSpots(IReadOnlyCollection<PlayerBotSpot> spots)
     {
         Count = spots.Count;
+        Builds = spots.Count(s => s.Build != null);
+        MaxBuildLevel = spots.Select(s => s.Build?.Level ?? (byte)0).DefaultIfEmpty((byte)0).Max();
         _byRealm = spots.GroupBy(s => s.Realm).ToDictionary(g => g.Key, g => g.ToList());
     }
 
@@ -53,21 +61,40 @@ public sealed class PlayerBotSpots
                 "hib" or "3" => eRealm.Hibernia,
                 _ => null,
             };
-            if (realm == null || p.Length is < 4 or > 5 ||
+            if (realm == null || p.Length is not (4 or 5 or 8) ||
                 !ushort.TryParse(p[1], NumberStyles.None, CultureInfo.InvariantCulture, out ushort region) ||
                 !int.TryParse(p[2], NumberStyles.None, CultureInfo.InvariantCulture, out int x) ||
                 !int.TryParse(p[3], NumberStyles.None, CultureInfo.InvariantCulture, out int y))
-                throw new FormatException($"{EnvironmentVariable} line {number} must be realm|region|x|y[|z], got '{raw}'");
+                throw new FormatException($"{EnvironmentVariable} line {number} must be realm|region|x|y[|z[|level|class|race]], got '{raw}'");
             int? z = null;
-            if (p.Length == 5)
+            if (p.Length >= 5)
             {
                 if (!int.TryParse(p[4], NumberStyles.AllowLeadingSign, CultureInfo.InvariantCulture, out int zz))
                     throw new FormatException($"{EnvironmentVariable} line {number} has a bad z, got '{raw}'");
                 z = zz;
             }
-            spots.Add(new(realm.Value, region, x, y, z));
+            PlayerBotBuild build = null;
+            if (p.Length == 8)
+                build = ParseBuild(realm.Value, p[5], p[6], p[7]) ??
+                    throw new FormatException($"{EnvironmentVariable} line {number} has a bad level|class|race, got '{raw}'");
+            spots.Add(new(realm.Value, region, x, y, z, build));
         }
         return new(spots);
+    }
+
+    /// <summary>The ids of the owner's level export: a level 1-50, a class this realm may create (the list
+    /// IsCharacterValid checks, CharacterCreateRequestHandler.cs:972; GlobalConstants.cs:938) and a known race. The race
+    /// against the class (EligibleRaces, :991) is checked at creation. Null when any is bad.</summary>
+    public static PlayerBotBuild ParseBuild(eRealm realm, string level, string cls, string race)
+    {
+        if (!byte.TryParse(level, NumberStyles.None, CultureInfo.InvariantCulture, out byte l) || l is < 1 or > GamePlayer.MAX_LEVEL ||
+            !byte.TryParse(cls, NumberStyles.None, CultureInfo.InvariantCulture, out byte c) ||
+            !GlobalConstants.STARTING_CLASSES_DICT.TryGetValue(realm, out List<eCharacterClass> classes) ||
+            !classes.Contains((eCharacterClass)c) ||
+            !byte.TryParse(race, NumberStyles.None, CultureInfo.InvariantCulture, out byte r) ||
+            !Enum.IsDefined((eRace)r) || (eRace)r == eRace.Unknown)
+            return null;
+        return new(l, (eCharacterClass)c, (eRace)r);
     }
 
     public PlayerBotSpot For(PlayerBotSlot slot) =>
@@ -76,6 +103,10 @@ public sealed class PlayerBotSpots
     public string Describe() => Count == 0 ? "none" : string.Join(",",
         new[] { eRealm.Albion, eRealm.Midgard, eRealm.Hibernia }.Select(r =>
             PlayerBotPlan.RealmKey(r) + ":" + (_byRealm.TryGetValue(r, out List<PlayerBotSpot> l) ? l.Count : 0)));
+
+    public string DescribeBuilds() => Builds == 0 ? "none" : string.Join(",",
+        new[] { eRealm.Albion, eRealm.Midgard, eRealm.Hibernia }.Select(r =>
+            PlayerBotPlan.RealmKey(r) + ":" + (_byRealm.TryGetValue(r, out List<PlayerBotSpot> l) ? l.Count(s => s.Build != null) : 0)));
 
     /// <summary>The Z (and a mesh-snapped X/Y). The file's own Z, else the seed NPC's when it stands within SeedFar
     /// (one farther off stands elsewhere: no seed). Then the navmesh near that Z, else the floor under it (from the top

@@ -10,8 +10,9 @@ using NUnit.Framework;
 
 namespace DOL.GS.Tests;
 
-// HearthDAoC proto (#137 lever test): HEARTHDAOC_PLAYER_BOT_SPOTS. The spots file (realm|region|x|y[|z]; the realm as
-// alb/mid/hib, or 1/2/3 as the owner's richer export writes it), the n-th bot of a realm at that realm's n-th spot, the
+// HearthDAoC proto (#137 lever test): HEARTHDAOC_PLAYER_BOT_SPOTS. The spots file (realm|region|x|y[|z[|level|class|race]];
+// the realm as alb/mid/hib, or 1/2/3 as the owner's richer export writes it; the level-matched run's build as the level
+// export's ids, levelmatch/DESIGN.md 2.1), the n-th bot of a realm at that realm's n-th spot, the
 // Z (the navmesh near the file's or the nearest NPC's Z, the floor under it, that Z itself, else skipped), the row the
 // login reads and its 10 fields, and HoldAnchor. No server and no database: PlayerBotSpots.Place, which reads the world
 // and saves the row, is left to the smoke leg.
@@ -85,10 +86,11 @@ public sealed class UT_PlayerBotSpots
 
     [TestCase("elf|1|2|3")] [TestCase("0|1|2|3")] [TestCase("4|1|2|3")] [TestCase("alb|1|2")] [TestCase("alb|1|2|3|4|5")]
     [TestCase("alb|x|2|3")] [TestCase("alb|70000|2|3")] [TestCase("alb|1|-2|3")] [TestCase("alb|1|2|3.5")] [TestCase("alb,1,2,3")]
+    [TestCase("alb|1|2|3|4|5|6")] [TestCase("alb|1|2|3|4|5|6|7|8")]
     public void A_bad_line_is_refused_naming_its_number(string bad)
     {
         var e = Assert.Throws<FormatException>(() => PlayerBotSpots.Parse(["# owner", "alb|1|2|3", bad]));
-        Assert.That(e!.Message, Is.EqualTo($"HEARTHDAOC_PLAYER_BOT_SPOTS line 3 must be realm|region|x|y[|z], got '{bad}'"));
+        Assert.That(e!.Message, Is.EqualTo($"HEARTHDAOC_PLAYER_BOT_SPOTS line 3 must be realm|region|x|y[|z[|level|class|race]], got '{bad}'"));
     }
 
     [TestCase("alb|1|2|3|z")] [TestCase("alb|1|2|3|")] [TestCase("alb|1|2|3|1.5")]
@@ -97,6 +99,33 @@ public sealed class UT_PlayerBotSpots
         var e = Assert.Throws<FormatException>(() => PlayerBotSpots.Parse([bad]));
         Assert.That(e!.Message, Is.EqualTo($"HEARTHDAOC_PLAYER_BOT_SPOTS line 1 has a bad z, got '{bad}'"));
     }
+
+    [Test]
+    public void A_level_line_reads_its_build_and_counts_in_levels()          // levelmatch/DESIGN.md 2.1
+    {
+        PlayerBotSpots spots = PlayerBotSpots.Parse(["1|51|453735|485227|3091|40|10|1", "mid|100|1|2|3", "3|200|1|2|3|47|47|10"]);
+        Assert.That(spots.For(Slot(eRealm.Albion, 1)), Is.EqualTo(new PlayerBotSpot(eRealm.Albion, 51, 453735, 485227, 3091,
+            new PlayerBotBuild(40, eCharacterClass.Friar, eRace.Briton))));
+        Assert.That(spots.For(Slot(eRealm.Midgard, 1))!.Build, Is.Null);
+        Assert.That(spots.For(Slot(eRealm.Hibernia, 1))!.Build, Is.EqualTo(new PlayerBotBuild(47, eCharacterClass.Druid, eRace.Firbolg)));
+        Assert.That((spots.Builds, spots.MaxBuildLevel, spots.DescribeBuilds()), Is.EqualTo((2, (byte)47, "alb:1,mid:0,hib:1")));
+        Assert.That(PlayerBotSpots.Parse(["alb|1|2|3"]).DescribeBuilds(), Is.EqualTo("none"));
+        Assert.That((PlayerBotSpots.None.Builds, PlayerBotSpots.None.MaxBuildLevel), Is.EqualTo((0, (byte)0)));
+    }
+
+    [TestCase("alb|1|2|3|4|0|10|1")] [TestCase("alb|1|2|3|4|51|10|1")] [TestCase("alb|1|2|3|4|x|10|1")]
+    [TestCase("alb|1|2|3|4|40|22|1")]     // Warrior: a Midgard class on an Albion line
+    [TestCase("alb|1|2|3|4|40|255|1")] [TestCase("alb|1|2|3|4|40|10|0")] [TestCase("alb|1|2|3|4|40|10|250")]
+    [TestCase("alb|1|2|3|4|40|10|")]
+    public void A_bad_build_is_refused_naming_its_line(string bad)
+    {
+        var e = Assert.Throws<FormatException>(() => PlayerBotSpots.Parse([bad]));
+        Assert.That(e!.Message, Is.EqualTo($"HEARTHDAOC_PLAYER_BOT_SPOTS line 1 has a bad level|class|race, got '{bad}'"));
+    }
+
+    [Test]
+    public void A_level_line_with_no_z_is_a_bad_z() =>
+        Assert.That(Assert.Throws<FormatException>(() => PlayerBotSpots.Parse(["alb|1|2|3||40|10|1"]))!.Message, Does.Contain("has a bad z"));
 
     [Test]
     public void The_nth_bot_of_a_realm_takes_that_realms_nth_spot_and_none_past_the_end()
