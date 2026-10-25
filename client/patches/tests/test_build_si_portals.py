@@ -5,9 +5,12 @@ The generator runs on made-up archives with our own text. The committed sets are
 HDC_CLIENT_FILES holds the four client files (OfflineDAoC 0.36b's or 0.37b's, read only), against them: a rebuild
 is the committed sets, the prototype's after hashes (~/tmp/hearthdaoc-period/scripts/repack_proto.py, 2026-10-22),
 the six entries at their base sizes with no portal row left, and both appliers on a copy in a temporary folder
-(apply, re-apply, restore).
+(apply, re-apply, restore, and the portal set retired by PORTALS_RETIRED putting the archives back). Only the two
+pin lines of CommittedSetTests name the switches' shipped values (FORK.md, The Shrouded Isles portals).
 """
+import contextlib
 import hashlib
+import io
 import json
 import os
 import shutil
@@ -15,6 +18,7 @@ import subprocess
 import sys
 import tempfile
 import unittest
+from unittest import mock
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 PATCHES = os.path.dirname(HERE)
@@ -111,6 +115,14 @@ class Client:
         return os.path.join(self.dir, *rel.split("/"))
 
 
+def said(out, retired, look):
+    """What the generator prints after writing both sets in `out` with these switches."""
+    portals = " (retired: upstream's archives come back)" if retired else ""
+    art = "retired: the 2006 look" if look == "2006" else "moved aside: the 2002 Albion portal look"
+    return (f"Wrote {os.path.join(out, 'si-portals.json')}: {', '.join(ARCHIVES)}{portals}\n"
+            f"Wrote {os.path.join(out, 'si-portal-art.json')}: {MODEL} ({art})\n")
+
+
 def contents(data):
     """{entry name: content} of an MPK archive."""
     return {e["name_field"].split(b"\0")[0].decode("latin-1"): e["content"] for e in parse_mpk(data)[2]}
@@ -119,7 +131,7 @@ def contents(data):
 class GeneratorTests(unittest.TestCase):
     def test_the_portal_set_takes_the_portal_row_out_of_each_fixtures_and_nifs_entry(self):
         client = Client(self)
-        data = build_si_portals.build_portals_set(client.dir)
+        data = build_si_portals.build_portals_set(client.dir, retired=False)
         self.assertEqual(list(data), ["format", "name", "client", "refused", "files"])
         self.assertEqual([data[key] for key in ("format", "name", "client", "refused")],
                          [1, "si-portals", build_si_portals.CLIENT, build_si_portals.PORTALS_REFUSED])
@@ -139,7 +151,7 @@ class GeneratorTests(unittest.TestCase):
 
     def test_the_art_set_moves_the_2006_model_aside(self):
         client = Client(self)
-        self.assertEqual(build_si_portals.build_art_set(client.dir), {
+        self.assertEqual(build_si_portals.build_art_set(client.dir, "2002"), {
             "format": 1, "name": "si-portal-art", "client": build_si_portals.CLIENT,
             "refused": build_si_portals.ART_REFUSED,
             "files": [{"path": MODEL, "before": sha(b"our 2006 portal model"), "after": "absent", "ops": [{"op": "remove"}]}]})
@@ -153,10 +165,54 @@ class GeneratorTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "the Albion portal look must be 2002 or 2006, not '2004'"):
             build_si_portals.build_art_set(client.dir, "2004")
 
+    def test_retiring_the_portal_set_writes_it_retired_so_the_appliers_put_the_archives_back(self):
+        # The way back if a client can't read the rebuilt archives (FORK.md, The Shrouded Isles portals): a set that
+        # has shipped is never dropped, since nothing would run it on a Windows client.
+        client = Client(self)
+        shipped = build_si_portals.build_portals_set(client.dir, retired=False)
+        retired = build_si_portals.build_portals_set(client.dir, retired=True)
+        self.assertEqual(list(retired), ["format", "name", "client", "refused", "retired", "files"])
+        self.assertEqual(retired, dict(shipped, retired=True))
+        originals = {path: read(client.path(path)) for path in ARCHIVES}
+        appliers = [([sys.executable, APPLY_PY], ("--client", "--patchset"))]
+        if PWSH:
+            appliers.append(([PWSH, "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-File", PS1],
+                             ("-Client", "-PatchSet")))
+        for command, flags in appliers:
+            with self.subTest(command[0]):
+                for data, said in ((shipped, "Patched: "), (retired, "Restored: ")):
+                    path = os.path.join(client.root, "si-portals.json")
+                    write(path, to_json(data).encode("ascii"))
+                    r = subprocess.run(command + [flags[0], client.dir, flags[1], path], capture_output=True, text=True)
+                    self.assertEqual((r.returncode, r.stderr), (0, ""), r.stdout)
+                    self.assertEqual([line.split(" (")[0] for line in r.stdout.splitlines()],
+                                     [said + archive for archive in ARCHIVES])
+                for archive in ARCHIVES:
+                    self.assertEqual(read(client.path(archive)), originals[archive])
+                    self.assertFalse(os.path.exists(client.path(archive) + ".hearthdaoc-orig"))
+
+    def test_the_cli_writes_the_sets_as_the_switches_say(self):
+        # PORTALS_RETIRED and ALBION_LOOK both ways, so a release that flips one changes only the switch, the line of
+        # CommittedSetTests that pins it, and the committed JSON (FORK.md, The Shrouded Isles portals).
+        for retired, look in ((False, "2002"), (True, "2006")):
+            with self.subTest(retired=retired, look=look):
+                client = Client(self)
+                out = os.path.join(client.root, "out")
+                os.makedirs(out)
+                printed = io.StringIO()
+                with mock.patch.object(build_si_portals, "PORTALS_RETIRED", retired), \
+                        mock.patch.object(build_si_portals, "ALBION_LOOK", look), contextlib.redirect_stdout(printed):
+                    self.assertEqual(build_si_portals.main(["--client", client.dir, "--out-dir", out]), 0)
+                self.assertEqual(read(os.path.join(out, "si-portals.json")),
+                                 to_json(build_si_portals.build_portals_set(client.dir, retired)).encode("ascii"))
+                self.assertEqual(read(os.path.join(out, "si-portal-art.json")),
+                                 to_json(build_si_portals.build_art_set(client.dir, look)).encode("ascii"))
+                self.assertEqual(printed.getvalue(), said(out, retired, look))
+
     def test_the_sets_are_valid_and_apply_with_patchset(self):
         client = Client(self)
-        for name, data in (("si-portals.json", build_si_portals.build_portals_set(client.dir)),
-                           ("si-portal-art.json", build_si_portals.build_art_set(client.dir))):
+        for name, data in (("si-portals.json", build_si_portals.build_portals_set(client.dir, retired=False)),
+                           ("si-portal-art.json", build_si_portals.build_art_set(client.dir, "2002"))):
             with self.subTest(name):
                 path = os.path.join(client.root, name)
                 write(path, to_json(data).encode("ascii"))
@@ -202,13 +258,11 @@ class GeneratorTests(unittest.TestCase):
             r = subprocess.run([sys.executable, "-B", GENERATOR, "--client", client.dir, "--out-dir", out],
                                capture_output=True, text=True)
             self.assertEqual((r.returncode, r.stderr), (0, ""))
-            self.assertEqual(r.stdout, f"Wrote {os.path.join(out, 'si-portals.json')}: {', '.join(ARCHIVES)}\n"
-                                       f"Wrote {os.path.join(out, 'si-portal-art.json')}: {MODEL} (moved aside: the "
-                                       "2002 Albion portal look)\n")
-            self.assertEqual(read(os.path.join(out, "si-portals.json")),
-                             to_json(build_si_portals.build_portals_set(client.dir)).encode("ascii"))
-            self.assertEqual(read(os.path.join(out, "si-portal-art.json")),
-                             to_json(build_si_portals.build_art_set(client.dir)).encode("ascii"))
+            self.assertEqual(r.stdout, said(out, build_si_portals.PORTALS_RETIRED, build_si_portals.ALBION_LOOK))
+            self.assertEqual(read(os.path.join(out, "si-portals.json")), to_json(build_si_portals.build_portals_set(
+                client.dir, build_si_portals.PORTALS_RETIRED)).encode("ascii"))
+            self.assertEqual(read(os.path.join(out, "si-portal-art.json")), to_json(build_si_portals.build_art_set(
+                client.dir, build_si_portals.ALBION_LOOK)).encode("ascii"))
         self.assertEqual(sorted(os.listdir(out)), ["si-portal-art.json", "si-portals.json"])
 
     def test_the_cli_writes_nothing_when_a_file_is_missing(self):
@@ -226,10 +280,11 @@ class CommittedSetTests(unittest.TestCase):
     """si-portals.json and si-portal-art.json as they ship: upstream's six rows and four hashes, no EA bytes."""
 
     def test_the_portal_set_removes_upstreams_two_rows_from_each_archive(self):
+        self.assertIs(build_si_portals.PORTALS_RETIRED, False)  # this release ships the fix (FORK.md)
         data = patchset.load(PORTALS)
         self.assertEqual([data[key] for key in ("format", "name", "client", "refused")],
                          [1, "si-portals", build_si_portals.CLIENT, build_si_portals.PORTALS_REFUSED])
-        self.assertNotIn("retired", data)
+        self.assertIs(data.get("retired", False), build_si_portals.PORTALS_RETIRED)
         self.assertEqual([entry["path"] for entry in data["files"]], ARCHIVES)
         for entry in data["files"]:
             with self.subTest(entry["path"]):
@@ -243,12 +298,12 @@ class CommittedSetTests(unittest.TestCase):
                     self.assertEqual(op["find"].count("\n"), 1)
                     self.assertLess(len(op["find"]), 120)
 
-    def test_the_art_set_moves_the_2006_model_aside_and_is_not_retired(self):
+    def test_the_art_set_moves_the_2006_model_aside_retired_only_for_the_2006_look(self):
         self.assertEqual(build_si_portals.ALBION_LOOK, "2002")  # the look this release ships (FORK.md)
         data = patchset.load(ART)
         self.assertEqual([data[key] for key in ("format", "name", "client", "refused")],
                          [1, "si-portal-art", build_si_portals.CLIENT, build_si_portals.ART_REFUSED])
-        self.assertNotIn("retired", data)
+        self.assertIs(data.get("retired", False), build_si_portals.ALBION_LOOK == "2006")
         [entry] = data["files"]
         self.assertEqual((entry["path"], entry["after"], entry["ops"]), (MODEL, "absent", [{"op": "remove"}]))
         self.assertEqual(entry["before"], "dfb6feaffcfefbac45e81377d3d1f4968f978b67cfe0d884cf6dc0a75e31f519")
@@ -278,8 +333,10 @@ class RealClientTests(unittest.TestCase):
         return os.path.join(self.client, *rel.split("/"))
 
     def test_a_rebuild_is_the_committed_sets(self):
-        self.assertEqual(to_json(build_si_portals.build_portals_set(CLIENT)).encode("ascii"), read(PORTALS))
-        self.assertEqual(to_json(build_si_portals.build_art_set(CLIENT)).encode("ascii"), read(ART))
+        self.assertEqual(to_json(build_si_portals.build_portals_set(CLIENT, build_si_portals.PORTALS_RETIRED))
+                         .encode("ascii"), read(PORTALS))
+        self.assertEqual(to_json(build_si_portals.build_art_set(CLIENT, build_si_portals.ALBION_LOOK)).encode("ascii"),
+                         read(ART))
 
     def test_the_rebuilt_archives_are_the_prototype_s_and_hold_the_base_entries(self):
         for entry in patchset.load(PORTALS)["files"]:
@@ -306,15 +363,25 @@ class RealClientTests(unittest.TestCase):
         return subprocess.run(command + [flags[0], self.client, flags[1], pset, *switches],
                               capture_output=True, text=True)
 
+    def applied(self, pset):
+        """A copy of the committed set without "retired" (which a release that takes it back sets): its path."""
+        with open(pset, encoding="ascii") as f:
+            data = json.load(f)
+        data.pop("retired", None)
+        path = os.path.join(os.path.dirname(self.client), "applied-" + os.path.basename(pset))
+        write(path, to_json(data).encode("ascii"))
+        return path
+
     def check_applier(self, command, flags, restore):
-        for pset in (PORTALS, ART):
+        sets = [self.applied(pset) for pset in (PORTALS, ART)]
+        for pset in sets:
             r = self.run_applier(command, flags, pset)
             self.assertEqual((r.returncode, r.stderr), (0, ""), r.stdout)
             self.assertTrue(r.stdout.startswith("Patched: "), r.stdout)
         for rel, after in PROTOTYPE_AFTER.items():
             self.assertEqual(sha(read(self.path(rel))), after)
         self.assertFalse(os.path.exists(self.path(MODEL)))
-        for pset in (PORTALS, ART):
+        for pset in sets:
             r = self.run_applier(command, flags, pset)
             self.assertEqual((r.returncode, r.stderr), (0, ""))
             self.assertTrue(all(line.startswith("Already patched: ") for line in r.stdout.splitlines()), r.stdout)
@@ -325,13 +392,33 @@ class RealClientTests(unittest.TestCase):
             self.assertEqual(read(self.path(rel)), original)
             self.assertFalse(os.path.exists(self.path(rel) + ".hearthdaoc-orig"))
 
+    def check_retired_portals(self, command, flags):
+        """The shipped portal set, then the same set retired (PORTALS_RETIRED), with a plain run: the originals."""
+        retired = os.path.join(os.path.dirname(self.client), "si-portals-retired.json")
+        write(retired, to_json(build_si_portals.build_portals_set(CLIENT, retired=True)).encode("ascii"))
+        for pset, said in ((self.applied(PORTALS), "Patched: "), (retired, "Restored: ")):
+            r = self.run_applier(command, flags, pset)
+            self.assertEqual((r.returncode, r.stderr), (0, ""), r.stdout)
+            self.assertEqual([line.split(" (")[0] for line in r.stdout.splitlines()], [said + rel for rel in ARCHIVES])
+        for rel in ARCHIVES:
+            self.assertEqual(read(self.path(rel)), self.originals[rel])
+            self.assertFalse(os.path.exists(self.path(rel) + ".hearthdaoc-orig"))
+
     def test_the_python_applier_patches_and_restores_the_real_files(self):
         self.check_applier([sys.executable, APPLY_PY], ("--client", "--patchset"), "--restore")
+
+    def test_the_python_applier_puts_the_real_archives_back_from_the_retired_portal_set(self):
+        self.check_retired_portals([sys.executable, APPLY_PY], ("--client", "--patchset"))
 
     @unittest.skipUnless(PWSH, "pwsh is not installed (HDC_PWSH may name it)")
     def test_the_powershell_applier_gives_the_same_bytes(self):
         self.check_applier([PWSH, "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-File", PS1],
                            ("-Client", "-PatchSet"), "-Restore")
+
+    @unittest.skipUnless(PWSH, "pwsh is not installed (HDC_PWSH may name it)")
+    def test_the_powershell_applier_puts_the_real_archives_back_from_the_retired_portal_set(self):
+        self.check_retired_portals([PWSH, "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-File", PS1],
+                                   ("-Client", "-PatchSet"))
 
 
 if __name__ == "__main__":

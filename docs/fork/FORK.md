@@ -307,6 +307,16 @@ the update (the model comes from the base client and the release, and there is n
 back is `"2002"` again. The portals stay at the 1.65 spots either way: moving them back to the towns is a revert
 of the server change, a separate decision.
 
+**Taking the portal fix back** (if a client can't read the rebuilt archives, say Camelot Hills, Vale of Mularn
+or Lough Derg fail to load: that the game reads stored blocks is the one guess here no test can check) is one
+small release the same way: set `PORTALS_RETIRED = True` in `build_si_portals.py` (and the line of
+`test_build_si_portals.py` that pins it), rebuild, and commit `si-portals.json`, which then says
+`"retired": true`. Every client that has it applied gets upstream's three archives back from its backups, on
+Linux at the update and on Windows at the first start after the player copies the release's files
+(`test_build_si_portals.py` runs both appliers on the retired set). Upstream's inert portal art in the three
+towns comes back with them; the server's portals stay at the 1.65 spots. A player who can't wait for that
+release takes the set out by hand (client/README.md, The Shrouded Isles portals).
+
 **Never drop a set that has shipped; retire it.** A Linux release without a set gets the client's own files back,
 since `setup.sh` builds the client afresh (`test_setup.py` checks it for the art set). But nothing runs a set that
 is gone on a Windows client: its files stay patched (the 2006 model stays aside as

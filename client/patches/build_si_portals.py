@@ -17,7 +17,9 @@ into the patch sets. Running it twice on the same files gives byte-identical out
 
 ALBION_LOOK is the look the release ships. "2006" writes si-portal-art.json retired, so that every client that has
 it applied gets the 2006 model back at its next start; the launchers need no change (docs/fork/FORK.md, The
-Shrouded Isles portals).
+Shrouded Isles portals). PORTALS_RETIRED True writes si-portals.json retired the same way, so every client gets
+upstream's three archives back (the way back if a client can't read the rebuilt ones): a set that has shipped is
+never dropped, since nothing would run it on a Windows client.
 
   python3 client/patches/build_si_portals.py --client ~/Games/HearthDAoC/client --out-dir client/patches
 """
@@ -39,6 +41,7 @@ MARK = "SI Portal Visual"
 MODEL = "Newtowns/zones/Nifs/bavteleporter.npk"
 LOOKS = ("2002", "2006")
 ALBION_LOOK = "2002"
+PORTALS_RETIRED = False
 # What the appliers print after "Not patched: <file> is not the file this HearthDAoC release supports ".
 PORTALS_REFUSED = ("(OfflineDAoC 0.36b's and 0.37b's zone files). The Shrouded Isles portal art upstream added in "
                    "Cotswold, Mularn and Mag Mell stays; it takes you nowhere. Use the portals on the Avalon Marsh "
@@ -78,10 +81,13 @@ def archive_entry(client_dir: str, path: str) -> dict:
     return {"path": path, "before": sha256(original), "after": sha256(after), "ops": ops}
 
 
-def build_portals_set(client_dir: str) -> dict:
-    """si-portals.json, for the archives in `client_dir`."""
-    return {"format": FORMAT, "name": "si-portals", "client": CLIENT, "refused": PORTALS_REFUSED,
-            "files": [archive_entry(client_dir, path) for path in ARCHIVES]}
+def build_portals_set(client_dir: str, retired: bool = PORTALS_RETIRED) -> dict:
+    """si-portals.json, for the archives in `client_dir`: applied, or retired to give upstream's archives back."""
+    data = {"format": FORMAT, "name": "si-portals", "client": CLIENT, "refused": PORTALS_REFUSED}
+    if retired:
+        data["retired"] = True
+    data["files"] = [archive_entry(client_dir, path) for path in ARCHIVES]
+    return data
 
 
 def build_art_set(client_dir: str, look: str = ALBION_LOOK) -> dict:
@@ -103,7 +109,8 @@ def main(argv=None) -> int:
     parser.add_argument("--out-dir", required=True, help="the folder to write si-portals.json and si-portal-art.json in")
     args = parser.parse_args(argv)
     try:
-        sets = [("si-portals.json", build_portals_set(args.client)), ("si-portal-art.json", build_art_set(args.client))]
+        sets = [("si-portals.json", build_portals_set(args.client, PORTALS_RETIRED)),
+                ("si-portal-art.json", build_art_set(args.client, ALBION_LOOK))]
     except (OSError, ValueError) as e:
         print(f"build_si_portals.py: {e}", file=sys.stderr)
         return 1
@@ -112,7 +119,8 @@ def main(argv=None) -> int:
         with open(out, "w", encoding="ascii", newline="\n") as f:
             f.write(to_json(data))
         if name == "si-portals.json":
-            print(f"Wrote {out}: {', '.join(entry['path'] for entry in data['files'])}")
+            what = " (retired: upstream's archives come back)" if data.get("retired") else ""
+            print(f"Wrote {out}: {', '.join(entry['path'] for entry in data['files'])}{what}")
         else:
             what = "retired: the 2006 look" if data.get("retired") else "moved aside: the 2002 Albion portal look"
             print(f"Wrote {out}: {MODEL} ({what})")
