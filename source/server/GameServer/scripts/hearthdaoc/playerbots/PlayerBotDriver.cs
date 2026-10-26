@@ -487,11 +487,14 @@ public static class PlayerBotDriver
         player.OnHeadingPacketReceived();                                                // GP:874-877 -> PMC:151-154
     }
 
-    // Drops a target that died or is no longer fair game (an attacker stays fair game whatever its con). A death counts
-    // for the TALLY of the first bot to report it only, so bots sharing a camp sum to the DRIVER line's kills.
+    // Drops a target that died or is no longer fair game (one fighting the bot or its pet stays fair game whatever its
+    // con, FightsBotOrPet). A death counts for the TALLY of the first bot to report it only, so bots sharing a camp sum
+    // to the DRIVER line's kills.
     private static void SettleTarget(PlayerBotState state, GamePlayer player)
     {
-        if (state.Target == null || IsValidTarget(player, state.Target, state.DeathSafetySteps) || IsAttacking(player, state.Target))
+        if (state.Target == null || IsValidTarget(player, state.Target, state.DeathSafetySteps) ||
+            state.Target is GameNPC npc && FightsBotOrPet(npc.TargetObject, player, player.ControlledBrain?.Body) &&
+            IsAttackable(player, npc))
             return;
         bool dead = !state.Target.IsAlive;
         if (state.Engaged) ReportFight(state, player, GameLoop.GameLoopTime, dead);   // with this life's kills before it
@@ -611,6 +614,13 @@ public static class PlayerBotDriver
 
     private static bool IsAttacking(GamePlayer player, GameLiving target) =>
         target is GameNPC npc && npc.TargetObject == player && IsAttackable(player, npc);
+
+    /// <summary>SettleTarget's rule for a target over the con cap: it stays while it fights the bot or the bot's pet. A
+    /// pet takes its owner's fights (CommandNpcAttack; a defensive pet the owner's attackers, ControlledMobBrain
+    /// OnOwnerAttacked), and the monster turns on it; dropped then, the bot sat (MayRest) or pulled another while its pet
+    /// fought on alone, and the monster came back to it once the pet died.</summary>
+    public static bool FightsBotOrPet(GameObject monstersTarget, GameObject bot, GameObject pet) =>
+        monstersTarget != null && (monstersTarget == bot || monstersTarget == pet);
 
     private static bool IsValidTarget(GamePlayer player, GameLiving target, int deathSteps) =>   // APP:447-463, group size 1
         IsAttackable(player, target) && !player.IsObjectGreyCon(target) &&

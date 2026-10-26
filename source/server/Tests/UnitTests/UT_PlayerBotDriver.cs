@@ -308,6 +308,18 @@ public sealed class UT_PlayerBotDriver
         long until, bool anyHitter, bool skips) =>
         Assert.That(PlayerBotDriver.SkipsHitter(unreachable, now, until, anyHitter), Is.EqualTo(skips));
 
+    // A target over the con cap stays the bot's while it fights the bot or the bot's pet (SettleTarget): one that turned
+    // on the pet was dropped, and the bot sat or pulled another while its pet fought on alone. No target is no fight,
+    // with no pet too.
+    [Test]
+    public void A_monster_fighting_the_bot_or_its_pet_is_still_its_fight()
+    {
+        GameObject bot = Player(null), other = Player(null), pet = (GameNPC)RuntimeHelpers.GetUninitializedObject(typeof(GameNPC));
+        Assert.That((PlayerBotDriver.FightsBotOrPet(bot, bot, pet), PlayerBotDriver.FightsBotOrPet(pet, bot, pet),
+                PlayerBotDriver.FightsBotOrPet(other, bot, pet), PlayerBotDriver.FightsBotOrPet(null, bot, null)),
+            Is.EqualTo((true, true, false, false)));
+    }
+
     // Low, or sitting and not full, as before; and after a kill until full, as a GameBot rests to full after a camp
     // fight before its next pull (AutonomousWorldBotController.cs:423-424, :2727-2730, :3019-3047).
     [TestCase(true, false, false, false, true)] [TestCase(false, true, false, false, true)]
