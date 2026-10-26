@@ -643,6 +643,28 @@ public sealed class UT_PlayerBotDriver
         bool interrupted, bool interruptible, bool casts) =>
         Assert.That(PlayerBotDriver.ShouldCast(hasSpell, mana, 1_000, blockedUntil, interrupted, interruptible), Is.EqualTo(casts));
 
+    // A class with Quickcast, its damage spell blocked only by the hits' interrupt, uses it as a player does, then casts
+    // (SpellHandler.cs:578-590 lets a quickcast spell through). Not while it is on (the ability toggles it off,
+    // QuickCastAbilityHandler.cs:51-55), nor in its 30-s disable after a quickcast spell (SpellHandler.cs:1430-1434;
+    // CastingComponent.cs:487), nor while casting (QuickCastAbilityHandler.cs:44-48), nor for a spell the cast watch
+    // blocked, one the bot lacks the power for, or an instant one, which goes anyway.
+    [TestCase(true, false, 0, 0L, false, true, (byte)50, 0L, true, true, true)]
+    [TestCase(false, false, 0, 0L, false, true, (byte)50, 0L, true, true, false)]           // no Quickcast
+    [TestCase(true, true, 0, 0L, false, true, (byte)50, 0L, true, true, false)]             // on already
+    [TestCase(true, false, 1, 0L, false, true, (byte)50, 0L, true, true, false)]            // disabled
+    [TestCase(true, false, 0, 1_001L, false, true, (byte)50, 0L, true, true, false)]        // a try 2 s ago
+    [TestCase(true, false, 0, 0L, true, true, (byte)50, 0L, true, true, false)]             // casting
+    [TestCase(true, false, 0, 0L, false, false, (byte)50, 0L, true, true, false)]           // no damage spell
+    [TestCase(true, false, 0, 0L, false, true, (byte)17, 0L, true, true, false)]            // low power
+    [TestCase(true, false, 0, 0L, false, true, (byte)50, 1_001L, true, true, false)]        // the watch blocked it
+    [TestCase(true, false, 0, 0L, false, true, (byte)50, 0L, false, true, false)]           // not interrupted: casts
+    [TestCase(true, false, 0, 0L, false, true, (byte)50, 0L, true, false, false)]           // instant: casts
+    public void An_interrupted_caster_with_Quickcast_uses_it_then_casts(bool hasQuickcast, bool quickcastOn, int disabled,
+        long nextTry, bool casting, bool hasSpell, byte mana, long blockedUntil, bool interrupted, bool interruptible,
+        bool uses) =>
+        Assert.That(PlayerBotDriver.ShouldQuickcast(hasQuickcast, quickcastOn, disabled, nextTry, casting, hasSpell, mana, 1_000,
+            blockedUntil, interrupted, interruptible), Is.EqualTo(uses));
+
     [Test]
     public void A_cast_is_interruptible_unless_it_is_instant_or_uninterruptible()   // SpellHandler.cs:571
     {
