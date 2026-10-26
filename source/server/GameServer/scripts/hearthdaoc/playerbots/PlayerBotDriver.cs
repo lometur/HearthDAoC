@@ -88,6 +88,7 @@ public sealed class PlayerBotState
     public int LifeKills, LifeRests;                             //   this life's fights won and sits, its last kill,
     public long LastKillTick;                                    //   and the killer the Dying event names (OnBotDying)
     public GameObject Killer;
+    public (string Head, PlayerBotDeathDetail Detail, GameObject Target)? PendingDeath;   // a DEATH line awaiting Dying (AwaitsDying)
 }
 
 // HearthDAoC #137 spike: a thin copy of the /bot pilot's think (bots/autonomous/AutonomousPlayerPilot.cs:229-374) for a
@@ -235,6 +236,11 @@ public static class PlayerBotDriver
             state.RoamingSince = 0;
         }
         ObserveXp(state, player);                            // 5
+        if (state.PendingDeath is { } held)                                              //    last think's DEATH line, its
+        {                                                                                //    killer named since (AwaitsDying)
+            state.PendingDeath = null;
+            if (Log.IsInfoEnabled) Log.Info(DeathLine(held.Head, held.Detail, state.Killer, held.Target));
+        }
         if (!player.IsAlive) { HandleDeath(state, player, now); return; }               // 6
         if (state.DeathRecorded || state.AliveSince == 0)                                //    a new life
         {
@@ -540,6 +546,18 @@ public static class PlayerBotDriver
             state.Killer = dying.Killer;
     }
 
+    /// <summary>The DEATH line waits a think for its killer: the bot was killed in this tick's timer phase (a bolt or an
+    /// arrow lands from a timer, BoltSpellHandler.cs:153-165, AttackAction.cs:364-365), so the reaper's Dying event that
+    /// names the killer comes later in the tick (GameLiving.cs:1987-1988, GameLoop.cs:149-159).</summary>
+    public static bool AwaitsDying(GameObject killer, bool beingReaped) => killer == null && beingReaped;
+
+    /// <summary>PLAYER_BOT_DEATH: its first fields, then FormatDeathDetail's with the killer known by then.</summary>
+    public static string DeathLine(string head, PlayerBotDeathDetail detail, GameObject killer, GameObject target)
+    {
+        detail = detail with { Killer = killer?.Name, KillerLevel = killer?.EffectiveLevel ?? 0, KillerIsTarget = killer != null && killer == target };
+        return head + " " + PlayerBotDriverReport.FormatDeathDetail(detail);
+    }
+
     /// <summary>Low, or sitting and not yet full (APP:290-291 without the combat check): the driver rests once out of
     /// combat, and a task that walks lets it.</summary>
     public static bool WantsRest(GamePlayer player) =>
@@ -753,19 +771,21 @@ public static class PlayerBotDriver
         string fight = target == null ? "target=none" :
             $"target=\"{target.Name}\" targetLevel={target.EffectiveLevel} " +
             $"con={ConLevels.GetConColor(player.GetConLevel(target))} engaged={state.Engaged}";
-        GameObject killer = state.Killer;
         int fromBind = player.CurrentRegionID == player.BindRegion ? (int)Vector3.Distance(new(player.X, player.Y, player.Z),
             new(player.BindXpos, player.BindYpos, player.BindZpos)) : -1;
-        bool inFight = state.Engaged;                         // else the fight fields are the last fight's: -1
-        string detail = PlayerBotDriverReport.FormatDeathDetail(new(last, inFight ? state.EngageHealth : -1,
-            inFight ? (now - state.EngagedSince) / 1000 : -1, target?.HealthPercent ?? -1, state.FromDefence,
+        bool inFight = state.Engaged && target != null;       // else the fight fields are the last fight's: -1
+        PlayerBotDeathDetail detail = new(last, inFight ? state.EngageHealth : -1,
+            inFight ? (now - state.EngagedSince) / 1000 : -1, target?.HealthPercent ?? -1, target != null && state.FromDefence,
             inFight ? state.FightAdds : -1, state.LifeKills, state.LifeRests,
             state.LastKillTick > state.AliveSince ? (now - state.LastKillTick) / 1000 : -1, PowerPercent(player.MaxMana, player.ManaPercent),
-            inFight ? state.Swings : -1, inFight ? state.NotVisible : -1, killer?.Name, killer?.EffectiveLevel ?? 0,
-            killer != null && killer == target, fromBind));
-        Log.Info($"PLAYER_BOT_DEATH bot={player.Name} level={player.Level} at=({player.X},{player.Y},{player.Z}) " +
-                 $"zone={player.CurrentZone?.ID} {fight} attackers={state.Attackers} deathSteps={state.DeathSafetySteps} " +
-                 $"aliveSec={(now - state.AliveSince) / 1000} task={state.Task != null} {detail}");
+            inFight ? state.Swings : -1, inFight ? state.NotVisible : -1, null, 0, false, fromBind);   // the killer: DeathLine
+        string head = $"PLAYER_BOT_DEATH bot={player.Name} level={player.Level} at=({player.X},{player.Y},{player.Z}) " +
+                      $"zone={player.CurrentZone?.ID} {fight} attackers={state.Attackers} deathSteps={state.DeathSafetySteps} " +
+                      $"aliveSec={(now - state.AliveSince) / 1000} task={state.Task != null}";
+        if (AwaitsDying(state.Killer, player.IsBeingHandledByReaperService))
+            state.PendingDeath = (head, detail, target);                                   // the next think writes it
+        else
+            Log.Info(DeathLine(head, detail, state.Killer, target));
     }
 
     // One line per fight the bot was in when it settles (SettleTarget), so a fight's cost shows beside the deaths.

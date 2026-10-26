@@ -538,6 +538,34 @@ public sealed class UT_PlayerBotDriver
                        "mana=37 swings=-1 notVisible=-1 killer=\"\" killerLevel=0 killerIsTarget=False fromBind=-1"));
     }
 
+    private sealed class TestKiller : GameObject
+    {
+        public override eGameObjectType GameObjectType => eGameObjectType.NPC;
+    }
+
+    // A bolt or an arrow lands from a timer (BoltSpellHandler.cs:153-165, AttackAction.cs:364-365), in the timer phase the
+    // think runs in: the bot can be dead at its think before the reaper's Dying event names the killer (GameLoop.cs:149-159).
+    [TestCase(false, false, false)] [TestCase(false, true, true)] [TestCase(true, true, false)]
+    public void A_death_line_waits_for_its_killer_only_while_the_reaper_has_the_bot(bool named, bool beingReaped, bool waits) =>
+        Assert.That(PlayerBotDriver.AwaitsDying(named ? (TestKiller)RuntimeHelpers.GetUninitializedObject(typeof(TestKiller)) : null,
+            beingReaped), Is.EqualTo(waits));
+
+    [Test]
+    public void A_death_line_names_the_killer_it_has_by_then()
+    {
+        var detail = new PlayerBotDeathDetail(PlayerBotActivity.Fighting, 62, 14, 71, false, 2, 3, 0, 40, 100, 6, 1, null, 0, false, 748);
+        var target = (TestKiller)RuntimeHelpers.GetUninitializedObject(typeof(TestKiller));
+        var add = (TestKiller)RuntimeHelpers.GetUninitializedObject(typeof(TestKiller));
+        (target.Name, target.Level, add.Name, add.Level) = ("widow claw", 40, "a wolf", 38);
+        const string head = "PLAYER_BOT_DEATH bot=Pbotaaaac task=False";
+        Assert.That(PlayerBotDriver.DeathLine(head, detail, target, target), Is.EqualTo(head + " activity=Fighting startHp=62 fightSec=14 " +
+            "targetHp=71 from=pull adds=2 lifeKills=3 rests=0 sinceKillSec=40 mana=100 swings=6 notVisible=1 killer=\"widow claw\" " +
+            "killerLevel=40 killerIsTarget=True fromBind=748"));
+        Assert.That(PlayerBotDriver.DeathLine(head, detail, add, target), Does.EndWith(" killer=\"a wolf\" killerLevel=38 killerIsTarget=False fromBind=748"));
+        Assert.That(PlayerBotDriver.DeathLine(head, detail, null, null), Does.EndWith(" killer=\"\" killerLevel=0 killerIsTarget=False fromBind=748"),
+            "no killer and no target: not the target");
+    }
+
     [TestCase(0, (byte)0, (byte)100)] [TestCase(120, (byte)37, (byte)37)] [TestCase(120, (byte)0, (byte)0)]
     public void PowerPercentIsFullWithoutAPowerPool(int maxMana, byte mana, byte expected) =>
         Assert.That(PlayerBotDriver.PowerPercent(maxMana, mana), Is.EqualTo(expected));
