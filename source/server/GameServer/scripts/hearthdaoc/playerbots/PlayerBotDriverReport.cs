@@ -16,11 +16,12 @@ public readonly record struct PlayerBotDriverWindow(
 
 /// <summary>One settled fight (levelmatch/DEATHS.md 2): the bot's health and power at its first think in reach and now,
 /// the most attackers on a think, the swings seen and those the view gate refused, the casts, and this life's kills and
-/// sits before it.</summary>
+/// sits before it; then whether it had a living pet at that first think and its heals on itself since (DEATHS.md A5,
+/// A6).</summary>
 public readonly record struct PlayerBotFight(
     string Bot, int Level, string Target, int TargetLevel, ConColor Con, bool FromDefence, bool Killed,
     byte StartHp, byte EndHp, byte StartMana, byte EndMana, long Seconds, int Adds, int Swings, int NotVisible, int Casts,
-    int LifeKills, int Rests);
+    int LifeKills, int Rests, bool Pet = false, int Heals = 0);
 
 /// <summary>What a PLAYER_BOT_DEATH line adds after its first fields (levelmatch/DEATHS.md 2); -1 for none: the fight's
 /// fields (startHp, fightSec, adds, swings, notVisible) out of a fight, targetHp with no target, sinceKillSec with no kill
@@ -160,7 +161,7 @@ public static class PlayerBotDriverReport
         $"PLAYER_BOT_FIGHT bot={f.Bot} level={f.Level} target=\"{f.Target}\" targetLevel={f.TargetLevel} con={f.Con} " +
         $"from={(f.FromDefence ? "defence" : "pull")} result={(f.Killed ? "kill" : "dropped")} startHp={f.StartHp} endHp={f.EndHp} " +
         $"startMana={f.StartMana} endMana={f.EndMana} sec={f.Seconds} adds={f.Adds} swings={f.Swings} notVisible={f.NotVisible} " +
-        $"casts={f.Casts} lifeKills={f.LifeKills} rests={f.Rests}");
+        $"casts={f.Casts} lifeKills={f.LifeKills} rests={f.Rests} pet={(f.Pet ? "alive" : "none")} heals={f.Heals}");
 
     /// <summary>The fields PLAYER_BOT_DEATH appends after task= (the ones before stay as they were: legcheck.py reads them).</summary>
     public static string FormatDeathDetail(PlayerBotDeathDetail d) => string.Create(CultureInfo.InvariantCulture,

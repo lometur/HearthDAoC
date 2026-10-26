@@ -93,6 +93,8 @@ public sealed class PlayerBotState
     public bool SelfCast;                                        // a heal or summon on itself is being cast (DEATHS.md
     public long NextSelfHealTick, NextSummonTick;                //   A6, A5), the next tries, and the level at which it
     public byte NoPetSpellLevel;                                 //   found no main-pet summon (not looked for again then)
+    public bool EngagePet;                                       // PLAYER_BOT_FIGHT pet= and heals=: a living pet at the
+    public int FightHeals;                                       //   fight's first think, its heals on itself since
     public (string Head, PlayerBotDeathDetail Detail, GameObject Target)? PendingDeath;   // a DEATH line awaiting Dying (AwaitsDying)
 }
 
@@ -358,7 +360,8 @@ public static class PlayerBotDriver
             state.EngagedSince = now;
             state.EngageHealth = player.HealthPercent;
             state.EngageMana = PowerPercent(player.MaxMana, player.ManaPercent);
-            state.FightAdds = state.Swings = state.NotVisible = state.FightCasts = 0;
+            state.FightAdds = state.Swings = state.NotVisible = state.FightCasts = state.FightHeals = 0;
+            state.EngagePet = player.ControlledBrain?.Body?.IsAlive == true;
             if (player.ControlledBrain != null)                                         // its pet too: the pet window's
                 player.CommandNpcAttack();                                              //   attack (PetWindowHandler.cs:79-82)
         }
@@ -964,7 +967,8 @@ public static class PlayerBotDriver
         Log.Info(PlayerBotDriverReport.FormatFight(new(player.Name, player.Level, target.Name, target.EffectiveLevel,
             ConLevels.GetConColor(player.GetConLevel(target)), state.FromDefence, killed, state.EngageHealth, player.HealthPercent,
             state.EngageMana, PowerPercent(player.MaxMana, player.ManaPercent), (now - state.EngagedSince) / 1000, state.FightAdds,
-            state.Swings, state.NotVisible, state.FightCasts, state.LifeKills, state.LifeRests)));
+            state.Swings, state.NotVisible, state.FightCasts, state.LifeKills, state.LifeRests, state.EngagePet,
+            state.FightHeals)));
     }
 
     // APP:585-624, changed: every 10 s, no inventory count, no saves; after 15 minutes with no progress, back to the
@@ -1013,7 +1017,9 @@ public static class PlayerBotDriver
         (Spell heal, SpellLine line) = FindSelfHeal(UsableSpells(player), player.Level, player.MaxHealth,
             player.IsBeingInterruptedByOther,
             spell => player.GetSkillDisabledDuration(spell) <= 0 && HasPowerFor(player.MaxMana, player.Mana, spell.Power));
-        return heal != null && CastOnSelf(state, player, now, heal, line);
+        if (heal == null || !CastOnSelf(state, player, now, heal, line)) return false;
+        if (state.Engaged) state.FightHeals++;
+        return true;
     }
 
     // A pet class's main pet (DEATHS.md A5), which a GameBot always keeps (BotBrain.cs:1450-1458,
