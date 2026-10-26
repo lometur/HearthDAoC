@@ -436,6 +436,26 @@ public sealed class UT_PlayerBotDriver
         Assert.That(PlayerBotDriver.WatchCast(false, 3, 100, 100), Is.EqualTo((1, (byte)100, false))); // a new target
     }
 
+    // A player gets "must wait" for an interruptible cast while hits interrupt it (SpellHandler.cs:570-590), so the bot
+    // does not start one then (DEATHS.md A2; a GameBot under melee stops casting and fights, BotBrain.cs:3336-3370); an
+    // instant or uninterruptible spell still goes. Otherwise the old rules: a spell, 18% power, the cast watch's block.
+    [TestCase(true, (byte)50, 0L, true, true, false)] [TestCase(true, (byte)50, 0L, true, false, true)]
+    [TestCase(true, (byte)50, 0L, false, true, true)] [TestCase(false, (byte)50, 0L, false, false, false)]
+    [TestCase(true, (byte)17, 0L, false, true, false)] [TestCase(true, (byte)18, 0L, false, true, true)]
+    [TestCase(true, (byte)50, 1_001L, false, false, false)] [TestCase(true, (byte)50, 1_000L, false, false, true)]
+    public void A_bot_starts_no_interruptible_cast_while_hits_interrupt_it(bool hasSpell, byte mana, long blockedUntil,
+        bool interrupted, bool interruptible, bool casts) =>
+        Assert.That(PlayerBotDriver.ShouldCast(hasSpell, mana, 1_000, blockedUntil, interrupted, interruptible), Is.EqualTo(casts));
+
+    [Test]
+    public void A_cast_is_interruptible_unless_it_is_instant_or_uninterruptible()   // SpellHandler.cs:571
+    {
+        Spell Cast(double seconds, bool uninterruptible = false) => new(new DbSpell { SpellID = 990_001, Name = "Bolt",
+            Type = "Bolt", Target = "Enemy", Damage = 90, Range = 1500, CastTime = seconds, Uninterruptible = uninterruptible }, 20);
+        Assert.That((PlayerBotDriver.Interruptible(Cast(3.0)), PlayerBotDriver.Interruptible(Cast(0)),
+            PlayerBotDriver.Interruptible(Cast(3.0, uninterruptible: true))), Is.EqualTo((true, false, false)));
+    }
+
     // A player at a level with its skill caches set as GetAllUsableSkills / GetAllUsableListSpells hold them
     // (GamePlayer.cs:3394-3447; non-empty, so neither rebuilds).
     private static GamePlayer Caster(int level, List<(Skill, Skill)> usable, List<(SpellLine, List<Skill>)> listSpells)

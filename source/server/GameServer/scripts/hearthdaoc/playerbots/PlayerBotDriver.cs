@@ -311,7 +311,8 @@ public static class PlayerBotDriver
         GameLiving target = state.Target;
         player.TargetObject = target;                         // before AttackRange: MeleeAttackRange reads TargetObject (GP:5320-5335)
         int distance = player.GetDistanceTo(target);
-        bool canCast = state.Spell != null && player.ManaPercent >= 18 && now >= state.SpellBlockedUntil;   // APP:670 + the watch
+        bool canCast = ShouldCast(state.Spell != null, player.ManaPercent, now, state.SpellBlockedUntil,
+            player.IsBeingInterruptedByOther, state.Spell != null && Interruptible(state.Spell));
         int stop = canCast ? SpellStopDistance(player.castingComponent.CalculateSpellRange(state.Spell))
                            : MeleeStopDistance(player.attackComponent.AttackRange);
         if (distance > stop)
@@ -380,6 +381,17 @@ public static class PlayerBotDriver
             state.Activity = PlayerBotActivity.Fighting;
         }
     }
+
+    /// <summary>Whether the bot casts its damage spell this think (APP:670, the cast watch's block) or swings: never an
+    /// interruptible cast while a monster's hits interrupt it (IsBeingInterruptedByOther, GameLiving.cs:739), which a
+    /// player gets "must wait" for (SpellHandler.cs:570-590; DEATHS.md A2). A GameBot under melee stops casting and
+    /// fights (BotBrain.cs:3336-3370). An instant or uninterruptible spell still goes.</summary>
+    public static bool ShouldCast(bool hasSpell, byte manaPercent, long now, long blockedUntil, bool interrupted,
+        bool interruptible) =>
+        hasSpell && manaPercent >= 18 && now >= blockedUntil && (!interrupted || !interruptible);
+
+    /// <summary>The server's own test for the interrupt timer (SpellHandler.cs:571).</summary>
+    public static bool Interruptible(Spell spell) => !spell.Uninterruptible && !spell.IsInstantCast;
 
     /// <summary>The cast watch, one request on: (attempts, health mark, stalled). A new target, or one hurt since the
     /// mark, starts a new run; more than MaxFruitlessCasts requests that leave it at the mark have stalled.</summary>
