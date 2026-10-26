@@ -22,7 +22,10 @@ namespace DOL.GS.HearthDAoC.PlayerBots;
 // exception is the quest fighter's single re-login after its errands, in run 1's small plans. HEARTHDAOC_PLAYER_BOT_WAKE
 // (player, the default, or gamebot: the #137 lever, PlayerBotWake) and HEARTHDAOC_PLAYER_BOT_SPOTS (a start spots file,
 // PlayerBotSpots) are read only when bots are on, so a default start logs nothing (smoke.sh:56); a bad value or an
-// unreadable file keeps them off. A bot placed at its spot holds it (PlayerBotState.HoldAnchor).
+// unreadable file keeps them off. A bot placed at its spot holds it (PlayerBotState.HoldAnchor). A spot that carries a
+// GameBot's level, class and race makes a level-matched bot (levelmatch/DESIGN.md 2.5): created at that build with its
+// class's GameBot plan (PlayerBotKit), geared by the GameBot's rules at its first entered world (PlayerBotKitGear), and
+// trained on each level-up.
 //
 // Lines marked "// T4" came with the driver (task 4), lines marked "// T5" with the errands (task 5).
 public static class PlayerBotSpawner
@@ -62,6 +65,8 @@ public static class PlayerBotSpawner
         public volatile bool RelogRequested;        // set on the game loop when the errands are done
         public volatile bool ErrandRelogged;        // set by the timer before the re-login is posted
         public volatile bool Spotted;               // set by StartOnGameLoop: placed at its PLAYER_BOT_SPOTS spot
+        public volatile PlayerBotKitPlan Kit;       // set by StartOnGameLoop, once per slot: a level-matched bot's plan
+        public volatile bool Equipped;              // set by OnEnteredWorld: the kit's gear went on (not again on a re-login)
         public SlotPhase Phase;                     // the timer only, under Gate
         public int Attempts;
         public DateTime LoadingSinceUtc, RetryAtUtc;
@@ -100,6 +105,20 @@ public static class PlayerBotSpawner
             Plan = PlayerBotPlan.Off;
             return;
         }
+        if (_spots.Builds > 0)
+        {
+            try                                     // its own: any failure keeps the bots off (levelmatch REVIEW-FIXES 22)
+            {
+                int items = PlayerBotKitGear.Load(_spots.MaxBuildLevel);
+                Log.Info(Invariant($"{LogPrefix} kit items={items} maxLevel={_spots.MaxBuildLevel}"));
+            }
+            catch (Exception exception)
+            {
+                Log.Error($"{LogPrefix} error kit catalog {exception.GetType().Name}: {exception.Message}; player bots stay off");
+                Plan = PlayerBotPlan.Off;
+                return;
+            }
+        }
         if (Properties.DISCORD_ACTIVE)
         {
             // Read at each post (Managers/Discord/DiscordClientManager.cs:31; GameServer.cs:533), so this also stops
@@ -116,7 +135,7 @@ public static class PlayerBotSpawner
         }).ToArray();
         _startedUtc = DateTime.UtcNow;
         _nextStatusUtc = _startedUtc.AddSeconds(StatusEverySeconds);
-        Log.Info(Invariant($"{LogPrefix} plan {Plan.Describe()} slots={_slots.Length} perSecond={LoginsPerSecond} maxLoading={MaxLoading} wake={PlayerBotWake.Describe(PlayerBotWake.Lever)} spots={_spots.Describe()}"));
+        Log.Info(Invariant($"{LogPrefix} plan {Plan.Describe()} slots={_slots.Length} perSecond={LoginsPerSecond} maxLoading={MaxLoading} wake={PlayerBotWake.Describe(PlayerBotWake.Lever)} spots={_spots.Describe()} levels={_spots.DescribeBuilds()}"));
         GameEventMgr.AddHandler(GameClientEvent.PlayerLoaded, HeadlessClient.OnPlayerLoaded); // no ghost after a timed-out load
         _timer = new Timer(Tick, null, FirstTickMs, 1_000);
     }
@@ -245,19 +264,33 @@ public static class PlayerBotSpawner
         {
             DbAccount account = PlayerBotAccounts.EnsureAccount(s.Slot);
             HeadlessClient client = new(account);
-            DbCoreCharacter ch = PlayerBotAccounts.EnsureCharacter(account, s.Slot, client, out bool created, out string failure);
+            PlayerBotSpot spot = s.ErrandRelogged ? null : _spots.For(s.Slot);                         // the start, not the errand's re-login
+            if (spot?.Build != null && s.Kit == null)                                                 // once per slot: a retry keeps it
+            {
+                PlayerBotKitPlan kit = PlayerBotKit.Plan(spot.Build, PlayerBotKit.Seed(s.Slot));
+                if (kit == null)
+                {
+                    s.Error = "character reason=no-plan";
+                    return;
+                }
+                string[] unknown = PlayerBotKit.UnknownSpecs(kit.Lines, PlayerBotKit.OpenSpecs((int)kit.Build.Class, GamePlayer.MAX_LEVEL));
+                if (unknown.Length > 0)                                                               // skipped, never looked up (REVIEW-FIXES 20)
+                    Log.Warn(Invariant($"{LogPrefix} kit account={s.Slot.AccountName} class={(int)kit.Build.Class} unknownSpecs={string.Join(",", unknown.Select(u => u.Replace(' ', '_')))}"));
+                s.Kit = kit;
+            }
+            DbCoreCharacter ch = PlayerBotAccounts.EnsureCharacter(account, s.Slot, client, s.Kit, out bool created, out string failure);
             if (ch == null)
             {
                 s.Error = "character reason=" + failure;
                 return;
             }
             if (created)
-                Log.Info(Invariant($"{LogPrefix} created account={s.Slot.AccountName} name={ch.Name} realm={PlayerBotPlan.RealmKey(s.Slot.Realm)} race={ch.Race} class={ch.Class} region={ch.Region} x={ch.Xpos} y={ch.Ypos} guild={ch.GuildID}"));
+                Log.Info(Invariant($"{LogPrefix} created account={s.Slot.AccountName} name={ch.Name} realm={PlayerBotPlan.RealmKey(s.Slot.Realm)} race={ch.Race} class={ch.Class} level={ch.Level} region={ch.Region} x={ch.Xpos} y={ch.Ypos} guild={ch.GuildID}"));
             client.EnteredWorld += (c, first) => OnEnteredWorld(s, c, first);
             client.LoggedOut += c => PlayerBotDriver.Stop(c.Player);                                  // T4
             s.Client = client;
             DbCoreCharacter row = PlayerBotAccounts.LoginRow(account, ch);                            // the one the login reads
-            if (!s.ErrandRelogged && _spots.For(s.Slot) is PlayerBotSpot spot)                        // the start, not the errand's re-login
+            if (spot != null)
                 s.Spotted = PlayerBotSpots.Place(spot, row, s.Slot.AccountName, Log);
             client.BeginLogin(row);
         }
@@ -276,10 +309,20 @@ public static class PlayerBotSpawner
         try
         {
             GamePlayer player = c.Player;
+            if (s.Kit != null && !s.Equipped)                                                         // levelmatch: before any driving
+            {
+                s.Equipped = true;
+                PlayerBotKitResult gear = PlayerBotKitGear.Equip(player, s.Kit, PlayerBotKit.Seed(s.Slot));
+                Log.Info(PlayerBotKit.Format(s.Slot.AccountName, player, s.Kit, gear));
+            }
             bool Drive(GamePlayer p)                                                                  // a spot bot holds its spot
             {
                 if (!PlayerBotDriver.Start(p)) return false;
-                if (s.Spotted && PlayerBotDriver.StateOf(p) is { } state) state.HoldAnchor = true;
+                if (PlayerBotDriver.StateOf(p) is { } state)
+                {
+                    if (s.Spotted) state.HoldAnchor = true;
+                    state.Kit = s.Kit;                                                                // TrainTo on each level-up
+                }
                 return true;
             }
             bool errands = s.Slot.IsQuestFighter && Plan.Total <= ErrandMaxBots;                       // T5

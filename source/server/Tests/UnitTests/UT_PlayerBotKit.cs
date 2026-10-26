@@ -5,6 +5,7 @@ using System.Reflection;
 using System.Runtime.CompilerServices;
 using DOL.Database;
 using DOL.GS.HearthDAoC.PlayerBots;
+using DOL.GS.PacketHandler.Client.v168;
 using DOL.GS.Realm;
 using DOL.GS.ServerRules;
 using DOL.GS.Styles;
@@ -16,9 +17,10 @@ namespace DOL.GS.Tests;
 // HearthDAoC proto (#137 level-matched run, levelmatch/DESIGN.md): a bot made at a GameBot's level, class and race. The
 // allocator against GameBot.SpendSpecPoints' numbers (an autonomous GameBot's training, REVIEW-FIXES 5) and
 // VerifySpecPoints' budget, the stats against CharacterStatValidator, gender and race, the specs string and its keys,
-// the retrain, the skill counts, the gear rules and the KIT line. No server and no database (an empty one for GameObject's type initializer, as
-// UT_PlayerBotDriver.cs:26-38, and SkillBase's property names, PetTestLanguageScope): OpenSpecs (SkillBase's career),
-// ApplyToRow's caller, TrainTo, PlayerBotKitGear.Load/Equip and the login are left to the smoke leg.
+// the retrain, the skill counts, the creation row, the gear rules and the KIT line. No server and no database (an empty one
+// for GameObject's type initializer, as UT_PlayerBotDriver.cs:26-38, and SkillBase's property names,
+// PetTestLanguageScope): OpenSpecs (SkillBase's career), EnsureCharacter's database steps and the CharacterCreated
+// handlers, TrainTo, PlayerBotKitGear.Load/Equip and the login are left to the smoke leg.
 [TestFixture, NonParallelizable]
 public sealed class UT_PlayerBotKit
 {
@@ -256,6 +258,40 @@ public sealed class UT_PlayerBotKit
         var fire = new SpellLine("Fire", "Fire", Specs.Fire_Magic, true);
         GamePlayer caster = WithSkills([(style, null)], [(fire, [Spell(3), Spell(4), Spell(5)])]);
         Assert.That((PlayerBotKit.Spells(caster), PlayerBotKit.Styles(caster)), Is.EqualTo((3, 1)));
+    }
+
+    // --- creation (levelmatch/DESIGN.md 2.4, DECISIONS 2) ---
+
+    [Test]
+    public void A_build_row_is_a_valid_level_1_character_then_the_build_after_the_creation_event()
+    {
+        int rows = 0;
+        foreach (eCharacterClass cls in GameBotClasses)
+        {
+            eRealm realm = GlobalConstants.STARTING_CLASSES_DICT.First(kv => kv.Value.Contains(cls)).Key;
+            var slot = new PlayerBotSlot("hdbot-x-01", realm, 1);
+            foreach (PlayerRace race in ScriptMgr.FindCharacterClass((int)cls).EligibleRaces)
+            {
+                PlayerBotKitPlan kit = PlayerBotKit.Plan(new PlayerBotBuild(40, cls, race.ID), PlayerBotKit.Seed(slot));
+                DbCoreCharacter ch = PlayerBotAccounts.NewRow(slot.AccountName, slot, kit, out ICharacterClass charClass);
+                Assert.That((CharacterCreateRequestHandler.IsCharacterValid(ch), ch.Level, ch.Class, ch.Race),
+                    Is.EqualTo((true, 1, (int)cls, (int)race.ID)), $"{cls} {race.ID}");   // what the creation checks see
+                PlayerBotKit.ApplyToRow(ch, kit, charClass, kit.Lines.Where(l => l.Spec != null).Select(l => l.Spec)
+                    .ToHashSet(StringComparer.OrdinalIgnoreCase));
+                Assert.That((ch.Class, ch.Level, ch.Experience), Is.EqualTo(((int)cls, 40, GamePlayer.GetExperienceAmountForLevel(39))));
+                Assert.That((CharacterStatValidator.Validate(ch, out int points), points), Is.EqualTo((true, 30)), $"{cls} {race.ID} at 40");
+                Assert.That(ch.SerializedSpecs, Does.Contain("|"), $"{cls} {race.ID}");
+                rows++;
+            }
+        }
+        Assert.That(rows, Is.GreaterThan(2 * GameBotClasses.Length));                       // every class, most with 3+ races
+        var fighter = new PlayerBotKitPlan(new PlayerBotBuild(20, eCharacterClass.Fighter, eRace.Briton), eSpecType.None, new BotSpec());
+        var alb = new PlayerBotSlot("hdbot-alb-02", eRealm.Albion, 2);
+        Assert.That(PlayerBotAccounts.NewRow(alb.AccountName, alb, fighter, out _), Is.Null);   // a base class at 5 or more
+        DbCoreCharacter roster = PlayerBotAccounts.NewRow(alb.AccountName, alb, null, out ICharacterClass none);
+        Assert.That((roster.Race, roster.Class, roster.Gender, roster.Level, none),
+            Is.EqualTo(((int)alb.Template.Race, (int)alb.Template.BaseClass, 0, 1, (ICharacterClass)null)));   // today's roster bot
+        Assert.That(CharacterCreateRequestHandler.IsCharacterValid(roster), Is.True);
     }
 
     // --- gear (levelmatch/DESIGN.md 2.3) ---
