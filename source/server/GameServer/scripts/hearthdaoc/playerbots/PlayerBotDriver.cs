@@ -362,12 +362,13 @@ public static class PlayerBotDriver
         player.OnHeadingPacketReceived();                                                // GP:874-877 -> PMC:151-154
     }
 
-    // Drops a target that died or is no longer fair game (an attacker stays fair game whatever its con).
+    // Drops a target that died or is no longer fair game (an attacker stays fair game whatever its con). A death counts
+    // for the TALLY of the first bot to report it only, so bots sharing a camp sum to the DRIVER line's kills.
     private static void SettleTarget(PlayerBotState state, GamePlayer player)
     {
         if (state.Target == null || IsValidTarget(player, state.Target, state.DeathSafetySteps) || IsAttacking(player, state.Target))
             return;
-        if (state.Engaged && !state.Target.IsAlive) { PlayerBotDriverReport.Kill(state.Target); state.Kills++; }
+        if (state.Engaged && !state.Target.IsAlive) { if (PlayerBotDriverReport.Kill(state.Target)) state.Kills++; }
         else if (!state.Target.IsAlive) state.RoamingSince = 0;  // killed by another before this bot got there: not outgrown
         state.Target = null;
         state.Engaged = false;

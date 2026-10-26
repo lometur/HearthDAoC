@@ -457,4 +457,22 @@ public sealed class UT_PlayerBotDriver
         observe.Invoke(null, [state, player]);
         Assert.That((state.Gained, state.NetExperience, state.Retrains), Is.EqualTo((500L, 300L, 0)));
     }
+
+    [Test]
+    public void A_monster_two_bots_fought_counts_in_one_tally()               // the TALLY kills sum to the DRIVER kills
+    {
+        MethodInfo settle = typeof(PlayerBotDriver).GetMethod("SettleTarget", BindingFlags.Static | BindingFlags.NonPublic);
+        var monster = (GameNPC)RuntimeHelpers.GetUninitializedObject(typeof(GameNPC));   // health 0: dead
+        PlayerBotState Engaged()
+        {
+            PlayerBotState state = (PlayerBotState)RuntimeHelpers.GetUninitializedObject(typeof(PlayerBotState));
+            (state.Target, state.Engaged) = (monster, true);
+            return state;
+        }
+        PlayerBotState first = Engaged(), second = Engaged();
+        settle!.Invoke(null, [first, Player(null)]);
+        settle.Invoke(null, [second, Player(null)]);
+        Assert.That((first.Kills, second.Kills), Is.EqualTo((1, 0)), "the second bot's kill is the first's (PlayerBotDriverReport.Kill)");
+        Assert.That((first.Target, second.Target, first.Engaged, second.Engaged), Is.EqualTo(((GameLiving)null, (GameLiving)null, false, false)));
+    }
 }
