@@ -88,6 +88,7 @@ public sealed class PlayerBotState
     public int LifeKills, LifeRests;                             //   this life's fights won and sits, its last kill,
     public long LastKillTick;                                    //   and the killer the Dying event names (OnBotDying)
     public GameObject Killer;
+    public bool RecoverBeforePull;                               // a kill since the last full rest: rest to full first
     public (string Head, PlayerBotDeathDetail Detail, GameObject Target)? PendingDeath;   // a DEATH line awaiting Dying (AwaitsDying)
 }
 
@@ -247,6 +248,7 @@ public static class PlayerBotDriver
             state.AliveSince = now;
             state.LifeKills = state.LifeRests = 0;
             state.Killer = null;
+            state.RecoverBeforePull = false;                                             //    the release restores it all
         }
         state.DeathRecorded = false;
         state.ReleaseRequested = false;
@@ -278,13 +280,16 @@ public static class PlayerBotDriver
                 return;
             }
         }
-        if (!player.InCombat && WantsRest(player))
+        TryLoot(state, player, now);                                                     // 11. APP:403-414, before a sit
+        if (state.RecoverBeforePull && Recovered(player)) state.RecoverBeforePull = false;
+        if (MayRest(Attacker(state, player, now) != null, state.Engaged && state.Target?.IsAlive == true) &&
+            WantsRest(player, state.RecoverBeforePull))                                  // 12. APP:290-296, DEATHS.md A1
         {
-            Rest(state, player, now);                                                    // 11. APP:290-296
+            if (state.Target != null) Disengage(state, player);                         //    a pull not begun: re-picked after
+            Rest(state, player, now);
             return;
         }
-        if (player.IsSitting) player.Sit(false);                                         // 12
-        TryLoot(state, player, now);                                                     // 13. APP:403-414
+        if (player.IsSitting) player.Sit(false);                                         // 13. rested, or hit: stand
         RefreshTarget(state, player, now);                                               // 14
         if (state.Target == null)                                                        // 15
         {
@@ -405,6 +410,7 @@ public static class PlayerBotDriver
         {
             state.LifeKills++;                                    // every fight won, a monster another bot counted too
             state.LastKillTick = GameLoop.GameLoopTime;
+            state.RecoverBeforePull = true;                       // rest to full before the next pull (WantsRest)
             if (PlayerBotDriverReport.Kill(state.Target)) state.Kills++;
         }
         else if (dead) state.RoamingSince = 0;                   // killed by another before this bot got there: not outgrown
@@ -518,10 +524,17 @@ public static class PlayerBotDriver
     public static int DeathStepsFor(ConColor safest, int groupSize, int deathSteps) =>
         Math.Min(deathSteps, Math.Max(0, (int)MaximumTargetCon(groupSize, 0) - (int)safest));
 
-    // APP:186-187 for a class with a power pool. The roster's three classes have none (ManaStat UNDEFINED,
-    // MaxManaCalculator.cs:32-51), so ManaPercent reads 0 (GameLiving.cs:2753) and the pilot's rule would sit them forever.
+    // The GameBot's recovery thresholds (AutonomousRestPolicy.NeedsRecovery, AutonomousBotDecisionEngine.cs:384-394: 70%
+    // health, 45% power, 35% endurance; the pilot's 50/22/20 at APP:186-187 left the bots pulling at half health,
+    // levelmatch/DEATHS.md A1). Power counts only for a class with a pool: one with none (ManaStat UNDEFINED,
+    // MaxManaCalculator.cs:32-51) reads ManaPercent 0 (GameLiving.cs:2753) and would sit forever.
     public static bool NeedsRest(byte healthPercent, int maxMana, byte manaPercent, byte endurancePercent) =>
-        AutonomousPlayerPilot.ShouldRest(healthPercent, maxMana > 0 ? manaPercent : (byte)100, endurancePercent);
+        AutonomousRestPolicy.NeedsRecovery(healthPercent, manaPercent, endurancePercent, maxMana > 0);
+
+    /// <summary>The rest gate (DEATHS.md A1): nothing is hitting the bot and it has no live target engaged. A player may
+    /// sit in combat (GamePlayer.Sit, GamePlayer.cs:8734-8815, has no combat check); the old gate waited out InCombat's
+    /// 10 s after the last swing (GameLiving.cs:31, :225-227), and the next pull began in the think of the kill.</summary>
+    public static bool MayRest(bool beingHit, bool inLiveFight) => !beingHit && !inLiveFight;
 
     /// <summary>Power for the diagnostics' lines: full for a class with no power pool, as NeedsRest reads it.</summary>
     public static byte PowerPercent(int maxMana, byte manaPercent) => maxMana > 0 ? manaPercent : (byte)100;
@@ -558,11 +571,17 @@ public static class PlayerBotDriver
         return head + " " + PlayerBotDriverReport.FormatDeathDetail(detail);
     }
 
-    /// <summary>Low, or sitting and not yet full (APP:290-291 without the combat check): the driver rests once out of
-    /// combat, and a task that walks lets it.</summary>
-    public static bool WantsRest(GamePlayer player) =>
-        NeedsRest(player.HealthPercent, player.MaxMana, player.ManaPercent, player.EndurancePercent) ||
-        player.IsSitting && !Recovered(player);
+    /// <summary>Low, or sitting and not yet full (APP:290-291 without the combat check), or after a kill until full
+    /// (recoverBeforePull): the driver rests when MayRest says so, and a task that walks lets it.</summary>
+    public static bool WantsRest(GamePlayer player, bool recoverBeforePull = false) =>
+        WantsRest(NeedsRest(player.HealthPercent, player.MaxMana, player.ManaPercent, player.EndurancePercent),
+            player.IsSitting, recoverBeforePull, Recovered(player));
+
+    /// <summary>After a kill the bot rests to full before it picks the next target, as a GameBot does after a camp fight:
+    /// the fight sets _recoverBeforeNextCampTarget (AWBC:423-424) and WorkCamp rests until IsFullyRecovered before its
+    /// next target search (AWBC:2727-2730, HandleCampRecovery :3019-3047).</summary>
+    public static bool WantsRest(bool needsRest, bool sitting, bool recoverBeforePull, bool recovered) =>
+        needsRest || (sitting || recoverBeforePull) && !recovered;
 
     public static int TargetScore(int distance, ConColor con) => distance + Math.Abs((int)con) * ConPenalty;
     public static int MeleeStopDistance(int attackRange) => Math.Max(48, (attackRange > 0 ? attackRange : 128) - 48);

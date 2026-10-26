@@ -34,7 +34,7 @@ public sealed class PlayerBotErrandTask : IPlayerBotTask
             case ErrandActionKind.Walk:
                 if (PlayerBotDriver.WantsRest(player))
                 {
-                    if (!player.InCombat) return false;               // the driver sits (its Think step 11) until full
+                    if (!player.InCombat) return false;               // the driver sits (its Think step 12) until full
                     state.Mover.Stop(now);                            // in combat up to 10 s after the last swing
                     return true;                                      // (GameLiving.cs:31): stand, seek no fight
                 }

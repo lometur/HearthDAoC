@@ -281,12 +281,48 @@ public sealed class UT_PlayerBotDriver
             Is.EqualTo(new[] { 700, 900, 1100 }));
     }
 
-    // The roster's classes have no power pool, so ManaPercent reads 0 (GameLiving.cs:2753): only health and endurance count.
-    [TestCase((byte)100, 0, (byte)0, (byte)100, false)] [TestCase((byte)49, 0, (byte)0, (byte)100, true)]
-    [TestCase((byte)100, 0, (byte)0, (byte)19, true)] [TestCase((byte)100, 120, (byte)21, (byte)100, true)]
-    [TestCase((byte)100, 120, (byte)22, (byte)100, false)]
+    // The GameBot's recovery thresholds, 70% health, 45% power, 35% endurance (AutonomousRestPolicy.NeedsRecovery;
+    // levelmatch/DEATHS.md A1). A class with no power pool reads ManaPercent 0 (GameLiving.cs:2753): only health and
+    // endurance count for it.
+    [TestCase((byte)100, 0, (byte)0, (byte)100, false)] [TestCase((byte)69, 0, (byte)0, (byte)100, true)]
+    [TestCase((byte)70, 0, (byte)0, (byte)100, false)] [TestCase((byte)100, 0, (byte)0, (byte)34, true)]
+    [TestCase((byte)100, 0, (byte)0, (byte)35, false)] [TestCase((byte)100, 120, (byte)44, (byte)100, true)]
+    [TestCase((byte)100, 120, (byte)45, (byte)100, false)]
     public void NeedsRestIgnoresPowerWithoutAPowerPool(byte health, int maxMana, byte mana, byte endurance, bool expected) =>
         Assert.That(PlayerBotDriver.NeedsRest(health, maxMana, mana, endurance), Is.EqualTo(expected));
+
+    // A player may sit in combat (GamePlayer.Sit has no combat check): the bot sits once nothing hits it and no live
+    // target is engaged, not after InCombat's 10 s, by when the next pull had started (DEATHS.md A1). A monster hitting
+    // it keeps it standing to fight back.
+    [TestCase(false, false, true)] [TestCase(true, false, false)] [TestCase(false, true, false)] [TestCase(true, true, false)]
+    public void A_bot_may_rest_when_nothing_hits_it_and_no_live_fight_is_engaged(bool beingHit, bool inLiveFight, bool may) =>
+        Assert.That(PlayerBotDriver.MayRest(beingHit, inLiveFight), Is.EqualTo(may));
+
+    // Low, or sitting and not full, as before; and after a kill until full, as a GameBot rests to full after a camp
+    // fight before its next pull (AutonomousWorldBotController.cs:423-424, :2727-2730, :3019-3047).
+    [TestCase(true, false, false, false, true)] [TestCase(false, true, false, false, true)]
+    [TestCase(false, true, false, true, false)] [TestCase(false, false, true, false, true)]
+    [TestCase(false, false, true, true, false)] [TestCase(false, false, false, false, false)]
+    public void A_bot_rests_when_low_while_sitting_and_after_a_kill_until_full(bool needsRest, bool sitting,
+        bool recoverBeforePull, bool recovered, bool wants) =>
+        Assert.That(PlayerBotDriver.WantsRest(needsRest, sitting, recoverBeforePull, recovered), Is.EqualTo(wants));
+
+    [Test]
+    public void A_kill_has_the_bot_recover_before_its_next_pull_and_a_dropped_fight_does_not()
+    {
+        MethodInfo settle = typeof(PlayerBotDriver).GetMethod("SettleTarget", BindingFlags.Static | BindingFlags.NonPublic);
+        var dead = (GameNPC)RuntimeHelpers.GetUninitializedObject(typeof(GameNPC));     // health 0: dead
+        PlayerBotState Fought(bool engaged)
+        {
+            PlayerBotState state = (PlayerBotState)RuntimeHelpers.GetUninitializedObject(typeof(PlayerBotState));
+            (state.Target, state.Engaged) = (dead, engaged);
+            return state;
+        }
+        PlayerBotState won = Fought(true), late = Fought(false);
+        settle!.Invoke(null, [won, Player(null)]);
+        settle.Invoke(null, [late, Player(null)]);
+        Assert.That((won.RecoverBeforePull, late.RecoverBeforePull), Is.EqualTo((true, false)), "the late bot never fought it");
+    }
 
     [TestCase(1000, ConColor.YELLOW, 1000)] [TestCase(1000, ConColor.BLUE, 1220)] [TestCase(700, ConColor.GREEN, 1140)]
     public void TargetScore(int distance, ConColor con, int expected) =>
