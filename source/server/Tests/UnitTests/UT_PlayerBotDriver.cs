@@ -159,8 +159,9 @@ public sealed class UT_PlayerBotDriver
         bool passedOver, long now, long next) =>
         Assert.That(PlayerBotDriver.CappedClock(since, found, passedOver, now), Is.EqualTo(next));
 
-    private static (string Npc, Vector3 At, ConColor Con, bool Huntable) Monster(string name, float x, ConColor con) =>
-        (name, new Vector3(x, 0, 0), con, con is > ConColor.GREY and <= ConColor.YELLOW);
+    private static (string Npc, Vector3 At, ConColor Con, bool Huntable, bool Avoided) Monster(string name, float x,
+        ConColor con, bool avoided = false) =>
+        (name, new Vector3(x, 0, 0), con, con is > ConColor.GREY and <= ConColor.YELLOW, avoided);
 
     // A camp is the monsters around one the bot would hunt, within RoamRadius: it fits when that one is under the cap
     // and so are most of them (their median con, as a GameBot's camp is its levels' median, AWBC:3312-3330, :3386).
@@ -221,6 +222,56 @@ public sealed class UT_PlayerBotDriver
             "the failed camp when it is the only one");
         Assert.That(PlayerBotDriver.PlanRelocation(monsters[9..], Vector3.Zero, ConColor.GREEN, ConColor.YELLOW, null,
             new HashSet<string>(), 5), Is.EqualTo((Array.Empty<string>(), (ConColor?)null)));
+    }
+
+    // --- the killer memory (DEATHS.md A3) ---
+
+    // A death's names are remembered for a GameBot's failure memory, 15 minutes (AutonomousDeathRecoveryPolicy.cs:10,
+    // AWBC:3805, :3811), by any case of the name (its dictionaries are OrdinalIgnoreCase, AWBC:147-148); an expired one is
+    // dropped at the next.
+    [Test]
+    public void A_remembered_name_is_avoided_for_15_minutes()
+    {
+        var avoid = new Dictionary<string, long>(StringComparer.OrdinalIgnoreCase);
+        PlayerBotDriver.Remember(avoid, "rainbow sprite", 1_000);
+        PlayerBotDriver.Remember(avoid, null, 1_000);                                   // no killer named: nothing
+        Assert.That(PlayerBotDriver.IsAvoided(avoid, "rainbow sprite", 1_001), Is.True);
+        Assert.That(PlayerBotDriver.IsAvoided(avoid, "Rainbow Sprite", 900_999), Is.True);
+        Assert.That(PlayerBotDriver.IsAvoided(avoid, "rainbow sprite", 901_000), Is.False);
+        Assert.That(PlayerBotDriver.IsAvoided(avoid, "apple fly", 1_001), Is.False);
+        Assert.That(PlayerBotDriver.IsAvoided(avoid, null, 1_001), Is.False);
+        Assert.That(PlayerBotDriver.AvoidedCount(avoid, 1_001), Is.EqualTo(1));
+        PlayerBotDriver.Remember(avoid, "apple fly", 901_000);
+        Assert.That(avoid.Keys, Is.EqualTo(new[] { "apple fly" }), "the expired name went");
+        Assert.That(PlayerBotDriver.AvoidedCount(avoid, 1_801_000), Is.Zero);
+    }
+
+    // A camp full of avoided names fits no cap: its fresh monsters under the cap must be most of it, and the spot itself
+    // fresh. With no camp that fits, the fallback prefers a fresh camp, as a GameBot's PreferFreshTargets
+    // (AutonomousDeathRecoveryPolicy.cs:26-38, AWBC:3424-3427).
+    [Test]
+    public void A_relocation_counts_a_camp_of_avoided_names_as_unfit()
+    {
+        var monsters = new[]
+        {
+            Monster("s1", 1_000, ConColor.GREEN, avoided: true), Monster("s2", 1_100, ConColor.GREEN, avoided: true),
+            Monster("f1", 1_200, ConColor.GREEN),                                     // fresh, but 1 of 3
+            Monster("g1", 10_000, ConColor.GREEN), Monster("g2", 10_100, ConColor.GREEN),
+            Monster("g3", 10_200, ConColor.GREEN, avoided: true),                     // fresh: 2 of 3
+        };
+        Assert.That(PlayerBotDriver.PlanRelocation(monsters, Vector3.Zero, ConColor.GREEN, ConColor.YELLOW, null,
+            new HashSet<string>(), 5).Spots, Is.EqualTo(new[] { "g1", "g2" }), "g3 is avoided, the camp at 1,000 stale");
+        var fallback = new[]
+        {
+            Monster("s1", 1_000, ConColor.BLUE, avoided: true), Monster("s2", 1_100, ConColor.BLUE, avoided: true),
+            Monster("y1", 10_000, ConColor.YELLOW), Monster("y2", 10_100, ConColor.YELLOW),
+        };
+        Assert.That(PlayerBotDriver.PlanRelocation(fallback, Vector3.Zero, ConColor.GREEN, ConColor.YELLOW, null,
+            new HashSet<string>(), 5), Is.EqualTo((new[] { "y1", "y2" }, (ConColor?)ConColor.YELLOW)),
+            "the fresh yellow camp before the safer blue one the bot died to");
+        Assert.That(PlayerBotDriver.PlanRelocation(fallback[..2], Vector3.Zero, ConColor.GREEN, ConColor.YELLOW, null,
+            new HashSet<string>(), 5), Is.EqualTo((new[] { "s1", "s2" }, (ConColor?)ConColor.BLUE)),
+            "a stale camp when no fresh one is left");
     }
 
     // Runs r1-r1h (2026-10-21): on the switchback stairs by Master Lorik the two corners at their foot (Z 1795) counted as

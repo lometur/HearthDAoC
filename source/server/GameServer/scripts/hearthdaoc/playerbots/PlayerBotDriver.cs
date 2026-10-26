@@ -66,6 +66,8 @@ public sealed class PlayerBotState
     public long CappedSince;                                     // DEATHS.md A4: the first search that passed monsters over
     public ConColor? FallbackCap;                                //   for the cap and found none (CappedClock); a GameBot's
     public Vector3? FailedCampAt;                                //   fallback camp's con and its failed camp (PlanRelocation)
+    public readonly Dictionary<string, long> AvoidUntil = new(StringComparer.OrdinalIgnoreCase);   // DEATHS.md A3: the
+    public bool KillerAvoided;                                   //   names of deaths' killers and targets (IsAvoided)
     public long AliveSince;                                      // PLAYER_BOT_DEATH: the last release or login
     public int Attackers;                                        //   and the attackers on the last think alive
     public long NextBlockedLine;                                 // PLAYER_BOT_BLOCKED
@@ -272,6 +274,7 @@ public static class PlayerBotDriver
             state.AliveSince = now;
             state.LifeKills = state.LifeRests = 0;
             state.Killer = null;
+            state.KillerAvoided = false;
             state.RecoverBeforePull = false;                                             //    the release restores it all
         }
         state.DeathRecorded = false;
@@ -575,8 +578,8 @@ public static class PlayerBotDriver
                 leashed && Vector3.Distance(at, state.Anchor) > LeashRadius + RoamRadius)
                 continue;
             int score = TargetScore(player.GetDistanceTo(npc), con);                    // AWBC:3100
-            if (con <= cap) candidates.Add((npc, at, score));
-            else passedOver = true;
+            if (con <= cap && !IsAvoided(state.AvoidUntil, npc.Name, now)) candidates.Add((npc, at, score));
+            else passedOver = true;                                                     // over the cap, or a death's name
         }
         GameNPC best = PickUncrowded(candidates, adds, uncrowdedOnly: radius < SearchRadius);
         candidates.Clear();                                                             // no monster held past the search
@@ -696,13 +699,16 @@ public static class PlayerBotDriver
     /// (Huntable, not rejected for want of a corridor) that are its camps. A monster's camp is the non-grey monsters
     /// within RoamRadius of it, itself too; it fits the cap when the monster is at or under the cap and so is the
     /// camp's median con, as a GameBot's camp fits by its levels' median (AWBC:3312-3330, :3386; unlike a GameBot's
-    /// camp, one monster name, those over the natural cap count too). With none that fits, the GameBot's fallback
-    /// (SelectSafestAvailableAfterDeath, AutonomousBotDecisionEngine.cs:293-313; AWBC:3422-3437): the camps with the
-    /// safest median at or under the natural cap, not the one the bot died at (within RoamRadius of failedAt) while
-    /// another exists, and that median as Fallback, the con the bot hunts there (AWBC:3446-3452).</summary>
+    /// camp, one monster name, those over the natural cap count too). A name the bot avoids (DEATHS.md A3) counts as
+    /// over the cap, and such a monster is no spot: a camp full of them fits no cap. With none that fits, the GameBot's
+    /// fallback (SelectSafestAvailableAfterDeath, AutonomousBotDecisionEngine.cs:293-313; AWBC:3422-3437): of the camps
+    /// with a median at or under the natural cap, the fresh ones while there are any (most of the camp not avoided, as
+    /// PreferFreshTargets, AutonomousDeathRecoveryPolicy.cs:26-38), not the one the bot died at (within RoamRadius of
+    /// failedAt) while another is left, those with the safest median, and that median as Fallback, the con the bot hunts
+    /// there (AWBC:3446-3452).</summary>
     public static (T[] Spots, ConColor? Fallback) PlanRelocation<T>(
-        IReadOnlyList<(T Npc, Vector3 At, ConColor Con, bool Huntable)> monsters, Vector3 here, ConColor cap, ConColor natural,
-        Vector3? failedAt, ISet<T> rejected, int count) where T : class
+        IReadOnlyList<(T Npc, Vector3 At, ConColor Con, bool Huntable, bool Avoided)> monsters, Vector3 here, ConColor cap,
+        ConColor natural, Vector3? failedAt, ISet<T> rejected, int count) where T : class
     {
         Dictionary<(int, int), List<int>> grid = new();
         for (int i = 0; i < monsters.Count; i++)
@@ -719,30 +725,35 @@ public static class PlayerBotDriver
         List<T> fit = new();
         foreach (int i in order)
         {
-            if (monsters[i].Con <= cap && CampCon(monsters, grid, i) <= cap) fit.Add(monsters[i].Npc);
+            if (monsters[i].Con <= cap && !monsters[i].Avoided && CampCon(monsters, grid, i).Fresh <= cap)
+                fit.Add(monsters[i].Npc);
             if (fit.Count == count) break;
         }
         if (fit.Count > 0) return (fit.ToArray(), null);
-        List<(int I, ConColor Median, bool Failed)> safe = new();
+        List<(int I, ConColor Median, bool Fresh, bool Failed)> safe = new();
         foreach (int i in order)
         {
-            ConColor median = CampCon(monsters, grid, i);
+            (ConColor median, ConColor fresh) = CampCon(monsters, grid, i);
             if (median <= natural)
-                safe.Add((i, median, failedAt is Vector3 f && Vector3.DistanceSquared(monsters[i].At, f) <= RoamRadius * RoamRadius));
+                safe.Add((i, median, fresh <= natural,
+                    failedAt is Vector3 f && Vector3.DistanceSquared(monsters[i].At, f) <= RoamRadius * RoamRadius));
         }
         if (safe.Count == 0) return (Array.Empty<T>(), null);
-        IEnumerable<(int I, ConColor Median, bool Failed)> pool = safe.Any(c => !c.Failed) ? safe.Where(c => !c.Failed) : safe;
+        IEnumerable<(int I, ConColor Median, bool Fresh, bool Failed)> pool = safe.Any(c => c.Fresh) ? safe.Where(c => c.Fresh) : safe;
+        pool = pool.Any(c => !c.Failed) ? pool.Where(c => !c.Failed) : pool;
         ConColor safest = pool.Min(c => c.Median);
         return (pool.Where(c => c.Median == safest).Take(count).Select(c => monsters[c.I].Npc).ToArray(), safest);
     }
 
     private static (int, int) CampCell(Vector3 at) => ((int)MathF.Floor(at.X / RoamRadius), (int)MathF.Floor(at.Y / RoamRadius));
 
-    // The median con of the camp at monsters[centre]: its non-grey monsters within RoamRadius (the grid's cells).
-    private static ConColor CampCon<T>(IReadOnlyList<(T Npc, Vector3 At, ConColor Con, bool Huntable)> monsters,
+    // The median con of the camp at monsters[centre], its non-grey monsters within RoamRadius (the grid's cells), and the
+    // same with each avoided one as purple.
+    private static (ConColor Median, ConColor Fresh) CampCon<T>(
+        IReadOnlyList<(T Npc, Vector3 At, ConColor Con, bool Huntable, bool Avoided)> monsters,
         Dictionary<(int, int), List<int>> grid, int centre)
     {
-        Span<int> byCon = stackalloc int[7];                                            // GREY .. PURPLE
+        Span<int> byCon = stackalloc int[7], fresh = stackalloc int[7];                // GREY .. PURPLE
         int members = 0;
         Vector3 at = monsters[centre].At;
         (int cx, int cy) = CampCell(at);
@@ -753,12 +764,36 @@ public static class PlayerBotDriver
                         if (Vector3.DistanceSquared(monsters[j].At, at) <= RoamRadius * RoamRadius)
                         {
                             byCon[Math.Clamp((int)monsters[j].Con + 3, 0, 6)]++;
+                            fresh[monsters[j].Avoided ? 6 : Math.Clamp((int)monsters[j].Con + 3, 0, 6)]++;
                             members++;
                         }
-        for (int c = 0, seen = 0; c < 7; c++)                                           // the members/2-th, sorted
+        return (Median(byCon, members), Median(fresh, members));
+    }
+
+    private static ConColor Median(ReadOnlySpan<int> byCon, int members)
+    {
+        for (int c = 0, seen = 0; c < byCon.Length; c++)                                // the members/2-th, sorted
             if ((seen += byCon[c]) > members / 2) return (ConColor)(c - 3);
         return ConColor.PURPLE;
     }
+
+    /// <summary>Whether a monster's name is one the bot remembers from a death (DEATHS.md A3), until its time is up. A
+    /// GameBot's names, by any case, last FailureMemoryMilliseconds (AWBC:147-148, :3811).</summary>
+    public static bool IsAvoided(IReadOnlyDictionary<string, long> avoidUntil, string name, long now) =>
+        name != null && avoidUntil.TryGetValue(name, out long until) && now < until;
+
+    /// <summary>Remembers a death's name for AutonomousDeathRecoveryPolicy.FailureMemoryMilliseconds (15 minutes, the
+    /// GameBot's failed camp and target memory, AWBC:3805, :3811), dropping those whose time is up (AWBC:3230-3233).</summary>
+    public static void Remember(Dictionary<string, long> avoidUntil, string name, long now)
+    {
+        foreach (string old in avoidUntil.Where(pair => pair.Value <= now).Select(pair => pair.Key).ToArray())
+            avoidUntil.Remove(old);
+        if (!string.IsNullOrEmpty(name)) avoidUntil[name] = now + AutonomousDeathRecoveryPolicy.FailureMemoryMilliseconds;
+    }
+
+    /// <summary>The names the bot avoids now (PLAYER_BOT_DEATH avoided=).</summary>
+    public static int AvoidedCount(IReadOnlyDictionary<string, long> avoidUntil, long now) =>
+        avoidUntil.Count(pair => now < pair.Value);
 
     // The GameBot's recovery thresholds (AutonomousRestPolicy.NeedsRecovery, AutonomousBotDecisionEngine.cs:384-394: 70%
     // health, 45% power, 35% endurance; the pilot's 50/22/20 at APP:186-187 left the bots pulling at half health,
@@ -991,14 +1026,15 @@ public static class PlayerBotDriver
         if (nav.HasNavmesh(zone) && nav.GetClosestPoint(zone, here, 64, 64, 128, nav.DefaultFilters) == null)
             return;   // off the mesh here, every corridor fails (PlayerTravelPath.cs:48-50): blame no monster for it
         ConColor natural = MaximumTargetCon(1, 0);
-        List<(GameNPC Npc, Vector3 At, ConColor Con, bool Huntable)> monsters = new();
+        List<(GameNPC Npc, Vector3 At, ConColor Con, bool Huntable, bool Avoided)> monsters = new();
         foreach (GameNPC npc in WorldMgr.GetNPCsFromRegion(player.CurrentRegionID))
         {
             if (npc.CurrentZone != zone || !IsExperienceTarget(npc) || !IsAttackable(player, npc)) continue;
             ConColor con = ConLevels.GetConColor(player.GetConLevel(npc));
             if (con > ConColor.GREY)
                 monsters.Add((npc, new(npc.X, npc.Y, npc.Z), con,
-                    con <= natural && AutonomousPlayerPilot.IsEligibleExperienceTarget(con, npc.EffectiveLevel, player.Level, 1)));
+                    con <= natural && AutonomousPlayerPilot.IsEligibleExperienceTarget(con, npc.EffectiveLevel, player.Level, 1),
+                    IsAvoided(state.AvoidUntil, npc.Name, now)));
         }
         (GameNPC[] nearest, ConColor? fallback) = PlanRelocation(monsters, here, MaximumTargetCon(1, state.DeathSafetySteps),
             natural, state.FailedCampAt, state.RelocateRejected, RelocateCandidates);
@@ -1044,6 +1080,8 @@ public static class PlayerBotDriver
         if (!state.DeathRecorded)
         {
             ReportDeath(state, player, now, last);
+            if (state.Engaged && state.Target != null)
+                Remember(state.AvoidUntil, state.Target.Name, now);                    // DEATHS.md A3: died fighting it
             state.DeathRecorded = true;
             state.Deaths++;
             state.DeathSafetySteps = NextDeathSteps(state.DeathSafetySteps);
@@ -1057,6 +1095,11 @@ public static class PlayerBotDriver
             state.RelocateRejected.Clear();
             state.Mover.Reset();
             PlayerBotDriverReport.Death();
+        }
+        if (!state.KillerAvoided && state.Killer is GameNPC killer)                    // and its killer, once the reaper
+        {                                                                               //   names it (AwaitsDying)
+            Remember(state.AvoidUntil, killer.Name, now);
+            state.KillerAvoided = true;
         }
         if (!state.ReleaseRequested && now - player.DeathTick >= DeathReleaseDelayMilliseconds)
         {
