@@ -133,12 +133,95 @@ public sealed class UT_PlayerBotDriver
         Assert.That(Enumerable.Range(0, 128).Select(level => ConLevels.GetConColor(ConLevels.GetConLevel(1, level))),
             Has.None.EqualTo(ConColor.GREEN));
 
-    // Nothing in reach fits the death cap: keep just enough steps for the safest monster there, as a GameBot falls
-    // back to the safest camp (AWBC:3422-3437). The steps only go down.
-    [TestCase(ConColor.BLUE, 2, 1)] [TestCase(ConColor.YELLOW, 3, 0)] [TestCase(ConColor.GREEN, 2, 2)]
-    [TestCase(ConColor.BLUE, 0, 0)] [TestCase(ConColor.GREEN, 5, 2)]
-    public void DeathStepsForTheSafestMonsterInReach(ConColor safest, int deaths, int expected) =>
-        Assert.That(PlayerBotDriver.DeathStepsFor(safest, 1, deaths), Is.EqualTo(expected));
+    // A death lowers the cap a step, down to green, and nothing raises it again: a GameBot's steps are clamped to its
+    // natural cap's distance from green and never decay, neither over time nor on a level-up (AWBC:3755-3765,
+    // :3793-3796). The old rollback reset them to fit the safest monster in reach (DEATHS.md A4: 729 of lm-fsmoke's
+    // 1,482 deaths came at deathSteps=0).
+    [TestCase(0, 1)] [TestCase(1, 2)] [TestCase(2, 2)] [TestCase(5, 2)]
+    public void A_death_lowers_the_cap_a_step_down_to_green(int steps, int next) =>
+        Assert.That(PlayerBotDriver.NextDeathSteps(steps), Is.EqualTo(next));
+
+    // DEATHS.md A4: a bot whose searches find monsters in reach but none under its cap takes none and, 30 s on, moves to
+    // a camp that fits; one that has reached no target for 2 minutes has outgrown its ground. The cap's reason wins.
+    [TestCase(0L, 0L, 1_000_000L, null)]
+    [TestCase(10_000L, 0L, 129_999L, null)] [TestCase(10_000L, 0L, 130_000L, "outgrown")]
+    [TestCase(0L, 100_000L, 129_999L, null)] [TestCase(0L, 100_000L, 130_000L, "capped")]
+    [TestCase(10_000L, 100_000L, 130_000L, "capped")]
+    public void A_capped_bot_relocates_after_30_s_and_an_outgrown_one_after_2_minutes(long roamingSince, long cappedSince,
+        long now, string reason) =>
+        Assert.That(PlayerBotDriver.RelocateReason(roamingSince, cappedSince, now), Is.EqualTo(reason));
+
+    // The capped clock: it starts at the first search that passed a monster over for the cap and found nothing, keeps
+    // running while that lasts, and stops at a search that found a target or nothing at all to pass over.
+    [TestCase(0L, false, true, 5_000L, 5_000L)] [TestCase(2_000L, false, true, 5_000L, 2_000L)]
+    [TestCase(2_000L, true, true, 5_000L, 0L)] [TestCase(2_000L, false, false, 5_000L, 0L)]
+    public void The_capped_clock_runs_while_searches_pass_monsters_over_and_find_none(long since, bool found,
+        bool passedOver, long now, long next) =>
+        Assert.That(PlayerBotDriver.CappedClock(since, found, passedOver, now), Is.EqualTo(next));
+
+    private static (string Npc, Vector3 At, ConColor Con, bool Huntable) Monster(string name, float x, ConColor con) =>
+        (name, new Vector3(x, 0, 0), con, con is > ConColor.GREY and <= ConColor.YELLOW);
+
+    // A camp is the monsters around one the bot would hunt, within RoamRadius: it fits when that one is under the cap
+    // and so are most of them (their median con, as a GameBot's camp is its levels' median, AWBC:3312-3330, :3386).
+    [Test]
+    public void A_relocation_takes_the_nearest_camps_its_cap_fits()
+    {
+        var monsters = new[]
+        {
+            Monster("yellow", 1_000, ConColor.YELLOW),                                       // over the cap
+            Monster("blue among yellows", 3_000, ConColor.BLUE), Monster("y1", 3_100, ConColor.YELLOW),
+            Monster("y2", 3_200, ConColor.YELLOW),                                           // median yellow
+            Monster("blue camp", 10_000, ConColor.BLUE), Monster("g1", 10_100, ConColor.GREEN),
+            Monster("g2", 10_200, ConColor.GREEN), Monster("y3", 10_300, ConColor.YELLOW),   // median blue
+            Monster("green", 20_000, ConColor.GREEN), Monster("grey1", 20_100, ConColor.GREY),
+            Monster("grey2", 20_200, ConColor.GREY),                                         // greys are no camp
+        };
+        (string[] spots, ConColor? fallback) = PlayerBotDriver.PlanRelocation(monsters, Vector3.Zero, ConColor.BLUE,
+            ConColor.YELLOW, null, new HashSet<string>(), 5);
+        Assert.That(spots, Is.EqualTo(new[] { "blue camp", "g1", "g2", "green" }));
+        Assert.That(fallback, Is.Null);
+    }
+
+    // A camp a bot has no corridor to is checked once: the next try takes the next nearest monsters, instead of the same
+    // five for the rest of the run (review of 76e41cf).
+    [Test]
+    public void RelocationSkipsMonstersFoundUnreachable()
+    {
+        int[] distances = { 700, 100, 500, 300, 900, 200, 1100, 400 };
+        var monsters = distances.Select(d => Monster($"m{d}", d, ConColor.GREEN)).ToArray();
+        var rejected = new HashSet<string>();
+        string[] first = PlayerBotDriver.PlanRelocation(monsters, Vector3.Zero, ConColor.GREEN, ConColor.YELLOW, null,
+            rejected, 5).Spots;
+        Assert.That(first, Is.EqualTo(new[] { "m100", "m200", "m300", "m400", "m500" }));
+        rejected.UnionWith(first);
+        Assert.That(PlayerBotDriver.PlanRelocation(monsters, Vector3.Zero, ConColor.GREEN, ConColor.YELLOW, null, rejected,
+            5).Spots, Is.EqualTo(new[] { "m700", "m900", "m1100" }));
+    }
+
+    // No camp fits: a GameBot takes the safest camp there is, not its failed one while another exists, and hunts it at
+    // that camp's con (SelectSafestAvailableAfterDeath, AutonomousBotDecisionEngine.cs:293-313; AWBC:3422-3452). A camp
+    // over the natural cap is none (AWBC:3426).
+    [Test]
+    public void When_no_camp_fits_the_safest_other_camp_takes_the_bot_at_its_con()
+    {
+        var monsters = new[]
+        {
+            Monster("a1", 0, ConColor.BLUE), Monster("a2", 100, ConColor.BLUE), Monster("a3", 200, ConColor.BLUE),
+            Monster("b1", 10_000, ConColor.YELLOW), Monster("b2", 10_100, ConColor.YELLOW), Monster("b3", 10_200, ConColor.BLUE),
+            Monster("c1", 20_000, ConColor.YELLOW), Monster("c2", 20_100, ConColor.BLUE), Monster("c3", 20_200, ConColor.BLUE),
+            Monster("e", 30_000, ConColor.BLUE), Monster("o1", 30_100, ConColor.ORANGE), Monster("o2", 30_200, ConColor.ORANGE),
+        };
+        (string[] spots, ConColor? fallback) = PlayerBotDriver.PlanRelocation(monsters, Vector3.Zero, ConColor.GREEN,
+            ConColor.YELLOW, new Vector3(50, 0, 0), new HashSet<string>(), 5);
+        Assert.That(spots, Is.EqualTo(new[] { "c1", "c2", "c3" }), "camp a failed; b is yellow; e is orange");
+        Assert.That(fallback, Is.EqualTo(ConColor.BLUE));
+        Assert.That(PlayerBotDriver.PlanRelocation(monsters[..3], Vector3.Zero, ConColor.GREEN, ConColor.YELLOW,
+            new Vector3(50, 0, 0), new HashSet<string>(), 5).Spots, Is.EqualTo(new[] { "a1", "a2", "a3" }),
+            "the failed camp when it is the only one");
+        Assert.That(PlayerBotDriver.PlanRelocation(monsters[9..], Vector3.Zero, ConColor.GREEN, ConColor.YELLOW, null,
+            new HashSet<string>(), 5), Is.EqualTo((Array.Empty<string>(), (ConColor?)null)));
+    }
 
     // Runs r1-r1h (2026-10-21): on the switchback stairs by Master Lorik the two corners at their foot (Z 1795) counted as
     // reached from the stairs 37 units above, so the bot made for the next corner, under the stairs, along the stair
@@ -265,20 +348,6 @@ public sealed class UT_PlayerBotDriver
         public override Vector3? GetClosestPoint(Zone zone, Vector3 position, float xRange, float yRange, float zRange,
             EDtPolyFlags[] filters) => position + new Vector3(0, 0, FloorRise);
         public override bool HasLineOfSight(Zone zone, Vector3 start, Vector3 end, EDtPolyFlags[] filters) => true;
-    }
-
-    // A camp a bot has no corridor to is checked once: the next try 2 minutes later takes the next nearest monsters,
-    // instead of the same five for the rest of the run (review of 76e41cf).
-    [Test]
-    public void RelocationSkipsMonstersFoundUnreachable()
-    {
-        int[] distances = { 700, 100, 500, 300, 900, 200, 1100, 400 };
-        var rejected = new HashSet<int>();
-        int[] first = PlayerBotDriver.RelocationCandidates(distances, d => new Vector3(d, 0, 0), Vector3.Zero, rejected, 5);
-        Assert.That(first, Is.EqualTo(new[] { 100, 200, 300, 400, 500 }));
-        rejected.UnionWith(first);
-        Assert.That(PlayerBotDriver.RelocationCandidates(distances, d => new Vector3(d, 0, 0), Vector3.Zero, rejected, 5),
-            Is.EqualTo(new[] { 700, 900, 1100 }));
     }
 
     // The GameBot's recovery thresholds, 70% health, 45% power, 35% endurance (AutonomousRestPolicy.NeedsRecovery;
