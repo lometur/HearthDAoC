@@ -99,8 +99,9 @@ public sealed class PlayerBotState
     public long NextSelfHealTick, NextSummonTick;                //   A6, A5), the next tries, and the level at which it
     public byte NoPetSpellLevel;                                 //   found no main-pet summon (not looked for again then)
     public long NextQuickcastTick;                               // Quickcast's next try (UseQuickcast)
-    public bool EngagePet;                                       // PLAYER_BOT_FIGHT pet= and heals=: a living pet at the
-    public int FightHeals;                                       //   fight's first think, its heals on itself since
+    public bool EngagePet;                                       // PLAYER_BOT_FIGHT pet=, heals= and qc=: a living pet at
+    public int FightHeals;                                       //   the fight's first think, its heals on itself since,
+    public bool FightQuickcast;                                  //   and a cast with Quickcast on
     public (string Head, PlayerBotDeathDetail Detail, GameObject Target)? PendingDeath;   // a DEATH line awaiting Dying (AwaitsDying)
 }
 
@@ -383,6 +384,7 @@ public static class PlayerBotDriver
             state.EngageMana = PowerPercent(player.MaxMana, player.ManaPercent);
             state.FightAdds = state.Swings = state.NotVisible = state.FightCasts = state.FightHeals = 0;
             state.EngagePet = player.ControlledBrain?.Body?.IsAlive == true;
+            state.FightQuickcast = false;
             if (player.ControlledBrain != null)                                         // its pet too: the pet window's
                 player.CommandNpcAttack();                                              //   attack (PetWindowHandler.cs:79-82)
         }
@@ -408,6 +410,7 @@ public static class PlayerBotDriver
             }
             state.NextCombatChoiceTick = now + Math.Max(900, state.Spell.CastTime + 250);
             state.FightCasts++;
+            state.FightQuickcast |= quickcasting;
             state.Activity = PlayerBotActivity.Casting;
         }
         else if (!player.IsCasting)
@@ -694,6 +697,18 @@ public static class PlayerBotDriver
     public static string RelocateReason(long roamingSince, long cappedSince, long now) =>
         cappedSince != 0 && now - cappedSince >= CappedRelocateMilliseconds ? Capped :
         roamingSince != 0 && now - roamingSince >= RelocateAfterMilliseconds ? Outgrown : null;
+
+    /// <summary>PLAYER_BOT_RELOCATE for a move: its fields as they were (runs/legcheck.py reads bot= and to), then the
+    /// reason (RelocateReason) and the fallback camp's con, - for none (the death cap holds, Cap).</summary>
+    public static string RelocateLine(string bot, int level, Vector3 from, Vector3 to, int distance, string monster,
+        int monsterLevel, ushort zone, string reason, ConColor? fallback) =>
+        $"PLAYER_BOT_RELOCATE bot={bot} level={level} from=({from.X:0},{from.Y:0}) to=({to.X:0},{to.Y:0},{to.Z:0}) " +
+        $"distance={distance} monster=\"{monster}\" monsterLevel={monsterLevel} zone={zone} reason={reason} " +
+        $"fallback={fallback?.ToString() ?? "-"}";
+
+    /// <summary>PLAYER_BOT_RELOCATE when no camp checked had a corridor (or none was found): checked= of them.</summary>
+    public static string RelocateNoneLine(string bot, int level, int candidates, ushort zone, string reason) =>
+        $"PLAYER_BOT_RELOCATE bot={bot} level={level} none checked={candidates} zone={zone} reason={reason}";
 
     /// <summary>The capped clock after a search of the wider ring (or one that found a target): set at the first that
     /// passed a monster over for the cap and found none, kept while that lasts, 0 once a search finds a target or
@@ -1062,9 +1077,8 @@ public static class PlayerBotDriver
                 continue;
             }
             if (Log.IsInfoEnabled)
-                Log.Info($"PLAYER_BOT_RELOCATE bot={player.Name} level={player.Level} from=({state.Anchor.X:0},{state.Anchor.Y:0}) " +
-                         $"to=({spot.X:0},{spot.Y:0},{spot.Z:0}) distance={(int)Vector3.Distance(here, spot)} " +
-                         $"monster=\"{npc.Name}\" monsterLevel={npc.EffectiveLevel} zone={zone.ID}");
+                Log.Info(RelocateLine(player.Name, player.Level, state.Anchor, spot, (int)Vector3.Distance(here, spot), npc.Name,
+                    npc.EffectiveLevel, zone.ID, reason, fallback));
             state.Anchor = spot;
             state.RoamDestination = spot;   // walk there: a task bot levelling for its errand has no leash to pull it
             state.RelocateRejected.Clear();
@@ -1074,7 +1088,7 @@ public static class PlayerBotDriver
             return;
         }
         if (Log.IsInfoEnabled)
-            Log.Info($"PLAYER_BOT_RELOCATE bot={player.Name} level={player.Level} none checked={nearest.Length} zone={zone.ID}");
+            Log.Info(RelocateNoneLine(player.Name, player.Level, nearest.Length, zone.ID, reason));
     }
 
     private static Vector3 PickRoamPoint(GamePlayer player, Vector3 centre)
@@ -1141,7 +1155,8 @@ public static class PlayerBotDriver
             inFight ? (now - state.EngagedSince) / 1000 : -1, target?.HealthPercent ?? -1, target != null && state.FromDefence,
             inFight ? state.FightAdds : -1, state.LifeKills, state.LifeRests,
             state.LastKillTick > state.AliveSince ? (now - state.LastKillTick) / 1000 : -1, PowerPercent(player.MaxMana, player.ManaPercent),
-            inFight ? state.Swings : -1, inFight ? state.NotVisible : -1, null, 0, false, fromBind);   // the killer: DeathLine
+            inFight ? state.Swings : -1, inFight ? state.NotVisible : -1, null, 0, false, fromBind,   // the killer: DeathLine
+            AvoidedCount(state.AvoidUntil, now));                                          // this death's come after
         string head = $"PLAYER_BOT_DEATH bot={player.Name} level={player.Level} at=({player.X},{player.Y},{player.Z}) " +
                       $"zone={player.CurrentZone?.ID} {fight} attackers={state.Attackers} deathSteps={state.DeathSafetySteps} " +
                       $"aliveSec={(now - state.AliveSince) / 1000} task={state.Task != null}";
@@ -1160,7 +1175,7 @@ public static class PlayerBotDriver
             ConLevels.GetConColor(player.GetConLevel(target)), state.FromDefence, killed, state.EngageHealth, player.HealthPercent,
             state.EngageMana, PowerPercent(player.MaxMana, player.ManaPercent), (now - state.EngagedSince) / 1000, state.FightAdds,
             state.Swings, state.NotVisible, state.FightCasts, state.LifeKills, state.LifeRests, state.EngagePet,
-            state.FightHeals)));
+            state.FightHeals, state.FightQuickcast)));
     }
 
     // APP:585-624, changed: every 10 s, no inventory count, no saves; after 15 minutes with no progress, back to the
