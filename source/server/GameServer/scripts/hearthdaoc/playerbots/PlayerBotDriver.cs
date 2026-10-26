@@ -90,12 +90,14 @@ public sealed class PlayerBotState
     public long LastKillTick;                                    //   and the killer the Dying event names (OnBotDying)
     public GameObject Killer;
     public bool RecoverBeforePull;                               // a kill since the last full rest: rest to full first
+    public bool Healing;                                         // the self-heal (DEATHS.md A6): its cast is running,
+    public long NextSelfHealTick;                                //   and the next try
     public (string Head, PlayerBotDeathDetail Detail, GameObject Target)? PendingDeath;   // a DEATH line awaiting Dying (AwaitsDying)
 }
 
 // HearthDAoC #137 spike: a thin copy of the /bot pilot's think (bots/autonomous/AutonomousPlayerPilot.cs:229-374) for a
-// player bot: no quickbar file, pets, party, HUD or saves. Each bot is ticked every 250 ms by its own timer. It
-// keeps the bot alive, rests, loots, fights back a monster that hits it, else picks one the way a GameBot does
+// player bot: no quickbar file, pets, party, HUD or saves. Each bot is ticked every 250 ms by its own timer. It keeps
+// the bot alive, heals itself, rests, loots, fights back a monster that hits it, else picks one the way a GameBot does
 // (AutonomousWorldBotController.cs:3050-3148, no camp), walks with PlayerBotPathMover, faces, sets "target in view"
 // from the navmesh, and casts or swings. It writes no database rows on the loop; autosave and logout save. It runs in
 // TimerService's phase, in parallel with every other timer (the bot's own regeneration and release timers too), so the
@@ -130,6 +132,8 @@ public static class PlayerBotDriver
     public static readonly long StuckMilliseconds = (long)AutonomousStuckWatchdog.StuckThreshold.TotalMilliseconds; // 15 min
     public const int MaxFruitlessCasts = 3;                  // the cast watch (levelmatch/DESIGN.md 2.7)
     public const int SpellBlockMilliseconds = 10_000;        // (inf.) a few swings, then the spell again
+    public const int SelfHealBelowPercent = 60;              // DEATHS.md A6 (a GameBot's: below 65%, BotBrain.cs:4897)
+    public const int SelfHealRetryMilliseconds = 2_000;      // (inf.) a refused heal is not asked for every think
 
     private static readonly ConcurrentDictionary<GamePlayer, PlayerBotState> _states = new();
     [ThreadStatic] private static List<(GameNPC Npc, Vector3 At, int Score)> _candidates;      // FindWithin's, per timer
@@ -287,6 +291,7 @@ public static class PlayerBotDriver
             }
         }
         TryLoot(state, player, now);                                                     // 11. APP:403-414, before a sit
+        if (SelfHeal(state, player, now)) return;                                        // 11b. DEATHS.md A6, before a rest
         if (state.RecoverBeforePull && Recovered(player)) state.RecoverBeforePull = false;
         if (MayRest(Attacker(state, player, now) != null, state.Engaged && state.Target?.IsAlive == true) &&
             WantsRest(player, state.RecoverBeforePull))                                  // 12. APP:290-296, DEATHS.md A1
@@ -398,6 +403,39 @@ public static class PlayerBotDriver
 
     /// <summary>The server's own test for the interrupt timer (SpellHandler.cs:571).</summary>
     public static bool Interruptible(Spell spell) => !spell.Uninterruptible && !spell.IsInstantCast;
+
+    /// <summary>The self-heal's gate (DEATHS.md A6): below SelfHealBelowPercent, out of a cast, the retry timer due.</summary>
+    public static bool WantsSelfHeal(byte healthPercent, bool casting, long now, long nextTry) =>
+        !casting && healthPercent < SelfHealBelowPercent && now >= nextTry;
+
+    /// <summary>The heal a bot casts on itself (DEATHS.md A6): a Heal on a realm mate, itself or its group, at or below
+    /// its level, no song, ready, and while hits interrupt the bot an instant or uninterruptible one only (a GameBot's
+    /// rule, BotBrain.cs:4761); the most health back (a negative value is a percent, GameBot.cs:1887-1892), then an
+    /// instant one, then the higher level.</summary>
+    public static (Spell, SpellLine) FindSelfHeal(IEnumerable<(Spell Spell, SpellLine Line)> spells, int level, int maxHealth,
+        bool interrupted, Func<Spell, bool> ready)
+    {
+        Spell best = null;
+        SpellLine bestLine = null;
+        double bestAmount = 0;
+        foreach ((Spell spell, SpellLine line) in spells)
+        {
+            if (spell.SpellType is not eSpellType.Heal ||
+                spell.Target is not (eSpellTarget.REALM or eSpellTarget.SELF or eSpellTarget.GROUP) || spell.Level > level ||
+                spell.NeedInstrument || interrupted && Interruptible(spell) || !ready(spell))
+                continue;
+            double amount = spell.Value >= 0 ? spell.Value : maxHealth * -spell.Value / 100;
+            if (best == null || amount > bestAmount || amount == bestAmount &&
+                (spell.IsInstantCast != best.IsInstantCast ? spell.IsInstantCast : spell.Level > best.Level))
+                (best, bestLine, bestAmount) = (spell, line, amount);
+        }
+        return (best, bestLine);
+    }
+
+    /// <summary>Power for a spell's nominal cost: a negative power is a percent of the pool (SpellHandler.cs:1207-1213).
+    /// The cast checks the real cost.</summary>
+    public static bool HasPowerFor(int maxMana, int mana, int power) =>
+        mana >= (power < 0 ? maxMana * -power / 100 : power);
 
     /// <summary>The cast watch, one request on: (attempts, health mark, stalled). A new target, or one hurt since the
     /// mark, starts a new run; more than MaxFruitlessCasts requests that leave it at the mark have stalled.</summary>
@@ -664,25 +702,29 @@ public static class PlayerBotDriver
         return best;
     }
 
-    // APP:667-692 without the quickbar, the Animist policy, the range filter (checked at cast time) and the mana check. A
-    // list caster's spells are in its spell lines; a hybrid's (Paladin, Thane...) are among its usable skills, each with
-    // its line (GamePlayerUtils.cs:544-560; REVIEW-FIXES 19).
+    // A list caster's spells are in its spell lines; a hybrid's (Paladin, Thane...) are among its usable skills, each
+    // with its line (GamePlayerUtils.cs:544-560; REVIEW-FIXES 19).
+    internal static IEnumerable<(Spell Spell, SpellLine Line)> UsableSpells(GamePlayer player)
+    {
+        foreach ((SpellLine line, List<Skill> skills) in player.GetAllUsableListSpells())
+            foreach (Spell spell in skills.OfType<Spell>())
+                yield return (spell, line);
+        foreach ((Skill skill, Skill parent) in player.GetAllUsableSkills())
+            if (skill is Spell spell && parent is SpellLine line)
+                yield return (spell, line);
+    }
+
+    // APP:667-692 without the quickbar, the Animist policy, the range filter (checked at cast time) and the mana check.
     internal static (Spell, SpellLine) FindDamageSpell(GamePlayer player)
     {
         Spell best = null;
         SpellLine bestLine = null;
-        void Consider(Spell spell, SpellLine line)
+        foreach ((Spell spell, SpellLine line) in UsableSpells(player))
         {
             if (!spell.IsHarmful || spell.Damage <= 0 || spell.Range <= 0 || spell.NeedInstrument || spell.Level > player.Level)
-                return;
+                continue;
             if (best == null || Better(spell, best)) { best = spell; bestLine = line; }
         }
-        foreach ((SpellLine line, List<Skill> skills) in player.GetAllUsableListSpells())
-            foreach (Spell spell in skills.OfType<Spell>())
-                Consider(spell, line);
-        foreach ((Skill skill, Skill parent) in player.GetAllUsableSkills())
-            if (skill is Spell spell && parent is SpellLine line)
-                Consider(spell, line);
         return (best, bestLine);
     }
 
@@ -925,6 +967,30 @@ public static class PlayerBotDriver
         state.Mover.Reset();
         state.LastProgressTick = now;
         PlayerBotDriverReport.StuckRecovered();
+        return true;
+    }
+
+    // A healer's heal on itself (DEATHS.md A6), before a rest as a GameBot's (AWBC:2725). Targeted as a player does it,
+    // F1 then the spell: a self-target is in view (GamePlayer.cs:127-139), and a Self or Group heal ignores the target
+    // (SpellHandler.cs:411-416, :1807-1811). The request is read in the Casting phase later in this tick
+    // (CastingComponent.cs:116-144, SpellHandler.cs:403-406), so the target stays until the next think's Engage. True
+    // while that cast runs: the think waits it out (Engage would stop it to walk, Rest to sit).
+    private static bool SelfHeal(PlayerBotState state, GamePlayer player, long now)
+    {
+        if (!WantsSelfHeal(player.HealthPercent, player.IsCasting, now, state.NextSelfHealTick))
+            return state.Healing = state.Healing && player.IsCasting;
+        state.Healing = false;
+        state.NextSelfHealTick = now + SelfHealRetryMilliseconds;
+        (Spell heal, SpellLine line) = FindSelfHeal(UsableSpells(player), player.Level, player.MaxHealth,
+            player.IsBeingInterruptedByOther,
+            spell => player.GetSkillDisabledDuration(spell) <= 0 && HasPowerFor(player.MaxMana, player.Mana, spell.Power));
+        if (heal == null) return false;
+        state.Mover.Stop(now);
+        if (player.IsSitting) player.Sit(false);                                         // no cast sitting (SpellHandler.cs:556-562)
+        player.TargetObject = player;
+        if (!player.CastSpell(heal, line)) return false;
+        state.Healing = true;
+        state.Activity = PlayerBotActivity.Casting;
         return true;
     }
 

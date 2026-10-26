@@ -534,6 +534,79 @@ public sealed class UT_PlayerBotDriver
         Assert.That(PlayerBotDriver.BestDamageSpellName(Caster(40, [(storm, null)], [(fire, [])])), Is.EqualTo("-"));
     }
 
+    // --- the healer's self-heal (DEATHS.md A6) ---
+
+    private static readonly SpellLine Mending = new("Rejuvenation", "Rejuvenation", Specs.Rejuvenation, true);
+
+    private static (Spell, SpellLine) Heal(int level, double value, string target = "Realm", double castTime = 2.5,
+        string type = "Heal", int instrument = 0, bool uninterruptible = false) =>
+        (new(new DbSpell { SpellID = 920_000 + level * 1_000 + (int)Math.Abs(value), Name = $"{type}{level}", Type = type,
+            Target = target, Value = value, Range = 2000, CastTime = castTime, InstrumentRequirement = instrument,
+            Uninterruptible = uninterruptible }, level), Mending);
+
+    private static string SelfHealName(IEnumerable<(Spell, SpellLine)> spells, int level = 25, int maxHealth = 1000,
+        bool interrupted = false, Func<Spell, bool> ready = null) =>
+        PlayerBotDriver.FindSelfHeal(spells, level, maxHealth, interrupted, ready ?? (_ => true)) is (Spell s, SpellLine)
+            ? FormattableString.Invariant($"{s.Name}:{s.Value}") : "-";
+
+    // Below 60% and out of a cast, as a GameBot heals itself below 65% before it fights or rests (BotBrain.cs:4890-4897,
+    // AutonomousWorldBotController.cs:2725), with the retry timer's wait.
+    [TestCase((byte)59, false, 0L, true)] [TestCase((byte)60, false, 0L, false)] [TestCase((byte)30, true, 0L, false)]
+    [TestCase((byte)30, false, 1_001L, false)] [TestCase((byte)30, false, 1_000L, true)]
+    public void A_bot_heals_itself_below_60_percent_out_of_a_cast(byte health, bool casting, long nextTry, bool heals) =>
+        Assert.That(PlayerBotDriver.WantsSelfHeal(health, casting, 1_000, nextTry), Is.EqualTo(heals));
+
+    // A heal on the bot itself: a Heal on a realm mate, itself or its group, at or below its level, with no instrument;
+    // the most health back (a negative value is a percent of its health, GameBot.cs:1887-1892).
+    [Test]
+    public void A_bot_heals_itself_with_the_heal_that_gives_the_most_back()
+    {
+        var spells = new List<(Spell, SpellLine)>
+        {
+            Heal(10, 100), Heal(15, 200, target: "Group"), Heal(20, -25, target: "Self"),
+            Heal(30, 500),                                                   // above its level
+            Heal(12, 400, instrument: 1),                                    // a song
+            Heal(14, 450, target: "Pet"), Heal(16, 460, target: "Enemy"),    // not on itself
+            Heal(18, 470, type: "HealOverTime"),                             // not a heal at once
+            (Damage("DirectDamage", 20, 900), Mending),
+        };
+        Assert.That(SelfHealName(spells), Is.EqualTo("Heal20:-25"));                     // 25% of 1,000 = 250
+        Assert.That(SelfHealName(spells, maxHealth: 400), Is.EqualTo("Heal15:200"));     // 25% of 400 = 100
+        Assert.That(SelfHealName(spells, level: 9), Is.EqualTo("-"));
+        Assert.That(SelfHealName([]), Is.EqualTo("-"));
+    }
+
+    [Test]
+    public void An_instant_heal_wins_a_tie_then_the_higher_level()
+    {
+        Assert.That(SelfHealName([Heal(20, 300), Heal(10, 300, castTime: 0)]), Is.EqualTo("Heal10:300"));
+        Assert.That(SelfHealName([Heal(10, 300), Heal(20, 300)]), Is.EqualTo("Heal20:300"));
+    }
+
+    // A player gets "must wait" for an interruptible cast while hits interrupt it (SpellHandler.cs:570-590); a GameBot then
+    // heals only with an instant heal (BotBrain.cs:4761).
+    [Test]
+    public void While_hits_interrupt_it_a_bot_heals_only_with_an_instant_or_uninterruptible_heal()
+    {
+        var spells = new List<(Spell, SpellLine)> { Heal(20, 400), Heal(10, 150, castTime: 0), Heal(12, 120, uninterruptible: true) };
+        Assert.That((SelfHealName(spells), SelfHealName(spells, interrupted: true)), Is.EqualTo(("Heal20:400", "Heal10:150")));
+        Assert.That(SelfHealName([Heal(20, 400)], interrupted: true), Is.EqualTo("-"));
+    }
+
+    [Test]
+    public void A_heal_not_ready_is_skipped()
+    {
+        var spells = new List<(Spell, SpellLine)> { Heal(20, 400), Heal(10, 150) };
+        Assert.That(SelfHealName(spells, ready: spell => spell.Level != 20), Is.EqualTo("Heal10:150"));
+        Assert.That(SelfHealName(spells, ready: _ => false), Is.EqualTo("-"));
+    }
+
+    // The nominal cost, before focus and the like: a negative power is a percent of the pool (SpellHandler.cs:1207-1213).
+    [TestCase(200, 50, 50, true)] [TestCase(200, 49, 50, false)] [TestCase(200, 50, -25, true)] [TestCase(200, 49, -25, false)]
+    [TestCase(0, 0, 0, true)]
+    public void A_heal_needs_the_power_it_costs(int maxMana, int mana, int power, bool enough) =>
+        Assert.That(PlayerBotDriver.HasPowerFor(maxMana, mana, power), Is.EqualTo(enough));
+
     [Test]
     public void ReportFormat()
     {
