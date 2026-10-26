@@ -6,17 +6,18 @@ using DOL.AI.Brain;
 
 namespace DOL.GS.HearthDAoC.PlayerBots;
 
-public enum PlayerBotWakeKind { Aggro, TargetsBot, HeldAggro, Target, Attacker, Talk }
+public enum PlayerBotWakeKind { Aggro, TargetsBot, HeldAggro, Target, Attacker, Talk, Pet }
 
 public readonly record struct PlayerBotWakeWindow(int Seconds, bool Lever, long Scans, long Started, long Aggro,
-    long TargetsBot, long HeldAggro, long Target, long Attacker, long Talk);
+    long TargetsBot, long HeldAggro, long Target, long Attacker, long Talk, long Pet = 0);
 
 // HearthDAoC #137 lever. With HEARTHDAOC_PLAYER_BOT_WAKE=gamebot a player bot's client updates keep its NPC cache but
 // wake no NPC (the gate in ClientService.OnObjectCreateOrUpdateForPlayer). The driver then wakes what a GameBot wakes
 // (BotBrain.cs:1561-1584, every 1,250 + ObjectID % 500 ms), plus the bot's own target, the monsters fighting it, and
-// each NPC it talks to. A wake is GameNPC.OnAutonomousBotNearby (GameNPC.cs:2042-2048): IsVisibleToPlayersOrBots for
-// 60 s, never IsVisibleToPlayers. Not here, for the real PR: the bot's pets (ABrain.IsActive counts only GameBot
-// owners, AutonomousSummonActivity.cs:22-44; these bots have none) and the porter (wake it before the whisper, as
+// each NPC it talks to, and its own main pet. A wake is GameNPC.OnAutonomousBotNearby (GameNPC.cs:2042-2048):
+// IsVisibleToPlayersOrBots for 60 s, never IsVisibleToPlayers. Not here, for the real PR: the bot's other pets (an
+// Animist's field turrets, a bomber, a Bonedancer's minions: outside ControlledBrain, and ABrain.IsActive counts only
+// GameBot owners, AutonomousSummonActivity.cs:22-44) and the porter (wake it before the whisper, as
 // AutonomousFrontierTransport.cs:261 does).
 public static class PlayerBotWake
 {
@@ -75,22 +76,27 @@ public static class PlayerBotWake
     /// region, within VISIBILITY_DISTANCE, as ClientService.UpdateNpcs would send them), and the attackers. The
     /// client-side target only while it is the driver's or targets the bot: the driver lets a target go without
     /// clearing TargetObject (PlayerBotDriver Engage's unreachable branch, SettleTarget, Disengage), and a killed
-    /// monster respawns as the same object (GameNPC.RespawnTimerCallback).</summary>
+    /// monster respawns as the same object (GameNPC.RespawnTimerCallback). Last, the bot's own pet while the bot could
+    /// see it: a human's client update stamps its pet (ClientService.cs:679-680), and a player's pet is no GameBot's
+    /// (AutonomousSummonActivity.AutonomousOwner, ABrain.cs:17-18), so under the lever nothing else keeps its brain
+    /// running (NpcService.cs:66).</summary>
     public static void CollectAlways(GamePlayer bot, GameLiving target, IEnumerable<GameLiving> attackers,
         List<(GameNPC Npc, PlayerBotWakeKind Kind)> into)
     {
-        AddInSight(into, bot, target as GameNPC);
+        AddInSight(into, bot, target as GameNPC, PlayerBotWakeKind.Target);
         if (bot.TargetObject is GameNPC clicked && (clicked == target || clicked.TargetObject == bot))
-            AddInSight(into, bot, clicked);
+            AddInSight(into, bot, clicked, PlayerBotWakeKind.Target);
         if (attackers != null)
             foreach (GameLiving living in attackers)
                 Add(into, living as GameNPC, PlayerBotWakeKind.Attacker);
+        AddInSight(into, bot, bot.ControlledBrain?.Body, PlayerBotWakeKind.Pet);
     }
 
-    private static void AddInSight(List<(GameNPC Npc, PlayerBotWakeKind Kind)> into, GamePlayer bot, GameNPC npc)
+    private static void AddInSight(List<(GameNPC Npc, PlayerBotWakeKind Kind)> into, GamePlayer bot, GameNPC npc,
+        PlayerBotWakeKind kind)
     {
         if (npc != null && bot.IsWithinRadius(npc, WorldMgr.VISIBILITY_DISTANCE))   // false in another region (GameObject.cs:161)
-            Add(into, npc, PlayerBotWakeKind.Target);
+            Add(into, npc, kind);
     }
 
     // A dead or removed NPC is never woken: its brain would start for nothing.
@@ -149,11 +155,12 @@ public static class PlayerBotWake
         long Take(PlayerBotWakeKind k) => Interlocked.Exchange(ref _woke[(int)k], 0);
         return new(seconds, Lever, Interlocked.Exchange(ref _scans, 0), Interlocked.Exchange(ref _started, 0),
             Take(PlayerBotWakeKind.Aggro), Take(PlayerBotWakeKind.TargetsBot), Take(PlayerBotWakeKind.HeldAggro),
-            Take(PlayerBotWakeKind.Target), Take(PlayerBotWakeKind.Attacker), Take(PlayerBotWakeKind.Talk));
+            Take(PlayerBotWakeKind.Target), Take(PlayerBotWakeKind.Attacker), Take(PlayerBotWakeKind.Talk),
+            Take(PlayerBotWakeKind.Pet));
     }
 
     public static string Format(PlayerBotWakeWindow w) => string.Create(CultureInfo.InvariantCulture,
         $"PLAYER_BOT_WAKE win={w.Seconds} lever={Describe(w.Lever)} scans={w.Scans} started={w.Started} " +
         $"aggro={w.Aggro} targetsBot={w.TargetsBot} heldAggro={w.HeldAggro} target={w.Target} " +
-        $"attacker={w.Attacker} talk={w.Talk}");
+        $"attacker={w.Attacker} talk={w.Talk} pet={w.Pet}");
 }

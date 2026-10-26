@@ -607,6 +607,56 @@ public sealed class UT_PlayerBotDriver
     public void A_heal_needs_the_power_it_costs(int maxMana, int mana, int power, bool enough) =>
         Assert.That(PlayerBotDriver.HasPowerFor(maxMana, mana, power), Is.EqualTo(enough));
 
+    // --- the pet classes' pets (DEATHS.md A5) ---
+
+    private static (Spell, SpellLine) Summon(string type, int level, int id) =>
+        (new(new DbSpell { SpellID = id, Name = $"{type}{level}#{id}", Type = type, Target = "Self", Power = -20,
+            CastTime = 6.0 }, level), Mending);
+
+    private static string PetSpellName(IEnumerable<(Spell, SpellLine)> spells, int level) =>
+        PlayerBotDriver.FindPetSpell(spells, level) is (Spell s, SpellLine) ? s.Name : "-";
+
+    // The main-pet summons (AutonomousPetSupport.IsMainPetSummon): the highest level at or below the bot's, then the
+    // higher ID, as a GameBot picks its highest rank. A Bonedancer's minions, a Theurgist's and an Animist's field pets
+    // are no main pet.
+    [Test]
+    public void A_pet_class_summons_its_highest_main_pet_at_or_below_its_level()
+    {
+        var spells = new List<(Spell, SpellLine)>
+        {
+            Summon("SummonCommander", 1, 10101), Summon("SummonCommander", 15, 10102), Summon("SummonCommander", 30, 10103),
+            Summon("SummonMinion", 18, 10201), Summon("SummonTheurgistPet", 19, 10301), Summon("SummonAnimistFnF", 19, 10401),
+            (Damage("DirectDamage", 19, 90), Mending),
+        };
+        Assert.That(PetSpellName(spells, 20), Is.EqualTo("SummonCommander15#10102"));
+        Assert.That(PetSpellName(spells, 30), Is.EqualTo("SummonCommander30#10103"));
+        Assert.That(PetSpellName(spells, 0), Is.EqualTo("-"));
+        Assert.That(PetSpellName([Summon("SummonTheurgistPet", 5, 11)], 50), Is.EqualTo("-"));
+        Assert.That(PetSpellName([Summon("SummonAnimistPet", 11, 11125), Summon("SummonAnimistPet", 11, 11464)], 20),
+            Is.EqualTo("SummonAnimistPet11#11464"));
+        foreach (string type in new[] { "SummonUnderhill", "SummonDruidPet", "SummonSimulacrum", "SummonSpiritFighter",
+                     "SummonHunterPet", "SummonAnimistPet", "SummonNecroPet" })
+            Assert.That(PetSpellName([Summon(type, 1, 7)], 1), Is.EqualTo($"{type}1#7"));
+    }
+
+    // With no pet, nothing hitting it, out of combat, out of a cast, at 30% power or more, the retry timer due.
+    [TestCase(false, false, false, (byte)30, false, 1_000L, true)] [TestCase(true, false, false, (byte)30, false, 1_000L, false)]
+    [TestCase(false, true, false, (byte)30, false, 1_000L, false)] [TestCase(false, false, true, (byte)30, false, 1_000L, false)]
+    [TestCase(false, false, false, (byte)29, false, 1_000L, false)] [TestCase(false, false, false, (byte)30, true, 1_000L, false)]
+    [TestCase(false, false, false, (byte)30, false, 1_001L, false)]
+    public void A_bot_summons_its_pet_when_it_has_none_out_of_combat_with_power(bool hasPet, bool beingHit, bool inCombat,
+        byte mana, bool casting, long nextTry, bool summons) =>
+        Assert.That(PlayerBotDriver.WantsPet(hasPet, beingHit, inCombat, mana, casting, 1_000, nextTry), Is.EqualTo(summons));
+
+    // A Necromancer in shade form cannot swing (AttackComponent.cs:511-516): its servant fights.
+    [Test]
+    public void A_shade_does_not_swing()
+    {
+        Assert.That(PlayerBotDriver.CanSwing(null), Is.True);
+        Assert.That(PlayerBotDriver.CanSwing((GameNPC)RuntimeHelpers.GetUninitializedObject(typeof(GameSummonedPet))), Is.True);
+        Assert.That(PlayerBotDriver.CanSwing((GameNPC)RuntimeHelpers.GetUninitializedObject(typeof(NecromancerPet))), Is.False);
+    }
+
     [Test]
     public void ReportFormat()
     {

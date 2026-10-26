@@ -90,18 +90,19 @@ public sealed class PlayerBotState
     public long LastKillTick;                                    //   and the killer the Dying event names (OnBotDying)
     public GameObject Killer;
     public bool RecoverBeforePull;                               // a kill since the last full rest: rest to full first
-    public bool Healing;                                         // the self-heal (DEATHS.md A6): its cast is running,
-    public long NextSelfHealTick;                                //   and the next try
+    public bool SelfCast;                                        // a heal or summon on itself is being cast (DEATHS.md
+    public long NextSelfHealTick, NextSummonTick;                //   A6, A5), the next tries, and the level at which it
+    public byte NoPetSpellLevel;                                 //   found no main-pet summon (not looked for again then)
     public (string Head, PlayerBotDeathDetail Detail, GameObject Target)? PendingDeath;   // a DEATH line awaiting Dying (AwaitsDying)
 }
 
 // HearthDAoC #137 spike: a thin copy of the /bot pilot's think (bots/autonomous/AutonomousPlayerPilot.cs:229-374) for a
-// player bot: no quickbar file, pets, party, HUD or saves. Each bot is ticked every 250 ms by its own timer. It keeps
-// the bot alive, heals itself, rests, loots, fights back a monster that hits it, else picks one the way a GameBot does
-// (AutonomousWorldBotController.cs:3050-3148, no camp), walks with PlayerBotPathMover, faces, sets "target in view"
-// from the navmesh, and casts or swings. It writes no database rows on the loop; autosave and logout save. It runs in
-// TimerService's phase, in parallel with every other timer (the bot's own regeneration and release timers too), so the
-// player's position, heading, target, sitting and areas change there instead of in ClientService's packet phase;
+// player bot: no quickbar file, party, HUD or saves. Each bot is ticked every 250 ms by its own timer. It keeps the bot
+// alive, heals itself, keeps its pet, rests, loots, fights back a monster that hits it, else picks one the way a
+// GameBot does (AutonomousWorldBotController.cs:3050-3148, no camp), walks with PlayerBotPathMover, faces, sets "target
+// in view" from the navmesh, and casts or swings. It writes no database rows on the loop; autosave and logout save. It
+// runs in TimerService's phase, in parallel with every other timer (the bot's own regeneration and release timers too),
+// so the player's position, heading, target, sitting and areas change there instead of in ClientService's packet phase;
 // attacks and casts are only requested.
 public static class PlayerBotDriver
 {
@@ -134,6 +135,8 @@ public static class PlayerBotDriver
     public const int SpellBlockMilliseconds = 10_000;        // (inf.) a few swings, then the spell again
     public const int SelfHealBelowPercent = 60;              // DEATHS.md A6 (a GameBot's: below 65%, BotBrain.cs:4897)
     public const int SelfHealRetryMilliseconds = 2_000;      // (inf.) a refused heal is not asked for every think
+    public const int PetPowerPercent = 30;                   // DEATHS.md A5: summon at this much power or more
+    public const int SummonRetryMilliseconds = 2_000;        // (inf.) as the heal's
 
     private static readonly ConcurrentDictionary<GamePlayer, PlayerBotState> _states = new();
     [ThreadStatic] private static List<(GameNPC Npc, Vector3 At, int Score)> _candidates;      // FindWithin's, per timer
@@ -291,7 +294,8 @@ public static class PlayerBotDriver
             }
         }
         TryLoot(state, player, now);                                                     // 11. APP:403-414, before a sit
-        if (SelfHeal(state, player, now)) return;                                        // 11b. DEATHS.md A6, before a rest
+        if (WaitsForSelfCast(state, player) || SelfHeal(state, player, now) || SummonPet(state, player, now))
+            return;                                                                      // 11b. DEATHS.md A6, A5: before a rest
         if (state.RecoverBeforePull && Recovered(player)) state.RecoverBeforePull = false;
         if (MayRest(Attacker(state, player, now) != null, state.Engaged && state.Target?.IsAlive == true) &&
             WantsRest(player, state.RecoverBeforePull))                                  // 12. APP:290-296, DEATHS.md A1
@@ -355,6 +359,8 @@ public static class PlayerBotDriver
             state.EngageHealth = player.HealthPercent;
             state.EngageMana = PowerPercent(player.MaxMana, player.ManaPercent);
             state.FightAdds = state.Swings = state.NotVisible = state.FightCasts = 0;
+            if (player.ControlledBrain != null)                                         // its pet too: the pet window's
+                player.CommandNpcAttack();                                              //   attack (PetWindowHandler.cs:79-82)
         }
         state.Engaged = true;
         state.FightAdds = Math.Max(state.FightAdds, state.Attackers);
@@ -387,7 +393,7 @@ public static class PlayerBotDriver
                 state.NextStyleTick = now + StyleMilliseconds;
                 QueueUsableStyle(player);                                               // APP:694-710 without the quickbar filter
             }
-            if (!player.attackComponent.AttackState)
+            if (!player.attackComponent.AttackState && CanSwing(player.ControlledBrain?.Body))
                 player.attackComponent.RequestStartAttack(target);                      // AttackComponent.cs:491-496
             state.Activity = PlayerBotActivity.Fighting;
         }
@@ -431,6 +437,30 @@ public static class PlayerBotDriver
         }
         return (best, bestLine);
     }
+
+    /// <summary>The summon's gate (DEATHS.md A5): no pet, nothing hitting the bot, out of combat and of a cast, at
+    /// PetPowerPercent or more, the retry timer due. A pet that died is summoned again so.</summary>
+    public static bool WantsPet(bool hasPet, bool beingHit, bool inCombat, byte manaPercent, bool casting, long now, long nextTry) =>
+        !hasPet && !beingHit && !inCombat && manaPercent >= PetPowerPercent && !casting && now >= nextTry;
+
+    /// <summary>The pet a pet class summons (DEATHS.md A5): the main-pet summon (AutonomousPetSupport.IsMainPetSummon,
+    /// AutonomousPetSupport.cs:1092-1100) of the highest level at or below the bot's, then the higher ID, as a GameBot
+    /// picks its highest rank (AutonomousPetSupport.ChooseFromPool).</summary>
+    public static (Spell, SpellLine) FindPetSpell(IEnumerable<(Spell Spell, SpellLine Line)> spells, int level)
+    {
+        Spell best = null;
+        SpellLine bestLine = null;
+        foreach ((Spell spell, SpellLine line) in spells)
+        {
+            if (!AutonomousPetSupport.IsMainPetSummon(spell.SpellType) || spell.Level > level) continue;
+            if (best == null || spell.Level > best.Level || spell.Level == best.Level && spell.ID > best.ID)
+                (best, bestLine) = (spell, line);
+        }
+        return (best, bestLine);
+    }
+
+    /// <summary>A Necromancer in shade form cannot swing (AttackComponent.cs:511-516): its servant fights for it.</summary>
+    public static bool CanSwing(GameNPC pet) => pet is not NecromancerPet;
 
     /// <summary>Power for a spell's nominal cost: a negative power is a percent of the pool (SpellHandler.cs:1207-1213).
     /// The cast checks the real cost.</summary>
@@ -970,26 +1000,56 @@ public static class PlayerBotDriver
         return true;
     }
 
-    // A healer's heal on itself (DEATHS.md A6), before a rest as a GameBot's (AWBC:2725). Targeted as a player does it,
-    // F1 then the spell: a self-target is in view (GamePlayer.cs:127-139), and a Self or Group heal ignores the target
-    // (SpellHandler.cs:411-416, :1807-1811). The request is read in the Casting phase later in this tick
-    // (CastingComponent.cs:116-144, SpellHandler.cs:403-406), so the target stays until the next think's Engage. True
-    // while that cast runs: the think waits it out (Engage would stop it to walk, Rest to sit).
+    // True while the bot's own heal or summon is being cast: the think waits it out (Engage would stop it to walk, Rest
+    // to sit).
+    private static bool WaitsForSelfCast(PlayerBotState state, GamePlayer player) =>
+        state.SelfCast = state.SelfCast && player.IsCasting;
+
+    // A healer's heal on itself (DEATHS.md A6), before a rest as a GameBot's (AWBC:2725).
     private static bool SelfHeal(PlayerBotState state, GamePlayer player, long now)
     {
-        if (!WantsSelfHeal(player.HealthPercent, player.IsCasting, now, state.NextSelfHealTick))
-            return state.Healing = state.Healing && player.IsCasting;
-        state.Healing = false;
+        if (!WantsSelfHeal(player.HealthPercent, player.IsCasting, now, state.NextSelfHealTick)) return false;
         state.NextSelfHealTick = now + SelfHealRetryMilliseconds;
         (Spell heal, SpellLine line) = FindSelfHeal(UsableSpells(player), player.Level, player.MaxHealth,
             player.IsBeingInterruptedByOther,
             spell => player.GetSkillDisabledDuration(spell) <= 0 && HasPowerFor(player.MaxMana, player.Mana, spell.Power));
-        if (heal == null) return false;
+        return heal != null && CastOnSelf(state, player, now, heal, line);
+    }
+
+    // A pet class's main pet (DEATHS.md A5), which a GameBot always keeps (BotBrain.cs:1450-1458,
+    // AutonomousPetSupport.Maintain), summoned when it has none and so again once it dies. An Animist's is a turret on
+    // its ground target: set at the bot's feet, as /groundset does (PlayerGroundTargetHandler.cs:26-27;
+    // SummonAnimistPet.cs:20-41).
+    private static bool SummonPet(PlayerBotState state, GamePlayer player, long now)
+    {
+        if (player.Level == state.NoPetSpellLevel ||
+            !WantsPet(player.ControlledBrain != null, Attacker(state, player, now) != null, player.InCombat, player.ManaPercent,
+                player.IsCasting, now, state.NextSummonTick))
+            return false;
+        state.NextSummonTick = now + SummonRetryMilliseconds;
+        (Spell summon, SpellLine line) = FindPetSpell(UsableSpells(player), player.Level);
+        if (summon == null) { state.NoPetSpellLevel = player.Level; return false; }
+        if (player.GetSkillDisabledDuration(summon) > 0 || !HasPowerFor(player.MaxMana, player.Mana, summon.Power)) return false;
+        if (summon.SpellType is eSpellType.SummonAnimistPet)
+        {
+            player.GroundTargetInView = true;
+            player.SetGroundTarget(player.X, player.Y, player.Z);
+        }
+        return CastOnSelf(state, player, now, summon, line);
+    }
+
+    // A spell on the bot itself, stopped and standing (no cast sitting, SpellHandler.cs:556-562). Targeted as a player
+    // does it, F1 then the spell, unless it is a Self spell, which ignores the target (SpellHandler.cs:411-416): a
+    // self-target is in view (GamePlayer.cs:127-139), and a Group heal takes the caster with no group
+    // (SpellHandler.cs:1807-1811). The request is read in the Casting phase later in this tick (CastingComponent.cs:116-144,
+    // SpellHandler.cs:403-406), so the target stays until the next think's Engage.
+    private static bool CastOnSelf(PlayerBotState state, GamePlayer player, long now, Spell spell, SpellLine line)
+    {
         state.Mover.Stop(now);
-        if (player.IsSitting) player.Sit(false);                                         // no cast sitting (SpellHandler.cs:556-562)
-        player.TargetObject = player;
-        if (!player.CastSpell(heal, line)) return false;
-        state.Healing = true;
+        if (player.IsSitting) player.Sit(false);
+        if (spell.Target is not eSpellTarget.SELF) player.TargetObject = player;
+        if (!player.CastSpell(spell, line)) return false;
+        state.SelfCast = true;
         state.Activity = PlayerBotActivity.Casting;
         return true;
     }

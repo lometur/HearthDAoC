@@ -83,6 +83,12 @@ public sealed class UT_PlayerBotWake
         public override bool Start() { ServiceObjectId.OnPreAdd(); return true; }
     }
 
+    private sealed class TestPetBrain : ControlledMobBrain
+    {
+        private TestPetBrain() : base(null) { }                         // never run
+        public override bool Start() { ServiceObjectId.OnPreAdd(); return true; }
+    }
+
     private GameServer _savedServer;
     private long _savedTime;
 
@@ -150,6 +156,17 @@ public sealed class UT_PlayerBotWake
         typeof(ABrain).GetField("<ServiceObjectId>k__BackingField", Hidden)!.SetValue(brain, new ServiceObjectId(ServiceObjectType.Brain));
         (brain.Level, brain.Range, brain.CanAggro, brain.Held) = (level, range, canAggro, held);
         return brain;
+    }
+
+    // The bot's own pet: a controlled brain in the bot's slot (GameLiving.cs:3798, :3819-3831) on an NPC by the bot.
+    private static Mob PetOf(Bot bot, int x = 300)
+    {
+        TestPetBrain brain = Make<TestPetBrain>();
+        typeof(ABrain).GetField("<ServiceObjectId>k__BackingField", Hidden)!.SetValue(brain, new ServiceObjectId(ServiceObjectType.Brain));
+        Mob pet = Npc(brain, x);
+        brain.Body = pet;
+        typeof(GameLiving).GetField("m_controlledBrain", Hidden)!.SetValue(bot, new IControlledBrain[] { brain });
+        return pet;
     }
 
     private static PlayerBotState State(GameLiving target, long nextScan)
@@ -373,6 +390,40 @@ public sealed class UT_PlayerBotWake
         Assert.That(into, Is.Empty);
     }
 
+    // A human's client update stamps its pet (ClientService.cs:679); under the lever nothing stamps a player bot's, and
+    // a player's pet is no GameBot's (AutonomousSummonActivity.AutonomousOwner), so NpcService would stop its brain
+    // (NpcService.cs:66, ABrain.IsActive). The driver wakes it, while the bot could see it, after everything else.
+    [Test]
+    public void Every_think_collects_the_bots_own_pet_last_while_in_sight()
+    {
+        Bot bot = PlayerBot();
+        Mob target = Npc(), attacker = Npc(), pet = PetOf(bot);
+        var into = new List<(GameNPC, PlayerBotWakeKind)>();
+        PlayerBotWake.CollectAlways(bot, target, [attacker], into);
+        Assert.That(into, Is.EqualTo(new List<(GameNPC, PlayerBotWakeKind)>
+            { (target, PlayerBotWakeKind.Target), (attacker, PlayerBotWakeKind.Attacker), (pet, PlayerBotWakeKind.Pet) }));
+        pet.PositionX = WorldMgr.VISIBILITY_DISTANCE + 1;
+        into.Clear();
+        PlayerBotWake.CollectAlways(bot, null, null, into);
+        Assert.That(into, Is.Empty, "out of sight");
+        (pet.PositionX, pet.Alive) = (300, false);
+        PlayerBotWake.CollectAlways(bot, null, null, into);
+        Assert.That(into, Is.Empty, "dead");
+    }
+
+    [Test]
+    public void A_think_under_the_lever_keeps_the_bots_own_pets_brain_running()
+    {
+        PlayerBotWake.Lever = true;
+        Bot bot = PlayerBot();
+        Mob pet = PetOf(bot);
+        Assert.That(pet.Brain.IsActive, Is.False, "no client stamp, no GameBot owner");
+        PlayerBotWake.OnThink(State(null, nextScan: Now + 1), bot, Now);
+        Assert.That((pet.Wakes, pet.Brain.IsActive, pet.IsVisibleToPlayers, PlayerBotWake.BrainState(pet)),
+            Is.EqualTo((1, true, false, "waking")));
+        Assert.That(PlayerBotWake.TakeWindow(60), Is.EqualTo(new PlayerBotWakeWindow(60, true, 0, 1, 0, 0, 0, 0, 0, 0, 1)));
+    }
+
     [TestCase("dead")] [TestCase("deleted")]
     public void Every_think_skips_an_attacker_that_is_gone(string why)
     {
@@ -449,11 +500,12 @@ public sealed class UT_PlayerBotWake
     [Test]
     public void The_report_line_names_every_counter()
     {
-        Assert.That(PlayerBotWake.Format(new PlayerBotWakeWindow(60, true, 15600, 212, 31, 2, 4, 2900, 140, 9)), Is.EqualTo(
+        Assert.That(PlayerBotWake.Format(new PlayerBotWakeWindow(60, true, 15600, 212, 31, 2, 4, 2900, 140, 9, 960)), Is.EqualTo(
             "PLAYER_BOT_WAKE win=60 lever=gamebot scans=15600 started=212 aggro=31 targetsBot=2 heldAggro=4 target=2900 " +
-            "attacker=140 talk=9"));
+            "attacker=140 talk=9 pet=960"));
         Assert.That(PlayerBotWake.Format(new PlayerBotWakeWindow { Seconds = 60 }), Is.EqualTo(
-            "PLAYER_BOT_WAKE win=60 lever=player scans=0 started=0 aggro=0 targetsBot=0 heldAggro=0 target=0 attacker=0 talk=0"));
+            "PLAYER_BOT_WAKE win=60 lever=player scans=0 started=0 aggro=0 targetsBot=0 heldAggro=0 target=0 attacker=0 talk=0 " +
+            "pet=0"));
     }
 
     [Test]
@@ -463,7 +515,8 @@ public sealed class UT_PlayerBotWake
         PlayerBotWake.Wake(Npc(), PlayerBotWakeKind.HeldAggro);
         PlayerBotWake.Wake(Npc(), PlayerBotWakeKind.TargetsBot);
         PlayerBotWake.Wake(Npc(), PlayerBotWakeKind.Attacker);
-        Assert.That(PlayerBotWake.TakeWindow(60), Is.EqualTo(new PlayerBotWakeWindow(60, true, 0, 0, 0, 1, 1, 0, 1, 0)));
-        Assert.That(PlayerBotWake.TakeWindow(60), Is.EqualTo(new PlayerBotWakeWindow(60, true, 0, 0, 0, 0, 0, 0, 0, 0)));
+        PlayerBotWake.Wake(Npc(), PlayerBotWakeKind.Pet);
+        Assert.That(PlayerBotWake.TakeWindow(60), Is.EqualTo(new PlayerBotWakeWindow(60, true, 0, 0, 0, 1, 1, 0, 1, 0, 1)));
+        Assert.That(PlayerBotWake.TakeWindow(60), Is.EqualTo(new PlayerBotWakeWindow(60, true, 0, 0, 0, 0, 0, 0, 0, 0, 0)));
     }
 }
