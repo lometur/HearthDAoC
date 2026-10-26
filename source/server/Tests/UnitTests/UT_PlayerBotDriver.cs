@@ -178,10 +178,11 @@ public sealed class UT_PlayerBotDriver
             Monster("green", 20_000, ConColor.GREEN), Monster("grey1", 20_100, ConColor.GREY),
             Monster("grey2", 20_200, ConColor.GREY),                                         // greys are no camp
         };
-        (string[] spots, ConColor? fallback) = PlayerBotDriver.PlanRelocation(monsters, Vector3.Zero, ConColor.BLUE,
-            ConColor.YELLOW, null, new HashSet<string>(), 5);
+        (string[] spots, ConColor? fallback, bool stale) = PlayerBotDriver.PlanRelocation(monsters, Vector3.Zero,
+            ConColor.BLUE, ConColor.YELLOW, null, new HashSet<string>(), 5);
         Assert.That(spots, Is.EqualTo(new[] { "blue camp", "g1", "g2", "green" }));
         Assert.That(fallback, Is.Null);
+        Assert.That(stale, Is.False);
     }
 
     // A camp a bot has no corridor to is checked once: the next try takes the next nearest monsters, instead of the same
@@ -213,16 +214,57 @@ public sealed class UT_PlayerBotDriver
             Monster("c1", 20_000, ConColor.YELLOW), Monster("c2", 20_100, ConColor.BLUE), Monster("c3", 20_200, ConColor.BLUE),
             Monster("e", 30_000, ConColor.BLUE), Monster("o1", 30_100, ConColor.ORANGE), Monster("o2", 30_200, ConColor.ORANGE),
         };
-        (string[] spots, ConColor? fallback) = PlayerBotDriver.PlanRelocation(monsters, Vector3.Zero, ConColor.GREEN,
-            ConColor.YELLOW, new Vector3(50, 0, 0), new HashSet<string>(), 5);
+        (string[] spots, ConColor? fallback, bool stale) = PlayerBotDriver.PlanRelocation(monsters, Vector3.Zero,
+            ConColor.GREEN, ConColor.YELLOW, new[] { new Vector3(50, 0, 0) }, new HashSet<string>(), 5);
         Assert.That(spots, Is.EqualTo(new[] { "c1", "c2", "c3" }), "camp a failed; b is yellow; e is orange");
         Assert.That(fallback, Is.EqualTo(ConColor.BLUE));
+        Assert.That(stale, Is.False);
         Assert.That(PlayerBotDriver.PlanRelocation(monsters[..3], Vector3.Zero, ConColor.GREEN, ConColor.YELLOW,
-            new Vector3(50, 0, 0), new HashSet<string>(), 5).Spots, Is.EqualTo(new[] { "a1", "a2", "a3" }),
+            new[] { new Vector3(50, 0, 0) }, new HashSet<string>(), 5).Spots, Is.EqualTo(new[] { "a1", "a2", "a3" }),
             "the failed camp when it is the only one");
         Assert.That(PlayerBotDriver.PlanRelocation(monsters[9..], Vector3.Zero, ConColor.GREEN, ConColor.YELLOW, null,
-            new HashSet<string>(), 5), Is.EqualTo((Array.Empty<string>(), (ConColor?)null)));
+            new HashSet<string>(), 5), Is.EqualTo((Array.Empty<string>(), (ConColor?)null, false)));
+        // Every failed camp of the last 15 minutes stays out, not only the last: a bot that died at a, then at c, goes
+        // to b, nearest first, not back to a (a GameBot's failed camps, AWBC:3246, :3803-3804).
+        Assert.That(PlayerBotDriver.PlanRelocation(monsters, new Vector3(20_000, 0, 0), ConColor.GREEN, ConColor.YELLOW,
+            new[] { new Vector3(50, 0, 0), new Vector3(20_050, 0, 0) }, new HashSet<string>(), 5),
+            Is.EqualTo((new[] { "b3", "b2", "b1" }, (ConColor?)ConColor.YELLOW, false)));
     }
+
+    // Where the bot died, its failed camp, is remembered for a GameBot's failure memory, 15 minutes, every one (its
+    // _recentFailedSoloCamps, AWBC:3246, :3803-3804), not forgotten at the next relocation; one whose time is up goes
+    // at the next death.
+    [Test]
+    public void Failed_camps_are_remembered_for_15_minutes()
+    {
+        var failed = new List<(Vector3 At, long Until)>();
+        PlayerBotDriver.RememberFailedCamp(failed, new Vector3(1, 0, 0), 1_000);
+        PlayerBotDriver.RememberFailedCamp(failed, new Vector3(2, 0, 0), 600_000);
+        Assert.That(PlayerBotDriver.FailedCamps(failed, 900_999),
+            Is.EqualTo(new[] { new Vector3(1, 0, 0), new Vector3(2, 0, 0) }));
+        Assert.That(PlayerBotDriver.FailedCamps(failed, 901_000), Is.EqualTo(new[] { new Vector3(2, 0, 0) }));
+        PlayerBotDriver.RememberFailedCamp(failed, new Vector3(3, 0, 0), 901_000);
+        Assert.That(failed.Select(f => f.At), Is.EqualTo(new[] { new Vector3(2, 0, 0), new Vector3(3, 0, 0) }),
+            "the expired camp went");
+    }
+
+    // A capped bot that cannot move its leash (a lever spot bot, out of its anchor region or off the mesh, or no camp
+    // in its zone) takes the safest con it passed over where it is, as a GameBot takes the safest camp there is rather
+    // than plan forever (AutonomousBotDecisionEngine.cs:287-313); run 1's bots stood idle after two deaths without it.
+    // Not for an outgrown bot, nor one that passed over only names it avoids (they expire).
+    [TestCase("capped", ConColor.BLUE, ConColor.BLUE)] [TestCase("capped", null, null)]
+    [TestCase("outgrown", ConColor.BLUE, null)] [TestCase(null, ConColor.BLUE, null)]
+    public void A_capped_bot_that_cannot_move_takes_the_safest_con_it_passed_over(string reason, ConColor? safest,
+        ConColor? cap) =>
+        Assert.That(PlayerBotDriver.FallbackInPlace(reason, safest), Is.EqualTo(cap));
+
+    // A capped bot stands while it waits to move its leash, unless it walks to its anchor; one that cannot move it now
+    // (FallbackInPlace) roams as before.
+    [TestCase(true, 5_000L, false, true)] [TestCase(true, 0L, false, false)] [TestCase(true, 5_000L, true, false)]
+    [TestCase(false, 5_000L, false, false)]
+    public void A_capped_bot_holds_only_while_it_can_relocate(bool canRelocate, long cappedSince, bool walkingToAnchor,
+        bool holds) =>
+        Assert.That(PlayerBotDriver.HoldsForRelocation(canRelocate, cappedSince, walkingToAnchor), Is.EqualTo(holds));
 
     // PLAYER_BOT_RELOCATE's fields stay as they were (runs/legcheck.py reads bot= and to or none); its reason and, for a
     // move, the fallback camp's con (none: the death cap) come last.
@@ -242,7 +284,7 @@ public sealed class UT_PlayerBotDriver
     // --- the killer memory (DEATHS.md A3) ---
 
     // A death's names are remembered for a GameBot's failure memory, 15 minutes (AutonomousDeathRecoveryPolicy.cs:10,
-    // AWBC:3805, :3811), by any case of the name (its dictionaries are OrdinalIgnoreCase, AWBC:147-148); an expired one is
+    // AWBC:3804, :3811), by any case of the name (its dictionaries are OrdinalIgnoreCase, AWBC:147-148); an expired one is
     // dropped at the next.
     [Test]
     public void A_remembered_name_is_avoided_for_15_minutes()
@@ -263,7 +305,9 @@ public sealed class UT_PlayerBotDriver
 
     // A camp full of avoided names fits no cap: its fresh monsters under the cap must be most of it, and the spot itself
     // fresh. With no camp that fits, the fallback prefers a fresh camp, as a GameBot's PreferFreshTargets
-    // (AutonomousDeathRecoveryPolicy.cs:26-38, AWBC:3424-3427).
+    // (AutonomousDeathRecoveryPolicy.cs:26-38, AWBC:3424-3427); with none left it takes a stale one (Stale), whose names
+    // the bot then hunts, as a GameBot hunts its camp's monster (AWBC:3087-3088): else it stood there passing them over
+    // and moved every 30 s until they expired.
     [Test]
     public void A_relocation_counts_a_camp_of_avoided_names_as_unfit()
     {
@@ -282,10 +326,10 @@ public sealed class UT_PlayerBotDriver
             Monster("y1", 10_000, ConColor.YELLOW), Monster("y2", 10_100, ConColor.YELLOW),
         };
         Assert.That(PlayerBotDriver.PlanRelocation(fallback, Vector3.Zero, ConColor.GREEN, ConColor.YELLOW, null,
-            new HashSet<string>(), 5), Is.EqualTo((new[] { "y1", "y2" }, (ConColor?)ConColor.YELLOW)),
+            new HashSet<string>(), 5), Is.EqualTo((new[] { "y1", "y2" }, (ConColor?)ConColor.YELLOW, false)),
             "the fresh yellow camp before the safer blue one the bot died to");
         Assert.That(PlayerBotDriver.PlanRelocation(fallback[..2], Vector3.Zero, ConColor.GREEN, ConColor.YELLOW, null,
-            new HashSet<string>(), 5), Is.EqualTo((new[] { "s1", "s2" }, (ConColor?)ConColor.BLUE)),
+            new HashSet<string>(), 5), Is.EqualTo((new[] { "s1", "s2" }, (ConColor?)ConColor.BLUE, true)),
             "a stale camp when no fresh one is left");
     }
 
