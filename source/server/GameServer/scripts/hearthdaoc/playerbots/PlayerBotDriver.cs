@@ -80,6 +80,14 @@ public sealed class PlayerBotState
         NextCombatChoiceTick, NextNeighbourCountTick, NextProgressCheckTick, LastProgressTick, ProgressExperience, ProgressMoney;
     public Vector3 ProgressPosition;
     public bool DeathRecorded, ReleaseRequested;
+    public long EngagedSince;                                    // the deaths' diagnostics (levelmatch/DEATHS.md 2): the
+    public byte EngageHealth, EngageMana;                        //   fight's first think in reach and the bot's health and
+    public int FightAdds, Swings, NotVisible, FightCasts;        //   power then, its most attackers, swings and casts,
+    public AttackData LastSeenSwing;                             //   the swing counted last (CountSwing), its target
+    public bool FromDefence;                                     //   hitting the bot when picked (PLAYER_BOT_FIGHT);
+    public int LifeKills, LifeRests;                             //   this life's fights won and sits, its last kill,
+    public long LastKillTick;                                    //   and the killer the Dying event names (OnBotDying)
+    public GameObject Killer;
 }
 
 // HearthDAoC #137 spike: a thin copy of the /bot pilot's think (bots/autonomous/AutonomousPlayerPilot.cs:229-374) for a
@@ -131,6 +139,7 @@ public static class PlayerBotDriver
         PlayerBotState state = new(player);
         if (!_states.TryAdd(player, state))
             return true;
+        GameEventMgr.AddHandler(player, GameLivingEvent.Dying, OnBotDying);   // the DEATH line's killer; Stop removes it
         if (player.Client is HeadlessClient headless)
             headless.HeartbeatEnabled = false;                  // the mover's IdleBroadcast takes over
         player.CurrentSpeed = 0;
@@ -148,6 +157,7 @@ public static class PlayerBotDriver
     public static void Stop(GamePlayer player)
     {
         if (player == null || !_states.TryRemove(player, out PlayerBotState state)) return;
+        GameEventMgr.RemoveHandler(player, GameLivingEvent.Dying, OnBotDying);
         state.Stopped = true;
         state.Task = null;
         state.Timer?.Stop();
@@ -226,7 +236,12 @@ public static class PlayerBotDriver
         }
         ObserveXp(state, player);                            // 5
         if (!player.IsAlive) { HandleDeath(state, player, now); return; }               // 6
-        if (state.DeathRecorded || state.AliveSince == 0) state.AliveSince = now;
+        if (state.DeathRecorded || state.AliveSince == 0)                                //    a new life
+        {
+            state.AliveSince = now;
+            state.LifeKills = state.LifeRests = 0;
+            state.Killer = null;
+        }
         state.DeathRecorded = false;
         state.ReleaseRequested = false;
         state.Attackers = player.attackComponent.AttackerTracker.Count;                 //    Die clears it (GameLiving.cs:2050)
@@ -311,7 +326,16 @@ public static class PlayerBotDriver
             player.TargetInView = HeadlessLos.Answer(PathfindingProvider.Instance, player.CurrentZone,
                 new Vector3(player.X, player.Y, player.Z), new Vector3(target.X, target.Y, target.Z));
         }
+        if (!state.Engaged)                                   // the fight's first think in reach: PLAYER_BOT_FIGHT's start
+        {
+            state.EngagedSince = now;
+            state.EngageHealth = player.HealthPercent;
+            state.EngageMana = PowerPercent(player.MaxMana, player.ManaPercent);
+            state.FightAdds = state.Swings = state.NotVisible = state.FightCasts = 0;
+        }
         state.Engaged = true;
+        state.FightAdds = Math.Max(state.FightAdds, state.Attackers);
+        CountSwing(state, player.attackComponent.attackAction.LastAttackData);
         if (canCast && !player.IsCasting && now >= state.NextCombatChoiceTick &&
             player.IsWithinRadius(target, player.castingComponent.CalculateSpellRange(state.Spell)))
         {
@@ -330,6 +354,7 @@ public static class PlayerBotDriver
                 return;                                                                 // the next think walks into melee
             }
             state.NextCombatChoiceTick = now + Math.Max(900, state.Spell.CastTime + 250);
+            state.FightCasts++;
             state.Activity = PlayerBotActivity.Casting;
         }
         else if (!player.IsCasting)
@@ -368,8 +393,15 @@ public static class PlayerBotDriver
     {
         if (state.Target == null || IsValidTarget(player, state.Target, state.DeathSafetySteps) || IsAttacking(player, state.Target))
             return;
-        if (state.Engaged && !state.Target.IsAlive) { if (PlayerBotDriverReport.Kill(state.Target)) state.Kills++; }
-        else if (!state.Target.IsAlive) state.RoamingSince = 0;  // killed by another before this bot got there: not outgrown
+        bool dead = !state.Target.IsAlive;
+        if (state.Engaged) ReportFight(state, player, GameLoop.GameLoopTime, dead);   // with this life's kills before it
+        if (state.Engaged && dead)
+        {
+            state.LifeKills++;                                    // every fight won, a monster another bot counted too
+            state.LastKillTick = GameLoop.GameLoopTime;
+            if (PlayerBotDriverReport.Kill(state.Target)) state.Kills++;
+        }
+        else if (dead) state.RoamingSince = 0;                   // killed by another before this bot got there: not outgrown
         state.Target = null;
         state.Engaged = false;
     }
@@ -393,6 +425,7 @@ public static class PlayerBotDriver
             (searchDue ? FindWithin(state, player, ImmediateSearchRadius, now) ?? FindWithin(state, player, SearchRadius, now) : null); // AWBC:3148
         if (found == state.Target) return;
         state.Target = found;
+        state.FromDefence = found != null && IsAttacking(player, found);                  // FIGHT and DEATH from=
         state.Engaged = false;
         state.NextLosTick = 0;
         state.SpellBlockedUntil = 0;                                                       // a new target clears the watch
@@ -483,6 +516,29 @@ public static class PlayerBotDriver
     // MaxManaCalculator.cs:32-51), so ManaPercent reads 0 (GameLiving.cs:2753) and the pilot's rule would sit them forever.
     public static bool NeedsRest(byte healthPercent, int maxMana, byte manaPercent, byte endurancePercent) =>
         AutonomousPlayerPilot.ShouldRest(healthPercent, maxMana > 0 ? manaPercent : (byte)100, endurancePercent);
+
+    /// <summary>Power for the diagnostics' lines: full for a class with no power pool, as NeedsRest reads it.</summary>
+    public static byte PowerPercent(int maxMana, byte manaPercent) => maxMana > 0 ? manaPercent : (byte)100;
+
+    /// <summary>Counts the bot's last swing once (WeaponAction.cs:309 makes an AttackData per swing), and apart those the
+    /// player-only view gate refused (AttackComponent.cs:1062-1070). A refused swing retries every 100 ms
+    /// (AttackAction.cs:372-383), so NotVisible counts the thinks spent refused rather than the swings lost.</summary>
+    public static void CountSwing(PlayerBotState state, AttackData swing)
+    {
+        if (swing == null || swing == state.LastSeenSwing) return;
+        state.LastSeenSwing = swing;
+        state.Swings++;
+        if (swing.AttackResult is eAttackResult.TargetNotVisible) state.NotVisible++;
+    }
+
+    /// <summary>The DEATH line's killer. ProcessDeath notifies Dying last (GameLiving.cs:2073), in ReaperService's phase of
+    /// the tick the bot was killed in, so before its next think (GameLoop.cs:149, :159). Never throws: any sender but a
+    /// driven bot is ignored.</summary>
+    public static void OnBotDying(DOLEvent e, object sender, EventArgs args)
+    {
+        if (sender is GamePlayer player && StateOf(player) is PlayerBotState state && args is DyingEventArgs dying)
+            state.Killer = dying.Killer;
+    }
 
     /// <summary>Low, or sitting and not yet full (APP:290-291 without the combat check): the driver rests once out of
     /// combat, and a task that walks lets it.</summary>
@@ -663,10 +719,11 @@ public static class PlayerBotDriver
     // APP:561-583 without SaveIntoDatabase.
     private static void HandleDeath(PlayerBotState state, GamePlayer player, long now)
     {
+        PlayerBotActivity last = state.Activity;                                       // what it was doing when killed
         state.Activity = PlayerBotActivity.Dead;
         if (!state.DeathRecorded)
         {
-            ReportDeath(state, player, now);
+            ReportDeath(state, player, now, last);
             state.DeathRecorded = true;
             state.Deaths++;
             state.DeathSafetySteps++;
@@ -687,16 +744,39 @@ public static class PlayerBotDriver
 
     // The rerun of run 1 (76e41cf): from level 3 the bots died about once a minute with no trace of what killed them.
     // The target and its con, the attackers counted on the last think alive, and the time since the release or login.
-    private static void ReportDeath(PlayerBotState state, GamePlayer player, long now)
+    // Then the deaths' diagnostics (levelmatch/DEATHS.md 2): the fatal fight as PLAYER_BOT_FIGHT gives a settled one,
+    // this life's kills and sits, the killer the Dying event named, and the distance from the bind.
+    private static void ReportDeath(PlayerBotState state, GamePlayer player, long now, PlayerBotActivity last)
     {
         if (!Log.IsInfoEnabled) return;
         GameLiving target = state.Target;
         string fight = target == null ? "target=none" :
             $"target=\"{target.Name}\" targetLevel={target.EffectiveLevel} " +
             $"con={ConLevels.GetConColor(player.GetConLevel(target))} engaged={state.Engaged}";
+        GameObject killer = state.Killer;
+        int fromBind = player.CurrentRegionID == player.BindRegion ? (int)Vector3.Distance(new(player.X, player.Y, player.Z),
+            new(player.BindXpos, player.BindYpos, player.BindZpos)) : -1;
+        bool inFight = state.Engaged;                         // else the fight fields are the last fight's: -1
+        string detail = PlayerBotDriverReport.FormatDeathDetail(new(last, inFight ? state.EngageHealth : -1,
+            inFight ? (now - state.EngagedSince) / 1000 : -1, target?.HealthPercent ?? -1, state.FromDefence,
+            inFight ? state.FightAdds : -1, state.LifeKills, state.LifeRests,
+            state.LastKillTick > state.AliveSince ? (now - state.LastKillTick) / 1000 : -1, PowerPercent(player.MaxMana, player.ManaPercent),
+            inFight ? state.Swings : -1, inFight ? state.NotVisible : -1, killer?.Name, killer?.EffectiveLevel ?? 0,
+            killer != null && killer == target, fromBind));
         Log.Info($"PLAYER_BOT_DEATH bot={player.Name} level={player.Level} at=({player.X},{player.Y},{player.Z}) " +
                  $"zone={player.CurrentZone?.ID} {fight} attackers={state.Attackers} deathSteps={state.DeathSafetySteps} " +
-                 $"aliveSec={(now - state.AliveSince) / 1000} task={state.Task != null}");
+                 $"aliveSec={(now - state.AliveSince) / 1000} task={state.Task != null} {detail}");
+    }
+
+    // One line per fight the bot was in when it settles (SettleTarget), so a fight's cost shows beside the deaths.
+    private static void ReportFight(PlayerBotState state, GamePlayer player, long now, bool killed)
+    {
+        if (!Log.IsInfoEnabled) return;
+        GameLiving target = state.Target;
+        Log.Info(PlayerBotDriverReport.FormatFight(new(player.Name, player.Level, target.Name, target.EffectiveLevel,
+            ConLevels.GetConColor(player.GetConLevel(target)), state.FromDefence, killed, state.EngageHealth, player.HealthPercent,
+            state.EngageMana, PowerPercent(player.MaxMana, player.ManaPercent), (now - state.EngagedSince) / 1000, state.FightAdds,
+            state.Swings, state.NotVisible, state.FightCasts, state.LifeKills, state.LifeRests)));
     }
 
     // APP:585-624, changed: every 10 s, no inventory count, no saves; after 15 minutes with no progress, back to the
@@ -740,7 +820,10 @@ public static class PlayerBotDriver
         player.attackComponent.StopAttack();
         player.StopCurrentSpellcast();
         if (!player.IsSitting)
+        {
             player.Sit(true);
+            state.LifeRests++;                                                             // FIGHT and DEATH rests=
+        }
     }
 
     private static bool Recovered(GamePlayer player) =>                                    // APP:389-390

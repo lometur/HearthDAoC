@@ -14,9 +14,26 @@ public readonly record struct PlayerBotDriverWindow(
     long Kills, long Deaths, long LevelUps, int MaxLevel, long Experience, long Blocked, long Stuck, long LinkDeathsCancelled,
     long Errors, double NearPlayerBots, double NearGamebots, int GamebotNearbyHuman, int GamebotStandard, int GamebotEfficient);
 
+/// <summary>One settled fight (levelmatch/DEATHS.md 2): the bot's health and power at its first think in reach and now,
+/// the most attackers on a think, the swings seen and those the view gate refused, the casts, and this life's kills and
+/// sits before it.</summary>
+public readonly record struct PlayerBotFight(
+    string Bot, int Level, string Target, int TargetLevel, ConColor Con, bool FromDefence, bool Killed,
+    byte StartHp, byte EndHp, byte StartMana, byte EndMana, long Seconds, int Adds, int Swings, int NotVisible, int Casts,
+    int LifeKills, int Rests);
+
+/// <summary>What a PLAYER_BOT_DEATH line adds after its first fields (levelmatch/DEATHS.md 2); -1 for none: the fight's
+/// fields (startHp, fightSec, adds, swings, notVisible) out of a fight, targetHp with no target, sinceKillSec with no kill
+/// this life, fromBind with the bind in another region.</summary>
+public readonly record struct PlayerBotDeathDetail(
+    PlayerBotActivity Activity, int StartHp, long FightSeconds, int TargetHp, bool FromDefence, int Adds, int LifeKills,
+    int Rests, long SinceKillSeconds, byte Mana, int Swings, int NotVisible, string Killer, int KillerLevel,
+    bool KillerIsTarget, int FromBind);
+
 // HearthDAoC #137 spike: one PLAYER_BOT_DRIVER line a minute, then the lever's PLAYER_BOT_WAKE line, from a thread-pool
 // timer off the game loop, and every TallyEveryWindows windows a PLAYER_BOT_TALLY line per bot (the level-matched run).
-// The driver times itself (think, mover) because its TimerService row also holds the bot's other timers.
+// The driver times itself (think, mover) because its TimerService row also holds the bot's other timers. The driver's
+// own lines are formatted here too: PLAYER_BOT_FIGHT per settled fight and the deaths' fields (levelmatch/DEATHS.md 2).
 public static class PlayerBotDriverReport
 {
     private static readonly Logger Log = LoggerManager.Create(typeof(PlayerBotDriverReport));
@@ -136,6 +153,21 @@ public static class PlayerBotDriverReport
         int castFailed, int retrained, PlayerBotActivity activity) => string.Create(CultureInfo.InvariantCulture,
         $"PLAYER_BOT_TALLY window={window} bot={bot} level={level} kills={kills} deaths={deaths} xp={xp} netXp={netXp} " +
         $"castFailed={castFailed} retrained={retrained} activity={activity}");
+
+    /// <summary>PLAYER_BOT_FIGHT, from the driver when a fight it was in settles: the monster died (kill) or is no longer
+    /// fair game (dropped). lifeKills and rests are this life's before the fight; tools/deathdiag.py reads the line.</summary>
+    public static string FormatFight(PlayerBotFight f) => string.Create(CultureInfo.InvariantCulture,
+        $"PLAYER_BOT_FIGHT bot={f.Bot} level={f.Level} target=\"{f.Target}\" targetLevel={f.TargetLevel} con={f.Con} " +
+        $"from={(f.FromDefence ? "defence" : "pull")} result={(f.Killed ? "kill" : "dropped")} startHp={f.StartHp} endHp={f.EndHp} " +
+        $"startMana={f.StartMana} endMana={f.EndMana} sec={f.Seconds} adds={f.Adds} swings={f.Swings} notVisible={f.NotVisible} " +
+        $"casts={f.Casts} lifeKills={f.LifeKills} rests={f.Rests}");
+
+    /// <summary>The fields PLAYER_BOT_DEATH appends after task= (the ones before stay as they were: legcheck.py reads them).</summary>
+    public static string FormatDeathDetail(PlayerBotDeathDetail d) => string.Create(CultureInfo.InvariantCulture,
+        $"activity={d.Activity} startHp={d.StartHp} fightSec={d.FightSeconds} targetHp={d.TargetHp} " +
+        $"from={(d.FromDefence ? "defence" : "pull")} adds={d.Adds} lifeKills={d.LifeKills} rests={d.Rests} " +
+        $"sinceKillSec={d.SinceKillSeconds} mana={d.Mana} swings={d.Swings} notVisible={d.NotVisible} killer=\"{d.Killer}\" " +
+        $"killerLevel={d.KillerLevel} killerIsTarget={d.KillerIsTarget} fromBind={d.FromBind}");
 
     public static string Format(PlayerBotDriverWindow w)
     {

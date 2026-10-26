@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.Linq;
 using System.Net.Sockets;
@@ -6,6 +7,7 @@ using System.Numerics;
 using System.Reflection;
 using System.Runtime.CompilerServices;
 using DOL.Database;
+using DOL.Events;
 using DOL.GS.Commands;
 using DOL.GS.HearthDAoC;
 using DOL.GS.HearthDAoC.PlayerBots;
@@ -15,8 +17,8 @@ using NUnit.Framework;
 namespace DOL.GS.Tests;
 
 // HearthDAoC proto (#137): the player-bot driver's pure parts, its timer's meter charge, the mover's step maths and
-// corridor use, the never-throw tick, the report line and its one kill per monster life. Helpers copied from
-// UT_BotCpuMeter.cs:98-130 and UT_PlayerTravel.cs:27-58, :103-109.
+// corridor use, the never-throw tick, the report line and its one kill per monster life, and the deaths' diagnostics.
+// Helpers copied from UT_BotCpuMeter.cs:98-130 and UT_PlayerTravel.cs:27-58, :103-109.
 [TestFixture, NonParallelizable]
 public sealed class UT_PlayerBotDriver
 {
@@ -474,5 +476,117 @@ public sealed class UT_PlayerBotDriver
         settle.Invoke(null, [second, Player(null)]);
         Assert.That((first.Kills, second.Kills), Is.EqualTo((1, 0)), "the second bot's kill is the first's (PlayerBotDriverReport.Kill)");
         Assert.That((first.Target, second.Target, first.Engaged, second.Engaged), Is.EqualTo(((GameLiving)null, (GameLiving)null, false, false)));
+    }
+
+    // --- the deaths' diagnostics (levelmatch/DEATHS.md section 2) ---
+
+    [Test]
+    public void Every_bot_that_fought_a_monster_counts_it_in_its_life()      // DEATH lifeKills= and sinceKillSec=
+    {
+        PropertyInfo time = typeof(GameLoop).GetProperty(nameof(GameLoop.GameLoopTime))!;
+        long saved = GameLoop.GameLoopTime;
+        MethodInfo settle = typeof(PlayerBotDriver).GetMethod("SettleTarget", BindingFlags.Static | BindingFlags.NonPublic);
+        var monster = (GameNPC)RuntimeHelpers.GetUninitializedObject(typeof(GameNPC));   // health 0: dead
+        PlayerBotState Fought(bool engaged)
+        {
+            PlayerBotState state = (PlayerBotState)RuntimeHelpers.GetUninitializedObject(typeof(PlayerBotState));
+            (state.Target, state.Engaged) = (monster, engaged);
+            return state;
+        }
+        try
+        {
+            time.SetValue(null, 90_000L);
+            PlayerBotState first = Fought(true), second = Fought(true), late = Fought(false);
+            foreach (PlayerBotState state in new[] { first, second, late })
+                settle!.Invoke(null, [state, Player(null)]);
+            Assert.That((first.LifeKills, second.LifeKills, late.LifeKills), Is.EqualTo((1, 1, 0)),
+                "the second bot shares the monster with the first; the late one never reached it");
+            Assert.That((first.LastKillTick, second.LastKillTick, late.LastKillTick), Is.EqualTo((90_000L, 90_000L, 0L)));
+        }
+        finally
+        {
+            time.SetValue(null, saved);
+        }
+    }
+
+    [Test]
+    public void FightFormat()
+    {
+        Assert.That(PlayerBotDriverReport.FormatFight(new PlayerBotFight("Pbotaaaac", 40, "widow claw", 40, ConColor.YELLOW, false,
+                true, 100, 38, 100, 12, 21, 1, 9, 2, 4, 0, 0)),
+            Is.EqualTo("PLAYER_BOT_FIGHT bot=Pbotaaaac level=40 target=\"widow claw\" targetLevel=40 con=YELLOW from=pull result=kill " +
+                       "startHp=100 endHp=38 startMana=100 endMana=12 sec=21 adds=1 swings=9 notVisible=2 casts=4 lifeKills=0 rests=0"));
+        Assert.That(PlayerBotDriverReport.FormatFight(new PlayerBotFight("Pbothaaab", 43, "empyrean guardian", 36, ConColor.BLUE, true,
+                false, 64, 51, 100, 100, 7, 2, 3, 0, 0, 3, 1)),
+            Is.EqualTo("PLAYER_BOT_FIGHT bot=Pbothaaab level=43 target=\"empyrean guardian\" targetLevel=36 con=BLUE from=defence " +
+                       "result=dropped startHp=64 endHp=51 startMana=100 endMana=100 sec=7 adds=2 swings=3 notVisible=0 casts=0 " +
+                       "lifeKills=3 rests=1"));
+    }
+
+    // The fields PLAYER_BOT_DEATH appends after task= (its earlier fields stay as they were: runs/legcheck.py reads them).
+    [Test]
+    public void DeathDetailFormat()
+    {
+        Assert.That(PlayerBotDriverReport.FormatDeathDetail(new PlayerBotDeathDetail(PlayerBotActivity.Fighting, 62, 14, 71, false,
+                2, 3, 0, 40, 100, 6, 1, "widow claw", 40, true, 748)),
+            Is.EqualTo("activity=Fighting startHp=62 fightSec=14 targetHp=71 from=pull adds=2 lifeKills=3 rests=0 sinceKillSec=40 " +
+                       "mana=100 swings=6 notVisible=1 killer=\"widow claw\" killerLevel=40 killerIsTarget=True fromBind=748"));
+        // Out of a fight, no target, no kill this life, no killer named by the Dying event, the bind in another region.
+        Assert.That(PlayerBotDriverReport.FormatDeathDetail(new PlayerBotDeathDetail(PlayerBotActivity.Hunting, -1, -1, -1, true,
+                -1, 0, 2, -1, 37, -1, -1, null, 0, false, -1)),
+            Is.EqualTo("activity=Hunting startHp=-1 fightSec=-1 targetHp=-1 from=defence adds=-1 lifeKills=0 rests=2 sinceKillSec=-1 " +
+                       "mana=37 swings=-1 notVisible=-1 killer=\"\" killerLevel=0 killerIsTarget=False fromBind=-1"));
+    }
+
+    [TestCase(0, (byte)0, (byte)100)] [TestCase(120, (byte)37, (byte)37)] [TestCase(120, (byte)0, (byte)0)]
+    public void PowerPercentIsFullWithoutAPowerPool(int maxMana, byte mana, byte expected) =>
+        Assert.That(PlayerBotDriver.PowerPercent(maxMana, mana), Is.EqualTo(expected));
+
+    // WeaponAction.cs:309 sets a new AttackData per swing; the think sees the last one, often twice.
+    [Test]
+    public void Each_swing_counts_once_and_the_view_gates_refusals_apart()
+    {
+        PlayerBotState state = (PlayerBotState)RuntimeHelpers.GetUninitializedObject(typeof(PlayerBotState));
+        var hit = new AttackData { AttackResult = eAttackResult.HitUnstyled };
+        PlayerBotDriver.CountSwing(state, null);                                        // no swing yet
+        PlayerBotDriver.CountSwing(state, hit);
+        PlayerBotDriver.CountSwing(state, hit);                                         // the same swing, a think later
+        PlayerBotDriver.CountSwing(state, new AttackData { AttackResult = eAttackResult.TargetNotVisible });
+        PlayerBotDriver.CountSwing(state, new AttackData { AttackResult = eAttackResult.TargetNotVisible });   // its retry
+        PlayerBotDriver.CountSwing(state, new AttackData { AttackResult = eAttackResult.Missed });
+        Assert.That((state.Swings, state.NotVisible), Is.EqualTo((4, 2)));
+    }
+
+    [Test]
+    public void The_dying_handler_names_a_bots_killer_ignores_anyone_else_and_goes_with_stop()
+    {
+        FieldInfo instance = typeof(GameEventMgr).GetField("_soleInstance", BindingFlags.Static | BindingFlags.NonPublic)!;
+        var previous = (GameEventMgr)instance.GetValue(null)!;
+        var states = (ConcurrentDictionary<GamePlayer, PlayerBotState>)typeof(PlayerBotDriver)
+            .GetField("_states", BindingFlags.Static | BindingFlags.NonPublic)!.GetValue(null)!;
+        GamePlayer bot = Player(null), human = Player(null);
+        bot.ObjectState = GameObject.eObjectState.Inactive;                             // Stop leaves the world alone
+        var killer = (GameNPC)RuntimeHelpers.GetUninitializedObject(typeof(GameNPC));
+        var state = (PlayerBotState)RuntimeHelpers.GetUninitializedObject(typeof(PlayerBotState));
+        try
+        {
+            GameEventMgr.LoadTestDouble(new GameEventMgr());
+            states[bot] = state;
+            GameEventMgr.AddHandler(bot, GameLivingEvent.Dying, PlayerBotDriver.OnBotDying);   // as Start adds it
+            Assert.DoesNotThrow(() => PlayerBotDriver.OnBotDying(GameLivingEvent.Dying, human, new DyingEventArgs(killer)));
+            Assert.DoesNotThrow(() => PlayerBotDriver.OnBotDying(GameLivingEvent.Dying, killer, new DyingEventArgs(bot)));
+            Assert.DoesNotThrow(() => PlayerBotDriver.OnBotDying(GameLivingEvent.Dying, null, null));
+            Assert.DoesNotThrow(() => PlayerBotDriver.OnBotDying(GameLivingEvent.Dying, bot, EventArgs.Empty));
+            Assert.That(state.Killer, Is.Null);
+            GameEventMgr.Notify(GameLivingEvent.Dying, bot, new DyingEventArgs(killer));   // GameObject.Notify (GameLiving.cs:2073)
+            Assert.That(state.Killer, Is.SameAs(killer));
+            PlayerBotDriver.Stop(bot);
+            Assert.That(GameEventMgr.NumObjectHandlers, Is.Zero, "Stop removes the handler Start added");
+        }
+        finally
+        {
+            states.TryRemove(bot, out _);
+            GameEventMgr.LoadTestDouble(previous);
+        }
     }
 }
