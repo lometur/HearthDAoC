@@ -5,6 +5,7 @@ using System.Diagnostics;
 using System.Linq;
 using System.Numerics;
 using System.Threading;
+using DOL.AI.Brain;
 using DOL.Events;
 using DOL.GS.Commands;
 using DOL.GS.Keeps;
@@ -109,6 +110,9 @@ public static class PlayerBotDriver
     public const ushort ImmediateSearchRadius = 2600;        // GameBot: AWBC:31, :3148
     public const ushort SearchRadius = 5000;                 // AWBC:35, :3148
     public const int ConPenalty = 220;                       // AWBC:3100
+    public const int AddMargin = 200;                        // the adds rule: an add's reach past its aggro range
+    public const int AddScanMargin = 700;                    // (inf.) 500, the aggro range of 54,397 of the world's
+                                                             //   aggressive rows, + AddMargin: adds past a ring's edge
     public const ushort LootRadius = 260;                    // APP:26
     public const int LootMilliseconds = 1000;                // APP:408
     public const int RoamRadius = 1400;                      // APP:483
@@ -128,6 +132,8 @@ public static class PlayerBotDriver
     public const int SpellBlockMilliseconds = 10_000;        // (inf.) a few swings, then the spell again
 
     private static readonly ConcurrentDictionary<GamePlayer, PlayerBotState> _states = new();
+    [ThreadStatic] private static List<(GameNPC Npc, Vector3 At, int Score)> _candidates;      // FindWithin's, per timer
+    [ThreadStatic] private static List<(GameNPC Npc, Vector3 At, int AggroRange)> _adds;       //   thread (TimerService)
 
     public static IEnumerable<PlayerBotState> States => _states.Values;
     public static bool IsDriven(GamePlayer player) => player != null && _states.ContainsKey(player);
@@ -457,29 +463,48 @@ public static class PlayerBotDriver
         (state.Spell, state.SpellLine) = found == null ? (null, null) : FindDamageSpell(player);
     }
 
+    // The candidates within the con cap go through the adds rule (PickUncrowded): the 2,600-unit ring takes only one with
+    // no potential add near it, the 5,000-unit ring the least crowded. The scan reaches AddScanMargin past the ring for
+    // the adds by a candidate at its edge.
     private static GameNPC FindWithin(PlayerBotState state, GamePlayer player, ushort radius, long now)
     {
-        GameNPC best = null, safest = null;
-        int bestScore = int.MaxValue, safestScore = int.MaxValue;
+        GameNPC safest = null;
+        int safestScore = int.MaxValue;
         ConColor cap = MaximumTargetCon(1, state.DeathSafetySteps), safestCon = ConColor.PURPLE;
         bool leashed = Leashed(state, player);
-        foreach (GameNPC npc in player.GetNPCsInRadius(radius))
+        List<(GameNPC Npc, Vector3 At, int Score)> candidates = _candidates ??= new();
+        List<(GameNPC Npc, Vector3 At, int AggroRange)> adds = _adds ??= new();
+        foreach (GameNPC npc in player.GetNPCsInRadius((ushort)(radius + AddScanMargin)))
         {
-            if (!IsExperienceTarget(npc) || !IsValidTarget(player, npc, 0) ||
+            if (!IsExperienceTarget(npc)) continue;                                     // monsters only, adds too
+            Vector3 at = new(npc.X, npc.Y, npc.Z);
+            if (AddReach(player, npc) is > 0 and int reach) adds.Add((npc, at, reach));
+            if (!player.IsWithinRadius(npc, radius) || !IsValidTarget(player, npc, 0) ||
                 npc == state.Unreachable && now < state.UnreachableUntil)
                 continue;
             ConColor con = ConLevels.GetConColor(player.GetConLevel(npc));
             if (!AutonomousPlayerPilot.IsEligibleExperienceTarget(con, npc.EffectiveLevel, player.Level, 1) ||
-                leashed && Vector3.Distance(new(npc.X, npc.Y, npc.Z), state.Anchor) > LeashRadius + RoamRadius)
+                leashed && Vector3.Distance(at, state.Anchor) > LeashRadius + RoamRadius)
                 continue;
             int score = TargetScore(player.GetDistanceTo(npc), con);                    // AWBC:3100
-            if (con <= cap) { if (score < bestScore) { best = npc; bestScore = score; } }
+            if (con <= cap) candidates.Add((npc, at, score));
             else if (con < safestCon || con == safestCon && score < safestScore) { safest = npc; safestCon = con; safestScore = score; }
         }
+        GameNPC best = PickUncrowded(candidates, adds, uncrowdedOnly: radius < SearchRadius);
+        candidates.Clear();                                                             // no monster held past the search
+        adds.Clear();
         if (best != null || safest == null || radius < SearchRadius) return best;
         state.DeathSafetySteps = DeathStepsFor(safestCon, 1, state.DeathSafetySteps);    // nothing in reach fits the death cap
         return safest;
     }
+
+    // The adds rule's view of a monster (IsExperienceTarget) near a candidate: its aggro range when it would join that
+    // fight, else 0.
+    private static int AddReach(GamePlayer player, GameNPC npc) =>
+        npc.Brain is StandardMobBrain brain && npc.IsAlive &&
+        IsPotentialAdd(brain.AggroLevel, brain.AggroRange, player.IsObjectGreyCon(npc),
+            npc.IsAttacking && npc.TargetObject is GameLiving other && other != player)
+            ? brain.AggroRange : 0;
 
     // Self-defence: the nearest monster that is hitting the bot (its AttackerTracker, as BotGroupSupport.UnderAttack
     // reads it), whatever its con and wherever the leash is. The pilot's filter alone left the bot roaming or resting
@@ -598,6 +623,46 @@ public static class PlayerBotDriver
     public static int TargetScore(int distance, ConColor con) => distance + Math.Abs((int)con) * ConPenalty;
     public static int MeleeStopDistance(int attackRange) => Math.Max(48, (attackRange > 0 ? attackRange : 128) - 48);
     public static int SpellStopDistance(int spellRange) => Math.Max(145, spellRange - 80);   // APP:320
+
+    /// <summary>Whether a monster would join a fight by it (the adds rule; in the diagnostic smoke 26% of the deaths with a
+    /// named killer were to a monster other than the target): aggressive (aggro level and range above 0,
+    /// StandardMobBrain.cs:705, as PlayerBotWake.ScanReason reads them), not grey to the bot (a grey monster never aggroes,
+    /// StandardMobBrain.cs:685) and not already fighting someone else.</summary>
+    public static bool IsPotentialAdd(int aggroLevel, int aggroRange, bool greyToBot, bool fightingSomeoneElse) =>
+        aggroLevel > 0 && aggroRange > 0 && !greyToBot && !fightingSomeoneElse;
+
+    /// <summary>The potential adds within their aggro range + AddMargin of a candidate at `at`: the bot fights by its
+    /// target. The candidate itself is no add.</summary>
+    public static int Crowding<T>(T candidate, Vector3 at, IReadOnlyList<(T Npc, Vector3 At, int AggroRange)> adds) where T : class
+    {
+        int crowd = 0;
+        for (int i = 0; i < adds.Count; i++)                                            // no enumerator per candidate
+        {
+            (T npc, Vector3 position, int aggroRange) = adds[i];
+            float reach = aggroRange + AddMargin;
+            if (!ReferenceEquals(npc, candidate) && Vector3.DistanceSquared(position, at) <= reach * reach) crowd++;
+        }
+        return crowd;
+    }
+
+    /// <summary>The adds rule over a ring's candidates within the con cap: the best score (TargetScore) among those with no
+    /// potential add near them; with none such, the least crowded, then the best score; null with uncrowdedOnly, so the
+    /// wider ring decides. The first of equals wins, as before.</summary>
+    public static T PickUncrowded<T>(IReadOnlyList<(T Npc, Vector3 At, int Score)> candidates,
+        IReadOnlyList<(T Npc, Vector3 At, int AggroRange)> adds, bool uncrowdedOnly) where T : class
+    {
+        T best = null;
+        int bestCrowd = int.MaxValue, bestScore = int.MaxValue;
+        for (int i = 0; i < candidates.Count; i++)
+        {
+            (T npc, Vector3 at, int score) = candidates[i];
+            if (bestCrowd == 0 && score >= bestScore) continue;                         // nothing beats a clear better one
+            int crowd = Crowding(npc, at, adds);
+            if (uncrowdedOnly && crowd > 0) continue;
+            if (crowd < bestCrowd || crowd == bestCrowd && score < bestScore) (best, bestCrowd, bestScore) = (npc, crowd, score);
+        }
+        return best;
+    }
 
     // APP:667-692 without the quickbar, the Animist policy, the range filter (checked at cast time) and the mana check. A
     // list caster's spells are in its spell lines; a hybrid's (Paladin, Thane...) are among its usable skills, each with

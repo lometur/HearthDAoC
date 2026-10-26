@@ -328,6 +328,60 @@ public sealed class UT_PlayerBotDriver
     public void TargetScore(int distance, ConColor con, int expected) =>
         Assert.That(PlayerBotDriver.TargetScore(distance, con), Is.EqualTo(expected));
 
+    // --- the adds rule: a target with no aggressive neighbour that would join its fight ---
+
+    // Aggressive (aggro level and range above 0), not grey to the bot (a grey monster never aggroes, StandardMobBrain.cs:685)
+    // and not already fighting someone else.
+    [TestCase(50, 500, false, false, true)] [TestCase(0, 500, false, false, false)] [TestCase(50, 0, false, false, false)]
+    [TestCase(50, 500, true, false, false)] [TestCase(50, 500, false, true, false)]
+    public void A_potential_add_is_aggressive_not_grey_and_not_busy(int level, int range, bool grey, bool busy, bool add) =>
+        Assert.That(PlayerBotDriver.IsPotentialAdd(level, range, grey, busy), Is.EqualTo(add));
+
+    private static (string, Vector3, int) At(string name, float x, int score) => (name, new Vector3(x, 0, 0), score);
+    private static (string, Vector3, int) Add(string name, float x, int aggroRange = 500) => (name, new Vector3(x, 0, 0), aggroRange);
+
+    [Test]
+    public void A_crowded_candidate_gives_way_to_one_with_no_add_near_it()
+    {
+        var candidates = new List<(string, Vector3, int)> { At("crowded", 0, 100), At("clear", 5_000, 900) };
+        var adds = new List<(string, Vector3, int)> { Add("wolf", 600) };                // 500 + 200 reaches 0
+        Assert.That(PlayerBotDriver.PickUncrowded(candidates, adds, uncrowdedOnly: false), Is.EqualTo("clear"));
+        Assert.That(PlayerBotDriver.PickUncrowded(candidates, [], uncrowdedOnly: false), Is.EqualTo("crowded"),
+            "with no adds, the best score as before");
+    }
+
+    [TestCase(700f, 1)] [TestCase(701f, 0)] [TestCase(-700f, 1)]
+    public void An_add_counts_within_its_aggro_range_and_200_of_the_candidate(float x, int crowd) =>
+        Assert.That(PlayerBotDriver.Crowding("target", Vector3.Zero, new List<(string, Vector3, int)> { Add("wolf", x) }),
+            Is.EqualTo(crowd));
+
+    [Test]
+    public void A_candidate_is_not_its_own_add()
+    {
+        var adds = new List<(string, Vector3, int)> { Add("target", 0), Add("wolf", 300, 100) };
+        Assert.That(PlayerBotDriver.Crowding("target", Vector3.Zero, adds), Is.EqualTo(1));
+    }
+
+    [Test]
+    public void When_every_candidate_is_crowded_the_least_crowded_then_the_best_score_wins()
+    {
+        var candidates = new List<(string, Vector3, int)> { At("two", 0, 100), At("one", 10_000, 900), At("one, nearer", 20_000, 800) };
+        var adds = new List<(string, Vector3, int)> { Add("a", 100), Add("b", 200), Add("c", 10_100), Add("d", 20_100) };
+        Assert.That(PlayerBotDriver.PickUncrowded(candidates, adds, uncrowdedOnly: false), Is.EqualTo("one, nearer"));
+    }
+
+    // The 2,600-unit ring takes only an uncrowded target; with none, the 5,000-unit ring decides.
+    [Test]
+    public void The_near_ring_takes_no_crowded_target()
+    {
+        var crowded = new List<(string, Vector3, int)> { At("crowded", 0, 100) };
+        var adds = new List<(string, Vector3, int)> { Add("wolf", 100) };
+        Assert.That(PlayerBotDriver.PickUncrowded(crowded, adds, uncrowdedOnly: true), Is.Null);
+        crowded.Add(At("clear", 5_000, 900));
+        Assert.That(PlayerBotDriver.PickUncrowded(crowded, adds, uncrowdedOnly: true), Is.EqualTo("clear"));
+        Assert.That(PlayerBotDriver.PickUncrowded(new List<(string, Vector3, int)>(), adds, uncrowdedOnly: false), Is.Null);
+    }
+
     // Every bot engaged with a monster reports its death; bots on one start row share monsters (runs 2-3).
     [Test]
     public void AMonsterLifeCountsOneKillHoweverManyBotsFoughtIt()
