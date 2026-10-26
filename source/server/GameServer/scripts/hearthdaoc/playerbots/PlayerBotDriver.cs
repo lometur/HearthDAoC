@@ -299,7 +299,7 @@ public static class PlayerBotDriver
         if (WaitsForSelfCast(state, player) || SelfHeal(state, player, now) || SummonPet(state, player, now))
             return;                                                                      // 11b. DEATHS.md A6, A5: before a rest
         if (state.RecoverBeforePull && Recovered(player)) state.RecoverBeforePull = false;
-        if (MayRest(Attacker(state, player, now) != null, state.Engaged && state.Target?.IsAlive == true) &&
+        if (MayRest(Attacker(state, player, now, anyHitter: true) != null, state.Engaged && state.Target?.IsAlive == true) &&
             WantsRest(player, state.RecoverBeforePull))                                  // 12. APP:290-296, DEATHS.md A1
         {
             if (state.Target != null) Disengage(state, player);                         //    a pull not begun: re-picked after
@@ -579,20 +579,30 @@ public static class PlayerBotDriver
 
     // Self-defence: the nearest monster that is hitting the bot (its AttackerTracker, as BotGroupSupport.UnderAttack
     // reads it), whatever its con and wherever the leash is. The pilot's filter alone left the bot roaming or resting
-    // while an orange monster killed it, and each death lowered its con cap further.
-    private static GameNPC Attacker(PlayerBotState state, GamePlayer player, long now)
+    // while an orange monster killed it, and each death lowered its con cap further. anyHitter: the one found unreachable
+    // too, for the rest gate and the summon (SkipsHitter).
+    private static GameNPC Attacker(PlayerBotState state, GamePlayer player, long now, bool anyHitter = false)
     {
         GameNPC best = null;
         int bestDistance = int.MaxValue;
         foreach (GameLiving living in player.attackComponent.AttackerTracker.Attackers)
         {
-            if (living is not GameNPC npc || !IsAttacking(player, npc) || npc == state.Unreachable && now < state.UnreachableUntil)
+            if (living is not GameNPC npc || !IsAttacking(player, npc) ||
+                SkipsHitter(npc == state.Unreachable, now, state.UnreachableUntil, anyHitter))
                 continue;
             int distance = player.GetDistanceTo(npc);
             if (distance < bestDistance) { best = npc; bestDistance = distance; }
         }
         return best;
     }
+
+    /// <summary>Whether Attacker passes over a monster hitting the bot: the one Engage found unreachable, while
+    /// UnreachableUntil lasts, when it picks whom to fight back. Never for anyHitter (the rest gate, MayRest; the
+    /// summon): that monster still hits the bot, a sitting player takes double melee damage that never misses
+    /// (AttackAction.cs:236-238, AttackComponent.cs:2206-2208), and no hit stands it up. The old gate, InCombat, kept
+    /// such a bot standing.</summary>
+    public static bool SkipsHitter(bool unreachable, long now, long unreachableUntil, bool anyHitter) =>
+        !anyHitter && unreachable && now < unreachableUntil;
 
     /// <summary>For a task (the errands): true while the bot has a fight to finish, a monster hitting it or the one it
     /// is engaged with; then the task gives the think to the driver, which fights that one and seeks no other.</summary>
@@ -1029,8 +1039,8 @@ public static class PlayerBotDriver
     private static bool SummonPet(PlayerBotState state, GamePlayer player, long now)
     {
         if (player.Level == state.NoPetSpellLevel ||
-            !WantsPet(player.ControlledBrain != null, Attacker(state, player, now) != null, player.InCombat, player.ManaPercent,
-                player.IsCasting, now, state.NextSummonTick))
+            !WantsPet(player.ControlledBrain != null, Attacker(state, player, now, anyHitter: true) != null, player.InCombat,
+                player.ManaPercent, player.IsCasting, now, state.NextSummonTick))
             return false;
         state.NextSummonTick = now + SummonRetryMilliseconds;
         (Spell summon, SpellLine line) = FindPetSpell(UsableSpells(player), player.Level);

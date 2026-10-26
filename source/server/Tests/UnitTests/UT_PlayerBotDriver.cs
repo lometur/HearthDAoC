@@ -298,6 +298,16 @@ public sealed class UT_PlayerBotDriver
     public void A_bot_may_rest_when_nothing_hits_it_and_no_live_fight_is_engaged(bool beingHit, bool inLiveFight, bool may) =>
         Assert.That(PlayerBotDriver.MayRest(beingHit, inLiveFight), Is.EqualTo(may));
 
+    // Self-defence passes over the monster it found unreachable while that lasts (Engage's blocked walk); the rest gate
+    // never does (anyHitter): that monster still hits the bot, a sitting player takes double melee damage that never
+    // misses (AttackAction.cs:236-238, AttackComponent.cs:2206-2208), and no hit stands it up. The old gate, InCombat,
+    // kept such a bot standing.
+    [TestCase(true, 1_000L, 2_000L, false, true)] [TestCase(true, 1_000L, 2_000L, true, false)]
+    [TestCase(true, 2_000L, 2_000L, false, false)] [TestCase(false, 1_000L, 2_000L, false, false)]
+    public void Self_defence_passes_over_an_unreachable_hitter_and_the_rest_gate_does_not(bool unreachable, long now,
+        long until, bool anyHitter, bool skips) =>
+        Assert.That(PlayerBotDriver.SkipsHitter(unreachable, now, until, anyHitter), Is.EqualTo(skips));
+
     // Low, or sitting and not full, as before; and after a kill until full, as a GameBot rests to full after a camp
     // fight before its next pull (AutonomousWorldBotController.cs:423-424, :2727-2730, :3019-3047).
     [TestCase(true, false, false, false, true)] [TestCase(false, true, false, false, true)]
