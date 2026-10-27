@@ -3,26 +3,29 @@ using System.Collections.Generic;
 using System.Globalization;
 using System.Threading;
 using DOL.AI.Brain;
+using DOL.GS.Quests;
 
 namespace DOL.GS.HearthDAoC.PlayerBots;
 
-public enum PlayerBotWakeKind { Aggro, TargetsBot, HeldAggro, Target, Attacker, Talk, Pet }
+public enum PlayerBotWakeKind { Aggro, TargetsBot, HeldAggro, Target, Attacker, Talk, Pet, Quest }
 
 public readonly record struct PlayerBotWakeWindow(int Seconds, bool Lever, long Scans, long Started, long Aggro,
-    long TargetsBot, long HeldAggro, long Target, long Attacker, long Talk, long Pet = 0);
+    long TargetsBot, long HeldAggro, long Target, long Attacker, long Talk, long Pet = 0, long Quest = 0);
 
 // HearthDAoC #137 lever. With HEARTHDAOC_PLAYER_BOT_WAKE=gamebot a player bot's client updates keep its NPC cache but
 // wake no NPC (the gate in ClientService.OnObjectCreateOrUpdateForPlayer). The driver then wakes what a GameBot wakes
-// (BotBrain.cs:1561-1584, every 1,250 + ObjectID % 500 ms), plus the bot's own target, the monsters fighting it, and
-// each NPC it talks to, and its own main pet. A wake is GameNPC.OnAutonomousBotNearby (GameNPC.cs:2042-2048):
-// IsVisibleToPlayersOrBots for 60 s, never IsVisibleToPlayers. Not here, for the real PR: the bot's other pets (an
-// Animist's field turrets, a bomber, a Bonedancer's minions: outside ControlledBrain, and ABrain.IsActive counts only
-// GameBot owners, AutonomousSummonActivity.cs:22-44) and the porter (wake it before the whisper, as
-// AutonomousFrontierTransport.cs:261 does).
+// (BotBrain.cs:1561-1584, every 1,250 + ObjectID % 500 ms), plus the bot's own target, the monsters fighting it, each
+// NPC it talks to, its own main pet, and, at each scan, the NPCs its current quests name within 6,000 (the owner's
+// rule, 2026-10-22: a quest's walking fellows and roamers move only while awake). A wake is
+// GameNPC.OnAutonomousBotNearby (GameNPC.cs:2042-2048): IsVisibleToPlayersOrBots for 60 s, never IsVisibleToPlayers.
+// Not woken yet: the bot's other pets (an Animist's field turrets, a bomber, a Bonedancer's minions: outside
+// ControlledBrain, and ABrain.IsActive counts only GameBot owners, AutonomousSummonActivity.cs:22-44), the porter (wake
+// it before the whisper, as AutonomousFrontierTransport.cs:261 does), and the NPCs a scripted quest names in its code.
 public static class PlayerBotWake
 {
     public const string EnvironmentVariable = "HEARTHDAOC_PLAYER_BOT_WAKE";
     public const int ScanMilliseconds = 1_250, ScanSpreadMilliseconds = 500;   // BotBrain.cs:1568
+    public const int QuestRadius = 6_000;   // the owner's rule (2026-10-22): the NPCs the bot's current quests name
 
     /// <summary>On: player bots wake only what GameBots wake. Set once in PlayerBotSpawner.OnServerStarted, which
     /// GameServer raises before GameLoop.Init (GameServer.cs:510, :517), so the loop threads start after the write.</summary>
@@ -31,6 +34,8 @@ public static class PlayerBotWake
     private static readonly long[] _woke = new long[Enum.GetValues<PlayerBotWakeKind>().Length];
     private static long _scans, _started;
     [ThreadStatic] private static List<(GameNPC Npc, PlayerBotWakeKind Kind)> _list;
+    [ThreadStatic] private static List<JournalStep> _steps;
+    [ThreadStatic] private static List<GameNPC> _givers;
 
     /// <summary>Unset or empty is gamebot, the lever: on #137's level-matched run 390 player bots cost 0.44x the
     /// estimated cost of the live server's 390 GameBots with it, 1.10x without it (issuecomment-6441658806).</summary>
@@ -109,6 +114,49 @@ public static class PlayerBotWake
         into.Add((npc, kind));
     }
 
+    /// <summary>What the bot's current quests name, read as the quest markers read a journal (QuestIndicators.For): each
+    /// data quest's current step target (TargetName in TargetRegion) and the names its classic stage adds
+    /// (ClassicQuests.StepNames, any region), and each reward quest's giver. Scripted quests keep their NPCs in their own
+    /// code: none here.</summary>
+    public static void QuestNames(GamePlayer bot, List<JournalStep> steps, List<GameNPC> givers)
+    {
+        foreach (AbstractQuest quest in bot.QuestList.Keys)
+        {
+            switch (quest)
+            {
+                case DataQuest data when data.Step > 0:
+                    steps.Add(new(data.StepType, data.TargetName, data.TargetRegion));
+                    foreach (string name in ClassicQuests.StepNames(data.ID, data.Step))
+                        steps.Add(new(data.StepType, name, 0));
+                    break;
+                case RewardQuest reward when reward.QuestGiver != null:
+                    givers.Add(reward.QuestGiver);
+                    break;
+            }
+        }
+    }
+
+    /// <summary>Whether a step names the NPC, as the quest markers match one (QuestIndicators.Targets).</summary>
+    public static bool Named(IReadOnlyList<JournalStep> steps, GameNPC npc)
+    {
+        foreach (JournalStep step in steps)
+            if (QuestIndicators.Targets(step, npc.Name, npc.CurrentRegionID))
+                return true;
+        return false;
+    }
+
+    /// <summary>The quest rule: the givers within QuestRadius, and the nearby NPCs a step names.</summary>
+    public static void CollectQuest(GamePlayer bot, IReadOnlyList<JournalStep> steps, IReadOnlyList<GameNPC> givers,
+        IEnumerable<GameNPC> nearby, List<(GameNPC Npc, PlayerBotWakeKind Kind)> into)
+    {
+        foreach (GameNPC giver in givers)
+            if (bot.IsWithinRadius(giver, QuestRadius))   // false in another region (GameObject.cs:161)
+                Add(into, giver, PlayerBotWakeKind.Quest);
+        if (steps.Count == 0) return;
+        foreach (GameNPC npc in nearby)
+            if (Named(steps, npc)) Add(into, npc, PlayerBotWakeKind.Quest);
+    }
+
     /// <summary>Each driver think while the bot is alive (PlayerBotDriver.Think, step 6b). On the bot's own timer,
     /// so the meter charges it to playerbot / Timer (BotCpuMeter.cs:657).</summary>
     public static void OnThink(PlayerBotState state, GamePlayer bot, long now)
@@ -121,6 +169,14 @@ public static class PlayerBotWake
         {
             state.NextWakeScanTick = NextScanTick(bot, now);
             Interlocked.Increment(ref _scans);
+            List<JournalStep> steps = _steps ??= new();
+            List<GameNPC> givers = _givers ??= new();
+            QuestNames(bot, steps, givers);
+            // The wider query first: a narrower one in the same tick filters its cached list (GameObject.GetNPCsInRadius).
+            if (steps.Count > 0 || givers.Count > 0)
+                CollectQuest(bot, steps, givers, steps.Count > 0 ? bot.GetNPCsInRadius(QuestRadius) : [], list);
+            steps.Clear();
+            givers.Clear();
             foreach (GameNPC npc in bot.GetNPCsInRadius(StandardMobBrain.MAX_AGGRO_DISTANCE))   // :22, 3600
                 if (ScanReason(bot, npc) is PlayerBotWakeKind kind) Add(list, npc, kind);
         }
@@ -158,11 +214,11 @@ public static class PlayerBotWake
         return new(seconds, Lever, Interlocked.Exchange(ref _scans, 0), Interlocked.Exchange(ref _started, 0),
             Take(PlayerBotWakeKind.Aggro), Take(PlayerBotWakeKind.TargetsBot), Take(PlayerBotWakeKind.HeldAggro),
             Take(PlayerBotWakeKind.Target), Take(PlayerBotWakeKind.Attacker), Take(PlayerBotWakeKind.Talk),
-            Take(PlayerBotWakeKind.Pet));
+            Take(PlayerBotWakeKind.Pet), Take(PlayerBotWakeKind.Quest));
     }
 
     public static string Format(PlayerBotWakeWindow w) => string.Create(CultureInfo.InvariantCulture,
         $"PLAYER_BOT_WAKE win={w.Seconds} lever={Describe(w.Lever)} scans={w.Scans} started={w.Started} " +
         $"aggro={w.Aggro} targetsBot={w.TargetsBot} heldAggro={w.HeldAggro} target={w.Target} " +
-        $"attacker={w.Attacker} talk={w.Talk} pet={w.Pet}");
+        $"attacker={w.Attacker} talk={w.Talk} pet={w.Pet} quest={w.Quest}");
 }

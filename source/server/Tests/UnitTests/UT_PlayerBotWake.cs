@@ -1,12 +1,15 @@
 using System;
 using System.Collections;
+using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.Reflection;
 using System.Runtime.CompilerServices;
 using DOL.AI;
 using DOL.AI.Brain;
 using DOL.Database;
+using DOL.GS.HearthDAoC;
 using DOL.GS.HearthDAoC.PlayerBots;
+using DOL.GS.Quests;
 using DOL.GS.ServerRules;
 using NUnit.Framework;
 
@@ -37,6 +40,8 @@ public sealed class UT_PlayerBotWake
         public int PositionX, Wakes;
         public ushort Region;
         public bool Alive;
+        public string Called;
+        public override string Name { get => Called; set { } }
         public override int X => PositionX;
         public override int Y => 0;
         public override int Z => 0;
@@ -69,6 +74,8 @@ public sealed class UT_PlayerBotWake
         public override ushort CurrentRegionID { get => Region; set { } }
         public override bool IsAlive => Alive;
         public override bool IsStealthed => Stealthed;
+        private ConcurrentDictionary<AbstractQuest, byte> _journal;
+        public override ConcurrentDictionary<AbstractQuest, byte> QuestList => _journal ??= new();   // an empty journal
     }
 
     private sealed class TestBrain : StandardMobBrain
@@ -501,12 +508,12 @@ public sealed class UT_PlayerBotWake
     [Test]
     public void The_report_line_names_every_counter()
     {
-        Assert.That(PlayerBotWake.Format(new PlayerBotWakeWindow(60, true, 15600, 212, 31, 2, 4, 2900, 140, 9, 960)), Is.EqualTo(
+        Assert.That(PlayerBotWake.Format(new PlayerBotWakeWindow(60, true, 15600, 212, 31, 2, 4, 2900, 140, 9, 960, 3)), Is.EqualTo(
             "PLAYER_BOT_WAKE win=60 lever=gamebot scans=15600 started=212 aggro=31 targetsBot=2 heldAggro=4 target=2900 " +
-            "attacker=140 talk=9 pet=960"));
+            "attacker=140 talk=9 pet=960 quest=3"));
         Assert.That(PlayerBotWake.Format(new PlayerBotWakeWindow { Seconds = 60 }), Is.EqualTo(
             "PLAYER_BOT_WAKE win=60 lever=player scans=0 started=0 aggro=0 targetsBot=0 heldAggro=0 target=0 attacker=0 talk=0 " +
-            "pet=0"));
+            "pet=0 quest=0"));
     }
 
     [Test]
@@ -517,7 +524,69 @@ public sealed class UT_PlayerBotWake
         PlayerBotWake.Wake(Npc(), PlayerBotWakeKind.TargetsBot);
         PlayerBotWake.Wake(Npc(), PlayerBotWakeKind.Attacker);
         PlayerBotWake.Wake(Npc(), PlayerBotWakeKind.Pet);
-        Assert.That(PlayerBotWake.TakeWindow(60), Is.EqualTo(new PlayerBotWakeWindow(60, true, 0, 0, 0, 1, 1, 0, 1, 0, 1)));
-        Assert.That(PlayerBotWake.TakeWindow(60), Is.EqualTo(new PlayerBotWakeWindow(60, true, 0, 0, 0, 0, 0, 0, 0, 0, 0)));
+        PlayerBotWake.Wake(Npc(), PlayerBotWakeKind.Quest);
+        Assert.That(PlayerBotWake.TakeWindow(60), Is.EqualTo(new PlayerBotWakeWindow(60, true, 0, 0, 0, 1, 1, 0, 1, 0, 1, 1)));
+        Assert.That(PlayerBotWake.TakeWindow(60), Is.EqualTo(new PlayerBotWakeWindow(60, true, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0)));
+    }
+
+    // --- the quest rule: the NPCs the bot's current quests name, within 6,000 (the owner's rule, 2026-10-22) ---
+
+    private static Mob Named(string name, int x = 400, ushort region = 1)
+    {
+        Mob npc = Npc(Brain(level: 0), x, region);
+        npc.Called = name;
+        return npc;
+    }
+
+    // As the quest markers match a step (QuestIndicators.Targets): the name without case, region 0 or the NPC's.
+    [Test]
+    public void A_step_names_an_npc_by_name_without_case_in_its_region_or_any()
+    {
+        var steps = new List<JournalStep> { new(DataQuest.eStepType.Interact, "Olorustos", 1) };
+        Assert.That(PlayerBotWake.Named(steps, Named("olorustos")), Is.True);
+        Assert.That(PlayerBotWake.Named(steps, Named("Olorustos", region: 2)), Is.False);
+        Assert.That(PlayerBotWake.Named(steps, Named("Guardian Aron")), Is.False);
+        Assert.That(PlayerBotWake.Named(new List<JournalStep> { new(DataQuest.eStepType.Kill, "Olorustos", 0) }, Named("Olorustos", region: 2)), Is.True);
+        Assert.That(PlayerBotWake.Named(new List<JournalStep>(), Named("Olorustos")), Is.False);
+    }
+
+    [Test]
+    public void The_quest_rule_wakes_named_npcs_and_givers_within_6000_and_nothing_else()
+    {
+        PlayerBotWake.Lever = true;
+        Bot bot = PlayerBot();
+        Mob olorustos = Named("Olorustos", x: 5_900), stranger = Named("Guardian Aron", x: 300), giver = Named("Master Lorik", x: 5_900),
+            farGiver = Named("Captain Falron", x: 6_100), deadNamed = Named("Olorustos", x: 200);
+        deadNamed.Alive = false;
+        var steps = new List<JournalStep> { new(DataQuest.eStepType.Interact, "Olorustos", 1) };
+        var into = new List<(GameNPC Npc, PlayerBotWakeKind Kind)>();
+        PlayerBotWake.CollectQuest(bot, steps, new List<GameNPC> { giver, farGiver }, new GameNPC[] { olorustos, stranger, deadNamed }, into);
+        Assert.That(into, Is.EquivalentTo(new (GameNPC, PlayerBotWakeKind)[] { (giver, PlayerBotWakeKind.Quest), (olorustos, PlayerBotWakeKind.Quest) }));
+    }
+
+    // The names a classic quest's current step adds (classic-quests.json, hearthdaoc-quests.json): the issuer, the
+    // grant's giver, the custom step's target and the monsters that drop for it.
+    [Test]
+    public void A_classic_step_adds_its_issuer_grant_giver_target_and_drop_monsters()
+    {
+        var config = new ClassicQuests.Config();
+        config.Quests[20206] = new ClassicQuests.QuestInfo
+        {
+            Steps = new()
+            {
+                null,
+                new ClassicQuests.StepInfo { Issuer = "Master Lorik" },
+                new ClassicQuests.StepInfo
+                {
+                    Issuer = "Olorustos", GrantFrom = "Guardian Aron",
+                    Custom = new ClassicQuests.CustomStep { Kind = "trade", Target = "Elvar", Drops = new() { new() { Mob = "bandit" }, new() { Mob = "" } } },
+                },
+            },
+        };
+        Assert.That(ClassicQuests.StepNames(config, 20206, 2), Is.EqualTo(new[] { "Olorustos", "Guardian Aron", "Elvar", "bandit" }));
+        Assert.That(ClassicQuests.StepNames(config, 20206, 1), Is.EqualTo(new[] { "Master Lorik" }));
+        Assert.That(ClassicQuests.StepNames(config, 20206, 3), Is.Empty);
+        Assert.That(ClassicQuests.StepNames(config, 20206, 0), Is.Empty);
+        Assert.That(ClassicQuests.StepNames(config, 1, 1), Is.Empty);
     }
 }
