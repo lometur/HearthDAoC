@@ -32,11 +32,13 @@ public static class PlayerBotWake
     private static long _scans, _started;
     [ThreadStatic] private static List<(GameNPC Npc, PlayerBotWakeKind Kind)> _list;
 
+    /// <summary>Unset or empty is gamebot, the lever: on #137's level-matched run 390 player bots cost 0.44x the
+    /// estimated cost of the live server's 390 GameBots with it, 1.10x without it (issuecomment-6441658806).</summary>
     public static bool Parse(string text)
     {
         string value = text?.Trim() ?? "";
-        if (value.Length == 0 || value.Equals("player", StringComparison.OrdinalIgnoreCase)) return false;
-        if (value.Equals("gamebot", StringComparison.OrdinalIgnoreCase)) return true;
+        if (value.Equals("player", StringComparison.OrdinalIgnoreCase)) return false;
+        if (value.Length == 0 || value.Equals("gamebot", StringComparison.OrdinalIgnoreCase)) return true;
         throw new FormatException($"{EnvironmentVariable} must be player or gamebot, got '{text}'");
     }
 

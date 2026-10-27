@@ -20,7 +20,7 @@ namespace DOL.GS.HearthDAoC.PlayerBots;
 // status line every minute, and one forced full collection at minute 51 for retained heap per bot (the meter has no
 // /botcpu heap, spec 4.5). A bot that drops out of Playing is never logged in again (F1 must stay visible); the one
 // exception is the quest fighter's single re-login after its errands, in run 1's small plans. HEARTHDAOC_PLAYER_BOT_WAKE
-// (player, the default, or gamebot: the #137 lever, PlayerBotWake) and HEARTHDAOC_PLAYER_BOT_SPOTS (a start spots file,
+// (gamebot, the default: the #137 lever, PlayerBotWake; or player) and HEARTHDAOC_PLAYER_BOT_SPOTS (a start spots file,
 // PlayerBotSpots) are read only when bots are on, so a default start logs nothing (smoke.sh:56); a bad value or an
 // unreadable file keeps them off. A bot placed at its spot holds it (PlayerBotState.HoldAnchor). A spot that carries a
 // GameBot's level, class and race makes a level-matched bot (levelmatch/DESIGN.md 2.5): created at that build with its

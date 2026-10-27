@@ -179,9 +179,10 @@ public sealed class UT_PlayerBotWake
 
     // --- the setting ---
 
-    [TestCase(null, false)] [TestCase("", false)] [TestCase(" player ", false)] [TestCase("PLAYER", false)]
+    // Unset or empty is the lever: player bots wake what GameBots wake (the #137 measurements: 0.44x vs 1.10x the cost).
+    [TestCase(null, true)] [TestCase("", true)] [TestCase("  ", true)] [TestCase(" player ", false)] [TestCase("PLAYER", false)]
     [TestCase("gamebot", true)] [TestCase(" GameBot ", true)]
-    public void Parse_reads_player_or_gamebot(string text, bool lever) => Assert.That(PlayerBotWake.Parse(text), Is.EqualTo(lever));
+    public void Parse_reads_player_or_gamebot_and_defaults_to_gamebot(string text, bool lever) => Assert.That(PlayerBotWake.Parse(text), Is.EqualTo(lever));
 
     [TestCase("on")] [TestCase("bots")] [TestCase("1")] [TestCase("game bot")]
     public void Parse_refuses_anything_else_naming_the_variable(string text)
