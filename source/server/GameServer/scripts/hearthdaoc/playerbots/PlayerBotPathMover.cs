@@ -4,6 +4,7 @@ using System.Diagnostics;
 using System.Linq;
 using System.Numerics;
 using DOL.GS.Commands;
+using DOL.Logging;
 
 namespace DOL.GS.HearthDAoC.PlayerBots;
 
@@ -21,13 +22,17 @@ public sealed class PlayerBotPathMover
     public const int IdleBroadcastMilliseconds = HeadlessClient.HeartbeatMs; // (est.) < 5 s is proven by PMC:15
     public const int StallSteps = 12;                  // 3 s without progress = blocked
     public const int ChurnReplans = 2;                 // churning windows in a row that only replan; the next one blocks
+    public const int FloorStepRange = 300;             // the GameBots' step onto the nearest floor (AWBC TryBeginLocalRouteRecovery)
+    public const int FloorStepMilliseconds = 5_000;    // at most one such step per bot in this time
+
+    private static readonly Logger Log = LoggerManager.Create(typeof(PlayerBotPathMover));
 
     private readonly GamePlayer _player;
     private readonly IPathfindingMgr _nav;             // null = PathfindingProvider.Instance (set at start-up, PathfindingProvider.cs:11-32)
     private readonly PlayerTravelPath _path = new();
     private Vector3 _lastApplied;
     private Vector3? _exact;                           // where the mover last put the bot, before GamePlayer rounded it
-    private long _lastStepTick, _lastUpdateTick;
+    private long _lastStepTick, _lastUpdateTick, _nextFloorStep;
     private int _stalledSteps;
     private readonly PlayerBotChurnWatch _churn = new();
     private int _walkSteps;                            // WalkReport: steps and distance since its last call
@@ -73,6 +78,14 @@ public sealed class PlayerBotPathMover
     /// for 14 minutes. From the exact spot the same walk arrives in 12 steps (UT_PlayerBotWalkReplay).</summary>
     public static Vector3 StepStart(Vector3 player, Vector3? exact) =>
         exact is Vector3 spot && Vector3.DistanceSquared(player, spot) <= 1 ? spot : player;
+
+    /// <summary>Where a bot whose walk failed steps to, as a GameBot does (AutonomousWorldBotController
+    /// .TryBeginLocalRouteRecovery): standing off the walkable mesh, no step or route can start, so it steps onto the
+    /// nearest real floor within 300 units and plans again from there. Null on floor with a way out (the goal was the
+    /// trouble), or with no floor near. In st-fix2 (#166) six bots stood for the rest of the run where every step lost
+    /// the walkable surface; in Tir na Nog one stood 84 units above the floor, which lay 51 units away.</summary>
+    public static Vector3? FloorStep(IPathfindingMgr nav, Zone zone, Vector3 here) =>
+        AutonomousNavigationSurface.TryNearestWalkableFloor(nav, zone, here, FloorStepRange, out Vector3 floor) ? floor : null;
 
     /// <summary>Whether the bot stands within the stop radius as the driver judges range: GetDistanceTo cuts the
     /// whole-unit distance to an int (Point3D.cs:78-87), so anything under stopDistance + 1 is in.</summary>
@@ -130,6 +143,17 @@ public sealed class PlayerBotPathMover
             {
                 LastBlock = failure;
                 Stop(now);
+                if (now >= _nextFloorStep && FloorStep(Nav, _player.CurrentZone, current) is Vector3 floor)
+                {
+                    _nextFloorStep = now + FloorStepMilliseconds;
+                    if (Log.IsInfoEnabled)
+                        Log.Info($"PLAYER_BOT_FLOOR_STEP bot={_player.Name} from=({current.X:0},{current.Y:0},{current.Z:0}) " +
+                                 $"to=({floor.X:0},{floor.Y:0},{floor.Z:0}) distance={Vector3.Distance(current, floor):0} why=\"{failure}\"");
+                    _player.MoveTo(_player.CurrentRegionID, (int)Math.Round(floor.X), (int)Math.Round(floor.Y), (int)Math.Round(floor.Z),
+                        _player.Heading);
+                    Reset();
+                    _exact = null;
+                }
                 PlayerBotDriverReport.Blocked();
                 return PlayerBotStepResult.Blocked;
             }
