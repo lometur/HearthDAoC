@@ -145,9 +145,15 @@ Nog). GameBots do the same, but a player bot should look like a player: worth a 
 Tir na Nog. A floor step is a visible jump: 14 in one run, of 50-198 units.
 
 Known gaps:
-- **Stalls are rare.** In a 15-minute run of 390 hunting bots, 2 walks stalled, each once (14 after #168, 2,421 before
-  these fixes, counting each blocked line's `count=`). In all, 17 bots logged 89 blocked walks, most of them walks to a
-  target with no path (next gap).
+- **Stalls are rare, but for one spot.** In two 15-minute runs of 390 hunting bots, 2 and 16 walks stalled (14 after
+  #168, 2,421 before these fixes, counting each blocked line's `count=`). 15 of the 16 were one bot at one spot in
+  Jordheim (next gap). Most other blocked walks were walks to a target with no path (the gap after).
+- **A ledge in Jordheim (32225, 26622).** The corridor leads from a lower floor over a ledge about 67 units high to a
+  corner 35 units up. The surface moves slide along the ledge's foot into a pocket, where no move or ray reaches the
+  corner, and each fresh corridor leads back out and up again: a roaming bot there walked to and fro for minutes (39
+  replans). Detour's ray along the corridor is blocked from below but clear from above, so the corridor line can't be
+  trusted there either; likely overlapping polygons. Not new: before the replan the same walk stalled and ended the
+  same way. It reproduces offline on the installed navmesh.
 - **Unreachable targets come back.** A bot skips a target it found no path to for 30 seconds, then may pick it again:
   in that run one bot tried the same monster 51 times between its fights. A GameBot's target and camp choice is part of
   the parity work (#167).
