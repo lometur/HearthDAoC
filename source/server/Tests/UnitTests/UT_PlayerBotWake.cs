@@ -7,6 +7,7 @@ using System.Runtime.CompilerServices;
 using DOL.AI;
 using DOL.AI.Brain;
 using DOL.Database;
+using DOL.Events;
 using DOL.GS.HearthDAoC;
 using DOL.GS.HearthDAoC.PlayerBots;
 using DOL.GS.Quests;
@@ -536,6 +537,34 @@ public sealed class UT_PlayerBotWake
         Mob npc = Npc(Brain(level: 0), x, region);
         npc.Called = name;
         return npc;
+    }
+
+    private sealed class Quest : AbstractQuest
+    {
+        public int At;
+        public override int Step { get => At; set { } }
+        public override bool CheckQuestQualification(GamePlayer player) => true;
+        public override void Notify(DOLEvent e, object sender, EventArgs args) { }
+    }
+
+    // The DataQuest getters log an error at every read of a malformed step, and a scan comes every 1.25-1.75 s: a bot
+    // reads its quest names again only when its journal's quests or steps change (PlayerBotState.QuestJournal).
+    [Test]
+    public void The_journal_key_changes_with_a_quest_taken_its_next_step_and_its_end()
+    {
+        Bot bot = PlayerBot();
+        long empty = PlayerBotWake.JournalKey(bot);
+        Assert.That(new PlayerBotState(bot).QuestJournal, Is.Not.EqualTo(empty), "the first scan reads the journal");
+        Assert.That(PlayerBotWake.JournalKey(bot), Is.EqualTo(empty));
+        Quest quest = Make<Quest>();
+        quest.At = 1;
+        bot.QuestList[quest] = 0;
+        long taken = PlayerBotWake.JournalKey(bot);
+        Assert.That(taken, Is.Not.EqualTo(empty));
+        quest.At = 2;
+        Assert.That(PlayerBotWake.JournalKey(bot), Is.Not.EqualTo(taken));
+        bot.QuestList.TryRemove(quest, out _);
+        Assert.That(PlayerBotWake.JournalKey(bot), Is.EqualTo(empty));
     }
 
     // As the quest markers match a step (QuestIndicators.Targets): the name without case, region 0 or the NPC's.

@@ -75,6 +75,9 @@ public sealed class PlayerBotState
     public long NextBlockedLine;                                 // PLAYER_BOT_BLOCKED
     public int BlockedSinceLine;
     public long NextWakeScanTick;                                // PlayerBotWake's 3,600-unit scan (the #137 lever)
+    public long QuestJournal = long.MinValue;                    //   and the quest rule's names, read again only when
+    public List<JournalStep> QuestSteps;                         //   the journal changes (PlayerBotWake.JournalKey)
+    public List<GameNPC> QuestGivers;
     public bool HoldAnchor;                                      // a spot bot (PLAYER_BOT_SPOTS): never relocates,
     public PlayerBotKitPlan Kit;                                 //   unless it has a build (levelmatch): TrainTo on level-up
     public long SpellBlockedUntil;                               // the cast watch (levelmatch): swing, not cast, until then

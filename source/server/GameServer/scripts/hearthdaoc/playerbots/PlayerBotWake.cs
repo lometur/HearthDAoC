@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.Globalization;
+using System.Runtime.CompilerServices;
 using System.Threading;
 using DOL.AI.Brain;
 using DOL.GS.Quests;
@@ -34,8 +35,6 @@ public static class PlayerBotWake
     private static readonly long[] _woke = new long[Enum.GetValues<PlayerBotWakeKind>().Length];
     private static long _scans, _started;
     [ThreadStatic] private static List<(GameNPC Npc, PlayerBotWakeKind Kind)> _list;
-    [ThreadStatic] private static List<JournalStep> _steps;
-    [ThreadStatic] private static List<GameNPC> _givers;
 
     /// <summary>Unset or empty is gamebot, the lever: on #137's level-matched run 390 player bots cost 0.44x the
     /// estimated cost of the live server's 390 GameBots with it, 1.10x without it (issuecomment-6441658806).</summary>
@@ -120,9 +119,9 @@ public static class PlayerBotWake
     /// code: none here.</summary>
     public static void QuestNames(GamePlayer bot, List<JournalStep> steps, List<GameNPC> givers)
     {
-        foreach (AbstractQuest quest in bot.QuestList.Keys)
+        foreach (KeyValuePair<AbstractQuest, byte> pair in bot.QuestList)   // not Keys: that locks every bucket and copies
         {
-            switch (quest)
+            switch (pair.Key)
             {
                 case DataQuest data when data.Step > 0:
                     steps.Add(new(data.StepType, data.TargetName, data.TargetRegion));
@@ -134,6 +133,17 @@ public static class PlayerBotWake
                     break;
             }
         }
+    }
+
+    /// <summary>Changes when the bot takes a quest, moves to its next step or ends it: OnThink reads the names again
+    /// only then. A DataQuest getter logs an error at each read of a malformed step, and a scan comes every 1.25-1.75 s.
+    /// </summary>
+    public static long JournalKey(GamePlayer bot)
+    {
+        long key = 17;
+        foreach (KeyValuePair<AbstractQuest, byte> pair in bot.QuestList)   // a sum: the dictionary's order doesn't count
+            key += HashCode.Combine(RuntimeHelpers.GetHashCode(pair.Key), pair.Key.Step);
+        return key;
     }
 
     /// <summary>Whether a step names the NPC, as the quest markers match one (QuestIndicators.Targets).</summary>
@@ -169,14 +179,19 @@ public static class PlayerBotWake
         {
             state.NextWakeScanTick = NextScanTick(bot, now);
             Interlocked.Increment(ref _scans);
-            List<JournalStep> steps = _steps ??= new();
-            List<GameNPC> givers = _givers ??= new();
-            QuestNames(bot, steps, givers);
+            List<JournalStep> steps = state.QuestSteps ??= new();
+            List<GameNPC> givers = state.QuestGivers ??= new();
+            long journal = JournalKey(bot);
+            if (journal != state.QuestJournal)
+            {
+                steps.Clear();
+                givers.Clear();
+                QuestNames(bot, steps, givers);
+                state.QuestJournal = journal;   // after: a throw reads them again at the next scan
+            }
             // The wider query first: a narrower one in the same tick filters its cached list (GameObject.GetNPCsInRadius).
             if (steps.Count > 0 || givers.Count > 0)
                 CollectQuest(bot, steps, givers, steps.Count > 0 ? bot.GetNPCsInRadius(QuestRadius) : [], list);
-            steps.Clear();
-            givers.Clear();
             foreach (GameNPC npc in bot.GetNPCsInRadius(StandardMobBrain.MAX_AGGRO_DISTANCE))   // :22, 3600
                 if (ScanReason(bot, npc) is PlayerBotWakeKind kind) Add(list, npc, kind);
         }

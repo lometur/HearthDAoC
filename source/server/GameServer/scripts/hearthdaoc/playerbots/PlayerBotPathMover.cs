@@ -64,7 +64,7 @@ public sealed class PlayerBotPathMover
     /// (GamePlayer keeps whole units, so it stands up to 0.87 units away), else the bot's own position (a teleport, a
     /// release or a speed-hack correction moved it). By Olorustos (lv-r1-stall, 2026-10-25) the whole-unit spot lay
     /// 0.6 units off the mesh: each step only snapped the bot back onto it, rounding put it back, and it stood there
-    /// for 14 minutes. From the exact spot the same walk arrives in 10 steps (UT_PlayerBotWalkReplay).</summary>
+    /// for 14 minutes. From the exact spot the same walk arrives in 12 steps (UT_PlayerBotWalkReplay).</summary>
     public static Vector3 StepStart(Vector3 player, Vector3? exact) =>
         exact is Vector3 spot && Vector3.DistanceSquared(player, spot) <= 1 ? spot : player;
 
