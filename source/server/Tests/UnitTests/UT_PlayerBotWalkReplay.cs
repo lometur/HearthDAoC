@@ -47,6 +47,14 @@ public class UT_PlayerBotWalkReplay
             Vector3? floor = PlayerBotPathMover.FloorStep(nav, zone, sunk);
             Assert.That(floor, Is.EqualTo(new Vector3(521313, 317795, 4801.47f)).Using<Vector3>((a, b) => Vector3.Distance(a, b) < 1));
             Assert.That(UT_PlayerBotDriver.Walk(nav, region, zone, floor!.Value, target, keepExact: true), Is.InRange(1, 200));
+
+            // st-replan2: Pbotaaabq stood 161 units over the floor, off the mesh, for minutes. Each step stood still
+            // without failing, so only a stall ends its walks: then it steps down onto the floor and walks on.
+            Vector3 over = new(515046.1f, 358050.7f, 3161.16f), camp = new(513749, 357535, 2823);
+            Assert.That(UT_PlayerBotDriver.Walk(nav, region, zone, over, camp, keepExact: true, blockEnds: true), Is.EqualTo(-2), "the stall");
+            Vector3? down = PlayerBotPathMover.FloorStep(nav, zone, over);
+            Assert.That(down, Is.EqualTo(new Vector3(515046.1f, 358050.7f, 3000.47f)).Using<Vector3>((a, b) => Vector3.Distance(a, b) < 1));
+            Assert.That(UT_PlayerBotDriver.Walk(nav, region, zone, down!.Value, camp, keepExact: true), Is.InRange(1, 200));
         });
 
     // st-smoke: in Caledon Pbothaade's first corner lay 2.2 units beside it and 123 above it. A surface step that only

@@ -105,8 +105,9 @@ registered, test it in game. The mover:
 - judges arrival as the driver judges range: the whole-unit distance cut to an int.
 - plans the corridor again from where the bot stands after a second without a step, keeping the goal; after 3 seconds
   the walk ends blocked. The stalls left after #168 mostly had the corridor's next corner on another level than the bot
-  (a ramp above it), while a fresh corridor from the same spot walked on. It does this once a goal: a bot whose fresh
-  corridors each led to another stall would walk to and fro for good.
+  (a ramp above it), while a fresh corridor from the same spot walked on. It does this at most twice a goal, as the
+  corridor's own progress check gives up after two: a bot whose fresh corridors each led to another stall would walk
+  to and fro for good. Once a goal was too few: bots stalled again where a fresh corridor walked on.
 - passes a corner within reach (32 units across) only with the next corner in sight, or standing on it, as the NPC
   pathfinder passes its nodes. In Vendo Caverns a corridor turned round a wall by two corners 13 and 20 units from the
   bot; both counted as reached, so it walked at the next corner, 100 units off behind the wall, and every fresh
@@ -124,9 +125,9 @@ registered, test it in game. The mover:
 - within 300 units of its goal, walks straight at it only with a clear line of sight, or within a corner's reach (32
   units across), where the corridor has dropped its last corner; otherwise it follows the corridor (a bot crept along
   a wall 267 units from its target).
-- when a walk fails, steps onto the nearest floor within 300 units that leads on, as a GameBot does, with one search
-  every 5 seconds at most: bots stood off the mesh, 79-88 units under the floor or 84 above it, where every step lost
-  the walkable surface.
+- when a walk fails or stalls, steps onto the nearest floor within 300 units that leads on, as a GameBot does, with one
+  search every 5 seconds at most: bots stood off the mesh, 79-88 units under the floor or 84 above it, where every step
+  lost the walkable surface, and one stood 161 units over the floor in Snowdonia, where every step stood still.
 
 `UT_PlayerBotWalkReplay` replays each of these walks on the installed navmesh.
 
@@ -140,9 +141,9 @@ Known gaps:
   before these fixes). No bot was blocked 3 or more times at one spot, and none was stuck as the run ended (16 before).
   Most of the 14 stalls had one shape: the corridor's next corner lay on another level than the bot (a ramp above
   it), while a fresh corridor from the same spot walks on. The mover now plans again after a second (above): LIVE_REPLAN.
-- In an earlier run a Tir na Nog bot stalled at one spot (21263, 35215), as it did before these fixes, but the same
-  step replayed offline walks on (same navmesh, same Detour library). Each stall line now gives the stalled step's own
-  queries (`queries:`), to find what differs live.
+- A Tir na Nog bot stalls at one spot (21263, 35215) in most runs, but the same step replayed offline walks on (same
+  navmesh, same Detour library). Live, the stall line's queries put the nearest mesh 5 units from the bot, so the floor
+  step after a stall (above) should move it; why the mesh differs live isn't known.
 - Within 300 units of its goal, in the open, a bot takes the plain surface move, which keeps the height of the straight
   line to the goal. Grounded steps there would also need arrival judged by the floor, for targets that hover or swim
   above it.
@@ -157,6 +158,7 @@ All start `PLAYER_BOT_`:
 - `FIGHT`, `DEATH`, `RELOCATE`, `IDLE`, `BLOCKED`: one per event. A stalled walk's `BLOCKED` line ends with `stall:`,
   the bot's last step and state, and `queries:`, the stalled step's own navmesh queries and a fresh corridor's step;
 - `FLOOR_STEP`: a step onto the nearest floor, with where from and to and why;
+- `REPLAN`: a stalled walk planned again, with where, the goal, the count for that goal and the stall's first step;
 - `ERRAND`: the quest bot's steps;
 - `SPOT`, `KIT`, `RETRAIN`: start spots and level-matched bots; `TALLY`, every few minutes, a line per bot.
 
