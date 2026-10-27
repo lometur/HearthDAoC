@@ -26,6 +26,7 @@ public sealed class PlayerBotPathMover
     private readonly IPathfindingMgr _nav;             // null = PathfindingProvider.Instance (set at start-up, PathfindingProvider.cs:11-32)
     private readonly PlayerTravelPath _path = new();
     private Vector3 _lastApplied;
+    private Vector3? _exact;                           // where the mover last put the bot, before GamePlayer rounded it
     private long _lastStepTick, _lastUpdateTick;
     private int _stalledSteps;
     private readonly PlayerBotChurnWatch _churn = new();
@@ -59,6 +60,18 @@ public sealed class PlayerBotPathMover
         return maxSpeed * elapsedMilliseconds / 1000f;
     }
 
+    /// <summary>Where the next step starts: the spot the mover last put the bot on, while the bot still stands on it
+    /// (GamePlayer keeps whole units, so it stands up to 0.87 units away), else the bot's own position (a teleport, a
+    /// release or a speed-hack correction moved it). By Olorustos (lv-r1-stall, 2026-10-25) the whole-unit spot lay
+    /// 0.6 units off the mesh: each step only snapped the bot back onto it, rounding put it back, and it stood there
+    /// for 14 minutes. From the exact spot the same walk arrives in 10 steps (UT_PlayerBotWalkReplay).</summary>
+    public static Vector3 StepStart(Vector3 player, Vector3? exact) =>
+        exact is Vector3 spot && Vector3.DistanceSquared(player, spot) <= 1 ? spot : player;
+
+    /// <summary>Whether the bot stands within the stop radius as the driver judges range: GetDistanceTo cuts the
+    /// whole-unit distance to an int (Point3D.cs:78-87), so anything under stopDistance + 1 is in.</summary>
+    public static bool Arrived(Vector3 here, Vector3 goal, int stopDistance) => Vector3.Distance(here, goal) < stopDistance + 1;
+
     public static bool TryComputeNext(IPathfindingMgr nav, Region region, Zone zone, PlayerTravelPath path, Vector3 current,
         Vector3 goal, int stopDistance, float stepLength, long now, out Vector3 next, out string failure)
     {
@@ -66,7 +79,9 @@ public sealed class PlayerBotPathMover
         failure = string.Empty;
         float remaining = Vector3.Distance(current, goal) - stopDistance;
         if (remaining <= 0) return true;
-        float step = Math.Min(stepLength, remaining);                  // never step inside the stop radius
+        // At most one unit inside the stop radius: the whole-unit spot then lies within it (Arrived), and a bot less than
+        // a unit short still steps (it stood still, and 12 such steps blocked the walk).
+        float step = Math.Min(stepLength, remaining + 1);
         if (step < 1) return true;
         if (region == null || zone == null) { failure = "No zone here."; return false; }
         if (!nav.HasNavmesh(zone) || remaining <= DirectStepRange)
@@ -87,13 +102,14 @@ public sealed class PlayerBotPathMover
         long started = Stopwatch.GetTimestamp();
         try
         {
-            Vector3 current = new(_player.X, _player.Y, _player.Z);
+            Vector3 here = new(_player.X, _player.Y, _player.Z);
+            Vector3 current = StepStart(here, _exact);
             if (Vector3.DistanceSquared(current, _lastApplied) > TeleportResetDistance * TeleportResetDistance)
             {
                 _path.Clear();
                 _churn.Reset();
             }
-            if (Vector3.Distance(current, goal) <= stopDistance) { Stop(now); return PlayerBotStepResult.Arrived; }
+            if (Arrived(here, goal, stopDistance)) { Stop(now); return PlayerBotStepResult.Arrived; }
             float step = StepLength(_player.MaxSpeed, now - _lastStepTick);
             _lastStepTick = now;
             if (step < 1) { Stop(now); return PlayerBotStepResult.Waiting; }
@@ -105,6 +121,7 @@ public sealed class PlayerBotPathMover
                 PlayerBotDriverReport.Blocked();
                 return PlayerBotStepResult.Blocked;
             }
+            _exact = next;                                  // a snap back onto the mesh counts, though the bot stays put
             if (Vector3.DistanceSquared(next, current) < 1)
             {
                 if (++_stalledSteps < StallSteps) return PlayerBotStepResult.Moving;

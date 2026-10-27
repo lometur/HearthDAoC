@@ -605,10 +605,14 @@ public sealed class UT_PlayerBotDriver
         Assert.That(PlayerBotPathMover.TryComputeNext(flat, region, zone, new PlayerTravelPath(), Vector3.Zero, new(1000, 0, 0), 0, 47.75f, 0,
             out Vector3 next, out _), Is.True);
         Assert.That(next.X, Is.EqualTo(47.75f).Within(0.001));
-        // Never inside the stop radius.
+        // At most one unit inside the stop radius, so that the whole-unit spot is within it (Arrived).
         Assert.That(PlayerBotPathMover.TryComputeNext(flat, region, zone, new PlayerTravelPath(), Vector3.Zero, new(100, 0, 0), 80, 47.75f, 0,
             out next, out _), Is.True);
-        Assert.That(next.X, Is.EqualTo(20).Within(0.001));
+        Assert.That(next.X, Is.EqualTo(21).Within(0.001));
+        // Less than a unit short still steps (it stood still, and 12 such steps blocked the walk).
+        Assert.That(PlayerBotPathMover.TryComputeNext(flat, region, zone, new PlayerTravelPath(), new(19.5f, 0, 0), new(100, 0, 0), 80, 47.75f, 0,
+            out next, out _), Is.True);
+        Assert.That(next.X, Is.EqualTo(21).Within(0.001));
         // Far: the corridor turns the corner (UT_PlayerTravel.cs:151), one search.
         var mesh = new Mesh { Corners = new[] { new Vector3(100, 100, 0), new Vector3(100, 500, 0), new Vector3(600, 500, 0) } };
         var path = new PlayerTravelPath();
@@ -635,6 +639,78 @@ public sealed class UT_PlayerBotDriver
         Assert.That(PlayerBotPathMover.TryComputeNext(blocked, region, zone, path, new(100, 100, 0), new(1000, 1000, 0), 0, 47.75f, 45000,
             out _, out _), Is.False);
     }
+
+    // The walkable mesh is the strip y >= 0.4. From a point off it, the surface move only snaps back onto it (0.4 units),
+    // as Detour did 0.6 units off the mesh by Olorustos (lv-r1-stall, 2026-10-25), and the line of sight is refused.
+    private sealed class SliverMesh : PathfindingMgrBase
+    {
+        private static Vector3 OnMesh(Vector3 v) => new(v.X, Math.Max(v.Y, 0.4f), v.Z);
+        public override bool HasNavmesh(Zone zone) => true;
+        public override PathfindingResult GetPathStraight(Zone zone, Vector3 start, Vector3 end,
+            EDtPolyFlags[] filters, Span<WrappedPathfindingNode> destination)
+        {
+            destination[0] = new(OnMesh(start), EDtPolyFlags.Walk);
+            destination[1] = new(OnMesh(end), EDtPolyFlags.Walk);
+            return new(PathfindingStatus.PathFound, 2);
+        }
+        public override Vector3? GetMoveAlongSurface(Zone zone, Vector3 start, Vector3 end, EDtPolyFlags[] filters) =>
+            start.Y < 0.4f ? OnMesh(start) : OnMesh(end);
+        public override Vector3? GetClosestPoint(Zone zone, Vector3 position, float xRange, float yRange, float zRange,
+            EDtPolyFlags[] filters) => OnMesh(position);
+        public override bool HasLineOfSight(Zone zone, Vector3 start, Vector3 end, EDtPolyFlags[] filters) => start.Y >= 0.4f;
+    }
+
+    // StepToward's position and stall rule: GamePlayer keeps whole units (X, Y, Z are ints), so the bot stands where the
+    // mover put it, rounded; 12 steps without a unit of progress drop the corridor. Returns the tick the bot arrived, or -1.
+    internal static int Walk(IPathfindingMgr nav, Region region, Zone zone, Vector3 from, Vector3 goal, bool keepExact)
+    {
+        var path = new PlayerTravelPath();
+        Vector3 player = from;
+        Vector3? exact = null;
+        int still = 0;
+        for (int tick = 0; tick < 200; tick++)
+        {
+            if (keepExact ? PlayerBotPathMover.Arrived(player, goal, 20) : Vector3.Distance(player, goal) <= 20) return tick;
+            Vector3 current = keepExact ? PlayerBotPathMover.StepStart(player, exact) : player;
+            Assert.That(PlayerBotPathMover.TryComputeNext(nav, region, zone, path, current, goal, 20, 47.75f, tick * 250L,
+                out Vector3 next, out string failure), Is.True, failure);
+            exact = next;
+            if (Vector3.DistanceSquared(next, current) < 1)
+            {
+                if (++still >= PlayerBotPathMover.StallSteps) { still = 0; path.Clear(); }
+                continue;
+            }
+            still = 0;
+            player = new(MathF.Round(next.X), MathF.Round(next.Y), MathF.Round(next.Z));
+        }
+        return -1;
+    }
+
+    [Test]
+    public void A_bot_rounded_off_the_mesh_walks_on_from_where_the_mover_put_it()
+    {
+        var (region, zone) = World();
+        Assert.That(Walk(new SliverMesh(), region, zone, Vector3.Zero, new(1000, 0, 0), keepExact: false), Is.EqualTo(-1), "the stall by Olorustos");
+        Assert.That(Walk(new SliverMesh(), region, zone, Vector3.Zero, new(1000, 0, 0), keepExact: true), Is.InRange(1, 25));
+    }
+
+    // The exact spot counts while the bot stands where the mover put it (rounding moves it at most 0.87 units); after a
+    // teleport, a release or a speed-hack correction the bot's own position counts.
+    [Test]
+    public void The_next_step_starts_from_the_exact_spot_only_while_the_bot_stands_on_it()
+    {
+        Vector3 exact = new(497254.4f, 587785.6f, 2310.4f);
+        Assert.That(PlayerBotPathMover.StepStart(new(497254, 587786, 2310), exact), Is.EqualTo(exact));
+        Assert.That(PlayerBotPathMover.StepStart(new(497254, 587786, 2310), null), Is.EqualTo(new Vector3(497254, 587786, 2310)));
+        Assert.That(PlayerBotPathMover.StepStart(new(497300, 587786, 2310), exact), Is.EqualTo(new Vector3(497300, 587786, 2310)));
+        Assert.That(PlayerBotPathMover.StepStart(new(497254, 587786, 2312), exact), Is.EqualTo(new Vector3(497254, 587786, 2312)));
+    }
+
+    // The driver is in range when GetDistanceTo, the whole-unit distance cut to an int (Point3D.cs:78-87), is within the
+    // stop radius: the mover's arrival agrees.
+    [TestCase(20.9f, true)] [TestCase(20f, true)] [TestCase(21f, false)] [TestCase(21.5f, false)]
+    public void A_bot_has_arrived_where_the_driver_counts_it_in_range(float distance, bool expected) =>
+        Assert.That(PlayerBotPathMover.Arrived(new(distance, 0, 0), Vector3.Zero, 20), Is.EqualTo(expected));
 
     [Test]
     public void TickStopsWithoutAClientAndNeverThrows()
