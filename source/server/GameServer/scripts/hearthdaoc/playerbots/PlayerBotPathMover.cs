@@ -21,6 +21,7 @@ public sealed class PlayerBotPathMover
     public const int TeleportResetDistance = 256;      // a jump this big (teleport, release, speed-hack correction) drops the corridor
     public const int IdleBroadcastMilliseconds = HeadlessClient.HeartbeatMs; // (est.) < 5 s is proven by PMC:15
     public const int StallSteps = 12;                  // 3 s without progress = blocked
+    public const int ReplanSteps = 4;                  // 1 s without progress: the corridor is planned again from here (#166)
     public const int ChurnReplans = 2;                 // churning windows in a row that only replan; the next one blocks
     public const int FloorStepRange = 300;             // the GameBots' step onto the nearest floor (AWBC TryBeginLocalRouteRecovery)
     public const int FloorStepMilliseconds = 5_000;    // at most one such step per bot in this time
@@ -130,6 +131,16 @@ public sealed class PlayerBotPathMover
         return path.TryStep(region, zone, current, goal, step, now, nav, out next, out failure); // PTP:73-167
     }
 
+    /// <summary>A step that brought the bot less than a unit on: whether the walk is now blocked (StallSteps in a row).
+    /// At ReplanSteps the corridor is planned again from where the bot stands, once a stall, for the same goal. In st-fix6
+    /// (#166) most stalls left had the corridor's next corner on another level than the bot (a ramp above it), while a
+    /// fresh corridor from the same spot walked 48-57 units on; the walk ended blocked and the bot gave up its goal.</summary>
+    public static bool StillStep(ref int stalledSteps, PlayerTravelPath path)
+    {
+        if (++stalledSteps == ReplanSteps) path.Clear();
+        return stalledSteps >= StallSteps;
+    }
+
     public PlayerBotStepResult StepToward(Vector3 goal, int stopDistance, long now)
     {
         long started = Stopwatch.GetTimestamp();
@@ -172,7 +183,7 @@ public sealed class PlayerBotPathMover
             if (Vector3.DistanceSquared(next, current) < 1)
             {
                 if (_stalledSteps == 0) _stallFirst = $"first={Exact(current)}->{Exact(next)} {Cursor(_path)}";
-                if (++_stalledSteps < StallSteps) return PlayerBotStepResult.Moving;
+                if (!StillStep(ref _stalledSteps, _path)) return PlayerBotStepResult.Moving;
                 LastStall = $"here={Exact(here)} last={Exact(current)}->{Exact(next)} step={step:0.0} " +
                             $"speed={_player.MaxSpeed} sitting={_player.IsSitting} stealthed={_player.IsStealthed} " +
                             $"combat={_player.InCombat} {_stallFirst} | last {Cursor(_path)} | {StallQueries(current, goal, step)}";

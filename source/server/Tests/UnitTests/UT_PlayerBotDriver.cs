@@ -453,6 +453,55 @@ public sealed class UT_PlayerBotDriver
             Floor(start, 32, 32, 64) is float f && Vector2.Distance(new(On(f, end).X, On(f, end).Y), new(end.X, end.Y)) < 0.01f;
     }
 
+    // A ledge (Z 40 from Y 100 on) that the lower floor (Z 0) reaches only by the ramp at X 200 or more. A corridor
+    // planned from the start (X < 10) runs over the ledge's edge at X 150, which no step crosses; one planned from
+    // anywhere else goes by the ramp.
+    private sealed class LedgeMesh : PathfindingMgrBase
+    {
+        public override bool HasNavmesh(Zone zone) => true;
+        private static float Floor(float y) => y >= 100 ? 40 : 0;
+        private static bool Crosses(Vector3 a, Vector3 b) => (a.Y < 100) != (b.Y < 100) && Math.Min(a.X, b.X) < 195;
+        public override PathfindingResult GetPathStraight(Zone zone, Vector3 start, Vector3 end,
+            EDtPolyFlags[] filters, Span<WrappedPathfindingNode> destination)
+        {
+            float x = start.X < 10 ? 150 : 200;
+            Vector3[] route = { start, new(x, 90, 0), new(x, 110, 40), end };
+            for (int i = 0; i < route.Length; i++) destination[i] = new(route[i], EDtPolyFlags.Walk);
+            return new(PathfindingStatus.PathFound, route.Length);
+        }
+        public override Vector3? GetMoveAlongSurface(Zone zone, Vector3 start, Vector3 end, EDtPolyFlags[] filters) =>
+            Crosses(start, end) ? new(end.X, 99, 0) : new(end.X, end.Y, Floor(end.Y));
+        public override Vector3? GetClosestPoint(Zone zone, Vector3 position, float xRange, float yRange, float zRange,
+            EDtPolyFlags[] filters) => Math.Abs(position.Z - Floor(position.Y)) <= zRange ? new(position.X, position.Y, Floor(position.Y)) : null;
+        public override bool HasLineOfSight(Zone zone, Vector3 start, Vector3 end, EDtPolyFlags[] filters) => !Crosses(start, end);
+    }
+
+    // st-fix6 (#166): most stalls left had one shape, the corridor's next corner on another level than the bot (a ramp
+    // above it), while a fresh corridor from the same spot walked 48-57 units on. After 3 seconds the walk ended blocked
+    // and the bot gave up its goal. A second without a step plans the corridor again from where the bot stands, once
+    // a stall, and it walks on to the same goal.
+    [Test]
+    public void AStalledWalkPlansAgainFromHereAndKeepsItsGoal()
+    {
+        var (region, zone) = World();
+        Assert.That(Walk(new LedgeMesh(), region, zone, Vector3.Zero, new(150, 150, 40), keepExact: true, blockEnds: true),
+            Is.InRange(1, 200));
+
+        // The rule itself: one plan again at ReplanSteps, blocked at StallSteps.
+        var path = new PlayerTravelPath();
+        Assert.That(path.TryStep(region, zone, Vector3.Zero, new(150, 150, 40), 1, 0, new LedgeMesh(), out _, out _), Is.True);
+        int still = 0;
+        for (int step = 1; step < PlayerBotPathMover.StallSteps; step++)
+        {
+            Assert.That(PlayerBotPathMover.StillStep(ref still, path), Is.False, $"step {step}");
+            Assert.That(PathNodes(path) == 0, Is.EqualTo(step >= PlayerBotPathMover.ReplanSteps), $"planned again (step {step})");
+        }
+        Assert.That(PlayerBotPathMover.StillStep(ref still, path), Is.True, "blocked");
+    }
+
+    private static int PathNodes(PlayerTravelPath path) =>
+        ((Queue<WrappedPathfindingNode>)typeof(PlayerTravelPath).GetField("_nodes", BindingFlags.Instance | BindingFlags.NonPublic)!.GetValue(path)!).Count;
+
     // st-fix4 (#166): in Tir na Nog the mesh joins two stacked floors 167 units apart over 41, with no floor between. Half
     // way up, the surface moves found a middle floor beside the link and the bot stood on its edge for minutes, its next
     // corner 87 units overhead. A walker on a link of its own corridor goes along it to the corner, as a GameBot does,
@@ -828,9 +877,10 @@ public sealed class UT_PlayerBotDriver
     }
 
     // StepToward's position and stall rule: GamePlayer keeps whole units (X, Y, Z are ints), so the bot stands where the
-    // mover put it, rounded; 12 steps without a unit of progress drop the corridor. Returns the tick the bot arrived, or -1.
+    // mover put it, rounded; a second without a unit of progress plans the corridor again, and 12 steps drop it. Returns
+    // the tick the bot arrived, -1 if it never did, or with blockEnds -2 where the mover's walk would end blocked.
     internal static int Walk(IPathfindingMgr nav, Region region, Zone zone, Vector3 from, Vector3 goal, bool keepExact,
-        int ticks = 200)
+        int ticks = 200, bool blockEnds = false)
     {
         var path = new PlayerTravelPath();
         Vector3 player = from;
@@ -845,7 +895,11 @@ public sealed class UT_PlayerBotDriver
             exact = next;
             if (Vector3.DistanceSquared(next, current) < 1)
             {
-                if (++still >= PlayerBotPathMover.StallSteps) { still = 0; path.Clear(); }
+                if (PlayerBotPathMover.StillStep(ref still, path))
+                {
+                    if (blockEnds) return -2;                                   // the mover's walk ends blocked here
+                    still = 0; path.Clear();
+                }
                 continue;
             }
             still = 0;

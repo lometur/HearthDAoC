@@ -103,6 +103,9 @@ registered, test it in game. The mover:
   Olorustos the rounded spot lay off the navmesh, so the quest bot stood there for 14 minutes.
   `UT_PlayerBotWalkReplay` replays that walk on the installed navmesh.
 - judges arrival as the driver judges range: the whole-unit distance cut to an int.
+- plans the corridor again from where the bot stands after a second without a step, once a stall, keeping the goal;
+  after 3 seconds the walk ends blocked. The stalls left after #168 mostly had the corridor's next corner on another
+  level than the bot (a ramp above it), while a fresh corridor from the same spot walked on.
 - follows the corridor line, as a GameBot walks its path, when a step brings it no closer to the next corner, where the
   mesh is open and the surface moves still find it (#166). Detour's corners take the coarse polygons' height, which
   on steep ground lies far off the floor: bots stood for the rest of a run beside a corner 70 units below them, or
@@ -131,8 +134,7 @@ Known gaps:
 - **Brief stalls remain.** In a 15-minute run of 390 hunting bots, 20 bots logged 32 blocked walks (306 from 86 bots
   before these fixes). No bot was blocked 3 or more times at one spot, and none was stuck as the run ended (16 before).
   Most of the 14 stalls had one shape: the corridor's next corner lay on another level than the bot (a ramp above
-  it), while a fresh corridor from the same spot walks on. After 3 seconds the stall clears the corridor and the bot
-  takes a new goal. Planning again once before calling it a stall would keep the goal (not done).
+  it), while a fresh corridor from the same spot walks on. The mover now plans again after a second (above): LIVE_REPLAN.
 - In an earlier run a Tir na Nog bot stalled at one spot (21263, 35215), as it did before these fixes, but the same
   step replayed offline walks on (same navmesh, same Detour library). Each stall line now gives the stalled step's own
   queries (`queries:`), to find what differs live.
