@@ -4,7 +4,7 @@ using DOL.GS.PacketHandler;
 
 namespace DOL.GS.HearthDAoC.PlayerBots;
 
-// HearthDAoC #137 spike: what the server asked a player bot, for its driver to read and answer (HeadlessClient.Answer*).
+// HearthDAoC player bots (#137): what the server asked a player bot, for its driver to read and answer (HeadlessClient.Answer*).
 // The packet library writes it on any game-loop thread; the driver reads it. One lock guards short lists, and the
 // oldest entry drops at 16.
 public sealed class HeadlessInbox

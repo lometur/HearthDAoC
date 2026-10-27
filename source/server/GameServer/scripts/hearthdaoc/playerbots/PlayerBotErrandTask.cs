@@ -3,7 +3,7 @@ using System.Numerics;
 
 namespace DOL.GS.HearthDAoC.PlayerBots;
 
-// HearthDAoC #137 spike: runs PlayerBotErrands (quest 20206, then promotion) as the driver's task. Walk: the driver's
+// HearthDAoC player bots (#137): runs PlayerBotErrands (quest 20206, then promotion) as the driver's task. Walk: the driver's
 // mover walks to the NPC; while a monster hits the bot the driver fights that one (and seeks no other), and a bot low
 // after a fight rests before it walks on. Level: the driver grinds. Done or Fail: the task ends (finished(true) only for
 // Done; the spawner then logs the bot out and back in, and checks F3 and F4). Anything else (whisper, accept, interact,

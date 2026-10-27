@@ -10,7 +10,7 @@ using DOL.GS.ServerProperties;
 
 namespace DOL.GS.HearthDAoC.PlayerBots;
 
-// HearthDAoC #137 spike: one hdbot- account and one level-1 base-class character per slot, made as
+// HearthDAoC player bots (#137): one hdbot- account and one level-1 base-class character per slot, made as
 // CharacterCreateRequestHandler.CreateCharacter (packets/Client/168/CharacterCreateRequestHandler.cs:391-558) makes them,
 // without the packet. Runs on a game-loop thread (a NpcService posted action from PlayerBotSpawner), like the real
 // handler. A second start finds both rows and creates nothing. A level-matched bot (levelmatch/DESIGN.md 2.4) is made

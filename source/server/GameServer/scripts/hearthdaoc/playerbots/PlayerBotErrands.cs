@@ -10,7 +10,7 @@ using DOL.Logging;
 
 namespace DOL.GS.HearthDAoC.PlayerBots;
 
-// HearthDAoC (#137 prototype): carries out PlayerBotErrandPlan for one player bot, through the public calls a client's
+// HearthDAoC player bots (#137): carries out PlayerBotErrandPlan for one player bot, through the public calls a client's
 // packets reach (no upstream edit): whisper, the Accept button's event, interact, the item drag onto an NPC, the
 // inventory move. PlayerBotErrandTask calls Think from the driver's tick (the bot's own ECSGameTimer, so the CPU meter
 // charges it to playerbot / Timer, BotCpuMeter.cs:657) and walks the bot when Think says Walk. The spawner decides which

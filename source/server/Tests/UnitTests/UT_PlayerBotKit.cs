@@ -14,7 +14,7 @@ using NUnit.Framework;
 
 namespace DOL.GS.Tests;
 
-// HearthDAoC proto (#137 level-matched run, levelmatch/DESIGN.md): a bot made at a GameBot's level, class and race. The
+// HearthDAoC player bots (#137 level-matched run, levelmatch/DESIGN.md): a bot made at a GameBot's level, class and race. The
 // allocator against GameBot.SpendSpecPoints' numbers (an autonomous GameBot's training, REVIEW-FIXES 5) and
 // VerifySpecPoints' budget, the stats against CharacterStatValidator, gender and race, the specs string and its keys,
 // the retrain, the skill counts, the creation row, the gear rules and the KIT line. No server and no database (an empty one

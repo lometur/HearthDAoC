@@ -5,7 +5,7 @@ using DOL.Logging;
 
 namespace DOL.GS.HearthDAoC.PlayerBots;
 
-// HearthDAoC #137 spike: the player bot's Out. BotDummyPacketLib (bots/BotDummyPacketLib.cs) is a no-op IPacketLib with
+// HearthDAoC player bots (#137): the player bot's Out. BotDummyPacketLib (bots/BotDummyPacketLib.cs) is a no-op IPacketLib with
 // no virtual members, so this class lists IPacketLib again. C# maps the interface to the `new` members below and, for
 // every other member, to BotDummyPacketLib's (interface re-implementation). Every caller reaches it as IPacketLib
 // (GameClient.Out, GameClient.cs:90). Beyond the no-ops it: answers LoS checks from the navmesh; keeps the custom
@@ -85,7 +85,7 @@ public sealed class HeadlessPacketLib : BotDummyPacketLib, IPacketLib
         Note($"quest-{(abort ? "abort" : "offer")} quest={questId} npc={npc?.Name}");
     }
 
-    // Recorded only. A window's answer is not a dialog response; nothing in the spike answers one.
+    // Recorded only. A window's answer is not a dialog response; nothing in the player-bot code answers one.
     public new void SendQuestOfferWindow(GameNPC questNPC, GamePlayer player, RewardQuest quest) => Window("offer", questNPC, quest);
     public new void SendQuestOfferWindow(GameNPC questNPC, GamePlayer player, DataQuest quest) => Window("offer", questNPC, quest);
     public new void SendQuestRewardWindow(GameNPC questNPC, GamePlayer player, RewardQuest quest) => Window("reward", questNPC, quest);
@@ -136,7 +136,7 @@ public sealed class HeadlessPacketLib : BotDummyPacketLib, IPacketLib
     public new void SendChangeGroundTarget(int x, int y, int z) { }
     public new void SendRawMessage(string msg, eChatType type, eChatLoc loc) { }
 
-    // DEBUG would be quieter at scale; INFO keeps the spike's run-1 checks readable.
+    // DEBUG would be quieter at scale; INFO keeps run 1's checks readable.
     private void Note(string what)
     {
         if (Log.IsInfoEnabled)

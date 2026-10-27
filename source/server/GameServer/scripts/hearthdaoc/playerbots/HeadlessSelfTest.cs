@@ -4,7 +4,7 @@ using DOL.Logging;
 
 namespace DOL.GS.HearthDAoC.PlayerBots;
 
-// HearthDAoC #137 spike: one bot checks the client piece's paths in the live game, once, about 10 s after it enters the
+// HearthDAoC player bots (#137): one bot checks the client piece's paths in the live game, once, about 10 s after it enters the
 // world: registration, a LoS answer, a custom dialog answered through the real handler, a region change out and back
 // (re-entry), and the heartbeat. It logs "PLAYER_BOT selftest <step> ok|FAIL <account> <detail>" and then a "done"
 // line, then calls onDone (the spawner starts that bot's driver there). It runs on a timer its player owns, so the

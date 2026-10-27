@@ -15,7 +15,7 @@ using NUnit.Framework;
 
 namespace DOL.GS.Tests;
 
-// HearthDAoC proto (#137 lever): HEARTHDAOC_PLAYER_BOT_WAKE=gamebot. ClientService's marked gate keeps a player bot's
+// HearthDAoC player bots (#137 lever): HEARTHDAOC_PLAYER_BOT_WAKE=gamebot. ClientService's marked gate keeps a player bot's
 // NPC cache but wakes nothing; PlayerBotWake then wakes what a GameBot wakes (BotBrain.cs:1561-1584) plus the bot's
 // target, its attackers and the NPC it talks to, with the GameBot stamp only. No running server: doubles made without
 // their constructors, as UT_BotCpuMeter.cs:108-114 and UT_HeadlessClient.cs:73-84 make them.

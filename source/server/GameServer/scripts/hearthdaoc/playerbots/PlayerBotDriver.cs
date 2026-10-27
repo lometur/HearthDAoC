@@ -107,7 +107,7 @@ public sealed class PlayerBotState
     public (string Head, PlayerBotDeathDetail Detail, GameObject Target)? PendingDeath;   // a DEATH line awaiting Dying (AwaitsDying)
 }
 
-// HearthDAoC #137 spike: a thin copy of the /bot pilot's think (bots/autonomous/AutonomousPlayerPilot.cs:229-374) for a
+// HearthDAoC player bots (#137): a thin copy of the /bot pilot's think (bots/autonomous/AutonomousPlayerPilot.cs:229-374) for a
 // player bot: no quickbar file, party, HUD or saves. Each bot is ticked every 250 ms by its own timer. It keeps the bot
 // alive, heals itself, keeps its pet, rests, loots, fights back a monster that hits it, else picks one the way a
 // GameBot does (AutonomousWorldBotController.cs:3050-3148, no camp), walks with PlayerBotPathMover, faces, sets "target

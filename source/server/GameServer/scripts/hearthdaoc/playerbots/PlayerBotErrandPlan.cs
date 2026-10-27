@@ -1,6 +1,6 @@
 namespace DOL.GS.HearthDAoC.PlayerBots;
 
-// HearthDAoC (#137 prototype, branch proto/player-bots): what the errand bot does next. Every decision is made here
+// HearthDAoC player bots (#137): what the errand bot does next. Every decision is made here
 // from what the bot sees (ErrandView), with no server reads, so UT_PlayerBotErrands drives it; PlayerBotErrands builds
 // the view, carries the action out through the calls a client's packets reach, and logs PLAYER_BOT_ERRAND lines.
 // The errands: quest 20206 "Immediate Resolution" (Albion Fighter, levels 1-5), then at level 5 the promotion by the

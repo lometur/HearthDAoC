@@ -15,7 +15,7 @@ namespace DOL.GS.HearthDAoC.PlayerBots;
 
 public enum HeadlessStep { None, Registering, LoadingCharacter, Reentering, AwaitPlayerInit, InWorld, LoggingOut }
 
-// HearthDAoC #137 spike: a player bot's client. A real GameClient with a real account, a real session id and the bot
+// HearthDAoC player bots (#137): a player bot's client. A real GameClient with a real account, a real session id and the bot
 // packet library as Out, but no socket and no packet processor. ClientService's two marked blocks skip its receive,
 // ping, idle and send work and call OnClientServiceBeginTick instead, where it feeds the login handlers the packet
 // bodies a client sends (world init, game open, player init), handles the answers its library queued (LoS, dialogs),

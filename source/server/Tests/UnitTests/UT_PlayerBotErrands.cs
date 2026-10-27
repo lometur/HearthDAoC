@@ -3,7 +3,7 @@ using NUnit.Framework;
 
 namespace DOL.GS.Tests;
 
-// HearthDAoC (#137 prototype): the errand bot's decisions (PlayerBotErrandPlan), from what it sees, with no server.
+// HearthDAoC player bots (#137): the errand bot's decisions (PlayerBotErrandPlan), from what it sees, with no server.
 [TestFixture]
 public sealed class UT_PlayerBotErrands
 {

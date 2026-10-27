@@ -16,7 +16,7 @@ using NUnit.Framework;
 
 namespace DOL.GS.Tests;
 
-// HearthDAoC proto (#137): the player-bot driver's pure parts, its timer's meter charge, the mover's step maths and
+// HearthDAoC player bots (#137): the player-bot driver's pure parts, its timer's meter charge, the mover's step maths and
 // corridor use, the never-throw tick, the report line and its one kill per monster life, and the deaths' diagnostics.
 // Helpers copied from UT_BotCpuMeter.cs:98-130 and UT_PlayerTravel.cs:27-58, :103-109.
 [TestFixture, NonParallelizable]

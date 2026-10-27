@@ -32,7 +32,7 @@ public readonly record struct PlayerBotDeathDetail(
     int Rests, long SinceKillSeconds, byte Mana, int Swings, int NotVisible, string Killer, int KillerLevel,
     bool KillerIsTarget, int FromBind, int Avoided = 0);
 
-// HearthDAoC #137 spike: one PLAYER_BOT_DRIVER line a minute, then the lever's PLAYER_BOT_WAKE line, from a thread-pool
+// HearthDAoC player bots (#137): one PLAYER_BOT_DRIVER line a minute, then the lever's PLAYER_BOT_WAKE line, from a thread-pool
 // timer off the game loop, and every TallyEveryWindows windows a PLAYER_BOT_TALLY line per bot (the level-matched run).
 // The driver times itself (think, mover) because its TimerService row also holds the bot's other timers. The driver's
 // own lines are formatted here too: PLAYER_BOT_FIGHT per settled fight and the deaths' fields (levelmatch/DEATHS.md 2).

@@ -2,7 +2,7 @@ using System.Numerics;
 
 namespace DOL.GS.HearthDAoC.PlayerBots;
 
-// HearthDAoC #137 spike: a player bot's LoS answer from the server's navmesh, the way GameBots get theirs
+// HearthDAoC player bots (#137): a player bot's LoS answer from the server's navmesh, the way GameBots get theirs
 // (StandardMobBrain.cs:141-156): positions at the objects' feet, the default filters, and line of sight where the
 // zone has no mesh. LocalPathfindingMgr answers false for a zone it has no mesh for (LocalPathfindingMgr.cs:539-541),
 // so the mesh is checked first. Used for monsters' checks on the bot (HeadlessPacketLib) and the bot's own

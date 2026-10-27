@@ -13,7 +13,7 @@ using static System.FormattableString;
 
 namespace DOL.GS.HearthDAoC.PlayerBots;
 
-// HearthDAoC proto (#137): creates the missing player bots of HEARTHDAOC_PLAYER_BOTS at start and logs them in a few per
+// HearthDAoC player bots (#137): creates the missing player bots of HEARTHDAOC_PLAYER_BOTS at start and logs them in a few per
 // second, the way AutonomousPopulationController does for GameBots (bots/autonomous/AutonomousPopulationController.cs:
 // 46-70, :126, :157): a thread-pool timer paces and observes, and the game loop does the work (posted to NpcService).
 // "off", the default, does nothing at all. Any other value is test-world mode: Discord webhooks off for this run, a

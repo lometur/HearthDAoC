@@ -10,7 +10,7 @@ using NUnit.Framework;
 
 namespace DOL.GS.Tests;
 
-// HearthDAoC proto (#137 lever test): HEARTHDAOC_PLAYER_BOT_SPOTS. The spots file (realm|region|x|y[|z[|level|class|race]];
+// HearthDAoC player bots (#137 lever test): HEARTHDAOC_PLAYER_BOT_SPOTS. The spots file (realm|region|x|y[|z[|level|class|race]];
 // the realm as alb/mid/hib, or 1/2/3 as the owner's richer export writes it; the level-matched run's build as the level
 // export's ids, levelmatch/DESIGN.md 2.1), the n-th bot of a realm at that realm's n-th spot, the
 // Z (the navmesh near the file's or the nearest NPC's Z, the floor under it, that Z itself, else skipped), the row the

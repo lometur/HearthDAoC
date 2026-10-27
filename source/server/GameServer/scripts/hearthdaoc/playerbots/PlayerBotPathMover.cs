@@ -9,7 +9,7 @@ namespace DOL.GS.HearthDAoC.PlayerBots;
 
 public enum PlayerBotStepResult { Arrived, Moving, Waiting, Blocked }
 
-// HearthDAoC #137 spike: walks a GamePlayer along the navmesh with the existing PlayerTravelPath cursor
+// HearthDAoC player bots (#137): walks a GamePlayer along the navmesh with the existing PlayerTravelPath cursor
 // (commands/playercommands/PlayerTravelPath.cs:9-168: corridor, zone seams, replans), writes X/Y/Z and calls
 // GamePlayer.OnPositionUpdateFromPacket (GamePlayer.cs:869-872), so the player's own movement code broadcasts, checks
 // speed and moves subzones as for a client packet. Steps are MaxSpeed x elapsed with no floor: the speed-hack monitor
@@ -90,7 +90,7 @@ public sealed class PlayerBotPathMover
             // The plain move keeps the height of the straight line to the goal inside a polygon, so the last 300 units
             // follow it, not the floor. The grounded move would fix that, but arrival is judged against the goal's own
             // height: a target hovering or swimming 80+ units above the floor would then stall the bot under it (review
-            // of 2026-10-21). Kept as is for the spike; the real PR needs both, grounded steps and a floor-based arrival.
+            // of 2026-10-21). Kept as is: it needs both, grounded steps and a floor-based arrival (not done).
             next = nav.GetMoveAlongSurface(zone, current, desired, nav.DefaultFilters) ?? desired; // as APP:516-520
             return true;
         }

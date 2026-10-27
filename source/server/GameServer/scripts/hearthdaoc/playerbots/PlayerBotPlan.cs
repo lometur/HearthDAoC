@@ -4,7 +4,7 @@ using System.Globalization;
 
 namespace DOL.GS.HearthDAoC.PlayerBots;
 
-// HearthDAoC proto (#137, branch proto/player-bots, throwaway): the HEARTHDAOC_PLAYER_BOTS switch, parsed; the fixed
+// HearthDAoC player bots (#137): the HEARTHDAOC_PLAYER_BOTS switch, parsed; the fixed
 // roster (one level-1 base-class template per realm, names, stats); the login pacing. Pure, so UT_PlayerBotPlan
 // covers it all; PlayerBotSpawner reads the variable once at start.
 

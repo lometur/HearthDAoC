@@ -16,7 +16,7 @@ using NUnit.Framework;
 
 namespace DOL.GS.Tests;
 
-// HearthDAoC: the player bot's client and packet library (#137 spike), with no running server: the meter kind; the
+// HearthDAoC: the player bot's client and packet library (#137), with no running server: the meter kind; the
 // session-id allocator the client reaches by reflection; the login and dialog packet bodies, read as the handlers
 // read them; the library's answers and records; the navmesh LoS answer; ClientService's two marked blocks.
 [TestFixture, NonParallelizable]

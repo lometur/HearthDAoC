@@ -7,7 +7,7 @@ using NUnit.Framework;
 
 namespace DOL.GS.Tests;
 
-// HearthDAoC proto (#137): the HEARTHDAOC_PLAYER_BOTS switch (PlayerBotPlan), the fixed roster (PlayerBotRoster) and
+// HearthDAoC player bots (#137): the HEARTHDAOC_PLAYER_BOTS switch (PlayerBotPlan), the fixed roster (PlayerBotRoster) and
 // the login pacing (PlayerBotPacing).
 [TestFixture]
 public sealed class UT_PlayerBotPlan
