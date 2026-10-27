@@ -103,9 +103,10 @@ registered, test it in game. The mover:
   Olorustos the rounded spot lay off the navmesh, so the quest bot stood there for 14 minutes.
   `UT_PlayerBotWalkReplay` replays that walk on the installed navmesh.
 - judges arrival as the driver judges range: the whole-unit distance cut to an int.
-- plans the corridor again from where the bot stands after a second without a step, once a stall, keeping the goal;
-  after 3 seconds the walk ends blocked. The stalls left after #168 mostly had the corridor's next corner on another
-  level than the bot (a ramp above it), while a fresh corridor from the same spot walked on.
+- plans the corridor again from where the bot stands after a second without a step, keeping the goal; after 3 seconds
+  the walk ends blocked. The stalls left after #168 mostly had the corridor's next corner on another level than the bot
+  (a ramp above it), while a fresh corridor from the same spot walked on. It does this once a goal: a bot whose fresh
+  corridors each led to another stall would walk to and fro for good.
 - follows the corridor line, as a GameBot walks its path, when a step brings it no closer to the next corner, where the
   mesh is open and the surface moves still find it (#166). Detour's corners take the coarse polygons' height, which
   on steep ground lies far off the floor: bots stood for the rest of a run beside a corner 70 units below them, or
