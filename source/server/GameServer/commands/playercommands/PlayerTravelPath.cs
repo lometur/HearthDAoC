@@ -183,9 +183,12 @@ namespace DOL.GS.Commands
             // GameBot walks its path. Detour's straight-path corners take the polygons' height, which on steep ground lies
             // far off the floor the surface moves keep: player bots (#166) stood for the rest of a run beside a corner 70
             // units below them, bounced under one 123 units above, or stood at a polygon edge no surface move crossed.
+            // The step stays where the surface moves still find the mesh (their 32/64 box, LocalPathfindingMgr.cs:50):
+            // from beyond it every step lost the walkable surface for good.
             if (snapped.HasValue && NoStepCloser(current, snapped.Value, _nodes.Peek().Position) &&
                 Vector3.DistanceSquared(current, desired) >= 1 &&
-                nav.HasLineOfSight(zone, current, desired, nav.DefaultFilters)) snapped = desired;
+                nav.HasLineOfSight(zone, current, desired, nav.DefaultFilters) &&
+                nav.GetClosestPoint(zone, desired, 32, 32, 64, nav.DefaultFilters).HasValue) snapped = desired;
             if (!snapped.HasValue)
             {
                 failure = "Lost the walkable surface; manual control restored.";

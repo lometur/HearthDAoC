@@ -365,7 +365,8 @@ public sealed class UT_PlayerBotDriver
     }
 
     // A flat floor at Z 100: the surface move keeps that height, so it cannot step up or down on the spot, and no floor
-    // lies within a voxel of a step below it. Open: the mesh's line of sight.
+    // lies within a voxel of a step below it. A closest-point query finds it within its height range. Open: the mesh's
+    // line of sight.
     private sealed class FloorMesh : PathfindingMgrBase
     {
         public Vector3[] Corners;
@@ -380,7 +381,7 @@ public sealed class UT_PlayerBotDriver
         public override Vector3? GetMoveAlongSurface(Zone zone, Vector3 start, Vector3 end, EDtPolyFlags[] filters) =>
             new(end.X, end.Y, 100);
         public override Vector3? GetClosestPoint(Zone zone, Vector3 position, float xRange, float yRange, float zRange,
-            EDtPolyFlags[] filters) => new(position.X, position.Y, 100);
+            EDtPolyFlags[] filters) => Math.Abs(position.Z - 100) <= zRange ? new(position.X, position.Y, 100) : null;
         public override bool HasLineOfSight(Zone zone, Vector3 start, Vector3 end, EDtPolyFlags[] filters) => Open;
     }
 
@@ -406,6 +407,12 @@ public sealed class UT_PlayerBotDriver
         Assert.That(new PlayerTravelPath().TryStep(region, zone, corners[0], corners[^1], 47.75f, 0, mesh, out position, out _), Is.True);
         Assert.That(new Vector2(position.X, position.Y), Is.EqualTo(new Vector2(0, 0)).Using<Vector2>((a, b) => Vector2.Distance(a, b) < 1),
             "no step where the mesh is closed");
+
+        // st-fix (2026-10-27): no step to where the surface moves cannot find the mesh (more than 64 units off it), from
+        // where every step failed and the bot lost the walkable surface for good.
+        mesh = new FloorMesh { Corners = new[] { new Vector3(0, 0, 100), new Vector3(0.4f, 0, -100), new Vector3(500, 0, 100) } };
+        Assert.That(new PlayerTravelPath().TryStep(region, zone, mesh.Corners[0], mesh.Corners[^1], 100, 0, mesh, out position, out _), Is.True);
+        Assert.That(position.Z, Is.EqualTo(100), "no step 100 units under the floor");
     }
 
     // The promotion check after the run 1 rerun (2026-10-21): by Cotswold the surface mover returned the bot's own spot,

@@ -100,8 +100,10 @@ public sealed class PlayerBotPathMover
             // height: a target hovering or swimming 80+ units above the floor would then stall the bot under it (review
             // of 2026-10-21). Kept as is: it needs both, grounded steps and a floor-based arrival (not done).
             next = nav.GetMoveAlongSurface(zone, current, desired, nav.DefaultFilters) ?? desired; // as APP:516-520
-            // As the corridor's step (#166): no step closer, and the mesh is open to the goal, so the step takes the line.
-            if (PlayerTravelPath.NoStepCloser(current, next, goal)) next = desired;
+            // As the corridor's step (#166): no step closer, and the mesh is open to the goal, so the step takes the line,
+            // where the surface moves still find the mesh.
+            if (PlayerTravelPath.NoStepCloser(current, next, goal) &&
+                nav.GetClosestPoint(zone, desired, 32, 32, 64, nav.DefaultFilters).HasValue) next = desired;
             return true;
         }
         return path.TryStep(region, zone, current, goal, step, now, nav, out next, out failure); // PTP:73-167
