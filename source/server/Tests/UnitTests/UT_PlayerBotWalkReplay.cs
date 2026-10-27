@@ -11,7 +11,7 @@ namespace DOL.UnitTests;
 
 // HearthDAoC: player-bot walks that stalled, replayed on the installed navmesh. Read-only; never starts the server.
 // Set OFFLINE_DAOC_NAV_ROOT to a folder with navmesh/zone008.nav and lib/Detour (tools/linux/odaoc_fetch.py --lock
-// deploy/upstream.lock extract runtime/server/navmesh/zone008.nav DEST).
+// deploy/upstream.lock extract runtime/server/navmesh/zone008.nav FOLDER/navmesh/zone008.nav).
 [TestFixture, NonParallelizable, Explicit("Needs OFFLINE_DAOC_NAV_ROOT: a folder with navmesh/zone008.nav and lib/Detour")]
 public class UT_PlayerBotWalkReplay
 {

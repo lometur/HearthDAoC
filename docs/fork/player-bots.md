@@ -104,8 +104,14 @@ registered, test it in game. The mover:
   `UT_PlayerBotWalkReplay` replays that walk on the installed navmesh.
 - judges arrival as the driver judges range: the whole-unit distance cut to an int.
 
-Known gap: within 300 units of its goal a bot takes the plain surface move, which keeps the height of the straight line
-to the goal. Grounded steps there would also need arrival judged by the floor, for targets that hover or swim above it.
+Known gaps:
+- **Hunting bots still stall about as often as before.** In a 15-minute run of 390 hunting bots, 69 bots logged 257
+  stalled walks; the run before the fix had 63 bots and 246. Many of them stand at one spot for the rest of the run,
+  whatever goal they get next. One cause seen: a roam goal picked on a cliff top, where the bot creeps less than a
+  unit a step and is rightly stopped. Why it then never walks on is not found yet: replayed from the same spot on the
+  same navmesh, its next walks arrive.
+- Within 300 units of its goal a bot takes the plain surface move, which keeps the height of the straight line to the
+  goal. Grounded steps there would also need arrival judged by the floor, for targets that hover or swim above it.
 
 ## Log lines
 
@@ -125,5 +131,5 @@ The bot CPU meter (`/botcpu`) charges them to its own kind, `playerbot`, and the
 `Tests/UnitTests/UT_HeadlessClient.cs`, `UT_PlayerBotPlan.cs`, `UT_PlayerBotDriver.cs`, `UT_PlayerBotErrands.cs`,
 `UT_PlayerBotWake.cs`, `UT_PlayerBotSpots.cs` and `UT_PlayerBotKit.cs` run in CI. `UT_PlayerBotWalkReplay.cs` runs only
 when asked for. It needs `OFFLINE_DAOC_NAV_ROOT`: a folder holding `navmesh/zone008.nav` (from
-`tools/linux/odaoc_fetch.py --lock deploy/upstream.lock extract runtime/server/navmesh/zone008.nav DEST`) and the
-Detour library under `lib/`.
+`tools/linux/odaoc_fetch.py --lock deploy/upstream.lock extract runtime/server/navmesh/zone008.nav
+FOLDER/navmesh/zone008.nav`) and the Detour library under `lib/`.
