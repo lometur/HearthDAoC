@@ -499,7 +499,7 @@ public sealed class UT_PlayerBotDriver
     // st-fix6 (#166): most stalls left had one shape, the corridor's next corner on another level than the bot (a ramp
     // above it), while a fresh corridor from the same spot walked 48-57 units on. After 3 seconds the walk ended blocked
     // and the bot gave up its goal. A second without a step plans the corridor again from where the bot stands, at most
-    // twice a goal, and it walks on to the same goal.
+    // twice a walk, and it walks on to the same goal.
     [Test]
     public void AStalledWalkPlansAgainFromHereAndKeepsItsGoal()
     {
@@ -511,30 +511,64 @@ public sealed class UT_PlayerBotDriver
         Vector3 goal = new(150, 150, 40);
         var path = new PlayerTravelPath();
         var stall = new PlayerBotStallWatch();
-        Assert.That(path.TryStep(region, zone, Vector3.Zero, goal, 1, 0, new LedgeMesh(), out _, out _), Is.True);
+        long now = 0;
+        bool Rebuilt() => path.TryStep(region, zone, Vector3.Zero, goal, 1, now, new LedgeMesh(), out _, out _) && PathNodes(path) > 0;
+        bool StillRun(Vector3 toward)
+        {
+            bool any = false;
+            for (int step = 1; step <= PlayerBotPathMover.ReplanSteps; step++)
+            {
+                stall.Toward(toward, now += 250);
+                stall.Still(path, out bool replanned);
+                any |= replanned;
+            }
+            return any;
+        }
+        bool Run()
+        {
+            Assert.That(Rebuilt(), Is.True, "a corridor to plan again");
+            return StillRun(goal);
+        }
+        Assert.That(Rebuilt(), Is.True);
         for (int step = 1; step < PlayerBotPathMover.StallSteps; step++)
         {
-            Assert.That(stall.Still(goal, path, out bool replanned), Is.False, $"step {step}");
+            stall.Toward(goal, now += 250);
+            Assert.That(stall.Still(path, out bool replanned), Is.False, $"step {step}");
             Assert.That(replanned, Is.EqualTo(step == PlayerBotPathMover.ReplanSteps), $"replanned (step {step})");
             Assert.That(PathNodes(path) == 0, Is.EqualTo(step >= PlayerBotPathMover.ReplanSteps), $"planned again (step {step})");
         }
-        Assert.That(stall.Still(goal, path, out _), Is.True, "blocked");
+        stall.Toward(goal, now += 250);
+        Assert.That(stall.Still(path, out _), Is.True, "blocked");
 
-        // ReplansPerGoal (2) a goal: a later stall for a goal within 64 units of it plans again once more, then not; one
-        // for a goal further off plans again.
-        foreach ((Vector3 next, bool again) in new[]
+        // ReplansPerWalk (2) a walk: after a step that moved, the walk plans again once more, then not.
+        stall.Reset();
+        Assert.That(StillRun(goal), Is.True, "first");
+        stall.Moved();
+        Assert.That(Run(), Is.True, "second");
+        stall.Moved();
+        Assert.That(Run(), Is.False, "third");
+        Assert.That(PathNodes(path), Is.GreaterThan(0), "the corridor kept");
+
+        // A new walk counts afresh: a goal that jumps more than 64 units, a pause of more than a second in the steps, or
+        // a walk that ended (Reset: arrived or blocked). A goal that drifts on with the steps is the same walk.
+        foreach ((string what, Action start) in new (string, Action)[]
                  {
-                     (goal + new Vector3(64, 0, 0), true), (goal + new Vector3(64, 0, 0), false), (goal + new Vector3(129, 0, 0), true),
+                     ("a goal 65 units on", () => goal += new Vector3(65, 0, 0)),
+                     ("a pause", () => now += PlayerBotChurnWatch.PauseMilliseconds + 1),
+                     ("an ended walk", () => stall.Reset()),
                  })
         {
-            Assert.That(path.TryStep(region, zone, Vector3.Zero, next, 1, 0, new LedgeMesh(), out _, out _), Is.True);
-            stall.Restart();
-            bool replanned = false;
-            for (int step = 1; step <= PlayerBotPathMover.ReplanSteps; step++)
-                stall.Still(next, path, out replanned);
-            Assert.That(replanned, Is.EqualTo(again), $"planned again for {next}");
-            Assert.That(PathNodes(path) == 0, Is.EqualTo(again), $"corridor cleared for {next}");
+            stall.Moved();
+            Assert.That(Run(), Is.False, $"spent before {what}");
+            stall.Moved();
+            start();
+            Assert.That(Run(), Is.True, what);
+            stall.Moved();
+            Assert.That(Run(), Is.True, $"{what}: its second");
         }
+        stall.Moved();
+        foreach (int drift in new[] { 60, 60, 60 }) { goal += new Vector3(drift, 0, 0); stall.Toward(goal, now += 250); }
+        Assert.That(Run(), Is.False, "a drifting goal");
     }
 
     // A wall along Y 10 from X -5 east, with the corridor round its west end: a corner 11.7 units from the start (by the
@@ -576,7 +610,7 @@ public sealed class UT_PlayerBotDriver
     }
 
     // The review of the stall replan (#166): planned again at each stall, a bot whose fresh corridors each led to
-    // another stall walked to and fro between them for good, never blocked. With two plans again a goal, its third
+    // another stall walked to and fro between them for good, never blocked. With two plans again a walk, its third
     // stall blocks.
     [Test]
     public void AWalkThatStallsAgainAfterItsPlanAgainEndsBlocked()
@@ -964,7 +998,7 @@ public sealed class UT_PlayerBotDriver
     }
 
     // StepToward's position and stall rule: GamePlayer keeps whole units (X, Y, Z are ints), so the bot stands where the
-    // mover put it, rounded; a second without a unit of progress plans the corridor again (twice a goal), and 12 steps drop it. Returns
+    // mover put it, rounded; a second without a unit of progress plans the corridor again (twice a walk), and 12 steps drop it. Returns
     // the tick the bot arrived, -1 if it never did, or with blockEnds -2 where the mover's walk would end blocked.
     internal static int Walk(IPathfindingMgr nav, Region region, Zone zone, Vector3 from, Vector3 goal, bool keepExact,
         int ticks = 200, bool blockEnds = false)
@@ -976,20 +1010,21 @@ public sealed class UT_PlayerBotDriver
         for (int tick = 0; tick < ticks; tick++)
         {
             if (keepExact ? PlayerBotPathMover.Arrived(player, goal, 20) : Vector3.Distance(player, goal) <= 20) return tick;
+            stall.Toward(goal, tick * 250L);
             Vector3 current = keepExact ? PlayerBotPathMover.StepStart(player, exact) : player;
             Assert.That(PlayerBotPathMover.TryComputeNext(nav, region, zone, path, current, goal, 20, 47.75f, tick * 250L,
                 out Vector3 next, out string failure), Is.True, failure);
             exact = next;
             if (Vector3.DistanceSquared(next, current) < 1)
             {
-                if (stall.Still(goal, path, out _))
+                if (stall.Still(path, out _))
                 {
                     if (blockEnds) return -2;                                   // the mover's walk ends blocked here
-                    stall.Restart(); path.Clear();
+                    stall.Reset(); path.Clear();
                 }
                 continue;
             }
-            stall.Restart();
+            stall.Moved();
             player = new(MathF.Round(next.X), MathF.Round(next.Y), MathF.Round(next.Z));
         }
         return -1;

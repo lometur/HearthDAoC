@@ -105,9 +105,10 @@ registered, test it in game. The mover:
 - judges arrival as the driver judges range: the whole-unit distance cut to an int.
 - plans the corridor again from where the bot stands after a second without a step, keeping the goal; after 3 seconds
   the walk ends blocked. The stalls left after #168 mostly had the corridor's next corner on another level than the bot
-  (a ramp above it), while a fresh corridor from the same spot walked on. It does this at most twice a goal, as the
+  (a ramp above it), while a fresh corridor from the same spot walked on. It does this at most twice a walk, as the
   corridor's own progress check gives up after two: a bot whose fresh corridors each led to another stall would walk
-  to and fro for good. Once a goal was too few: bots stalled again where a fresh corridor walked on.
+  to and fro for good. Once a goal was too few: bots stalled again where a fresh corridor walked on. A walk ends when
+  it arrives or is blocked, or when its goal jumps more than 64 units or its steps pause for more than a second.
 - passes a corner within reach (32 units across) only with the next corner in sight, or standing on it, as the NPC
   pathfinder passes its nodes. In Vendo Caverns a corridor turned round a wall by two corners 13 and 20 units from the
   bot; both counted as reached, so it walked at the next corner, 100 units off behind the wall, and every fresh
@@ -158,7 +159,7 @@ All start `PLAYER_BOT_`:
 - `FIGHT`, `DEATH`, `RELOCATE`, `IDLE`, `BLOCKED`: one per event. A stalled walk's `BLOCKED` line ends with `stall:`,
   the bot's last step and state, and `queries:`, the stalled step's own navmesh queries and a fresh corridor's step;
 - `FLOOR_STEP`: a step onto the nearest floor, with where from and to and why;
-- `REPLAN`: a stalled walk planned again, with where, the goal, the count for that goal and the stall's first step;
+- `REPLAN`: a stalled walk planned again, with where, the goal, the count in that walk and the stall's first step;
 - `ERRAND`: the quest bot's steps;
 - `SPOT`, `KIT`, `RETRAIN`: start spots and level-matched bots; `TALLY`, every few minutes, a line per bot.
 

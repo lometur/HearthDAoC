@@ -22,7 +22,7 @@ public sealed class PlayerBotPathMover
     public const int IdleBroadcastMilliseconds = HeadlessClient.HeartbeatMs; // (est.) < 5 s is proven by PMC:15
     public const int StallSteps = 12;                  // 3 s without progress = blocked
     public const int ReplanSteps = 4;                  // 1 s without progress: the corridor is planned again from here (#166)
-    public const int ReplansPerGoal = 2;               // as the corridor's own progress check, blocked after two replans (PTP:115-128)
+    public const int ReplansPerWalk = 2;               // as the corridor's own progress check, blocked after two replans (PTP:115-128)
     public const int ChurnReplans = 2;                 // churning windows in a row that only replan; the next one blocks
     public const int FloorStepRange = 300;             // the GameBots' step onto the nearest floor (AWBC TryBeginLocalRouteRecovery)
     public const int FloorStepMilliseconds = 5_000;    // at most one such step per bot in this time
@@ -144,7 +144,8 @@ public sealed class PlayerBotPathMover
                 _path.Clear();
                 _churn.Reset();
             }
-            if (Arrived(here, goal, stopDistance)) { Stop(now); return PlayerBotStepResult.Arrived; }
+            _stall.Toward(goal, now);
+            if (Arrived(here, goal, stopDistance)) { _stall.Reset(); Stop(now); return PlayerBotStepResult.Arrived; }
             float step = StepLength(_player.MaxSpeed, now - _lastStepTick);
             _lastStepTick = now;
             if (step < 1) { Stop(now); return PlayerBotStepResult.Waiting; }
@@ -152,7 +153,7 @@ public sealed class PlayerBotPathMover
                     out Vector3 next, out string failure))
             {
                 LastBlock = failure;
-                _stall.Restart();                           // a stall ended by a failed plan again: the next walk counts afresh
+                _stall.Reset();                             // the walk ended (a stall's plan again can fail here): the next counts afresh
                 Stop(now);
                 TryFloorStep(current, failure, now);
                 PlayerBotDriverReport.Blocked();
@@ -162,17 +163,17 @@ public sealed class PlayerBotPathMover
             if (Vector3.DistanceSquared(next, current) < 1)
             {
                 if (_stall.Steps == 0) _stallFirst = $"first={Exact(current)}->{Exact(next)} {Cursor(_path)}";
-                if (!_stall.Still(goal, _path, out bool replanned))
+                if (!_stall.Still(_path, out bool replanned))
                 {
                     if (replanned && Log.IsInfoEnabled)
                         Log.Info($"PLAYER_BOT_REPLAN bot={_player.Name} at=({current.X:0},{current.Y:0},{current.Z:0}) " +
-                                 $"goal=({goal.X:0},{goal.Y:0},{goal.Z:0}) replan={_stall.Replans}/{ReplansPerGoal} {_stallFirst}");
+                                 $"goal=({goal.X:0},{goal.Y:0},{goal.Z:0}) replan={_stall.Replans}/{ReplansPerWalk} {_stallFirst}");
                     return PlayerBotStepResult.Moving;
                 }
                 LastStall = $"here={Exact(here)} last={Exact(current)}->{Exact(next)} step={step:0.0} " +
                             $"speed={_player.MaxSpeed} sitting={_player.IsSitting} stealthed={_player.IsStealthed} " +
                             $"combat={_player.InCombat} {_stallFirst} | last {Cursor(_path)} | {StallQueries(current, goal, step)}";
-                _stall.Restart();
+                _stall.Reset();
                 _path.Clear();
                 LastBlock = "stalled";
                 Stop(now);
@@ -180,7 +181,7 @@ public sealed class PlayerBotPathMover
                 PlayerBotDriverReport.Blocked();
                 return PlayerBotStepResult.Blocked;
             }
-            _stall.Restart();
+            _stall.Moved();
             float moved = Vector3.Distance(current, next);
             _walkSteps++;
             _walked += moved;
@@ -190,6 +191,7 @@ public sealed class PlayerBotPathMover
                 if (_churn.ChurningWindows > ChurnReplans)
                 {
                     _churn.Reset();
+                    _stall.Reset();
                     LastBlock = "churning";
                     Stop(now);
                     PlayerBotDriverReport.Blocked();
@@ -197,7 +199,7 @@ public sealed class PlayerBotPathMover
                 }
             }
             Zone zone = _player.CurrentRegion?.GetZone((int)next.X, (int)next.Y);
-            if (zone == null) { LastBlock = "no zone"; Stop(now); return PlayerBotStepResult.Blocked; } // as APP:531-536
+            if (zone == null) { _stall.Reset(); LastBlock = "no zone"; Stop(now); return PlayerBotStepResult.Blocked; } // as APP:531-536
             _player.Heading = _player.GetHeading((int)next.X, (int)next.Y);
             _player.CurrentSpeed = _player.MaxSpeed;
             _player.X = (int)Math.Round(next.X);
@@ -341,47 +343,52 @@ public sealed class PlayerBotPathMover
 }
 
 /// <summary>Steps in a row that brought the bot less than a unit on (#166). At ReplanSteps the corridor is planned again
-/// from where the bot stands, keeping the goal, at most ReplansPerGoal times a goal (a goal more than
-/// PlayerBotChurnWatch.GoalMoved from the last one is a new goal); at StallSteps the walk is blocked. In st-fix6 most
-/// stalls left had the corridor's next corner on another level than the bot (a ramp above it), while a fresh corridor
-/// from the same spot walked on; the walk ended blocked and the bot gave up its goal. A limit a goal: a fresh corridor
-/// that leads to another stall would otherwise plan again at each one, and a bot walking to and fro would never be
-/// blocked (Clear also restarts the corridor's own 15 s progress check). Once a goal was too few: in st-replan2 bots
-/// stalled again on a goal they had planned again for, where a fresh corridor walked on.</summary>
+/// from where the bot stands, keeping the goal, at most ReplansPerWalk times a walk; at StallSteps the walk is blocked.
+/// In st-fix6 most stalls left had the corridor's next corner on another level than the bot (a ramp above it), while a
+/// fresh corridor from the same spot walked on; the walk ended blocked and the bot gave up its goal. A limit a walk: a
+/// fresh corridor that leads to another stall would otherwise plan again at each one, and a bot walking to and fro
+/// would never be blocked (Clear also restarts the corridor's own 15 s progress check). Once a goal was too few: in
+/// st-replan2 bots stalled again where a fresh corridor walked on. A walk ends when it arrives or is blocked, or when the
+/// steps toward it pause or its goal jumps, as the churn watch tells a new walk (the review of the replan: counts kept
+/// from one walk denied the next its plans again).</summary>
 public sealed class PlayerBotStallWatch
 {
-    private Vector3? _goal;                            // the goal Replans counts for
+    private Vector3 _goal;
+    private long _last;
 
     /// <summary>Still steps in a row.</summary>
     public int Steps { get; private set; }
 
-    /// <summary>Times the corridor was planned again for the current goal.</summary>
+    /// <summary>Times the corridor was planned again in this walk.</summary>
     public int Replans { get; private set; }
 
-    /// <summary>One still step toward goal: true when the walk is now blocked; replanned when it planned the corridor
-    /// again.</summary>
-    public bool Still(Vector3 goal, PlayerTravelPath path, out bool replanned)
+    /// <summary>Each step toward goal, before it is taken: a goal more than PlayerBotChurnWatch.GoalMoved from the last
+    /// step's, or a pause of more than PlayerBotChurnWatch.PauseMilliseconds since it, starts a new walk.</summary>
+    public void Toward(Vector3 goal, long now)
     {
-        replanned = false;
-        if (++Steps == PlayerBotPathMover.ReplanSteps)
+        const float goalMoved = PlayerBotChurnWatch.GoalMoved;
+        if (now - _last > PlayerBotChurnWatch.PauseMilliseconds || Vector3.DistanceSquared(goal, _goal) > goalMoved * goalMoved)
+            Reset();
+        (_goal, _last) = (goal, now);
+    }
+
+    /// <summary>One still step: true when the walk is now blocked; replanned when it planned the corridor again.</summary>
+    public bool Still(PlayerTravelPath path, out bool replanned)
+    {
+        replanned = ++Steps == PlayerBotPathMover.ReplanSteps && Replans < PlayerBotPathMover.ReplansPerWalk;
+        if (replanned)
         {
-            const float goalMoved = PlayerBotChurnWatch.GoalMoved;
-            if (_goal is not Vector3 last || Vector3.DistanceSquared(last, goal) > goalMoved * goalMoved)
-                (_goal, Replans) = (goal, 0);
-            if (Replans < PlayerBotPathMover.ReplansPerGoal)
-            {
-                Replans++;
-                path.Clear();
-                replanned = true;
-            }
+            Replans++;
+            path.Clear();
         }
         return Steps >= PlayerBotPathMover.StallSteps;
     }
 
-    /// <summary>A step that moved the bot, or a walk that ended: the next still step starts a new run.</summary>
-    public void Restart() => Steps = 0;
+    /// <summary>A step that moved the bot: the next still step starts a new run, in the same walk.</summary>
+    public void Moved() => Steps = 0;
 
-    public void Reset() => (Steps, Replans, _goal) = (0, 0, null);
+    /// <summary>The walk ended: the next one counts afresh.</summary>
+    public void Reset() => (Steps, Replans) = (0, 0);
 }
 
 /// <summary>Walking that gets nowhere: a 15 s window of one walk that walked over 300 units and ended less than a third
