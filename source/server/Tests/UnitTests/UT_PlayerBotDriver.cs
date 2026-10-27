@@ -47,7 +47,7 @@ public sealed class UT_PlayerBotDriver
     private sealed class Mesh : PathfindingMgrBase
     {
         public bool Available = true;
-        public bool Blocked;
+        public bool Blocked, Walled;
         public PathfindingStatus Status = PathfindingStatus.PathFound;
         public Vector3[] Corners;
         public int Searches;
@@ -61,7 +61,7 @@ public sealed class UT_PlayerBotDriver
             return new(Status, route.Length);
         }
         public override Vector3? GetMoveAlongSurface(Zone zone, Vector3 start, Vector3 end, EDtPolyFlags[] filters) => Blocked ? start : end;
-        public override bool HasLineOfSight(Zone zone, Vector3 start, Vector3 end, EDtPolyFlags[] filters) => !Blocked;
+        public override bool HasLineOfSight(Zone zone, Vector3 start, Vector3 end, EDtPolyFlags[] filters) => !Blocked && !Walled;
     }
 
     private static (Region Region, Zone Zone) World()
@@ -364,12 +364,56 @@ public sealed class UT_PlayerBotDriver
         Assert.That(new Vector2(position.X, position.Y), Is.Not.EqualTo(new Vector2(17313, 8390)), "on toward the next corner");
     }
 
+    // A flat floor at Z 100: the surface move keeps that height, so it cannot step up or down on the spot, and no floor
+    // lies within a voxel of a step below it. Open: the mesh's line of sight.
+    private sealed class FloorMesh : PathfindingMgrBase
+    {
+        public Vector3[] Corners;
+        public bool Open = true;
+        public override bool HasNavmesh(Zone zone) => true;
+        public override PathfindingResult GetPathStraight(Zone zone, Vector3 start, Vector3 end,
+            EDtPolyFlags[] filters, Span<WrappedPathfindingNode> destination)
+        {
+            for (int i = 0; i < Corners.Length; i++) destination[i] = new(Corners[i], EDtPolyFlags.Walk);
+            return new(PathfindingStatus.PathFound, Corners.Length);
+        }
+        public override Vector3? GetMoveAlongSurface(Zone zone, Vector3 start, Vector3 end, EDtPolyFlags[] filters) =>
+            new(end.X, end.Y, 100);
+        public override Vector3? GetClosestPoint(Zone zone, Vector3 position, float xRange, float yRange, float zRange,
+            EDtPolyFlags[] filters) => new(position.X, position.Y, 100);
+        public override bool HasLineOfSight(Zone zone, Vector3 start, Vector3 end, EDtPolyFlags[] filters) => Open;
+    }
+
+    // st-smoke (2026-10-27, #166): Detour's straight-path corners take the polygons' height, which on steep ground lies
+    // far off the floor the bot stands on. In Snowdonia the corridor's first corner lay 0.4 units beside the bot and 70
+    // below it: never reached, and no surface step moved the bot, so it stood there for the rest of the run, whatever its
+    // goal. With the mesh open along the corridor the bot follows it, as a GameBot walks its path; a wall still stops it.
+    [Test]
+    public void ACorridorTheSurfaceStepCannotFollowIsWalkedWhereTheMeshIsOpen()
+    {
+        var (region, zone) = World();
+        Vector3[] corners = { new(0, 0, 100), new(0.4f, 0, 30), new(500, 0, 100) };
+        Assert.That(PlayerTravelPath.HasReachedCorner(corners[0], corners[1]), Is.False);
+        var path = new PlayerTravelPath();
+        var mesh = new FloorMesh { Corners = corners };
+        Vector3 position = corners[0];
+        for (int tick = 0; tick < 3; tick++)
+            Assert.That(path.TryStep(region, zone, position, corners[^1], 47.75f, tick * 250, mesh, out position, out string failure),
+                Is.True, failure);
+        Assert.That(position.X, Is.GreaterThan(90), "past the corner below and on toward the next one");
+
+        mesh = new FloorMesh { Corners = corners, Open = false };
+        Assert.That(new PlayerTravelPath().TryStep(region, zone, corners[0], corners[^1], 47.75f, 0, mesh, out position, out _), Is.True);
+        Assert.That(new Vector2(position.X, position.Y), Is.EqualTo(new Vector2(0, 0)).Using<Vector2>((a, b) => Vector2.Distance(a, b) < 1),
+            "no step where the mesh is closed");
+    }
+
     // The promotion check after the run 1 rerun (2026-10-21): by Cotswold the surface mover returned the bot's own spot,
     // and the mesh floor at the next corner lay 5 units above the corner (Z 1826 against 1821), within one voxel. The
     // fallback wanted 2 units, so the bot stood there for good. Coordinates are moved into the test zone (480000/580000
-    // less). A floor more than a voxel away is another surface, a bridge or a roof: no step.
+    // less). A floor more than a voxel away is another surface, a bridge or a roof: the step keeps to the corridor (#166).
     [TestCase(5f, true)] [TestCase(24f, true)] [TestCase(40f, false)]
-    public void AStepOntoTheFloorAVoxelAboveTheCornerIsTaken(float rise, bool moves)
+    public void AStepOntoTheFloorAVoxelAboveTheCornerIsTaken(float rise, bool onto)
     {
         var (region, zone) = World();
         var mesh = new EdgeMesh
@@ -379,7 +423,7 @@ public sealed class UT_PlayerBotDriver
         };
         Assert.That(new PlayerTravelPath().TryStep(region, zone, mesh.Corners[0], mesh.Corners[^1], 47.75f, 0, mesh,
             out Vector3 position, out string failure), Is.True, failure);
-        Assert.That(position, moves ? Is.EqualTo(mesh.Corners[1] + new Vector3(0, 0, rise)) : Is.EqualTo(mesh.Corners[0]));
+        Assert.That(position, Is.EqualTo(mesh.Corners[1] + new Vector3(0, 0, onto ? rise : 0)));
     }
 
     // The walk replay (2026-10-21): 120 steps of about 81 units every 30 s, 45-50 units nearer the goal. A window of
@@ -630,6 +674,12 @@ public sealed class UT_PlayerBotDriver
         Assert.That(PlayerBotPathMover.TryComputeNext(near, region, zone, new PlayerTravelPath(), Vector3.Zero, new(200, 0, 0), 0, 47.75f, 0,
             out next, out _), Is.True);
         Assert.That((near.Searches, next.X), Is.EqualTo((0, 47.75f)));
+        // Near, with a wall between: the corridor, round it. A bot 267 units from its target crept along a wall for the
+        // rest of the run (st-smoke, #166).
+        var walled = new Mesh { Walled = true, Corners = new[] { Vector3.Zero, new Vector3(0, 200, 0), new Vector3(200, 200, 0), new Vector3(200, 0, 0) } };
+        Assert.That(PlayerBotPathMover.TryComputeNext(walled, region, zone, new PlayerTravelPath(), Vector3.Zero, new(200, 0, 0), 0, 47.75f, 0,
+            out next, out _), Is.True);
+        Assert.That((walled.Searches, next), Is.EqualTo((1, new Vector3(0, 47.75f, 0))));
         // Blocked: false after two replans (PTP:97-105).
         var blocked = new Mesh { Blocked = true };
         path = new PlayerTravelPath();
@@ -662,13 +712,14 @@ public sealed class UT_PlayerBotDriver
 
     // StepToward's position and stall rule: GamePlayer keeps whole units (X, Y, Z are ints), so the bot stands where the
     // mover put it, rounded; 12 steps without a unit of progress drop the corridor. Returns the tick the bot arrived, or -1.
-    internal static int Walk(IPathfindingMgr nav, Region region, Zone zone, Vector3 from, Vector3 goal, bool keepExact)
+    internal static int Walk(IPathfindingMgr nav, Region region, Zone zone, Vector3 from, Vector3 goal, bool keepExact,
+        int ticks = 200)
     {
         var path = new PlayerTravelPath();
         Vector3 player = from;
         Vector3? exact = null;
         int still = 0;
-        for (int tick = 0; tick < 200; tick++)
+        for (int tick = 0; tick < ticks; tick++)
         {
             if (keepExact ? PlayerBotPathMover.Arrived(player, goal, 20) : Vector3.Distance(player, goal) <= 20) return tick;
             Vector3 current = keepExact ? PlayerBotPathMover.StepStart(player, exact) : player;

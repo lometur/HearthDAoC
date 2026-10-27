@@ -45,6 +45,11 @@ namespace DOL.GS.Commands
             return flat <= 32 * 32 && height <= 24 || flat <= 2 * 2 && height <= 64;
         }
 
+        // HearthDAoC: whether a step brought the walker less than a unit closer to a point. A step that only drops it
+        // back onto the floor under the point brings it no closer. Player bots (#166).
+        public static bool NoStepCloser(Vector3 from, Vector3 to, Vector3 toward) =>
+            Vector3.Distance(to, toward) > Vector3.Distance(from, toward) - 1;
+
         public static bool TryBuildCorridor(IPathfindingMgr nav, Zone zone, Vector3 start, Vector3 goal,
             out List<WrappedPathfindingNode> route)
         {
@@ -174,6 +179,13 @@ namespace DOL.GS.Commands
                     Vector3.Distance(current, floor.Value) <= distance + 2 &&
                     nav.HasLineOfSight(zone, current, floor.Value, nav.DefaultFilters)) snapped = floor;
             }
+            // HearthDAoC: no step closer to the corner, yet the mesh is open along the corridor: the step follows it, as a
+            // GameBot walks its path. Detour's straight-path corners take the polygons' height, which on steep ground lies
+            // far off the floor the surface moves keep: player bots (#166) stood for the rest of a run beside a corner 70
+            // units below them, bounced under one 123 units above, or stood at a polygon edge no surface move crossed.
+            if (snapped.HasValue && NoStepCloser(current, snapped.Value, _nodes.Peek().Position) &&
+                Vector3.DistanceSquared(current, desired) >= 1 &&
+                nav.HasLineOfSight(zone, current, desired, nav.DefaultFilters)) snapped = desired;
             if (!snapped.HasValue)
             {
                 failure = "Lost the walkable surface; manual control restored.";

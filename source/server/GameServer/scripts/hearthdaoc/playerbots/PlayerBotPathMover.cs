@@ -16,7 +16,7 @@ public enum PlayerBotStepResult { Arrived, Moving, Waiting, Blocked }
 // (PlayerMovementMonitor.cs:84-148) now sees them.
 public sealed class PlayerBotPathMover
 {
-    public const int DirectStepRange = 300;            // closer than this: one surface step, no corridor
+    public const int DirectStepRange = 300;            // closer than this, in the open: one surface step, no corridor
     public const int TeleportResetDistance = 256;      // a jump this big (teleport, release, speed-hack correction) drops the corridor
     public const int IdleBroadcastMilliseconds = HeadlessClient.HeartbeatMs; // (est.) < 5 s is proven by PMC:15
     public const int StallSteps = 12;                  // 3 s without progress = blocked
@@ -90,7 +90,9 @@ public sealed class PlayerBotPathMover
         float step = Math.Min(stepLength, remaining + 1);
         if (step < 1) return true;
         if (region == null || zone == null) { failure = "No zone here."; return false; }
-        if (!nav.HasNavmesh(zone) || remaining <= DirectStepRange)
+        // A wall between (no line of sight on the mesh) takes the corridor round it: in st-smoke (#166) a bot 267 units from
+        // its target crept along a wall for the rest of the run.
+        if (!nav.HasNavmesh(zone) || remaining <= DirectStepRange && nav.HasLineOfSight(zone, current, goal, nav.DefaultFilters))
         {
             Vector3 desired = PlayerTravelPath.Advance(current, goal, step);                     // PTP:30-35
             // The plain move keeps the height of the straight line to the goal inside a polygon, so the last 300 units
@@ -98,6 +100,8 @@ public sealed class PlayerBotPathMover
             // height: a target hovering or swimming 80+ units above the floor would then stall the bot under it (review
             // of 2026-10-21). Kept as is: it needs both, grounded steps and a floor-based arrival (not done).
             next = nav.GetMoveAlongSurface(zone, current, desired, nav.DefaultFilters) ?? desired; // as APP:516-520
+            // As the corridor's step (#166): no step closer, and the mesh is open to the goal, so the step takes the line.
+            if (PlayerTravelPath.NoStepCloser(current, next, goal)) next = desired;
             return true;
         }
         return path.TryStep(region, zone, current, goal, step, now, nav, out next, out failure); // PTP:73-167
