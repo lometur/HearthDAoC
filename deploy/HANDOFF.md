@@ -207,7 +207,24 @@ remove with `/mob remove` stay removed. The same file adds Lieutenant Cian besid
 Fortress's north wall and archives two rows the period didn't have (the generated "Bline" beside the merchant Bline
 Tengit, and the standing Martley, who now appears at the neophytes' camp). Four of these camps are linked: attack
 Delfina, Sir Dillus, the isolationist courier or the Savant and their companions join in (`Links` in
-`hearthdaoc-quests.json`; remove a group there to switch it off).
+`hearthdaoc-quests.json`; remove a group there to switch it off). It also gives level 5 "Cleric Mulgrut"'s Mulgrut
+Maggot his escort (two decayed zombies and a putrid zombie that follow him and fight with him: `Fellows` in
+`hearthdaoc-quests.json`) and his walk (the path `HDC_Mulgrut_CemeteryToMenhir`: around the Camelot Hills cemetery,
+out to the tall stone on the hill north-east and back). The first start after that update adds `added: ..., Mulgrut
+Maggot's first decayed zombie, Mulgrut Maggot's second decayed zombie, Mulgrut Maggot's putrid zombie; paths added:
+Mulgrut Maggot's walk (12 points)` to the line. A walk whose PathID is taken, or a walker already on another path, is
+named there (`not added: ...`, `left on another path: ...`). To stop his walk, clear his PathID with the server
+stopped; he then roams up to 500 around his spawn in the cemetery, the walk is not put back, and the start log stays
+quiet. Not with `/mob path` and no name: that also saves where he stands and the way he faces as his spawn, so done
+while he walks it moves his spawn for good, and every start then names him as left as he is. With your
+`HEARTHDAOC_TAG`:
+```bash
+./hdc stop
+docker run --rm --network none --user 1000:1000 -v hearthdaoc-data:/data --entrypoint sqlite3 \
+  ghcr.io/lometur/hearthdaoc:<HEARTHDAOC_TAG> /data/world/opendaoc.sqlite3.db \
+  "UPDATE Mob SET PathID='' WHERE Mob_ID='d5913594-869f-5d90-bcea-fce428f63926'"
+./hdc up
+```
 
 **Mob fixes.** Period corrections to upstream's monsters, items and quests, from the quest archives: level 11's thieves
 Frund and Agisthil are level 10, Frund stands at the red dwarf camp beside Agisthil, "Zombie Problem"'s Cloudy Green
@@ -216,17 +233,20 @@ Mulgrut", two stones per hog tail, four flint weapons per chert) hand it once, a
 from each class's own trainer, not the Cabalist trainer Magus Agyfen; the rest of the Guild of Shadows epic as the
 period had it: Sir Dillus in the renegade tower, Delfina a level-45 Tylwyth Teg huntress with two rangers by her fire,
 the isolationist courier in his camp, period levels, Master Eadig for the Infiltrator's chain, Magus Agyfen for the
-Cabalist's 40, and the item icons (`deploy/bin/mob_fixes.json`; each
-entry says why, with its source). After each start, `./hdc fixes` shows `Mob fixes: N corrected: ...` when rows were
+Cabalist's 40, and the item icons; Mulgrut Maggot back in the Camelot Hills cemetery, attacking on sight; and the
+three Shrouded Isles entrances (zone points 153, 165 and 167) crossed at their 1.65 portals on the Avalon Marsh pier, in
+Gotar and in Shannon Estuary, where bots, `/travel` and `/stables` now go, not at the town spots in Cotswold, Mularn
+and Mag Mell (`deploy/bin/mob_fixes.json`; each entry says why, with its source). After each start, `./hdc fixes` shows `Mob fixes: N corrected: ...` when rows were
 changed, and nothing when they are up to date. There is no marker: a row (a `Mob` row, the `NpcTemplate` rows of
-a template, an `ItemTemplate` row or a `DataQuest` row) changes only while it still holds every value upstream shipped, so a monster you changed yourself is
+a template, an `ItemTemplate` row, a `DataQuest` row or the `ZonePoint` rows of an Id) changes only while it still holds every value upstream shipped, so a monster you changed yourself is
 kept; kept rows are named at every start (`M left as they are (they hold neither upstream's values nor this
 file's): Frund (Mob 3ce2...)`). The entries that together decide one quest's rewards (say, a carried-only copy
 made the reward and the quest's second copy dropped) form a group, which changes only whole: if one of its rows
 holds neither value, none of them changes, so a quest never hands two real rewards, or none, and the start log
 names the group at every start (`1 group left as it is (...): Strange Bedfellows' reward (Perfect Life Stone
-(ItemTemplate cq_perfect_life_stone))`). If it fails (for example, a column the file names is not in the table), the start
-log says `Mob fixes: not applied (...)`, the monsters keep the values they have, and it tries again at the next
+(ItemTemplate cq_perfect_life_stone))`). The three Shrouded Isles entrances are one group too: if you moved one
+yourself, none of them moves. If it fails (for example, a column the file names is not in the table), the start
+log says `Mob fixes: not applied (...)`, the rows keep the values they have, and it tries again at the next
 start.
 
 **Quest rewards handed once.** Seven classic quest rewards are handed during the quest, by an NPC or as a named

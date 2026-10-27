@@ -11,7 +11,13 @@ names they must carry and why. Two more kinds of entry (owner 2026-10-13) use th
 adds an NPC the period had and the world lacks, made like another row ("like") with its own Mob_ID ("id") and the
 "set" columns changed (Lieutenant Cian like Lieutenant Brude); "archive" moves rows the period didn't have into
 fork_removed_mobs, as world_fixes.py's duplicate-townspeople fix does (the generated Bline, the standing Martley), and
-leaves a row that carries another name than the entry's.
+leaves a row that carries another name than the entry's. A fourth kind, "path" (2026-10-22), adds a walk the period
+gave a quest monster (Mulgrut Maggot between the Camelot Hills cemetery and the tall stone): a Path row and its
+PathPoints under the entry's PathID, written in the same step as its "walkers" (Mob_IDs) are put on it, never one
+without the other, since a PathID without points makes the server flip the NPC between idle and patrolling. A walker
+already on another path keeps it and is named in the start log. A PathID already in Path or PathPoints in any case is
+someone else's path, left as it is and named: the tables' unique index compares PathIDs without case. The server's path
+cache matches them by their exact case (MovementMgr), so only a walker holding the exact PathID walks the path.
 
 world_fixes.py calls apply() inside its transaction, before mob_fixes.py (which then moves rows of these camps), under
 its own savepoint: if it fails it is rolled back alone, apply() returns only the "not applied" line, and the other
@@ -27,6 +33,7 @@ removal delete; once the camp is copied, its rows leave that list and stay.
 import datetime
 import json
 import os
+import uuid
 
 SAVEPOINT = "quest_camps"
 ARCHIVE = "offline_classic165_removed_mobs"
@@ -43,7 +50,24 @@ def load_data(path=DATA_FILE):
         return json.load(f)
 
 
-KINDS = ("copy", "clone", "archive")
+KINDS = ("copy", "clone", "archive", "path")
+PATH_TYPES = (1, 2, 3)  # EPathType: Once, Path_Reverse (out and back), Loop (CoreDatabase/Enums/EPathType.cs)
+
+
+def path_id(path, step=None):
+    """The Path_ID of a path entry's Path row (step None) or the PathPoints_ID of its point number `step` (from 1)."""
+    key = "hearthdaoc:path:" + path.lower() + ("" if step is None else f":{step}")
+    return str(uuid.uuid5(uuid.NAMESPACE_URL, key))
+
+
+def _is_int(value):
+    return isinstance(value, int) and not isinstance(value, bool)
+
+
+def _is_point(point):
+    """[X, Y, Z, MaxSpeed, WaitTime]: whole numbers, a speed above 0, a wait (tenths of a second) of 0 or more."""
+    return (isinstance(point, list) and len(point) == 5 and all(_is_int(v) for v in point)
+            and point[3] > 0 and point[4] >= 0)
 
 
 def check(camp):
@@ -54,6 +78,20 @@ def check(camp):
     kind = camp.get("kind", "copy")
     if kind not in KINDS:
         raise ValueError(f"camp {camp['key']}: unknown kind {kind}")
+    if kind == "path":
+        if not isinstance(camp.get("path"), str) or not camp["path"].strip():
+            raise ValueError(f"camp {camp['key']}: no path")
+        if not _is_int(camp.get("type")) or camp["type"] not in PATH_TYPES:
+            raise ValueError(f"camp {camp['key']}: type must be 1 (once), 2 (out and back) or 3 (loop)")
+        if not _is_int(camp.get("region")) or camp["region"] < 0:
+            raise ValueError(f"camp {camp['key']}: no region")
+        points = camp.get("points")
+        if not isinstance(points, list) or len(points) < 2 or not all(_is_point(p) for p in points):
+            raise ValueError(f"camp {camp['key']}: points must be 2 or more [X, Y, Z, MaxSpeed, WaitTime]")
+        walkers = camp.get("walkers")
+        if not isinstance(walkers, list) or not walkers or not all(isinstance(w, str) and w for w in walkers):
+            raise ValueError(f"camp {camp['key']}: walkers must be a list of Mob_IDs")
+        return
     if kind == "clone":
         for field in ("like", "id"):
             if not isinstance(camp.get(field), str) or not camp[field]:
@@ -82,12 +120,26 @@ def apply(conn, now=None, data=None):
         conn.execute(f"CREATE TABLE IF NOT EXISTS {MARKER_TABLE} (FixId TEXT PRIMARY KEY, AppliedUtc TEXT NOT NULL)")
         columns = ", ".join(f'"{name}"' for _, name, *_ in conn.execute('PRAGMA table_info("Mob")'))
         copied, missing, added, not_added, archived_rows, not_archived = [], [], [], [], [], []
+        paths, other_path = [], []
         for camp in data["camps"]:
             check(camp)
             marker = MARKER.format(camp["key"])
             if conn.execute(f"SELECT 1 FROM {MARKER_TABLE} WHERE FixId=?", (marker,)).fetchone():
                 continue
             kind = camp.get("kind", "copy")
+            if kind == "path":
+                result = _path(conn, camp, tables, now)
+                if result is None:
+                    continue  # no path tables, or a walker not in Mob: not this world's (another world, or a test's)
+                done, others = result
+                if done:
+                    paths.append(f"{camp['name']} ({len(camp['points'])} points)")
+                else:
+                    not_added.append(f"{camp['name']} (its path {camp['path']} is taken)")
+                if others:
+                    other_path.append(f"{camp['name']} ({', '.join(others)})")
+                conn.execute(f"INSERT INTO {MARKER_TABLE} (FixId, AppliedUtc) VALUES (?, ?)", (marker, now))
+                continue
             if kind == "clone":
                 if not conn.execute("SELECT 1 FROM Mob WHERE Mob_ID=?", (camp["like"],)).fetchone():
                     continue  # no row to make it like: not this world's (another world, or a test's); tried again later
@@ -133,9 +185,10 @@ def apply(conn, now=None, data=None):
         return [NOT_APPLIED.format(str(e) or type(e).__name__)]
     conn.execute(f"RELEASE {SAVEPOINT}")
     parts = []
-    for label, items in (("copied back from upstream's archive", copied), ("added", added),
+    for label, items in (("copied back from upstream's archive", copied), ("added", added), ("paths added", paths),
                          (f"archived in {REMOVED}", archived_rows), ("not in the archive as named", missing),
-                         ("not added", not_added), ("not archived (another name)", not_archived)):
+                         ("not added", not_added), ("not archived (another name)", not_archived),
+                         ("left on another path", other_path)):
         if items:
             parts.append(f"{label}: " + ", ".join(items))
     return ["Quest camps: " + "; ".join(parts)] if parts else []
@@ -156,6 +209,38 @@ def _clone(conn, camp):
     columns = ", ".join(f'"{column}"' for column in values)
     conn.execute(f"INSERT INTO Mob ({columns}) VALUES ({', '.join('?' * len(values))})", list(values.values()))
     return True
+
+
+def _path(conn, camp, tables, now):
+    """Add the path entry's Path row and points and put its walkers on it.
+
+    None when the world lacks the path tables or Mob.PathID, or a walker (not this world's: it waits, as a clone without
+    its row does). (False, []) when the PathID is already in Path or PathPoints, in any case: someone else's path, left
+    as it is. Else (True, the walkers left on another path): a walker already on a path keeps it; only one without one
+    walks this. The Path row and its points are written in the same step as the walkers' PathID, never one without the
+    other."""
+    if "path" not in tables or "pathpoints" not in tables:
+        return None
+    if "pathid" not in {name.lower() for _, name, *_ in conn.execute('PRAGMA table_info("Mob")')}:
+        return None
+    walkers = list(dict.fromkeys(camp["walkers"]))
+    marks = ", ".join("?" * len(walkers))
+    found = dict(conn.execute(f"SELECT Mob_ID, COALESCE(PathID, '') FROM Mob WHERE Mob_ID IN ({marks})", walkers))
+    if len(found) < len(walkers):
+        return None
+    path = camp["path"]
+    if conn.execute("SELECT 1 FROM Path WHERE PathID=? COLLATE NOCASE UNION ALL "
+                    "SELECT 1 FROM PathPoints WHERE PathID=? COLLATE NOCASE", (path, path)).fetchone():
+        return False, []
+    conn.execute("INSERT INTO Path (PathID, PathType, RegionID, LastTimeRowUpdated, Path_ID) VALUES (?, ?, ?, ?, ?)",
+                 (path, camp["type"], camp["region"], now, path_id(path)))
+    conn.executemany("INSERT INTO PathPoints (PathID, Step, X, Y, Z, MaxSpeed, WaitTime, LastTimeRowUpdated, "
+                     "PathPoints_ID) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                     [(path, step, x, y, z, speed, wait, now, path_id(path, step))
+                      for step, (x, y, z, speed, wait) in enumerate(camp["points"], 1)])
+    others = [mob_id for mob_id in walkers if found[mob_id] and found[mob_id] != path]
+    conn.execute(f"UPDATE Mob SET PathID=? WHERE Mob_ID IN ({marks}) AND COALESCE(PathID, '')=''", (path, *walkers))
+    return True, others
 
 
 def _archive(conn, camp, marker, now):

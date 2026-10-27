@@ -51,17 +51,18 @@ class ReleaseWorthyTests(unittest.TestCase):
     def test_client_patches_ship_through_the_client_bundle(self):
         # build_bundles.sh bundles the patch sets, both appliers and the committed splash.mpk.
         for path in ("client/patches/classic-creation.json", "client/patches/default-layout.json",
+                     "client/patches/si-portals.json", "client/patches/si-portal-art.json",
                      "client/patches/apply_patches.py", "client/patches/patchset.py", "client/windows/patch-client.ps1",
                      "client/windows/patch-client.bat", "client/patches/splash.mpk"):
             with self.subTest(path=path):
                 self.assertTrue(rt.release_worthy([path]))
 
     def test_the_client_patch_set_generator_alone_does_not(self):
-        # What they make, classic-creation.json, default-layout.json and splash.mpk, is committed and ships; CI fails
+        # What they make, the patch sets and splash.mpk, is committed and ships; CI fails
         # when a patch set differs from what its generator makes. Upstream's MPK tool only builds splash.mpk, before
         # a commit.
         for path in ("client/patches/build.py", "client/patches/pe.py", "client/patches/classdata.py",
-                     "client/patches/layout.py",
+                     "client/patches/layout.py", "client/patches/build_si_portals.py",
                      "client/patches/src/baseclass.asm", "client/patches/src/base_classes.py",
                      "client/patches/branding/reletter_splash.py",
                      "source/tools/OfflineDaoc.Mpk/Program.cs", "source/tools/OfflineDaoc.Mpk/OfflineDaoc.Mpk.csproj"):

@@ -159,6 +159,134 @@ class QuestCampTests(unittest.TestCase):
         conn = world()
         self.assertEqual(quest_camps.apply(conn, NOW, {"camps": [self.BLINE]}), [])
 
+    # "path": a walk the period gave a quest monster, added with its points and its walker put on it (Mulgrut Maggot's
+    # walk between the Camelot Hills cemetery and the tall stone).
+    WALK = {"key": "walk", "name": "M's walk", "kind": "path", "path": "HDC_Test", "type": 2, "region": 1,
+            "walkers": ["m1"], "points": [[1, 2, 3, 70, 1800], [4, 5, 6, 70, 0]], "why": "period"}
+
+    @staticmethod
+    def path_world():
+        """world() with Mob.PathID and the Path and PathPoints tables as a real world declares them."""
+        conn = world()
+        conn.execute("ALTER TABLE Mob ADD COLUMN PathID TEXT")
+        conn.execute("CREATE TABLE Path (PathID VARCHAR(255) NOT NULL DEFAULT '' COLLATE NOCASE, PathType INT(11) NOT NULL "
+                     "DEFAULT 0, RegionID UNSIGNED SMALLINT(5) NOT NULL DEFAULT 0, LastTimeRowUpdated DATETIME NOT NULL "
+                     "DEFAULT '2000-01-01 00:00:00', Path_ID VARCHAR(255) NOT NULL DEFAULT '' COLLATE NOCASE, "
+                     "PRIMARY KEY (Path_ID))")
+        conn.execute("CREATE UNIQUE INDEX U_Path_PathID ON Path (PathID)")
+        conn.execute("CREATE TABLE PathPoints (PathID VARCHAR(255) NOT NULL DEFAULT '' COLLATE NOCASE, Step INT(11) NOT NULL "
+                     "DEFAULT 0, X INT(11) NOT NULL DEFAULT 0, Y INT(11) NOT NULL DEFAULT 0, Z INT(11) NOT NULL DEFAULT 0, "
+                     "MaxSpeed INT(11) NOT NULL DEFAULT 0, WaitTime INT(11) NOT NULL DEFAULT 0, LastTimeRowUpdated DATETIME "
+                     "NOT NULL DEFAULT '2000-01-01 00:00:00', PathPoints_ID VARCHAR(255) NOT NULL DEFAULT '' COLLATE NOCASE, "
+                     "PRIMARY KEY (PathPoints_ID))")
+        conn.execute("CREATE INDEX I_PathPoints_PathID ON PathPoints (PathID)")
+        return conn
+
+    @staticmethod
+    def add_walker(conn, path_id=None):
+        conn.execute("INSERT INTO Mob (Mob_ID, Name, Region, X, Y, Z, PathID) VALUES ('m1', 'M', 1, 1, 2, 3, ?)", (path_id,))
+
+    @staticmethod
+    def path_rows(conn):
+        return (conn.execute("SELECT PathID, PathType, RegionID, LastTimeRowUpdated, Path_ID FROM Path").fetchall(),
+                conn.execute("SELECT PathID, Step, X, Y, Z, MaxSpeed, WaitTime, LastTimeRowUpdated, PathPoints_ID "
+                             "FROM PathPoints ORDER BY Step").fetchall())
+
+    def test_a_path_is_added_and_its_walker_put_on_it_once(self):
+        conn = self.path_world()
+        self.add_walker(conn)
+        self.assertEqual(quest_camps.apply(conn, NOW, {"camps": [self.WALK]}), ["Quest camps: paths added: M's walk (2 points)"])
+        self.assertEqual(self.path_rows(conn), (
+            [("HDC_Test", 2, 1, NOW, quest_camps.path_id("HDC_Test"))],
+            [("HDC_Test", 1, 1, 2, 3, 70, 1800, NOW, quest_camps.path_id("HDC_Test", 1)),
+             ("HDC_Test", 2, 4, 5, 6, 70, 0, NOW, quest_camps.path_id("HDC_Test", 2))]))
+        self.assertEqual(conn.execute("SELECT PathID FROM Mob WHERE Mob_ID='m1'").fetchone(), ("HDC_Test",))
+        self.assertEqual(conn.execute("SELECT FixId FROM fork_world_fixes").fetchall(), [("quest-camp:walk",)])
+        # The owner takes him off it and deletes the path: it stays so.
+        conn.execute("UPDATE Mob SET PathID=NULL")
+        conn.execute("DELETE FROM Path")
+        conn.execute("DELETE FROM PathPoints")
+        self.assertEqual(quest_camps.apply(conn, NOW, {"camps": [self.WALK]}), [])
+        self.assertEqual(self.path_rows(conn), ([], []))
+        self.assertEqual(conn.execute("SELECT PathID FROM Mob WHERE Mob_ID='m1'").fetchone(), (None,))
+
+    def test_a_path_whose_walker_is_missing_waits_quietly(self):
+        # Not this world's (another world, or a test's): nothing is written, and a later start tries again.
+        conn = self.path_world()
+        self.assertEqual(quest_camps.apply(conn, NOW, {"camps": [self.WALK]}), [])
+        self.assertEqual(self.path_rows(conn), ([], []))
+        self.assertEqual(conn.execute("SELECT COUNT(*) FROM fork_world_fixes").fetchone(), (0,))
+        self.add_walker(conn)
+        self.assertEqual(quest_camps.apply(conn, NOW, {"camps": [self.WALK]}), ["Quest camps: paths added: M's walk (2 points)"])
+
+    def test_a_taken_path_id_is_named_in_the_log(self):
+        # The tables' unique index compares PathIDs without case, so a Path row in another case takes the PathID too;
+        # points without a Path row are someone's path as well.
+        for taken in ("INSERT INTO Path (PathID, PathType, RegionID, Path_ID) VALUES ('hdc_test', 1, 1, 'p')",
+                      "INSERT INTO PathPoints (PathID, Step, X, Y, Z, PathPoints_ID) VALUES ('HDC_Test', 1, 9, 9, 9, 'q')"):
+            with self.subTest(taken):
+                conn = self.path_world()
+                self.add_walker(conn)
+                conn.execute(taken)
+                before = self.path_rows(conn)
+                self.assertEqual(quest_camps.apply(conn, NOW, {"camps": [self.WALK]}),
+                                 ["Quest camps: not added: M's walk (its path HDC_Test is taken)"])
+                self.assertEqual(self.path_rows(conn), before)
+                self.assertEqual(conn.execute("SELECT PathID FROM Mob WHERE Mob_ID='m1'").fetchone(), (None,))
+                self.assertEqual(quest_camps.apply(conn, NOW, {"camps": [self.WALK]}), [])
+
+    def test_a_walker_on_another_path_keeps_it(self):
+        # The server's path cache matches PathIDs by their exact case (MovementMgr), so a walker on the path's name in
+        # another case is on another path.
+        for other in ("Other", "hdc_test"):
+            with self.subTest(other):
+                conn = self.path_world()
+                self.add_walker(conn, other)
+                self.assertEqual(quest_camps.apply(conn, NOW, {"camps": [self.WALK]}),
+                                 ["Quest camps: paths added: M's walk (2 points); left on another path: M's walk (m1)"])
+                self.assertEqual(conn.execute("SELECT PathID FROM Mob WHERE Mob_ID='m1'").fetchone(), (other,))
+                self.assertEqual(len(self.path_rows(conn)[1]), 2)
+
+    def test_a_walker_already_on_the_path_is_not_named(self):
+        conn = self.path_world()
+        self.add_walker(conn, "HDC_Test")
+        self.assertEqual(quest_camps.apply(conn, NOW, {"camps": [self.WALK]}), ["Quest camps: paths added: M's walk (2 points)"])
+        self.assertEqual(conn.execute("SELECT PathID FROM Mob WHERE Mob_ID='m1'").fetchone(), ("HDC_Test",))
+
+    def test_a_world_without_path_tables_waits_quietly(self):
+        conn = world()
+        conn.execute("ALTER TABLE Mob ADD COLUMN PathID TEXT")
+        self.add_walker(conn)
+        self.assertEqual(quest_camps.apply(conn, NOW, {"camps": [self.WALK]}), [])
+        self.assertEqual(conn.execute("SELECT COUNT(*) FROM fork_world_fixes").fetchone(), (0,))
+
+    def test_a_bad_path_entry_stops_the_step(self):
+        bad = {"type 4": {"type": 4}, "type true": {"type": True}, "one point": {"points": [[1, 2, 3, 70, 0]]},
+               "four numbers": {"points": [[1, 2, 3, 70], [4, 5, 6, 70, 0]]},
+               "speed 0": {"points": [[1, 2, 3, 0, 0], [4, 5, 6, 70, 0]]},
+               "wait -1": {"points": [[1, 2, 3, 70, -1], [4, 5, 6, 70, 0]]},
+               "true as a number": {"points": [[1, 2, True, 70, 0], [4, 5, 6, 70, 0]]},
+               "a text number": {"points": [[1, 2, "3", 70, 0], [4, 5, 6, 70, 0]]},
+               "no walkers": {"walkers": []}, "a walker not a text": {"walkers": [1]}, "no path": {"path": " "},
+               "no region": {"region": None}}
+        for label, change in bad.items():
+            with self.subTest(label):
+                conn = self.path_world()
+                self.add_walker(conn)
+                line, = quest_camps.apply(conn, NOW, {"camps": [DATA["camps"][0], dict(self.WALK, **change)]})
+                self.assertTrue(line.startswith("Quest camps: not applied (camp walk: "), line)
+                self.assertEqual(self.path_rows(conn), ([], []))
+                self.assertIsNone(conn.execute("SELECT 1 FROM Mob WHERE Mob_ID <> 'm1'").fetchone())  # the camp too
+                self.assertEqual(conn.execute("SELECT PathID FROM Mob WHERE Mob_ID='m1'").fetchone(), (None,))
+
+    def test_path_ids_are_stable(self):
+        # Path_ID and PathPoints_ID are the tables' keys: made from the PathID (without case) and the step.
+        for name in ("HDC_Mulgrut_CemeteryToMenhir", "hdc_mulgrut_cemeterytomenhir"):
+            with self.subTest(name):
+                self.assertEqual(quest_camps.path_id(name), "5c900371-1191-55f7-a15b-3f43e6aa7242")
+                self.assertEqual(quest_camps.path_id(name, 1), "a1fcdeae-a6d0-57e9-9fa5-4f3a29efb691")
+                self.assertEqual(quest_camps.path_id(name, 12), "fe0eddd8-78ed-57af-8d21-b677c10fdd51")
+
     def test_the_shipped_file_is_well_formed(self):
         data = quest_camps.load_data()
         keys = [camp["key"] for camp in data["camps"]]

@@ -29,6 +29,9 @@ GAME_SERVER = os.path.join(ROOT, "source", "server", "GameServer")
 EXTRA_QUESTS = os.path.join(DEPLOY, "hearthdaoc-quests.json")
 DOCKERFILE = os.path.join(DEPLOY, "Dockerfile")
 LORD_ELIDYN = "1f005bc1-27ae-40b0-bc42-1ec407a4aa34"
+# Mulgrut Maggot's escort (deploy/bin/quest_camps.json; tests/test_mulgrut.py): quest monsters too.
+MULGRUT_ESCORT = ["f4945947-03cc-5cd1-8969-5ecd228ac713", "230b08ea-77df-5256-96f6-997db4c9f1cf",
+                  "ccc4a788-1356-5a60-86ac-ff5c1d9709e4"]
 LEVEL_50_IDS = [990509, 990511, 990513, 990512, 990519]
 LEVEL_11_IDS = [20157, 20155, 20156, 20159, 20158]  # "Entry Into Tomorrow", rebuilt to the period story
 # Upstream's entries with a marker or event spawn moved to the period (2026-10-12; deploy/tests/test_epic_period.py):
@@ -72,7 +75,7 @@ class ExtraQuestFileTests(unittest.TestCase):
             self.assertIsNone(steps[0])
             self.assertEqual(steps[1]["Marker"], {"Region": 1, "X": 568158, "Y": 404718, "Z": 5032})
             self.assertEqual(steps[2]["Marker"], {"Region": 1, "X": 528239, "Y": 359818, "Z": 9088})
-        self.assertEqual(self.extra["QuestMonsterIds"], [LORD_ELIDYN])
+        self.assertEqual(self.extra["QuestMonsterIds"], [LORD_ELIDYN, *MULGRUT_ESCORT])
 
     def test_level_11_replaces_upstreams_entry_for_the_period_story(self):
         # Upstream's six stages (the same for all five IDs), with three changes: stage 2's marker on Frund at the red

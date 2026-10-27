@@ -77,7 +77,7 @@ docker exec "$NAME" cat /data/logs/world-fixes.log > "$T/fixes.log" || fail "no 
 [[ "$(grep -c '^=== Start ' "$T/fixes.log")" == 1 ]] || fail "world-fixes.log should hold one start: $(cat "$T/fixes.log")"
 grep -qE '^=== Start [0-9]{4}-[0-9]{2}-[0-9]{2} [0-9:]{8} UTC, release unknown, upstream [^ ]+ ===$' "$T/fixes.log" \
     || fail "world-fixes.log has no start header: $(head -1 "$T/fixes.log")"
-for line in "Epic chains: Guild of Shadows 60 links" "Quest dialogue: 142 quests rewritten" "Quest camps: copied back from upstream's archive: " "Mob fixes: 121 corrected: " \
+for line in "Epic chains: Guild of Shadows 60 links" "Quest dialogue: 142 quests rewritten" "Quest camps: copied back from upstream's archive: " "Mob fixes: 126 corrected: " \
             "Route fixes: 138 bridge crossings of 59 horse routes given points on the deck: " \
             "Start towns: 13 starting locations moved to the period's towns: "; do
     grep -q "^$line" "$T/fixes.log" || fail "world-fixes.log lacks this start's line: $line"

@@ -1,5 +1,5 @@
-"""Period corrections to upstream's monsters, items and quests in the world data (levels, spots, prices, rewards), from
-mob_fixes.json beside this file.
+"""Period corrections to upstream's monsters, items, quests and zone points in the world data (levels, spots, prices,
+rewards, where a zone point is crossed), from mob_fixes.json beside this file.
 
 The period quest archives turn up corrections like "Frund and Agisthil are level 10, at the red dwarf camp" (owner
 2026-10-10); each is one entry of the file. world_fixes.py calls apply() inside its transaction, after its other
@@ -15,8 +15,9 @@ The file:
   {"fixes": [{"name": "Frund", "table": "Mob", "id": "3ce2...", "expect": {"X": 491936, ...},
               "set": {"X": 537351, ...}, "why": "..."}]}
 - table and id: Mob (the row whose Mob_ID is id), NpcTemplate (the rows whose TemplateId is id), ItemTemplate (the row
-  whose Id_nb is id) or DataQuest (the quest whose ID is id). Entries of one row each check and change their own
-  columns, which no other entry of the row may name (a later correction in another column is its own entry).
+  whose Id_nb is id), DataQuest (the quest whose ID is id) or ZonePoint (the rows whose Id is id: a zone point's source
+  spot, where bots, /travel and /stables go to cross). Entries of one row each check and change their own columns,
+  which no other entry of the row may name (a later correction in another column is its own entry).
 - expect: the values the row must still hold, upstream's, column by column; it has a value for every column of set.
 - set: the values to set (never the row's id). Every column of expect and set must be one of the table's columns, or
   the fix is not applied. Values are text, numbers or null, and compare as SQLite compares them with the column (12
@@ -34,9 +35,9 @@ import json
 import os
 
 SAVEPOINT = "mob_fixes"
-NOT_APPLIED = "Mob fixes: not applied ({}); the monsters, items and quests keep the values they have"
+NOT_APPLIED = "Mob fixes: not applied ({}); the monsters, items, quests and zone points keep the values they have"
 DATA_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "mob_fixes.json")
-KEYS = {"Mob": "Mob_ID", "NpcTemplate": "TemplateId", "ItemTemplate": "Id_nb", "DataQuest": "ID"}
+KEYS = {"Mob": "Mob_ID", "NpcTemplate": "TemplateId", "ItemTemplate": "Id_nb", "DataQuest": "ID", "ZonePoint": "Id"}
 SHOWN = 10
 
 

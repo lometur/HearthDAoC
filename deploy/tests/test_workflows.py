@@ -92,7 +92,8 @@ class MergeIsReleaseTests(unittest.TestCase):
 # has no YAML reader. GitHub's Ubuntu runners have ruby; without it these tests are skipped.
 RUBY = shutil.which("ruby")
 YAML_TO_JSON = "require 'yaml'; require 'json'; puts JSON.generate(YAML.safe_load(File.read(ARGV[0])))"
-PATCH_SETS = [os.path.join(ROOT, "client", "patches", name) for name in ("classic-creation.json", "default-layout.json")]
+PATCH_SETS = [os.path.join(ROOT, "client", "patches", name)
+              for name in ("classic-creation.json", "default-layout.json", "si-portals.json", "si-portal-art.json")]
 TEST_JOB, RELEASE_JOB = "test-build-publish", "release-assets"
 MPK_PROJECT = "source/tools/OfflineDaoc.Mpk/OfflineDaoc.Mpk.csproj"
 MPK_TOOL = "source/tools/OfflineDaoc.Mpk/bin/Release/net10.0/OfflineDaoc.Mpk.dll"
@@ -123,7 +124,7 @@ class ClientPatchWorkflowTests(unittest.TestCase):
                              capture_output=True, text=True, check=True)
         cls.jobs = json.loads(run.stdout)["jobs"]
         cls.patched = []
-        for path in PATCH_SETS:  # every file of both patch sets
+        for path in PATCH_SETS:  # every file of every patch set
             with open(path, encoding="utf-8") as f:
                 cls.patched += [entry["path"] for entry in json.load(f)["files"]]
         cls.patched.sort()
@@ -203,6 +204,18 @@ class ClientPatchWorkflowTests(unittest.TestCase):
         for name in ("HDC_CLIENT_FILES", "HDC_TEST_WORLD"):
             self.assertEqual(rebuild["env"][name], tests["env"][name], name)
 
+    def test_a_rebuild_of_the_si_portal_sets_is_compared_with_the_committed_ones(self):
+        i_tests, tests = self.step(TEST_JOB, PATCH_TESTS)
+        i_rebuild, rebuild = self.step(TEST_JOB, "client/patches/build_si_portals.py")
+        self.assertGreater(i_rebuild, i_tests)
+        script = rebuild["run"]
+        for part in ('mkdir -p "$RUNNER_TEMP/si"',
+                     'python3 -B client/patches/build_si_portals.py --client "$HDC_CLIENT_FILES" --out-dir "$RUNNER_TEMP/si"',
+                     "for set in si-portals.json si-portal-art.json; do",
+                     'if ! diff -u "client/patches/$set" "$RUNNER_TEMP/si/$set"; then', "exit 1"):
+            self.assertIn(part, script)
+        self.assertEqual(rebuild["env"], {"HDC_CLIENT_FILES": tests["env"]["HDC_CLIENT_FILES"]})
+
     def test_nothing_fetched_is_published(self):
         for name, job_steps in self.jobs.items():
             for s in job_steps["steps"]:
@@ -280,7 +293,8 @@ SERVER_UNIT_TESTS = ("dotnet test source/server/Tests/Tests.csproj --nologo --fi
                      '|FullyQualifiedName~UT_BotCpuMeter|FullyQualifiedName~UT_BotCpuReport|FullyQualifiedName~UT_BotCpuScript'
                      '|FullyQualifiedName~UT_HeadlessClient|FullyQualifiedName~UT_PlayerBotPlan|FullyQualifiedName~UT_PlayerBotDriver|FullyQualifiedName~UT_PlayerBotErrands'
                      '|FullyQualifiedName~UT_PlayerBotWake|FullyQualifiedName~UT_PlayerBotSpots|FullyQualifiedName~UT_PlayerBotKit'
-                     '|FullyQualifiedName~UT_CommandNames"')
+                     '|FullyQualifiedName~UT_CommandNames'
+                     '|FullyQualifiedName~UT_SiPortalsPeriod"')
 UNIT_TESTS = os.path.join(ROOT, "source", "server", "Tests", "UnitTests")
 
 
@@ -314,7 +328,8 @@ class ServerUnitTestWorkflowTests(unittest.TestCase):
                                  "UT_BotCpuMeter", "UT_BotCpuReport", "UT_BotCpuScript",
                                  "UT_HeadlessClient", "UT_PlayerBotPlan", "UT_PlayerBotDriver", "UT_PlayerBotErrands",
                                  "UT_PlayerBotWake", "UT_PlayerBotSpots", "UT_PlayerBotKit",
-                                 "UT_CommandNames"])
+                                 "UT_CommandNames",
+                                 "UT_SiPortalsPeriod"])
         for name in names:
             with open(os.path.join(UNIT_TESTS, name + ".cs"), encoding="utf-8") as f:
                 self.assertRegex(f.read(), rf"\n\s*public (sealed )?class {name}\n", name)  # upstream's are not sealed

@@ -1,5 +1,5 @@
 {
- "_about": "The quest camps upstream archived as post-legacy spawns that the period's walkthroughs describe, copied back once per world by deploy/bin/quest_camps.py (owner's choice 2026-10-12; research dillus-guards-2026-10-12 on the owner's machine). Each camp: key (its marker quest-camp:<key> in fork_world_fixes), name (for the start log), names (the rows' names, compared without case), ids (Mob_IDs in offline_classic165_removed_mobs), why (the period source).",
+ "_about": "The quest camps upstream archived as post-legacy spawns that the period's walkthroughs describe, copied back once per world by deploy/bin/quest_camps.py (owner's choice 2026-10-12; research dillus-guards-2026-10-12 on the owner's machine). Each camp: key (its marker quest-camp:<key> in fork_world_fixes), name (for the start log), names (the rows' names, compared without case), ids (Mob_IDs in offline_classic165_removed_mobs), why (the period source). The other kinds are in deploy/bin/quest_camps.py's docstring: clone, archive and path (2026-10-22: a quest monster's walk; Mulgrut Maggot's, with his escort as clones).",
  "camps": [
   {"key": "delfina", "name": "Delfina's camp",
    "names": ["Tylwyth Teg ranger"],
@@ -62,6 +62,32 @@
    "why": "#126: the level-7 supply run's first step went to the Humberton merchant Bline Tengit (\"Bline is his FIRST name!! he stands outside the door\", 2002-09-22); upstream's generator made a level-5 peace-flagged \"Bline\" at the bindstone, 959 units east. The quest goes to Bline Tengit now (mob_fixes.json), and this copy is archived."},
   {"key": "standing-martley", "name": "the standing Martley", "kind": "archive",
    "names": ["Martley"], "ids": ["b94c9ac2-ba75-493e-a90c-65a5c62a839e"],
-   "why": "#124: Martley appears at the single-tent camp of drakoran neophytes (\"he spawns in the single tent camp\", 2003-01-05; \"When you kill one of the neophytes, Martley will spawn\", 2003; \"Martley appeared at the corpse\", 2004-06-12). Upstream had a passive Martley standing 2.7k north of the camp; deploy/hearthdaoc-quests.json makes him an event spawn at the camp, and this copy is archived."}
+   "why": "#124: Martley appears at the single-tent camp of drakoran neophytes (\"he spawns in the single tent camp\", 2003-01-05; \"When you kill one of the neophytes, Martley will spawn\", 2003; \"Martley appeared at the corpse\", 2004-06-12). Upstream had a passive Martley standing 2.7k north of the camp; deploy/hearthdaoc-quests.json makes him an event spawn at the camp, and this copy is archived."},
+  {"key": "mulgrut-escort-1", "name": "Mulgrut Maggot's first decayed zombie", "kind": "clone",
+   "like": "6ba397c1-72a2-4ef2-80a8-8d9ae89957d3", "id": "f4945947-03cc-5cd1-8969-5ecd228ac713",
+   "set": {"X": 565939, "Y": 528579, "Z": 2168, "Heading": 3043, "Level": 3, "Size": 50, "Speed": 175, "Gender": 0,
+           "ExamineArticle": "the", "MessageArticle": "The", "NPCTemplateID": -1, "Brain": "DOL.AI.Brain.QuestFellowBrain",
+           "AggroLevel": 51, "AggroRange": 500, "RespawnInterval": 300, "RoamingRange": 0, "PackageID": "ClassicQuest"},
+   "why": "Level 5 \"Cleric Mulgrut\": \"He walks with two decayed zombies and a putrid zombie between the cemetery and the hill with the tall stone\" (the quest's own text, DataQuest 20207); his company is \"high-aggro and will follow mulgrut around\" (Allakhazam cmob 1273, 2001-10-30), and \"His buddies spawn at the same time he does\" (2002-03-11); \"Mulgrut's zombie groupies will take you out if you are alone\" (2002-02-26). Made like the cemetery's decayed zombie 6ba397c1 with template 12334's values (level 3, size 45-55, speed 175, its articles); NPCTemplateID -1, since that template is shared and would put back its aggro 0/0 (ReplaceMobValues). It follows him as upstream's fellows follow Fjall (QuestFellowBrain; deploy/hearthdaoc-quests.json Fellows) and attacks on sight as he does (deploy/bin/mob_fixes.json). Our choice: it spawns 110 from his spawn, clear of the cemetery's other monsters, and respawns as often as he does (300 s)."},
+  {"key": "mulgrut-escort-2", "name": "Mulgrut Maggot's second decayed zombie", "kind": "clone",
+   "like": "6ba397c1-72a2-4ef2-80a8-8d9ae89957d3", "id": "230b08ea-77df-5256-96f6-997db4c9f1cf",
+   "set": {"X": 565863, "Y": 528526, "Z": 2168, "Heading": 3043, "Level": 3, "Size": 50, "Speed": 175, "Gender": 0,
+           "ExamineArticle": "the", "MessageArticle": "The", "NPCTemplateID": -1, "Brain": "DOL.AI.Brain.QuestFellowBrain",
+           "AggroLevel": 51, "AggroRange": 500, "RespawnInterval": 300, "RoamingRange": 0, "PackageID": "ClassicQuest"},
+   "why": "Mulgrut Maggot's escort (see mulgrut-escort-1)."},
+  {"key": "mulgrut-escort-3", "name": "Mulgrut Maggot's putrid zombie", "kind": "clone",
+   "like": "6ba397c1-72a2-4ef2-80a8-8d9ae89957d3", "id": "ccc4a788-1356-5a60-86ac-ff5c1d9709e4",
+   "set": {"Name": "putrid zombie", "X": 565855, "Y": 528433, "Z": 2168, "Heading": 3043, "Level": 4, "Size": 45,
+           "Speed": 180, "Gender": 0, "MeleeDamageType": 2, "NPCTemplateID": -1, "Brain": "DOL.AI.Brain.QuestFellowBrain",
+           "AggroLevel": 51, "AggroRange": 500, "RespawnInterval": 300, "RoamingRange": 0, "PackageID": "ClassicQuest"},
+   "why": "Mulgrut Maggot's escort (see mulgrut-escort-1), with template 12380's values (putrid zombie: level 4, size 40-50, speed 180, slash, no articles; the same model 110)."},
+  {"key": "mulgrut-walk", "name": "Mulgrut Maggot's walk", "kind": "path",
+   "path": "HDC_Mulgrut_CemeteryToMenhir", "type": 2, "region": 1,
+   "walkers": ["d5913594-869f-5d90-bcea-fce428f63926"],
+   "points": [[565958, 528471, 2168, 70, 300], [566030, 528935, 2168, 70, 400], [566325, 528620, 2172, 70, 200],
+              [565700, 528100, 2152, 70, 300], [566105, 528020, 2152, 70, 200], [566492, 527736, 2165, 70, 0],
+              [567518, 525762, 2399, 70, 0], [569067, 525148, 2634, 70, 0], [570587, 523631, 2661, 70, 0],
+              [572350, 521916, 2325, 70, 0], [573707, 520227, 2485, 70, 0], [573930, 519750, 2571, 70, 1200]],
+   "why": "Level 5 \"Cleric Mulgrut\": \"he spawns in the graveyard with a zombie/lrge skelly escort and wanders oup to the top of the hill and back\" (2002-03-12); \"He commonly spawns inside the graveyard and them wanders about the walls outside\" (Allakhazam cmob 1273, 2001-10-30); the quest's text: \"between the cemetery and the hill with the tall stone\". The stone is the menhir at loc 25344, 36352 on the hill north-east of the cemetery, ringed by large skeletons (\"stone located on a hill w/ 2 large skeletons\", WarCry 53; \"the big stone ringed by large skeletons at the top of hte nearby hill\", 2002-02-26), between Prydwen Keep and Cotswold (2001-11); WarCry's 2003 map marks him on this line. Our choice of points: his spawn and four more around the cemetery, each 400 or more from the last, 20-40 s at each, so he moves about it before and after each walk; then the way over the wooded hill and the valley, each point a monster's spawn spot (its ground height), at a walk; and 2 minutes by the stone. Where he waits, he stands 100-150 from other monsters' spawn spots, at the nearest one's height. Path type 2: out and back."}
  ]
 }

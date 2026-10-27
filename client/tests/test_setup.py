@@ -30,8 +30,19 @@ UNKNOWN_INI = ("Not patched: default.ini is not the file this HearthDAoC release
                "layout.\n")
 WARNING = "Warning: the client was set up without HearthDAoC's classic creation patches (see the message above).\n"
 LAYOUT_WARNING = "Warning: the client was set up without HearthDAoC's default layout (see the message above).\n"
+# A fake zone archive and the 2006 Albion portal model, with sets in the shape of client/patches/si-portals.json and
+# si-portal-art.json (a text edit stands in for the archive edit, which client/patches/tests cover).
+ARCHIVE_PATH, MODEL_PATH = "zones/Zone000/csv000.mpk", "Newtowns/zones/Nifs/bavteleporter.npk"
+RELEASE_ARCHIVE, RELEASE_MODEL = "runtime/client-opendaoc/app/" + ARCHIVE_PATH, "runtime/client-opendaoc/app/" + MODEL_PATH
+PORTAL_ROW = "455,SI Portal Visual 000,bavteleporter.NIF\r\n"
+ARCHIVE = b"10,Our Tree,ourtree.nif\r\n" + PORTAL_ROW.encode()
+ARCHIVE_PATCHED = b"10,Our Tree,ourtree.nif\r\n"
+MODEL = b"the 2006 portal model"
+SI_WARNING = "Warning: the client was set up without HearthDAoC's Shrouded Isles portal fix (see the message above).\n"
+ART_WARNING = "Warning: the client was set up without HearthDAoC's Albion portal look (see the message above).\n"
 # What setup.sh installs in <dest>/patches, for play.sh to apply at every launch: exactly these.
-PATCH_FILES = ["apply_patches.py", "classic-creation.json", "default-layout.json", "patchset.py", "splash.mpk"]
+PATCH_FILES = ["apply_patches.py", "classic-creation.json", "default-layout.json", "patchset.py", "si-portal-art.json",
+               "si-portals.json", "splash.mpk"]
 CONF = "hearthdaoc-client.conf"
 
 
@@ -157,6 +168,11 @@ class SetupTests(unittest.TestCase):
         self.assertIn(WARNING, r.stderr)
         self.assertIn(UNKNOWN_INI, r.stdout)
         self.assertIn(LAYOUT_WARNING, r.stderr)
+        # The fixture has no zone archives: refused, with a warning; and no 2006 model, which counts as patched.
+        self.assertIn("Not patched: zones/Zone000/csv000.mpk is missing from the client folder.\n", r.stdout)
+        self.assertIn(SI_WARNING, r.stderr)
+        self.assertIn(f"Already patched: {MODEL_PATH}\n", r.stdout)
+        self.assertNotIn(ART_WARNING, r.stderr)
         self.assertEqual(read(os.path.join(dest, "client", "default.ini")), INI)
         self.assertEqual(read(os.path.join(dest, "client", "game.dll")), self.files[RELEASE_DLL])
         self.assertEqual([n for n in os.listdir(os.path.join(dest, "client")) if n.endswith(".hearthdaoc-orig")], [])
@@ -186,6 +202,8 @@ class BundlePatchTests(unittest.TestCase):
         files = dict(fx.DEFAULT_FILES)
         files[RELEASE_SPLASH] = SPLASH
         files[RELEASE_INI] = INI
+        files[RELEASE_ARCHIVE] = ARCHIVE
+        files[RELEASE_MODEL] = MODEL
         self.lock, self.files = fx.build(self.dir, files)
         self.base = make_base(self.dir, self.files)
         self.dll = self.files[RELEASE_DLL]
@@ -203,6 +221,7 @@ class BundlePatchTests(unittest.TestCase):
             f.write(SPLASH_NEW)
         self.write_patchset(sha(self.dll))
         self.write_layout_set(sha(INI))
+        self.write_si_sets()
 
     def write_patchset(self, dll_before):
         data = {
@@ -234,6 +253,19 @@ class BundlePatchTests(unittest.TestCase):
         }
         with open(os.path.join(self.patches, "default-layout.json"), "w", encoding="utf-8") as f:
             json.dump(data, f, indent=1)
+
+    def write_si_sets(self, archive_before=sha(ARCHIVE), model_before=sha(MODEL), retired=False):
+        portals = {"format": 1, "name": "si-portals", "client": "test fixture",
+                   "refused": "(our test's). The town portal art stays.",
+                   "files": [{"path": ARCHIVE_PATH, "before": archive_before, "after": sha(ARCHIVE_PATCHED),
+                              "ops": [{"op": "text-replace", "find": PORTAL_ROW, "replace": ""}]}]}
+        art = {"format": 1, "name": "si-portal-art", "client": "test fixture",
+               "refused": "(our test's). The portal keeps its 2006 look.",
+               **({"retired": True} if retired else {}),
+               "files": [{"path": MODEL_PATH, "before": model_before, "after": "absent", "ops": [{"op": "remove"}]}]}
+        for name, data in (("si-portals.json", portals), ("si-portal-art.json", art)):
+            with open(os.path.join(self.patches, name), "w", encoding="utf-8") as f:
+                json.dump(data, f, indent=1)
 
     def setup_sh(self, base=None, cwd=None, release=None, env=None):
         """Run the bundle's setup.sh; release=(folder, lock) serves another release than setUp's."""
@@ -271,7 +303,9 @@ class BundlePatchTests(unittest.TestCase):
         client = os.path.join(dest, "client")
         self.assertIn("Patched: game.dll (original saved as game.dll.hearthdaoc-orig)\n"
                       "Patched: pregame/splash.mpk (original saved as pregame/splash.mpk.hearthdaoc-orig)\n"
-                      "Patched: default.ini (original saved as default.ini.hearthdaoc-orig)\n",
+                      "Patched: default.ini (original saved as default.ini.hearthdaoc-orig)\n"
+                      f"Patched: {ARCHIVE_PATH} (original saved as {ARCHIVE_PATH}.hearthdaoc-orig)\n"
+                      f"Patched: {MODEL_PATH} (original saved as {MODEL_PATH}.hearthdaoc-orig)\n",
                       r.stdout)
         self.assertNotIn("Warning", r.stderr)
         self.assertEqual(read(os.path.join(client, "game.dll")), self.dll_patched)
@@ -279,6 +313,9 @@ class BundlePatchTests(unittest.TestCase):
         self.assertEqual(read(os.path.join(client, "pregame", "splash.mpk")), SPLASH_NEW)
         self.assertEqual(read(os.path.join(client, "default.ini")), INI_PATCHED)
         self.assertEqual(read(os.path.join(client, "default.ini.hearthdaoc-orig")), INI)
+        self.assertEqual(read(os.path.join(client, *ARCHIVE_PATH.split("/"))), ARCHIVE_PATCHED)
+        self.assertFalse(os.path.exists(os.path.join(client, *MODEL_PATH.split("/"))))
+        self.assertEqual(read(os.path.join(client, *MODEL_PATH.split("/")) + ".hearthdaoc-orig"), MODEL)
         self.assertTrue(os.path.isfile(os.path.join(dest, "play.sh")))
         self.assertFalse(os.path.exists(os.path.join(self.patches, "__pycache__")))
 
@@ -292,12 +329,14 @@ class BundlePatchTests(unittest.TestCase):
         self.assertEqual(read(os.path.join(client, "pregame", "splash.mpk")), SPLASH_NEW)
         ours = sorted(os.path.relpath(os.path.join(folder, name), client).replace(os.sep, "/")
                       for folder, _dirs, names in os.walk(client) for name in names if "hearthdaoc" in name)
-        self.assertEqual(ours, ["default.ini.hearthdaoc-orig", "game.dll.hearthdaoc-orig",
-                                "pregame/splash.mpk.hearthdaoc-orig"])  # nothing else
+        self.assertEqual(ours, [MODEL_PATH + ".hearthdaoc-orig", "default.ini.hearthdaoc-orig", "game.dll.hearthdaoc-orig",
+                                "pregame/splash.mpk.hearthdaoc-orig", ARCHIVE_PATH + ".hearthdaoc-orig"])  # nothing else
         self.assertEqual(sha(read(os.path.join(client, "game.dll.hearthdaoc-orig"))), sha(self.dll))
         self.assertEqual(sha(read(os.path.join(client, "pregame", "splash.mpk.hearthdaoc-orig"))), sha(SPLASH))
         self.assertEqual(read(os.path.join(client, "default.ini.hearthdaoc-orig")), INI)
         self.assertEqual(read(os.path.join(client, "default.ini")), INI_PATCHED)
+        self.assertEqual(read(os.path.join(client, *MODEL_PATH.split("/")) + ".hearthdaoc-orig"), MODEL)
+        self.assertFalse(os.path.exists(os.path.join(client, *MODEL_PATH.split("/"))))
 
     def test_a_refused_patch_set_warns_and_setup_still_succeeds(self):
         self.write_patchset(sha(b"the game.dll of another edition"))
@@ -324,6 +363,65 @@ class BundlePatchTests(unittest.TestCase):
         self.assertFalse(os.path.exists(os.path.join(client, "default.ini.hearthdaoc-orig")))
         self.assertEqual(read(os.path.join(client, "game.dll")), self.dll_patched)
         self.assertTrue(os.path.isfile(os.path.join(dest, "play.sh")))
+
+    def test_refused_shrouded_isles_sets_warn_each_and_the_other_sets_still_apply(self):
+        for refused, warning in (("si-portals.json", SI_WARNING), ("si-portal-art.json", ART_WARNING)):
+            with self.subTest(refused):
+                shutil.rmtree(os.path.join(self.dir, "dest"), ignore_errors=True)
+                self.write_si_sets(**{"archive_before" if refused == "si-portals.json" else "model_before":
+                                      sha(b"another client's file")})
+                dest, r = self.setup_sh()
+                self.assertEqual(r.returncode, 0, r.stderr + r.stdout)
+                self.assertEqual(r.stderr, warning)
+                path = ARCHIVE_PATH if refused == "si-portals.json" else MODEL_PATH
+                self.assertIn(f"Not patched: {path} is not the file this HearthDAoC release supports (our test's).",
+                              r.stdout)
+                client = os.path.join(dest, "client")
+                self.assertEqual(read(os.path.join(client, *ARCHIVE_PATH.split("/"))),
+                                 ARCHIVE if refused == "si-portals.json" else ARCHIVE_PATCHED)
+                self.assertEqual(os.path.exists(os.path.join(client, *MODEL_PATH.split("/"))),
+                                 refused == "si-portal-art.json")
+                self.assertEqual(read(os.path.join(client, "game.dll")), self.dll_patched)
+                self.assertEqual(read(os.path.join(client, "default.ini")), INI_PATCHED)
+
+    def test_a_release_that_drops_the_art_set_gives_the_2006_model_back(self):
+        # The switch to the 2006 look is a release (FORK.md): one whose setup.sh no longer applies
+        # si-portal-art.json builds the client afresh, so the model is back and no backup of it stays.
+        dest, r = self.setup_sh()
+        self.assertEqual(r.returncode, 0, r.stderr + r.stdout)
+        model = os.path.join(dest, "client", *MODEL_PATH.split("/"))
+        self.assertFalse(os.path.exists(model))
+        with open(os.path.join(self.bundle, "setup.sh"), encoding="utf-8") as f:
+            script = f.read()
+        for part, new in ((" si-portal-art.json splash.mpk)", " splash.mpk)"),  # PATCH_FILES, and the call
+                          ("\napply_set si-portal-art.json ", "\n: dropped ")):
+            self.assertEqual(script.count(part), 1, part)
+            script = script.replace(part, new)
+        self.assertEqual([line for line in script.splitlines()
+                          if "si-portal-art.json" in line and not line.lstrip().startswith("#")], [])
+        with open(os.path.join(self.bundle, "setup.sh"), "w", encoding="utf-8") as f:
+            f.write(script)
+        os.remove(os.path.join(self.patches, "si-portal-art.json"))
+        dest, r = self.setup_sh()
+        self.assertEqual(r.returncode, 0, r.stderr + r.stdout)
+        self.assertEqual(read(model), MODEL)
+        self.assertFalse(os.path.exists(model + ".hearthdaoc-orig"))
+        self.assertNotIn("si-portal-art.json", os.listdir(os.path.join(dest, "patches")))
+
+    def test_a_release_with_the_art_set_retired_gives_the_2006_model_back(self):
+        # The other way (and the one for Windows clients, which are never built afresh): the set ships with
+        # "retired": true, and setup.sh, like play.sh at every launch, restores it instead of applying it.
+        dest, r = self.setup_sh()
+        self.assertEqual(r.returncode, 0, r.stderr + r.stdout)
+        self.write_si_sets(retired=True)
+        dest, r = self.setup_sh()
+        self.assertEqual(r.returncode, 0, r.stderr + r.stdout)
+        self.assertEqual(r.stderr, "")
+        self.assertIn(f"Nothing to restore: {MODEL_PATH}\n", r.stdout)  # the client was built afresh
+        model = os.path.join(dest, "client", *MODEL_PATH.split("/"))
+        self.assertEqual(read(model), MODEL)
+        self.assertFalse(os.path.exists(model + ".hearthdaoc-orig"))
+        self.assertEqual(read(os.path.join(dest, "client", *ARCHIVE_PATH.split("/"))), ARCHIVE_PATCHED)
 
     def test_setup_installs_the_patch_files_next_to_play_sh(self):
         dest, r = self.setup_sh()
@@ -479,7 +577,7 @@ class BundlePatchTests(unittest.TestCase):
     def test_a_failed_patch_fails_setup(self):
         # An invalid patch set (exit 2), either one. The message names the installed copy: setup.sh applies
         # <dest>/patches, the files play.sh applies at every launch, not the bundle's.
-        for name in ("classic-creation.json", "default-layout.json"):
+        for name in ("classic-creation.json", "default-layout.json", "si-portals.json", "si-portal-art.json"):
             with self.subTest(name):
                 shutil.rmtree(os.path.join(self.dir, "dest"), ignore_errors=True)
                 kept = read(os.path.join(self.patches, name))
