@@ -53,6 +53,7 @@ echo "ok - single-player teleports are GM-only, companions stay open"
 grep -q "Command - '&botcpu' .* required plvl:2" "$T/server.log" || fail "/botcpu is not GM-only"
 if grep -q "BOT_CPU_STATE" "$T/server.log"; then fail "the bot CPU meter is on after a default start"; fi
 echo "ok - /botcpu is GM-only and a default start leaves the bot CPU meter off"
+if grep -q "HEARTHDAOC_PLAYER_BOTS" "$T/server.log"; then fail "player bots are on after a default start"; fi
 grep -q "CLASSIC_QUESTS loaded quests=[1-9]" "$T/server.log" || fail "the server did not load classic-quests.json"
 echo "ok - the server finds its data files (classic-quests.json, classic-quest-guides.json) in /data"
 [[ "$(docker exec "$NAME" sqlite3 /data/world/opendaoc.sqlite3.db "SELECT Value FROM ServerProperty WHERE \`Key\`='disabled_classes'")" == "33;34;39;58-62" ]] \

@@ -291,6 +291,8 @@ SERVER_UNIT_TESTS = ("dotnet test source/server/Tests/Tests.csproj --nologo --fi
                      '|FullyQualifiedName~UT_RelicPadAttackers'
                      '|FullyQualifiedName~UT_QuestGrants'
                      '|FullyQualifiedName~UT_BotCpuMeter|FullyQualifiedName~UT_BotCpuReport|FullyQualifiedName~UT_BotCpuScript'
+                     '|FullyQualifiedName~UT_HeadlessClient|FullyQualifiedName~UT_PlayerBotPlan|FullyQualifiedName~UT_PlayerBotDriver|FullyQualifiedName~UT_PlayerBotErrands'
+                     '|FullyQualifiedName~UT_PlayerBotWake|FullyQualifiedName~UT_PlayerBotSpots|FullyQualifiedName~UT_PlayerBotKit'
                      '|FullyQualifiedName~UT_CommandNames'
                      '|FullyQualifiedName~UT_SiPortalsPeriod"')
 UNIT_TESTS = os.path.join(ROOT, "source", "server", "Tests", "UnitTests")
@@ -324,6 +326,8 @@ class ServerUnitTestWorkflowTests(unittest.TestCase):
                                  "UT_RelicPadAttackers",
                                  "UT_QuestGrants",
                                  "UT_BotCpuMeter", "UT_BotCpuReport", "UT_BotCpuScript",
+                                 "UT_HeadlessClient", "UT_PlayerBotPlan", "UT_PlayerBotDriver", "UT_PlayerBotErrands",
+                                 "UT_PlayerBotWake", "UT_PlayerBotSpots", "UT_PlayerBotKit",
                                  "UT_CommandNames",
                                  "UT_SiPortalsPeriod"])
         for name in names:

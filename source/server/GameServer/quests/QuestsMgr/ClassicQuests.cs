@@ -922,6 +922,23 @@ namespace DOL.GS.Quests
                 ? info.Steps[step]?.Marker
                 : null;
 
+        /// <summary>HearthDAoC: the names a quest's stage adds (either file): its issuer, its grant's giver, its custom
+        /// step's target and the monsters that drop for it. Player bots (#137) keep the NPCs of their current stage awake.</summary>
+        public static IEnumerable<string> StepNames(int questId, int step) => StepNames(_config, questId, step);
+
+        public static IEnumerable<string> StepNames(Config config, int questId, int step)
+        {
+            if (config.Quests == null || !config.Quests.TryGetValue(questId, out QuestInfo info) || info?.Steps == null ||
+                step <= 0 || step >= info.Steps.Count || info.Steps[step] is not StepInfo stage)
+                yield break;
+            foreach (string name in new[] { stage.Issuer, stage.GrantFrom, stage.Custom?.Target })
+                if (!string.IsNullOrEmpty(name))
+                    yield return name;
+            foreach (StepDrop drop in stage.Custom?.Drops ?? new List<StepDrop>())
+                if (!string.IsNullOrEmpty(drop?.Mob))
+                    yield return drop.Mob;
+        }
+
         private static void Refresh(object state)
         {
             try

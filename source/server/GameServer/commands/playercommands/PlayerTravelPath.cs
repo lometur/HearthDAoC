@@ -34,9 +34,16 @@ namespace DOL.GS.Commands
             return length <= distance || length < 0.01f ? next : current + delta * (distance / length);
         }
 
-        public static bool HasReachedCorner(Vector3 current, Vector3 corner) =>
-            Vector2.DistanceSquared(new(current.X, current.Y), new(corner.X, corner.Y)) <= 32 * 32 &&
-            Math.Abs(current.Z - corner.Z) <= 64;
+        // HearthDAoC: 24 units of height, not 64. A player bot (#137) on switchback stairs counted the corners at their foot,
+        // 37 units below it, as reached, and climbed back up toward the next corner, which lies under the stairs.
+        // A corner within 2 units keeps 64: a step on the floor cannot change height on the spot, and a player bot stood
+        // for good at the top of a descent whose next corner lay at its own spot, 24.4 units below its feet.
+        public static bool HasReachedCorner(Vector3 current, Vector3 corner)
+        {
+            float flat = Vector2.DistanceSquared(new(current.X, current.Y), new(corner.X, corner.Y));
+            float height = Math.Abs(current.Z - corner.Z);
+            return flat <= 32 * 32 && height <= 24 || flat <= 2 * 2 && height <= 64;
+        }
 
         public static bool TryBuildCorridor(IPathfindingMgr nav, Zone zone, Vector3 start, Vector3 goal,
             out List<WrappedPathfindingNode> route)
@@ -143,7 +150,13 @@ namespace DOL.GS.Commands
                 return true;
             }
             Vector3 desired = Advance(current, _nodes.Peek().Position, distance);
-            Vector3? snapped = nav.GetMoveAlongSurface(zone, current, desired, nav.DefaultFilters);
+            // HearthDAoC: on the real navmesh, first the surface move GameBots use, which takes the height of the polygon
+            // it reached (AutonomousNavigationSurface.MoveAlongGround). The plain move is a 2D query: stopped at an edge
+            // it returns the edge's vertex height, and a player bot (#137) by Cotswold bounced about 66 units a step
+            // between two levels and crept at 2 units a second for minutes. The grounded move fails on a polygon edge,
+            // where the plain move and the floor fallback below still apply.
+            Vector3? snapped = (nav is LocalPathfindingMgr ? AutonomousNavigationSurface.MoveAlongGround(nav, zone, current, desired) : null)
+                ?? nav.GetMoveAlongSurface(zone, current, desired, nav.DefaultFilters);
             // At certain polygon edges Detour's local surface mover returns the
             // origin even though its corridor and raycast agree the next step is
             // open (Cotswold stable approach). A normal-speed step is allowed only
@@ -153,7 +166,11 @@ namespace DOL.GS.Commands
                 Vector3.DistanceSquared(current, desired) >= 1)
             {
                 Vector3? floor = nav.GetClosestPoint(zone, desired, 16, 16, 64, nav.DefaultFilters);
-                if (floor.HasValue && Vector3.DistanceSquared(floor.Value, desired) <= 4 &&
+                // HearthDAoC: the floor may lie up to one voxel (24) above or below the step, as corners do (see above):
+                // a player bot (#137) by Cotswold found it 5 units above the corner and stood there for good.
+                if (floor.HasValue &&
+                    Vector2.DistanceSquared(new(floor.Value.X, floor.Value.Y), new(desired.X, desired.Y)) <= 4 &&
+                    Math.Abs(floor.Value.Z - desired.Z) <= 24 &&
                     Vector3.Distance(current, floor.Value) <= distance + 2 &&
                     nav.HasLineOfSight(zone, current, floor.Value, nav.DefaultFilters)) snapped = floor;
             }

@@ -24,6 +24,9 @@ services:
       HEARTHDAOC_SI_START_CHOICE: ${HEARTHDAOC_SI_START_CHOICE-on}
       HEARTHDAOC_BOT_RP_TIMER_WAIT: ${HEARTHDAOC_BOT_RP_TIMER_WAIT-on}
       HEARTHDAOC_BOT_CPU: ${HEARTHDAOC_BOT_CPU-off}
+      HEARTHDAOC_PLAYER_BOTS: ${HEARTHDAOC_PLAYER_BOTS-off}  # HearthDAoC player bots (#137): player bots; off = nothing
+      HEARTHDAOC_PLAYER_BOT_WAKE: ${HEARTHDAOC_PLAYER_BOT_WAKE-gamebot}  # HearthDAoC player bots (#137): gamebot = the lever
+      HEARTHDAOC_PLAYER_BOT_SPOTS: ${HEARTHDAOC_PLAYER_BOT_SPOTS-}      # HearthDAoC player bots (#137): start spots file
       HEARTHDAOC_SKIP_NAVMESH: ${HEARTHDAOC_SKIP_NAVMESH:-}
       TZ: ${TZ:-UTC}
     volumes:

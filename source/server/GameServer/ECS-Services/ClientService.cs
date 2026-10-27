@@ -71,6 +71,9 @@ namespace DOL.GS
         {
             try
             {
+                // HearthDAoC: a player bot's client (#137) has no socket: no receive, ping or idle check; it runs its own login steps.
+                if (client is HearthDAoC.PlayerBots.HeadlessClient headless) { headless.OnClientServiceBeginTick(); return; }
+
                 switch (client.ClientState)
                 {
                     case GameClient.eClientState.NotConnected:
@@ -164,6 +167,9 @@ namespace DOL.GS
 
         private static void Send(GameClient client)
         {
+            // HearthDAoC: a player bot's client (#137) has no packet processor: nothing to send, in any state.
+            if (client is HearthDAoC.PlayerBots.HeadlessClient) return;
+
             long startTick = MonotonicTime.NowMs;
             client.PacketProcessor.SendPendingPackets();
             long stopTick = MonotonicTime.NowMs;
@@ -669,6 +675,8 @@ namespace DOL.GS
 
         private static void OnObjectCreateOrUpdateForPlayer(GamePlayer player, GameObject gameObject)
         {
+            // HearthDAoC: #137 lever (HEARTHDAOC_PLAYER_BOT_WAKE=gamebot): a player bot's update keeps its NPC cache but wakes nothing; PlayerBotWake wakes what a GameBot would.
+            if (!HearthDAoC.PlayerBots.PlayerBotWake.ClientUpdateWakes(player)) { AddObjectToPlayerCache(player, gameObject); return; }
             gameObject.OnUpdateOrCreateForPlayer();
             AddObjectToPlayerCache(player, gameObject);
         }
