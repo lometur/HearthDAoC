@@ -148,12 +148,16 @@ Known gaps:
 - **Stalls are rare, but for one spot.** In two 15-minute runs of 390 hunting bots, 2 and 16 walks stalled (14 after
   #168, 2,421 before these fixes, counting each blocked line's `count=`). 15 of the 16 were one bot at one spot in
   Jordheim (next gap). Most other blocked walks were walks to a target with no path (the gap after).
-- **A ledge in Jordheim (32225, 26622).** The corridor leads from a lower floor over a ledge about 67 units high to a
-  corner 35 units up. The surface moves slide along the ledge's foot into a pocket, where no move or ray reaches the
-  corner, and each fresh corridor leads back out and up again: a roaming bot there walked to and fro for minutes (39
-  replans). Detour's ray along the corridor is blocked from below but clear from above, so the corridor line can't be
-  trusted there either; likely overlapping polygons. Not new: before the replan the same walk stalled and ended the
-  same way. It reproduces offline on the installed navmesh.
+- **A ledge in Jordheim (32225, 26622).** The corridor crosses a ridge there, by a corner 35 units above the lower
+  floor; under its line the floor rises 67 units within 11. The surface moves toward that corner slide sideways along
+  the ridge's foot into a pocket 17 units off the line, where no move reaches the corner and Detour's ray toward it is
+  blocked, so the corridor-line step isn't taken either. Each fresh corridor from the pocket leads back out to a corner
+  61 units away (about 100 for some goals), then toward the ridge again, and the moves slide the bot back into the
+  pocket. It reproduces offline on the installed navmesh: from the pocket, all 20 goals a roaming bot had there end in
+  it. Not new: runs before the replan logged bots stuck in this pocket too, for up to about 6 minutes at about 16
+  blocked walks a minute, before they walked out. With two replans a walk takes about twice as long (7 blocked walks a
+  minute in the last run, where the bot stayed nearly 3 minutes, to the run's end), so a bot likely stays there longer
+  now; not measured.
 - **Unreachable targets come back.** A bot skips a target it found no path to for 30 seconds, then may pick it again:
   in that run one bot tried the same monster 51 times between its fights. A GameBot's target and camp choice is part of
   the parity work (#167).
