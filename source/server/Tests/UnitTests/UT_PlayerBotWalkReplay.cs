@@ -40,6 +40,12 @@ public class UT_PlayerBotWalkReplay
         {
             Vector3 stall = new(535840.4f, 349184, 5387.15f), goal = new(539712, 353104, 4300);
             Assert.That(UT_PlayerBotDriver.Walk(nav, region, zone, stall, goal, keepExact: true), Is.InRange(1, 200));
+
+            // st-fix3: Pbotaaadv stood 88 units under the floor, beyond the surface moves' reach: it steps up onto it.
+            Vector3 sunk = new(521313, 317795, 4713), target = new(521067, 316426, 4267);
+            Vector3? floor = PlayerBotPathMover.FloorStep(nav, zone, sunk);
+            Assert.That(floor, Is.EqualTo(new Vector3(521313, 317795, 4801.47f)).Using<Vector3>((a, b) => Vector3.Distance(a, b) < 1));
+            Assert.That(UT_PlayerBotDriver.Walk(nav, region, zone, floor!.Value, target, keepExact: true), Is.InRange(1, 200));
         });
 
     // st-smoke: in Caledon Pbothaade's first corner lay 2.2 units beside it and 123 above it. A surface step that only
@@ -80,6 +86,11 @@ public class UT_PlayerBotWalkReplay
             Assert.That(Vector3.Distance(lost, floor!.Value), Is.LessThan(PlayerBotPathMover.FloorStepRange));
             Assert.That(PlayerBotPathMover.FloorStep(nav, zone, floor.Value), Is.Null, "on floor with a way out: no step");
             Assert.That(UT_PlayerBotDriver.Walk(nav, region, zone, floor.Value, goal, keepExact: true), Is.InRange(1, 200));
+
+            // st-fix3: the same bot stood 79 units under the floor: it steps up onto the floor straight above.
+            Vector3 sunk = new(24140, 33873, 6582);
+            Assert.That(PlayerBotPathMover.FloorStep(nav, zone, sunk),
+                Is.EqualTo(new Vector3(24140, 33873, 6660.8f)).Using<Vector3>((a, b) => Vector3.Distance(a, b) < 1));
         });
 
     private static void OnZone(ushort id, string name, int offsetX, int offsetY, Action<IPathfindingMgr, Region, Zone> walk)

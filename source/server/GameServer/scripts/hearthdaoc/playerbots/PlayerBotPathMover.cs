@@ -83,9 +83,15 @@ public sealed class PlayerBotPathMover
     /// .TryBeginLocalRouteRecovery): standing off the walkable mesh, no step or route can start, so it steps onto the
     /// nearest real floor within 300 units and plans again from there. Null on floor with a way out (the goal was the
     /// trouble), or with no floor near. In st-fix2 (#166) six bots stood for the rest of the run where every step lost
-    /// the walkable surface; in Tir na Nog one stood 84 units above the floor, which lay 51 units away.</summary>
-    public static Vector3? FloorStep(IPathfindingMgr nav, Zone zone, Vector3 here) =>
-        AutonomousNavigationSurface.TryNearestWalkableFloor(nav, zone, here, FloorStepRange, out Vector3 floor) ? floor : null;
+    /// the walkable surface; in Tir na Nog one stood 84 units above the floor, which lay 51 units away. The nearest
+    /// floor search counts a floor up to 128 units overhead as underfoot, but the surface moves reach only 64: in st-fix3
+    /// bots stood 79-88 units under the floor for the rest of the run. Out of the moves' reach, it steps onto that floor.</summary>
+    public static Vector3? FloorStep(IPathfindingMgr nav, Zone zone, Vector3 here)
+    {
+        if (AutonomousNavigationSurface.TryNearestWalkableFloor(nav, zone, here, FloorStepRange, out Vector3 floor)) return floor;
+        return !nav.GetClosestPoint(zone, here, 32, 32, 64, nav.DefaultFilters).HasValue &&
+               AutonomousNavigationSurface.TryFloor(nav, zone, here, out floor) ? floor : null;
+    }
 
     /// <summary>Whether the bot stands within the stop radius as the driver judges range: GetDistanceTo cuts the
     /// whole-unit distance to an int (Point3D.cs:78-87), so anything under stopDistance + 1 is in.</summary>
