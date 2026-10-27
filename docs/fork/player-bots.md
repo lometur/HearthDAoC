@@ -16,8 +16,9 @@ the bots real players instead of monsters (a GameBot is a `GameNPC`). They are a
 | `off` (default) | Nothing: no account, no character, no log line. |
 | `N` | N bots, split across the realms (Albion gets the first extra), at most 450. |
 | `alb:N,mid:N,hib:N` | That many per realm, 0-150 each. |
+| `0` | No bots, but test-world mode: an empty run to compare with. |
 
-Turning them on puts the server in **test-world mode** for that run:
+Any valid value other than `off`, even `0`, puts the server in **test-world mode** for that run:
 - Discord posts are off (in memory only; the world's setting is unchanged).
 - A status line is logged every minute.
 - At minute 51 the server forces one full memory collection, to log the memory each bot holds. The game loop pauses for it
@@ -39,8 +40,8 @@ Two more settings are read only when bots are on:
 ## What they do
 
 Each bot thinks every 250 ms, a thin copy of the `/bot` pilot's think:
-- It hunts monsters within 4,000 units of its start that con at most yellow. Each death lowers that by one step, by two
-  at most.
+- It roams within 4,000 units of its start and hunts monsters within 5,400 that con at most yellow. Each death lowers
+  that con by one step, by two at most.
 - It rests to full after each kill, and whenever below a GameBot's rest thresholds (70% health, 45% power, 35%
   endurance).
 - A bot with a heal heals itself below 60% health. A caster doesn't start a cast that a hit would interrupt, and uses
@@ -110,7 +111,9 @@ to the goal. Grounded steps there would also need arrival judged by the floor, f
 
 All start `PLAYER_BOT_`:
 - `DRIVER`, every minute: counts and time per bot;
-- `WAKE`, every minute, by reason: `aggro`, `targetsBot`, `heldAggro`, `target`, `attacker`, `talk`, `pet`, `quest`;
+- `WAKE`, every minute, by reason: `aggro`, `targetsBot`, `heldAggro`, `target`, `attacker`, `talk`, `pet`, `quest`.
+  An NPC counts once per think, under its first reason: target, attacker or pet, then quest, then the scan's (an
+  aggressive monster a quest names counts as `quest`);
 - `FIGHT`, `DEATH`, `RELOCATE`, `IDLE`, `BLOCKED`: one per event;
 - `ERRAND`: the quest bot's steps;
 - `SPOT`, `KIT`, `RETRAIN`: start spots and level-matched bots; `TALLY`, every few minutes, a line per bot.
