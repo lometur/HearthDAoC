@@ -36,6 +36,12 @@ public sealed class PlayerBotPathMover
     /// <summary>Why the last Blocked came (the corridor's failure text, "stalled" or "no zone"); for the logs.</summary>
     public string LastBlock { get; private set; } = string.Empty;
 
+    /// <summary>For the blocked line (#166): the last stall's first and last steps, the step length, the bot's state
+    /// and the corridor cursor. Hunting bots stood at one spot for the rest of a run, though a replay from that spot
+    /// walks on.</summary>
+    public string LastStall { get; private set; } = string.Empty;
+    private string _stallFirst = string.Empty;
+
     /// <summary>For the errand's walk line: the steps and distance since the last call, and the live corridor cursor
     /// (the promotion check's walk to Captain Falron covered 6,000 of 35,000 units in 15 minutes, with no block).</summary>
     public string WalkReport()
@@ -124,7 +130,11 @@ public sealed class PlayerBotPathMover
             _exact = next;                                  // a snap back onto the mesh counts, though the bot stays put
             if (Vector3.DistanceSquared(next, current) < 1)
             {
+                if (_stalledSteps == 0) _stallFirst = $"first={Exact(current)}->{Exact(next)} {Cursor(_path)}";
                 if (++_stalledSteps < StallSteps) return PlayerBotStepResult.Moving;
+                LastStall = $"here={Exact(here)} last={Exact(current)}->{Exact(next)} step={step:0.0} " +
+                            $"speed={_player.MaxSpeed} sitting={_player.IsSitting} stealthed={_player.IsStealthed} " +
+                            $"combat={_player.InCombat} {_stallFirst} | last {Cursor(_path)}";
                 _stalledSteps = 0;
                 _path.Clear();
                 LastBlock = "stalled";
@@ -203,6 +213,8 @@ public sealed class PlayerBotPathMover
     }
 
     // The corridor cursor's own state (PlayerTravelPath is upstream's; read only, by reflection, for this log line).
+    private static string Exact(Vector3 v) => $"({v.X:0.00},{v.Y:0.00},{v.Z:0.00})";
+
     private static string Cursor(PlayerTravelPath path)
     {
         const System.Reflection.BindingFlags Hidden = System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic;
