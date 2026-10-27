@@ -55,6 +55,14 @@ public class UT_PlayerBotWalkReplay
             Vector3? down = PlayerBotPathMover.FloorStep(nav, zone, over);
             Assert.That(down, Is.EqualTo(new Vector3(515046.1f, 358050.7f, 3000.47f)).Using<Vector3>((a, b) => Vector3.Distance(a, b) < 1));
             Assert.That(UT_PlayerBotDriver.Walk(nav, region, zone, down!.Value, camp, keepExact: true), Is.InRange(1, 200));
+
+            // st-final2: Pbotaaack stood for minutes on a polygon edge, where 117 of 507 starts within 0.06 units of its
+            // spot don't move (this one among them). Down the mountain it then met the corridor line's float (19 over
+            // the floor) and a slope whose surface move returns the start though the ray is clear. 10,000 units on, it
+            // gets there.
+            Vector3 edge = new(536300.6f, 352870.4f, 6563.43f), worryWort = new(546122, 353692, 4510);
+            Assert.That(UT_PlayerBotDriver.Walk(nav, region, zone, edge, worryWort, keepExact: true, ticks: 400, blockEnds: true),
+                Is.InRange(1, 400));
         });
 
     // st-smoke: in Caledon Pbothaade's first corner lay 2.2 units beside it and 123 above it. A surface step that only

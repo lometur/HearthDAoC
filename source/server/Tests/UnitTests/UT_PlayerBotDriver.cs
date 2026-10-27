@@ -571,6 +571,39 @@ public sealed class UT_PlayerBotDriver
         Assert.That(Run(), Is.False, "a drifting goal");
     }
 
+    // A floor at Z 0 whose surface moves stop at the start, with the ray blocked, from a start on the polygon edge at
+    // X 0 or from over the floor.
+    private sealed class PolygonEdgeMesh : PathfindingMgrBase
+    {
+        public override bool HasNavmesh(Zone zone) => true;
+        private static bool Stuck(Vector3 start) => Math.Abs(start.X) < 0.01f || start.Z > 1;
+        public override PathfindingResult GetPathStraight(Zone zone, Vector3 start, Vector3 end,
+            EDtPolyFlags[] filters, Span<WrappedPathfindingNode> destination)
+        {
+            destination[0] = new(start, EDtPolyFlags.Walk);
+            destination[1] = new(end, EDtPolyFlags.Walk);
+            return new(PathfindingStatus.PathFound, 2);
+        }
+        public override Vector3? GetMoveAlongSurface(Zone zone, Vector3 start, Vector3 end, EDtPolyFlags[] filters) =>
+            Stuck(start) ? start : new(end.X, end.Y, 0);
+        public override Vector3? GetClosestPoint(Zone zone, Vector3 position, float xRange, float yRange, float zRange,
+            EDtPolyFlags[] filters) => Math.Abs(position.Z) <= zRange ? new(position.X, position.Y, 0) : null;
+        public override bool HasLineOfSight(Zone zone, Vector3 start, Vector3 end, EDtPolyFlags[] filters) => !Stuck(start);
+    }
+
+    // st-final2 (#166): a bot stood for minutes on a polygon edge in Snowdonia, where Detour took a polygon that led
+    // nowhere: its moves stopped at the start and its ray was blocked (117 of 507 starts within 0.06 units of the spot).
+    // Further down it floated over the floor after a corridor-line step, and no move started there either. The moves
+    // and the ray are taken again from the floor under the walker, half a unit on toward the step.
+    [Test]
+    public void AWalkerOnAPolygonEdgeOrOverTheFloorStepsOn()
+    {
+        var (region, zone) = World();
+        foreach (Vector3 start in new[] { Vector3.Zero, new Vector3(0, 0, 19) })
+            Assert.That(Walk(new PolygonEdgeMesh(), region, zone, start, new(1000, 0, 0), keepExact: true, blockEnds: true),
+                Is.InRange(1, 200), $"from {start}");
+    }
+
     // A wall along Y 10 from X -5 east, with the corridor round its west end: a corner 11.7 units from the start (by the
     // wall's end), then one 104 units off behind the wall. No step or line of sight crosses the wall.
     private sealed class WallEndMesh : PathfindingMgrBase

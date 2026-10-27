@@ -96,7 +96,7 @@ Read these with their caveats:
 
 ## Walking
 
-A bot walks with upstream's `PlayerTravelPath` corridor cursor (`PlayerBotPathMover`). Eleven marked edits there reach
+A bot walks with upstream's `PlayerTravelPath` corridor cursor (`PlayerBotPathMover`). Thirteen marked edits there reach
 only player bots: `/travel` isn't registered, and `/grind` uses only `TryBuildCorridor`. If `/travel` is ever
 registered, test it in game. The mover:
 - starts each step from the exact spot it last put the bot on. The game stores positions in whole units, and by
@@ -113,6 +113,11 @@ registered, test it in game. The mover:
   pathfinder passes its nodes. In Vendo Caverns a corridor turned round a wall by two corners 13 and 20 units from the
   bot; both counted as reached, so it walked at the next corner, 100 units off behind the wall, and every fresh
   corridor did the same.
+- takes a step again from the floor under it, half a unit on toward the step, when its surface moves stop where they
+  start. From a spot on a polygon edge Detour can take a polygon that leads nowhere: in Snowdonia a bot stood for
+  minutes where 117 of 507 starts within 0.06 units of its spot didn't move, though its logged spot walked on offline.
+  Further down the same walk it floated 19 units over the floor after a corridor-line step, and no move started there
+  either.
 - follows the corridor line, as a GameBot walks its path, when a step brings it no closer to the next corner, where the
   mesh is open and the surface moves still find it (#166). Detour's corners take the coarse polygons' height, which
   on steep ground lies far off the floor: bots stood for the rest of a run beside a corner 70 units below them, or
@@ -143,8 +148,9 @@ Known gaps:
   Most of the 14 stalls had one shape: the corridor's next corner lay on another level than the bot (a ramp above
   it), while a fresh corridor from the same spot walks on. The mover now plans again after a second (above): LIVE_REPLAN.
 - A Tir na Nog bot stalls at one spot (21263, 35215) in most runs, but the same step replayed offline walks on (same
-  navmesh, same Detour library). Live, the stall line's queries put the nearest mesh 5 units from the bot, so the floor
-  step after a stall (above) should move it; why the mesh differs live isn't known.
+  navmesh, same Detour library). Live, the stall line's queries put the nearest mesh 5 units from the bot. It is likely
+  the polygon-edge case above: the log rounds the spot, and starts a few hundredths of a unit apart can differ there.
+  The step again from the floor, or the floor step after a stall, should move it.
 - Within 300 units of its goal, in the open, a bot takes the plain surface move, which keeps the height of the straight
   line to the goal. Grounded steps there would also need arrival judged by the floor, for targets that hover or swim
   above it.
@@ -170,5 +176,5 @@ The bot CPU meter (`/botcpu`) charges them to its own kind, `playerbot`, and the
 `Tests/UnitTests/UT_HeadlessClient.cs`, `UT_PlayerBotPlan.cs`, `UT_PlayerBotDriver.cs`, `UT_PlayerBotErrands.cs`,
 `UT_PlayerBotWake.cs`, `UT_PlayerBotSpots.cs` and `UT_PlayerBotKit.cs` run in CI. `UT_PlayerBotWalkReplay.cs` runs only
 when asked for. It needs `OFFLINE_DAOC_NAV_ROOT`: a folder holding `navmesh/zone008.nav`, `zone012.nav`,
-`zone152.nav`, `zone209.nav` and `zone250.nav` (each from `tools/linux/odaoc_fetch.py --lock deploy/upstream.lock
+`zone126.nav`, `zone152.nav`, `zone209.nav` and `zone250.nav` (each from `tools/linux/odaoc_fetch.py --lock deploy/upstream.lock
 extract runtime/server/navmesh/zone008.nav FOLDER/navmesh/zone008.nav`, and so on) and the Detour library under `lib/`.
