@@ -121,9 +121,10 @@ look in game near a steep hill. Walls still stop it. A floor step is a visible j
 
 Known gaps:
 - **One bot still stalled in the last run.** In a 15-minute run of 390 hunting bots, 22 bots logged 48 blocked walks
-  (306 from 86 bots before these fixes), and none stood at one spot for the rest of the run. One bot in Tir na Nog's
-  stacked floors stalled 4 times at one spot: it stood on a middle floor while its path's next corner lay 87 units up
-  on the floor above. It seems the corridor line between the lower and upper floors took it onto the middle one.
+  (306 from 86 bots before these fixes), and none was still stuck as the run ended (16 before). One bot in Tir na Nog's
+  stacked floors stood at one spot for about 5 minutes and stalled 4 times there, each time with a different goal. It
+  stood on a middle floor while its path's next corner lay 87 units up on the floor above. It seems the corridor line
+  between the lower and upper floors took it onto the middle one. It got away on its own about 4 minutes later.
 - Within 300 units of its goal, in the open, a bot takes the plain surface move, which keeps the height of the straight
   line to the goal. Grounded steps there would also need arrival judged by the floor, for targets that hover or swim
   above it.
