@@ -108,7 +108,8 @@ registered, test it in game. The mover:
   (a ramp above it), while a fresh corridor from the same spot walked on. It does this at most twice a walk, as the
   corridor's own progress check gives up after two: a bot whose fresh corridors each led to another stall would walk
   to and fro for good. Once a goal was too few: bots stalled again where a fresh corridor walked on. A walk ends when
-  it arrives or is blocked, or when its goal jumps more than 64 units or its steps pause for more than a second.
+  it arrives or is blocked, or when its steps pause for more than a second; a goal that jumps more than 64 units gets
+  two replans of its own, but the still steps count on, so a bot whose target runs on still ends blocked.
 - passes a corner within reach (32 units across) only with the next corner in sight, or standing on it, as the NPC
   pathfinder passes its nodes. In Vendo Caverns a corridor turned round a wall by two corners 13 and 20 units from the
   bot; both counted as reached, so it walked at the next corner, 100 units off behind the wall, and every fresh
@@ -135,7 +136,8 @@ registered, test it in game. The mover:
   search every 5 seconds at most: bots stood off the mesh, 79-88 units under the floor or 84 above it, where every step
   lost the walkable surface, and one stood 161 units over the floor in Snowdonia, where every step stood still.
 
-`UT_PlayerBotWalkReplay` replays each of these walks on the installed navmesh.
+`UT_PlayerBotWalkReplay` replays each of these walks on the installed navmesh but the replan's: offline, a fresh
+corridor from those stalls walks on, and the corridor that stalled can't be rebuilt there. A fake-mesh test covers it.
 
 **The trade-off:** on the corridor line a bot on steep ground can sink into the slope or float above it for a step or
 two (about 44 units at one Snowdonia spot), and on a floor link it floats up or down the link (167 units in Tir na
@@ -143,14 +145,15 @@ Nog). GameBots do the same, but a player bot should look like a player: worth a 
 Tir na Nog. A floor step is a visible jump: 14 in one run, of 50-198 units.
 
 Known gaps:
-- **Brief stalls remain.** In a 15-minute run of 390 hunting bots, 20 bots logged 32 blocked walks (306 from 86 bots
-  before these fixes). No bot was blocked 3 or more times at one spot, and none was stuck as the run ended (16 before).
-  Most of the 14 stalls had one shape: the corridor's next corner lay on another level than the bot (a ramp above
-  it), while a fresh corridor from the same spot walks on. The mover now plans again after a second (above): LIVE_REPLAN.
-- A Tir na Nog bot stalls at one spot (21263, 35215) in most runs, but the same step replayed offline walks on (same
-  navmesh, same Detour library). Live, the stall line's queries put the nearest mesh 5 units from the bot. It is likely
-  the polygon-edge case above: the log rounds the spot, and starts a few hundredths of a unit apart can differ there.
-  The step again from the floor, or the floor step after a stall, should move it.
+- **Stalls are rare.** In a 15-minute run of 390 hunting bots, 2 walks stalled, each once (14 after #168, 2,421 before
+  these fixes, counting each blocked line's `count=`). In all, 17 bots logged 89 blocked walks, most of them walks to a
+  target with no path (next gap).
+- **Unreachable targets come back.** A bot skips a target it found no path to for 30 seconds, then may pick it again:
+  in that run one bot tried the same monster 51 times between its fights. A GameBot's target and camp choice is part of
+  the parity work (#167).
+- A Tir na Nog bot stalled at one spot (21263, 35215) in most runs, though the same step replayed offline walks on
+  (same navmesh, same Detour library). It is likely the polygon-edge case above: the log rounds the spot, and starts a
+  few hundredths of a unit apart can differ there. In the last run none stalled there; one churned there once.
 - Within 300 units of its goal, in the open, a bot takes the plain surface move, which keeps the height of the straight
   line to the goal. Grounded steps there would also need arrival judged by the floor, for targets that hover or swim
   above it.

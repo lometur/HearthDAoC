@@ -569,14 +569,25 @@ public sealed class UT_PlayerBotDriver
         stall.Moved();
         foreach (int drift in new[] { 60, 60, 60 }) { goal += new Vector3(drift, 0, 0); stall.Toward(goal, now += 250); }
         Assert.That(Run(), Is.False, "a drifting goal");
+
+        // A target that runs 65 units a step while the bot stands still: the still steps count on, and the walk ends
+        // blocked as any other.
+        stall.Reset();
+        for (int step = 1; step < PlayerBotPathMover.StallSteps; step++)
+        {
+            stall.Toward(goal += new Vector3(65, 0, 0), now += 250);
+            Assert.That(stall.Still(path, out _), Is.False, $"a running target (step {step})");
+        }
+        stall.Toward(goal += new Vector3(65, 0, 0), now += 250);
+        Assert.That(stall.Still(path, out _), Is.True, "a running target: blocked");
     }
 
-    // A floor at Z 0 whose surface moves stop at the start, with the ray blocked, from a start on the polygon edge at
-    // X 0 or from over the floor.
+    // A floor at Z 0 whose surface moves stop at the start within MoveBand of the polygon edge at X 0, and whose ray is
+    // blocked from within RayBand of it; both from over the floor too.
     private sealed class PolygonEdgeMesh : PathfindingMgrBase
     {
+        public float MoveBand, RayBand;
         public override bool HasNavmesh(Zone zone) => true;
-        private static bool Stuck(Vector3 start) => Math.Abs(start.X) < 0.01f || start.Z > 1;
         public override PathfindingResult GetPathStraight(Zone zone, Vector3 start, Vector3 end,
             EDtPolyFlags[] filters, Span<WrappedPathfindingNode> destination)
         {
@@ -585,10 +596,11 @@ public sealed class UT_PlayerBotDriver
             return new(PathfindingStatus.PathFound, 2);
         }
         public override Vector3? GetMoveAlongSurface(Zone zone, Vector3 start, Vector3 end, EDtPolyFlags[] filters) =>
-            Stuck(start) ? start : new(end.X, end.Y, 0);
+            Math.Abs(start.X) < MoveBand || start.Z > 1 ? start : new(end.X, end.Y, 0);
         public override Vector3? GetClosestPoint(Zone zone, Vector3 position, float xRange, float yRange, float zRange,
             EDtPolyFlags[] filters) => Math.Abs(position.Z) <= zRange ? new(position.X, position.Y, 0) : null;
-        public override bool HasLineOfSight(Zone zone, Vector3 start, Vector3 end, EDtPolyFlags[] filters) => !Stuck(start);
+        public override bool HasLineOfSight(Zone zone, Vector3 start, Vector3 end, EDtPolyFlags[] filters) =>
+            Math.Abs(start.X) >= RayBand && start.Z <= 1;
     }
 
     // st-final2 (#166): a bot stood for minutes on a polygon edge in Snowdonia, where Detour took a polygon that led
@@ -599,9 +611,15 @@ public sealed class UT_PlayerBotDriver
     public void AWalkerOnAPolygonEdgeOrOverTheFloorStepsOn()
     {
         var (region, zone) = World();
+        // The moves stop only on the edge, but the ray is blocked half a unit on too: the move taken again walks it on.
+        var moves = new PolygonEdgeMesh { MoveBand = 0.01f, RayBand = 0.6f };
         foreach (Vector3 start in new[] { Vector3.Zero, new Vector3(0, 0, 19) })
-            Assert.That(Walk(new PolygonEdgeMesh(), region, zone, start, new(1000, 0, 0), keepExact: true, blockEnds: true),
-                Is.InRange(1, 200), $"from {start}");
+            Assert.That(Walk(moves, region, zone, start, new(1000, 0, 0), keepExact: true, blockEnds: true),
+                Is.InRange(1, 200), $"the move again, from {start}");
+        // The moves stop half a unit on too, the ray only on the edge: the floor fallback, its ray from the floor, does.
+        var ray = new PolygonEdgeMesh { MoveBand = 0.6f, RayBand = 0.01f };
+        Assert.That(Walk(ray, region, zone, Vector3.Zero, new(1000, 0, 0), keepExact: true, blockEnds: true),
+            Is.InRange(1, 200), "the ray from the floor");
     }
 
     // A wall along Y 10 from X -5 east, with the corridor round its west end: a corner 11.7 units from the start (by the

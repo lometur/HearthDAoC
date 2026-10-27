@@ -22,7 +22,7 @@ public sealed class PlayerBotPathMover
     public const int IdleBroadcastMilliseconds = HeadlessClient.HeartbeatMs; // (est.) < 5 s is proven by PMC:15
     public const int StallSteps = 12;                  // 3 s without progress = blocked
     public const int ReplanSteps = 4;                  // 1 s without progress: the corridor is planned again from here (#166)
-    public const int ReplansPerWalk = 2;               // as the corridor's own progress check, blocked after two replans (PTP:115-128)
+    public const int ReplansPerWalk = 2;               // as the corridor's own progress check, blocked after two replans (PTP:126-139)
     public const int ChurnReplans = 2;                 // churning windows in a row that only replan; the next one blocks
     public const int FloorStepRange = 300;             // the GameBots' step onto the nearest floor (AWBC TryBeginLocalRouteRecovery)
     public const int FloorStepMilliseconds = 5_000;    // at most one such step per bot in this time
@@ -362,13 +362,15 @@ public sealed class PlayerBotStallWatch
     /// <summary>Times the corridor was planned again in this walk.</summary>
     public int Replans { get; private set; }
 
-    /// <summary>Each step toward goal, before it is taken: a goal more than PlayerBotChurnWatch.GoalMoved from the last
-    /// step's, or a pause of more than PlayerBotChurnWatch.PauseMilliseconds since it, starts a new walk.</summary>
+    /// <summary>Each step toward goal, before it is taken: a pause of more than PlayerBotChurnWatch.PauseMilliseconds since
+    /// the last step starts a new walk, and a goal more than PlayerBotChurnWatch.GoalMoved from the last step's starts a
+    /// new walk's replans. The still steps count on across a goal jump: a stalled bot whose target ran more than 64 units a
+    /// step never ended blocked (the review).</summary>
     public void Toward(Vector3 goal, long now)
     {
         const float goalMoved = PlayerBotChurnWatch.GoalMoved;
-        if (now - _last > PlayerBotChurnWatch.PauseMilliseconds || Vector3.DistanceSquared(goal, _goal) > goalMoved * goalMoved)
-            Reset();
+        if (now - _last > PlayerBotChurnWatch.PauseMilliseconds) Reset();
+        else if (Vector3.DistanceSquared(goal, _goal) > goalMoved * goalMoved) Replans = 0;
         (_goal, _last) = (goal, now);
     }
 
