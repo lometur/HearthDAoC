@@ -96,7 +96,7 @@ Read these with their caveats:
 
 ## Walking
 
-A bot walks with upstream's `PlayerTravelPath` corridor cursor (`PlayerBotPathMover`). Five marked edits there reach
+A bot walks with upstream's `PlayerTravelPath` corridor cursor (`PlayerBotPathMover`). Nine marked edits there reach
 only player bots: `/travel` isn't registered, and `/grind` uses only `TryBuildCorridor`. If `/travel` is ever
 registered, test it in game. The mover:
 - starts each step from the exact spot it last put the bot on. The game stores positions in whole units, and by
@@ -107,24 +107,28 @@ registered, test it in game. The mover:
   mesh is open and the surface moves still find it (#166). Detour's corners take the coarse polygons' height, which
   on steep ground lies far off the floor: bots stood for the rest of a run beside a corner 70 units below them, or
   under one 123 above.
-- within 300 units of its goal, walks straight at it only with a clear line of sight; otherwise it follows the
-  corridor (a bot crept along a wall 267 units from its target).
-- when a walk fails, steps onto the nearest floor within 300 units that leads on, as a GameBot does, at most once
-  every 5 seconds: bots stood off the mesh, 79-88 units under the floor or 84 above it, where every step lost the
-  walkable surface.
+- goes up or down a floor link of its corridor along the line, from the link's foot to its top, whatever the surface
+  moves find: two corners at most 64 units apart across but more than 64 apart in height. In Tir na Nog the mesh joins
+  two stacked floors 167 units apart over 41, with no floor between, and half way up the surface moves found a middle
+  floor beside the link: the bot stood on its edge for minutes. A link starts only from its foot, where the bot reached
+  the corner before: Detour's line of sight is 2D and cannot tell a link from two floors stacked, so a bot on another
+  floor than its corridor is not taken through a floor.
+- within 300 units of its goal, walks straight at it only with a clear line of sight, or within a corner's reach (32
+  units across), where the corridor has dropped its last corner; otherwise it follows the corridor (a bot crept along
+  a wall 267 units from its target).
+- when a walk fails, steps onto the nearest floor within 300 units that leads on, as a GameBot does, with one search
+  every 5 seconds at most: bots stood off the mesh, 79-88 units under the floor or 84 above it, where every step lost
+  the walkable surface.
 
 `UT_PlayerBotWalkReplay` replays each of these walks on the installed navmesh.
 
 **The trade-off:** on the corridor line a bot on steep ground can sink into the slope or float above it for a step or
-two (about 44 units at one Snowdonia spot). GameBots do the same, but a player bot should look like a player: worth a
-look in game near a steep hill. Walls still stop it. A floor step is a visible jump: 14 in that run, of 50-198 units.
+two (about 44 units at one Snowdonia spot), and on a floor link it floats up or down the link (167 units in Tir na
+Nog). GameBots do the same, but a player bot should look like a player: worth a look in game near a steep hill and in
+Tir na Nog. A floor step is a visible jump: 14 in one run, of 50-198 units.
 
 Known gaps:
-- **One bot still stalled in the last run.** In a 15-minute run of 390 hunting bots, 22 bots logged 48 blocked walks
-  (306 from 86 bots before these fixes), and none was still stuck as the run ended (16 before). One bot in Tir na Nog's
-  stacked floors stood at one spot for about 5 minutes and stalled 4 times there, each time with a different goal. It
-  stood on a middle floor while its path's next corner lay 87 units up on the floor above. It seems the corridor line
-  between the lower and upper floors took it onto the middle one. It got away on its own about 4 minutes later.
+- LIVE_GAPS
 - Within 300 units of its goal, in the open, a bot takes the plain surface move, which keeps the height of the straight
   line to the goal. Grounded steps there would also need arrival judged by the floor, for targets that hover or swim
   above it.

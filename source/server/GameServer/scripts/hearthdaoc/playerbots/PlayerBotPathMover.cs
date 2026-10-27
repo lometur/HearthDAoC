@@ -110,8 +110,10 @@ public sealed class PlayerBotPathMover
         if (step < 1) return true;
         if (region == null || zone == null) { failure = "No zone here."; return false; }
         // A wall between (no line of sight on the mesh) takes the corridor round it: in st-smoke (#166) a bot 267 units from
-        // its target crept along a wall for the rest of the run.
-        if (!nav.HasNavmesh(zone) || remaining <= DirectStepRange && nav.HasLineOfSight(zone, current, goal, nav.DefaultFilters))
+        // its target crept along a wall for the rest of the run. Within a corner's reach of the goal the corridor has
+        // dropped its last corner, so the direct step goes on (the review of #168: the bot stood short of the goal).
+        if (!nav.HasNavmesh(zone) || remaining <= DirectStepRange &&
+            (PlayerTravelPath.HasReachedCorner(current, goal) || nav.HasLineOfSight(zone, current, goal, nav.DefaultFilters)))
         {
             Vector3 desired = PlayerTravelPath.Advance(current, goal, step);                     // PTP:30-35
             // The plain move keeps the height of the straight line to the goal inside a polygon, so the last 300 units
@@ -149,16 +151,19 @@ public sealed class PlayerBotPathMover
             {
                 LastBlock = failure;
                 Stop(now);
-                if (now >= _nextFloorStep && FloorStep(Nav, _player.CurrentZone, current) is Vector3 floor)
+                if (now >= _nextFloorStep)
                 {
-                    _nextFloorStep = now + FloorStepMilliseconds;
-                    if (Log.IsInfoEnabled)
-                        Log.Info($"PLAYER_BOT_FLOOR_STEP bot={_player.Name} from=({current.X:0},{current.Y:0},{current.Z:0}) " +
-                                 $"to=({floor.X:0},{floor.Y:0},{floor.Z:0}) distance={Vector3.Distance(current, floor):0} why=\"{failure}\"");
-                    _player.MoveTo(_player.CurrentRegionID, (int)Math.Round(floor.X), (int)Math.Round(floor.Y), (int)Math.Round(floor.Z),
-                        _player.Heading);
-                    Reset();
-                    _exact = null;
+                    _nextFloorStep = now + FloorStepMilliseconds;   // one search in the time, found or not: it runs on the game loop (the review of #168)
+                    if (FloorStep(Nav, _player.CurrentZone, current) is Vector3 floor)
+                    {
+                        if (Log.IsInfoEnabled)
+                            Log.Info($"PLAYER_BOT_FLOOR_STEP bot={_player.Name} from=({current.X:0},{current.Y:0},{current.Z:0}) " +
+                                     $"to=({floor.X:0},{floor.Y:0},{floor.Z:0}) distance={Vector3.Distance(current, floor):0} why=\"{failure}\"");
+                        _player.MoveTo(_player.CurrentRegionID, (int)Math.Round(floor.X), (int)Math.Round(floor.Y), (int)Math.Round(floor.Z),
+                            _player.Heading);
+                        Reset();
+                        _exact = null;
+                    }
                 }
                 PlayerBotDriverReport.Blocked();
                 return PlayerBotStepResult.Blocked;

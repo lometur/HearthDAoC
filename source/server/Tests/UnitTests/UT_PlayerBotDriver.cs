@@ -455,7 +455,8 @@ public sealed class UT_PlayerBotDriver
 
     // st-fix4 (#166): in Tir na Nog the mesh joins two stacked floors 167 units apart over 41, with no floor between. Half
     // way up, the surface moves found a middle floor beside the link and the bot stood on its edge for minutes, its next
-    // corner 87 units overhead. The walker goes up the link to the corner, as a GameBot does, whatever the moves find.
+    // corner 87 units overhead. A walker on a link of its own corridor goes along it to the corner, as a GameBot does,
+    // whatever the moves find; down as well as up.
     [Test]
     public void AWalkerGoesUpALinkBetweenStackedFloorsToItsCorner()
     {
@@ -464,13 +465,15 @@ public sealed class UT_PlayerBotDriver
         var path = new PlayerTravelPath();
         Vector3 position = mesh.Corners[0];
         for (int tick = 0; tick < 12; tick++)
+        {
             Assert.That(path.TryStep(region, zone, position, mesh.Corners[^1], 47.75f, tick * 250, mesh, out position, out string failure),
                 Is.True, failure);
+            Assert.That(position.Y, Is.LessThan(30), $"never on the middle floor (tick {tick})");
+        }
         Assert.That(position.Z, Is.EqualTo(167), "on the upper floor");
         Assert.That(position.X, Is.GreaterThan(100), "and on along it");
-        Assert.That(position.Y, Is.LessThan(30), "never on the middle floor");
 
-        // From the middle floor's edge, the corner overhead: up to it, and on to the goal (the mover stops within 20).
+        // A link from the middle floor's edge to the corner overhead: up to it, and on to the goal (the mover stops within 20).
         path = new PlayerTravelPath();
         mesh = new StackedMesh { Corners = new[] { new Vector3(41, 30, 80), new Vector3(41, 0, 167), new Vector3(300, 0, 167) } };
         position = mesh.Corners[0];
@@ -478,6 +481,42 @@ public sealed class UT_PlayerBotDriver
             Assert.That(path.TryStep(region, zone, position, mesh.Corners[^1], 47.75f, tick * 250, mesh, out position, out string failure),
                 Is.True, failure);
         Assert.That(Vector3.Distance(position, mesh.Corners[^1]), Is.LessThanOrEqualTo(20.25f));
+    }
+
+    [Test]
+    public void AWalkerGoesDownALinkBetweenStackedFloorsToItsCorner()
+    {
+        var (region, zone) = World();
+        var mesh = new StackedMesh { Corners = new[] { new Vector3(400, 0, 167), new Vector3(341, 0, 167), new Vector3(330, 0, 0), new Vector3(100, 0, 0) } };
+        var path = new PlayerTravelPath();
+        Vector3 position = mesh.Corners[0];
+        for (int tick = 0; tick < 12 && Vector3.Distance(position, mesh.Corners[^1]) > 20.25f; tick++)
+        {
+            Assert.That(path.TryStep(region, zone, position, mesh.Corners[^1], 47.75f, tick * 250, mesh, out position, out string failure),
+                Is.True, failure);
+            Assert.That(position.Y, Is.LessThan(30), $"never on the middle floor (tick {tick})");
+        }
+        Assert.That(Vector3.Distance(position, mesh.Corners[^1]), Is.LessThanOrEqualTo(20.25f), "down on the lower floor at the goal");
+    }
+
+    // The review of #168: Detour's ray is 2D, so it cannot tell a link from two floors stacked. A walker that stands on
+    // another floor than its corridor (here the middle floor, over the corridor's next corner) is not taken through the
+    // floor to that corner; it stalls, and the mover plans again from the floor it stands on. A link starts only from
+    // its foot.
+    [Test]
+    public void AWalkerOnAnotherFloorThanItsCorridorIsNotTakenThroughTheFloor()
+    {
+        var (region, zone) = World();
+        var mesh = new StackedMesh { Corners = new[] { new Vector3(0, 0, 0), new Vector3(5, 0, 0), new Vector3(60, 0, 0), new Vector3(71, 0, 167), new Vector3(300, 0, 167) } };
+        var path = new PlayerTravelPath();
+        Assert.That(path.TryStep(region, zone, mesh.Corners[0], mesh.Corners[^1], 1, 0, mesh, out _, out string failure), Is.True, failure);
+        Vector3 position = new(65, 40, 80);
+        for (int tick = 1; tick < 12; tick++)
+        {
+            Assert.That(path.TryStep(region, zone, position, mesh.Corners[^1], 47.75f, tick * 250, mesh, out position, out failure),
+                Is.True, failure);
+            Assert.That(position.Z, Is.EqualTo(80), $"on the middle floor (tick {tick})");
+        }
     }
 
     // The promotion check after the run 1 rerun (2026-10-21): by Cotswold the surface mover returned the bot's own spot,
@@ -752,6 +791,12 @@ public sealed class UT_PlayerBotDriver
         Assert.That(PlayerBotPathMover.TryComputeNext(walled, region, zone, new PlayerTravelPath(), Vector3.Zero, new(200, 0, 0), 0, 47.75f, 0,
             out next, out _), Is.True);
         Assert.That((walled.Searches, next), Is.EqualTo((1, new Vector3(0, 47.75f, 0))));
+        // Within a corner's reach of it (32 units across), the direct step whatever the wall: the corridor drops its last
+        // corner there, and the bot stood short of the goal (the review of #168).
+        walled = new Mesh { Walled = true, Corners = new[] { Vector3.Zero, new Vector3(30, 0, 0) } };
+        Assert.That(PlayerBotPathMover.TryComputeNext(walled, region, zone, new PlayerTravelPath(), Vector3.Zero, new(30, 0, 0), 0, 47.75f, 0,
+            out next, out _), Is.True);
+        Assert.That((walled.Searches, next), Is.EqualTo((0, new Vector3(30, 0, 0))));
         // Blocked: false after two replans (PTP:97-105).
         var blocked = new Mesh { Blocked = true };
         path = new PlayerTravelPath();
