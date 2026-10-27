@@ -170,7 +170,7 @@ public sealed class PlayerBotPathMover
                 if (++_stalledSteps < StallSteps) return PlayerBotStepResult.Moving;
                 LastStall = $"here={Exact(here)} last={Exact(current)}->{Exact(next)} step={step:0.0} " +
                             $"speed={_player.MaxSpeed} sitting={_player.IsSitting} stealthed={_player.IsStealthed} " +
-                            $"combat={_player.InCombat} {_stallFirst} | last {Cursor(_path)}";
+                            $"combat={_player.InCombat} {_stallFirst} | last {Cursor(_path)} | {StallQueries(current, goal, step)}";
                 _stalledSteps = 0;
                 _path.Clear();
                 LastBlock = "stalled";
@@ -237,6 +237,26 @@ public sealed class PlayerBotPathMover
         return $"floor={P(floor)} path={result.Status}/{result.NodeCount} corners={corners} step={P(desired)} " +
                $"surface={P(surface)} stepFloor={P(under)} los={los} goalZone={_player.CurrentRegion?.GetZone((int)goal.X, (int)goal.Y)?.ID} " +
                Replay(zone, here, goal);
+    }
+
+    // #166: the stalled step's own queries, from where it started, toward the cursor's next corner (Tir na Nog,
+    // st-fix5: every step from one spot came back to it, while the same queries offline walk on).
+    private string StallQueries(Vector3 current, Vector3 goal, float step)
+    {
+        Zone zone = _player.CurrentZone;
+        IPathfindingMgr nav = Nav;
+        if (zone == null || !nav.HasNavmesh(zone)) return "queries: navmesh=none";
+        static string P(Vector3? v) => v is Vector3 p ? $"({p.X:0.0},{p.Y:0.0},{p.Z:0.0})" : "none";
+        var nodes = typeof(PlayerTravelPath).GetField("_nodes", System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic)
+            ?.GetValue(_path) as Queue<WrappedPathfindingNode>;
+        if (nodes == null || !nodes.TryPeek(out WrappedPathfindingNode node)) return "queries: corner=none " + Replay(zone, current, goal);
+        Vector3 desired = PlayerTravelPath.Advance(current, node.Position, step);
+        return $"queries: corner={P(node.Position)}[{node.Flags}] desired={P(desired)} " +
+               $"ground={P(AutonomousNavigationSurface.MoveAlongGround(nav, zone, current, desired))} " +
+               $"surface={P(nav.GetMoveAlongSurface(zone, current, desired, nav.DefaultFilters))} " +
+               $"los={nav.HasLineOfSight(zone, current, desired, nav.DefaultFilters)} " +
+               $"box={P(nav.GetClosestPoint(zone, desired, 32, 32, 64, nav.DefaultFilters))} " +
+               $"underfoot={P(nav.GetClosestPoint(zone, current, 2, 2, 64, nav.DefaultFilters))} " + Replay(zone, current, goal);
     }
 
     // One step of a fresh corridor cursor from here, as StepToward takes it after its stall cleared the path.
