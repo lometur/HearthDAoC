@@ -96,22 +96,37 @@ Read these with their caveats:
 
 ## Walking
 
-A bot walks with upstream's `PlayerTravelPath` corridor cursor (`PlayerBotPathMover`). Three marked edits there reach
+A bot walks with upstream's `PlayerTravelPath` corridor cursor (`PlayerBotPathMover`). Five marked edits there reach
 only player bots: `/travel` isn't registered, and `/grind` uses only `TryBuildCorridor`. If `/travel` is ever
 registered, test it in game. The mover:
 - starts each step from the exact spot it last put the bot on. The game stores positions in whole units, and by
   Olorustos the rounded spot lay off the navmesh, so the quest bot stood there for 14 minutes.
   `UT_PlayerBotWalkReplay` replays that walk on the installed navmesh.
 - judges arrival as the driver judges range: the whole-unit distance cut to an int.
+- follows the corridor line, as a GameBot walks its path, when a step brings it no closer to the next corner, where the
+  mesh is open and the surface moves still find it (#166). Detour's corners take the coarse polygons' height, which
+  on steep ground lies far off the floor: bots stood for the rest of a run beside a corner 70 units below them, or
+  under one 123 above.
+- within 300 units of its goal, walks straight at it only with a clear line of sight; otherwise it follows the
+  corridor (a bot crept along a wall 267 units from its target).
+- when a walk fails, steps onto the nearest floor within 300 units that leads on, as a GameBot does, at most once
+  every 5 seconds: bots stood off the mesh, 79-88 units under the floor or 84 above it, where every step lost the
+  walkable surface.
+
+`UT_PlayerBotWalkReplay` replays each of these walks on the installed navmesh.
+
+**The trade-off:** on the corridor line a bot on steep ground can sink into the slope or float above it for a step or
+two (about 44 units at one Snowdonia spot). GameBots do the same, but a player bot should look like a player: worth a
+look in game near a steep hill. Walls still stop it. A floor step is a visible jump: 14 in that run, of 50-198 units.
 
 Known gaps:
-- **Hunting bots still stall about as often as before.** In a 15-minute run of 390 hunting bots, 69 bots logged 257
-  stalled walks; the run before the fix had 63 bots and 246. Many of them stand at one spot for the rest of the run,
-  whatever goal they get next. One cause seen: a roam goal picked on a cliff top, where the bot creeps less than a
-  unit a step and is rightly stopped. Why it then never walks on is not found yet: replayed from the same spot on the
-  same navmesh, its next walks arrive.
-- Within 300 units of its goal a bot takes the plain surface move, which keeps the height of the straight line to the
-  goal. Grounded steps there would also need arrival judged by the floor, for targets that hover or swim above it.
+- **One bot still stalled in the last run.** In a 15-minute run of 390 hunting bots, 22 bots logged 48 blocked walks
+  (306 from 86 bots before these fixes), and none stood at one spot for the rest of the run. One bot in Tir na Nog's
+  stacked floors stalled 4 times at one spot: it stood on a middle floor while its path's next corner lay 87 units up
+  on the floor above. It seems the corridor line between the lower and upper floors took it onto the middle one.
+- Within 300 units of its goal, in the open, a bot takes the plain surface move, which keeps the height of the straight
+  line to the goal. Grounded steps there would also need arrival judged by the floor, for targets that hover or swim
+  above it.
 
 ## Log lines
 
@@ -120,7 +135,9 @@ All start `PLAYER_BOT_`:
 - `WAKE`, every minute, by reason: `aggro`, `targetsBot`, `heldAggro`, `target`, `attacker`, `talk`, `pet`, `quest`.
   An NPC counts once per think, under its first reason: target, attacker or pet, then quest, then the scan's (an
   aggressive monster a quest names counts as `quest`);
-- `FIGHT`, `DEATH`, `RELOCATE`, `IDLE`, `BLOCKED`: one per event;
+- `FIGHT`, `DEATH`, `RELOCATE`, `IDLE`, `BLOCKED`: one per event. A stalled walk's `BLOCKED` line ends with `stall:`,
+  the bot's last step and state;
+- `FLOOR_STEP`: a step onto the nearest floor, with where from and to and why;
 - `ERRAND`: the quest bot's steps;
 - `SPOT`, `KIT`, `RETRAIN`: start spots and level-matched bots; `TALLY`, every few minutes, a line per bot.
 
@@ -130,6 +147,6 @@ The bot CPU meter (`/botcpu`) charges them to its own kind, `playerbot`, and the
 
 `Tests/UnitTests/UT_HeadlessClient.cs`, `UT_PlayerBotPlan.cs`, `UT_PlayerBotDriver.cs`, `UT_PlayerBotErrands.cs`,
 `UT_PlayerBotWake.cs`, `UT_PlayerBotSpots.cs` and `UT_PlayerBotKit.cs` run in CI. `UT_PlayerBotWalkReplay.cs` runs only
-when asked for. It needs `OFFLINE_DAOC_NAV_ROOT`: a folder holding `navmesh/zone008.nav` (from
-`tools/linux/odaoc_fetch.py --lock deploy/upstream.lock extract runtime/server/navmesh/zone008.nav
-FOLDER/navmesh/zone008.nav`) and the Detour library under `lib/`.
+when asked for. It needs `OFFLINE_DAOC_NAV_ROOT`: a folder holding `navmesh/zone008.nav`, `zone012.nav`,
+`zone152.nav`, `zone209.nav` and `zone250.nav` (each from `tools/linux/odaoc_fetch.py --lock deploy/upstream.lock
+extract runtime/server/navmesh/zone008.nav FOLDER/navmesh/zone008.nav`, and so on) and the Detour library under `lib/`.
