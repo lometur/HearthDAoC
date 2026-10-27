@@ -96,7 +96,7 @@ Read these with their caveats:
 
 ## Walking
 
-A bot walks with upstream's `PlayerTravelPath` corridor cursor (`PlayerBotPathMover`). Nine marked edits there reach
+A bot walks with upstream's `PlayerTravelPath` corridor cursor (`PlayerBotPathMover`). Eleven marked edits there reach
 only player bots: `/travel` isn't registered, and `/grind` uses only `TryBuildCorridor`. If `/travel` is ever
 registered, test it in game. The mover:
 - starts each step from the exact spot it last put the bot on. The game stores positions in whole units, and by
@@ -107,6 +107,10 @@ registered, test it in game. The mover:
   the walk ends blocked. The stalls left after #168 mostly had the corridor's next corner on another level than the bot
   (a ramp above it), while a fresh corridor from the same spot walked on. It does this once a goal: a bot whose fresh
   corridors each led to another stall would walk to and fro for good.
+- passes a corner within reach (32 units across) only with the next corner in sight, or standing on it, as the NPC
+  pathfinder passes its nodes. In Vendo Caverns a corridor turned round a wall by two corners 13 and 20 units from the
+  bot; both counted as reached, so it walked at the next corner, 100 units off behind the wall, and every fresh
+  corridor did the same.
 - follows the corridor line, as a GameBot walks its path, when a step brings it no closer to the next corner, where the
   mesh is open and the surface moves still find it (#166). Detour's corners take the coarse polygons' height, which
   on steep ground lies far off the floor: bots stood for the rest of a run beside a corner 70 units below them, or

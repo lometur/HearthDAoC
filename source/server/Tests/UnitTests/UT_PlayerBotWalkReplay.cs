@@ -11,23 +11,24 @@ using NUnit.Framework;
 namespace DOL.UnitTests;
 
 // HearthDAoC: player-bot walks that stalled, replayed on the installed navmesh. Read-only; never starts the server.
-// Set OFFLINE_DAOC_NAV_ROOT to a folder with navmesh/zone008.nav, zone012.nav, zone152.nav, zone209.nav, zone250.nav and
-// lib/Detour
+// Set OFFLINE_DAOC_NAV_ROOT to a folder with navmesh/zone008.nav, zone012.nav, zone126.nav, zone152.nav, zone209.nav,
+// zone250.nav and lib/Detour
 // (tools/linux/odaoc_fetch.py --lock deploy/upstream.lock extract runtime/server/navmesh/zone008.nav
 // FOLDER/navmesh/zone008.nav, and the same for the others). One test per zone: loading a zone's navmesh twice in one
 // process crashes the test host.
-[TestFixture, NonParallelizable, Explicit("Needs OFFLINE_DAOC_NAV_ROOT: a folder with navmesh/zone008.nav, zone012.nav, zone152.nav, zone209.nav, zone250.nav and lib/Detour")]
+[TestFixture, NonParallelizable, Explicit("Needs OFFLINE_DAOC_NAV_ROOT: a folder with navmesh/zone008.nav, zone012.nav, zone126.nav, zone152.nav, zone209.nav, zone250.nav and lib/Detour")]
 public class UT_PlayerBotWalkReplay
 {
     // The quest bot stood 513 units short of Olorustos for 14 minutes (lv-r1-stall, 2026-10-25 04:46): its whole-unit
-    // spot lay 0.6 units off the mesh, so each step only snapped it back on, and rounding put it back.
+    // spot lay 0.6 units off the mesh, so each step only snapped it back on, and rounding put it back. (Since the corner
+    // rule of #166 the rounded walk here gets out too, by its near corner; SliverMesh in UT_PlayerBotDriver keeps the
+    // rounding case.)
     [Test]
     public void TheBotWalksOnFromItsStallShortOfOlorustos() =>
         // Campacorentin Forest (region 1, zone 8): the Zones row's OffsetX 59, OffsetY 71, Width 8, Height 8.
         OnZone(8, "Campacorentin Forest", 59, 71, (nav, region, zone) =>
         {
             Vector3 stall = new(497254, 587786, 2310), olorustos = new(496777, 587597, 2292);
-            Assert.That(UT_PlayerBotDriver.Walk(nav, region, zone, stall, olorustos, keepExact: false), Is.EqualTo(-1), "the stall");
             Assert.That(UT_PlayerBotDriver.Walk(nav, region, zone, stall, olorustos, keepExact: true), Is.InRange(1, 20));
         });
 
@@ -68,6 +69,19 @@ public class UT_PlayerBotWalkReplay
         {
             Vector3 stall = new(282187.1f, 280977.1f, 4229.36f), target = new(282046, 281204, 4239);
             Assert.That(UT_PlayerBotDriver.Walk(nav, region, zone, stall, target, keepExact: true), Is.InRange(1, 40));
+        });
+
+    // st-replan: in Vendo Caverns Pbotmaaab's corridor turned round a wall by two corners 13 and 20 units from it. Both
+    // counted as reached, so it walked at the next corner, 100 units off behind the wall, and every fresh corridor did
+    // the same: it stood there for minutes.
+    [Test]
+    public void TheBotWalksRoundAWallByTheCornersNearIt() =>
+        // Vendo Caverns (region 126, zone 126): OffsetX 1, OffsetY 1, Width 8, Height 8.
+        OnZone(126, "Vendo Caverns", 1, 1, (nav, region, zone) =>
+        {
+            Vector3 stall = new(27716.25f, 31724.64f, 16070.8f), goal = new(28693, 33846, 15744);
+            Assert.That(UT_PlayerBotDriver.Walk(nav, region, zone, stall, goal, keepExact: true, ticks: 600, blockEnds: true),
+                Is.InRange(1, 600));
         });
 
     // st-fix2: in Tir na Nog Pbothaacw stood 84 units above the floor, off the mesh: every step lost the walkable

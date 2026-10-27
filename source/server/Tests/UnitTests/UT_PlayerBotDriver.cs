@@ -531,6 +531,44 @@ public sealed class UT_PlayerBotDriver
         }
     }
 
+    // A wall along Y 10 from X -5 east, with the corridor round its west end: a corner 11.7 units from the start (by the
+    // wall's end), then one 104 units off behind the wall. No step or line of sight crosses the wall.
+    private sealed class WallEndMesh : PathfindingMgrBase
+    {
+        private static readonly Vector3 End = new(-6, 10, 0), Beyond = new(100, 30, 0);
+        public override bool HasNavmesh(Zone zone) => true;
+        private static bool Crosses(Vector3 a, Vector3 b)
+        {
+            if ((a.Y < 10) == (b.Y < 10)) return false;
+            float x = a.X + (10 - a.Y) / (b.Y - a.Y) * (b.X - a.X);
+            return x >= -5;
+        }
+        public override PathfindingResult GetPathStraight(Zone zone, Vector3 start, Vector3 end,
+            EDtPolyFlags[] filters, Span<WrappedPathfindingNode> destination)
+        {
+            Vector3[] route = start.Y < 10 ? new[] { start, End, Beyond, end } : new[] { start, Beyond, end };
+            for (int i = 0; i < route.Length; i++) destination[i] = new(route[i], EDtPolyFlags.Walk);
+            return new(PathfindingStatus.PathFound, route.Length);
+        }
+        public override Vector3? GetMoveAlongSurface(Zone zone, Vector3 start, Vector3 end, EDtPolyFlags[] filters) =>
+            Crosses(start, end) ? start : new(end.X, end.Y, 0);
+        public override Vector3? GetClosestPoint(Zone zone, Vector3 position, float xRange, float yRange, float zRange,
+            EDtPolyFlags[] filters) => Math.Abs(position.Z) <= zRange ? new(position.X, position.Y, 0) : null;
+        public override bool HasLineOfSight(Zone zone, Vector3 start, Vector3 end, EDtPolyFlags[] filters) => !Crosses(start, end);
+    }
+
+    // st-replan (#166): in Vendo Caverns a bot's corridor turned round a wall by two corners 13 and 20 units from it.
+    // Both counted as reached (within 32 units), so it walked at the next corner, 100 units off behind the wall, and
+    // every fresh corridor did the same, for minutes. A corner within reach is passed only with the next one in sight,
+    // or on it, as the NPC pathfinder passes its nodes.
+    [Test]
+    public void AWalkerGoesRoundAWallEndNearItsStart()
+    {
+        var (region, zone) = World();
+        Assert.That(Walk(new WallEndMesh(), region, zone, Vector3.Zero, new(400, 60, 0), keepExact: true, blockEnds: true),
+            Is.InRange(1, 200));
+    }
+
     // The review of the stall replan (#166): planned again at each stall, a bot whose fresh corridors each led to
     // another stall walked to and fro between them for good, never blocked. Once a goal, its second stall blocks.
     [Test]

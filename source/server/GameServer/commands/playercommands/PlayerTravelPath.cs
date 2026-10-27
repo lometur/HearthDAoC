@@ -60,6 +60,17 @@ namespace DOL.GS.Commands
             Vector2.DistanceSquared(new(foot.X, foot.Y), new(corner.X, corner.Y)) <= 64 * 64 &&
             nav.GetClosestPoint(zone, corner, 2, 2, 24, nav.DefaultFilters) is Vector3 floor && Math.Abs(floor.Z - corner.Z) <= 24;
 
+        // HearthDAoC: a corner within reach is passed only with the next corner in sight, or with the walker on it (within
+        // 2 units across), as the NPC pathfinder passes its nodes (Pathfinder.ManagePathProgress). In Vendo Caverns a
+        // player bot (#166) passed two corners 13 and 20 units off round a wall, walked at the next one 100 units off
+        // behind the wall, and stood there for minutes: every fresh corridor did the same.
+        private bool MayPassCorner(IPathfindingMgr nav, Zone zone, Vector3 current, Vector3 corner)
+        {
+            if (Vector2.DistanceSquared(new(current.X, current.Y), new(corner.X, corner.Y)) <= 2 * 2) return true;
+            using var next = _nodes.GetEnumerator();
+            return !(next.MoveNext() && next.MoveNext()) || nav.HasLineOfSight(zone, current, next.Current.Position, nav.DefaultFilters);
+        }
+
         public static bool TryBuildCorridor(IPathfindingMgr nav, Zone zone, Vector3 start, Vector3 goal,
             out List<WrappedPathfindingNode> route)
         {
@@ -151,7 +162,8 @@ namespace DOL.GS.Commands
             // by one mesh voxel (observed 13-24 units near Cotswold). Requiring
             // exact equality stalls at the polygon edge. Accept one voxel, then
             // constrain the next movement to the surface; never teleport across it.
-            while (_nodes.TryPeek(out var reached) && HasReachedCorner(current, reached.Position))
+            while (_nodes.TryPeek(out var reached) && HasReachedCorner(current, reached.Position) &&
+                   MayPassCorner(nav, zone, current, reached.Position)) // HearthDAoC: #166
             {
                 if ((reached.Flags & EDtPolyFlags.AnyDoor) != 0) _doorToOpen = reached.Position;
                 _passed = reached.Position; // HearthDAoC: #166
