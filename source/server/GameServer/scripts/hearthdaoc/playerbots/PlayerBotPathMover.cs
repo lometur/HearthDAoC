@@ -4,6 +4,7 @@ using System.Diagnostics;
 using System.Linq;
 using System.Numerics;
 using DOL.GS.Commands;
+using DOL.Logging;
 
 namespace DOL.GS.HearthDAoC.PlayerBots;
 
@@ -16,18 +17,22 @@ public enum PlayerBotStepResult { Arrived, Moving, Waiting, Blocked }
 // (PlayerMovementMonitor.cs:84-148) now sees them.
 public sealed class PlayerBotPathMover
 {
-    public const int DirectStepRange = 300;            // closer than this: one surface step, no corridor
+    public const int DirectStepRange = 300;            // closer than this, in the open: one surface step, no corridor
     public const int TeleportResetDistance = 256;      // a jump this big (teleport, release, speed-hack correction) drops the corridor
     public const int IdleBroadcastMilliseconds = HeadlessClient.HeartbeatMs; // (est.) < 5 s is proven by PMC:15
     public const int StallSteps = 12;                  // 3 s without progress = blocked
     public const int ChurnReplans = 2;                 // churning windows in a row that only replan; the next one blocks
+    public const int FloorStepRange = 300;             // the GameBots' step onto the nearest floor (AWBC TryBeginLocalRouteRecovery)
+    public const int FloorStepMilliseconds = 5_000;    // at most one such step per bot in this time
+
+    private static readonly Logger Log = LoggerManager.Create(typeof(PlayerBotPathMover));
 
     private readonly GamePlayer _player;
     private readonly IPathfindingMgr _nav;             // null = PathfindingProvider.Instance (set at start-up, PathfindingProvider.cs:11-32)
     private readonly PlayerTravelPath _path = new();
     private Vector3 _lastApplied;
     private Vector3? _exact;                           // where the mover last put the bot, before GamePlayer rounded it
-    private long _lastStepTick, _lastUpdateTick;
+    private long _lastStepTick, _lastUpdateTick, _nextFloorStep;
     private int _stalledSteps;
     private readonly PlayerBotChurnWatch _churn = new();
     private int _walkSteps;                            // WalkReport: steps and distance since its last call
@@ -35,6 +40,12 @@ public sealed class PlayerBotPathMover
 
     /// <summary>Why the last Blocked came (the corridor's failure text, "stalled" or "no zone"); for the logs.</summary>
     public string LastBlock { get; private set; } = string.Empty;
+
+    /// <summary>For the blocked line (#166): the last stall's first and last steps, the step length, the bot's state
+    /// and the corridor cursor. Hunting bots stood at one spot for the rest of a run, though a replay from that spot
+    /// walks on.</summary>
+    public string LastStall { get; private set; } = string.Empty;
+    private string _stallFirst = string.Empty;
 
     /// <summary>For the errand's walk line: the steps and distance since the last call, and the live corridor cursor
     /// (the promotion check's walk to Captain Falron covered 6,000 of 35,000 units in 15 minutes, with no block).</summary>
@@ -68,6 +79,20 @@ public sealed class PlayerBotPathMover
     public static Vector3 StepStart(Vector3 player, Vector3? exact) =>
         exact is Vector3 spot && Vector3.DistanceSquared(player, spot) <= 1 ? spot : player;
 
+    /// <summary>Where a bot whose walk failed steps to, as a GameBot does (AutonomousWorldBotController
+    /// .TryBeginLocalRouteRecovery): standing off the walkable mesh, no step or route can start, so it steps onto the
+    /// nearest real floor within 300 units and plans again from there. Null on floor with a way out (the goal was the
+    /// trouble), or with no floor near. In st-fix2 (#166) six bots stood for the rest of the run where every step lost
+    /// the walkable surface; in Tir na Nog one stood 84 units above the floor, which lay 51 units away. The nearest
+    /// floor search counts a floor up to 128 units overhead as underfoot, but the surface moves reach only 64: in st-fix3
+    /// bots stood 79-88 units under the floor for the rest of the run. Out of the moves' reach, it steps onto that floor.</summary>
+    public static Vector3? FloorStep(IPathfindingMgr nav, Zone zone, Vector3 here)
+    {
+        if (AutonomousNavigationSurface.TryNearestWalkableFloor(nav, zone, here, FloorStepRange, out Vector3 floor)) return floor;
+        return !nav.GetClosestPoint(zone, here, 32, 32, 64, nav.DefaultFilters).HasValue &&
+               AutonomousNavigationSurface.TryFloor(nav, zone, here, out floor) ? floor : null;
+    }
+
     /// <summary>Whether the bot stands within the stop radius as the driver judges range: GetDistanceTo cuts the
     /// whole-unit distance to an int (Point3D.cs:78-87), so anything under stopDistance + 1 is in.</summary>
     public static bool Arrived(Vector3 here, Vector3 goal, int stopDistance) => Vector3.Distance(here, goal) < stopDistance + 1;
@@ -84,7 +109,11 @@ public sealed class PlayerBotPathMover
         float step = Math.Min(stepLength, remaining + 1);
         if (step < 1) return true;
         if (region == null || zone == null) { failure = "No zone here."; return false; }
-        if (!nav.HasNavmesh(zone) || remaining <= DirectStepRange)
+        // A wall between (no line of sight on the mesh) takes the corridor round it: in st-smoke (#166) a bot 267 units from
+        // its target crept along a wall for the rest of the run. Within a corner's reach of the goal the corridor has
+        // dropped its last corner, so the direct step goes on (the review of #168: the bot stood short of the goal).
+        if (!nav.HasNavmesh(zone) || remaining <= DirectStepRange &&
+            (PlayerTravelPath.HasReachedCorner(current, goal) || nav.HasLineOfSight(zone, current, goal, nav.DefaultFilters)))
         {
             Vector3 desired = PlayerTravelPath.Advance(current, goal, step);                     // PTP:30-35
             // The plain move keeps the height of the straight line to the goal inside a polygon, so the last 300 units
@@ -92,6 +121,10 @@ public sealed class PlayerBotPathMover
             // height: a target hovering or swimming 80+ units above the floor would then stall the bot under it (review
             // of 2026-10-21). Kept as is: it needs both, grounded steps and a floor-based arrival (not done).
             next = nav.GetMoveAlongSurface(zone, current, desired, nav.DefaultFilters) ?? desired; // as APP:516-520
+            // As the corridor's step (#166): no step closer, and the mesh is open to the goal, so the step takes the line,
+            // where the surface moves still find the mesh.
+            if (PlayerTravelPath.NoStepCloser(current, next, goal) &&
+                nav.GetClosestPoint(zone, desired, 32, 32, 64, nav.DefaultFilters).HasValue) next = desired;
             return true;
         }
         return path.TryStep(region, zone, current, goal, step, now, nav, out next, out failure); // PTP:73-167
@@ -118,13 +151,31 @@ public sealed class PlayerBotPathMover
             {
                 LastBlock = failure;
                 Stop(now);
+                if (now >= _nextFloorStep)
+                {
+                    _nextFloorStep = now + FloorStepMilliseconds;   // one search in the time, found or not: it runs on the game loop (the review of #168)
+                    if (FloorStep(Nav, _player.CurrentZone, current) is Vector3 floor)
+                    {
+                        if (Log.IsInfoEnabled)
+                            Log.Info($"PLAYER_BOT_FLOOR_STEP bot={_player.Name} from=({current.X:0},{current.Y:0},{current.Z:0}) " +
+                                     $"to=({floor.X:0},{floor.Y:0},{floor.Z:0}) distance={Vector3.Distance(current, floor):0} why=\"{failure}\"");
+                        _player.MoveTo(_player.CurrentRegionID, (int)Math.Round(floor.X), (int)Math.Round(floor.Y), (int)Math.Round(floor.Z),
+                            _player.Heading);
+                        Reset();
+                        _exact = null;
+                    }
+                }
                 PlayerBotDriverReport.Blocked();
                 return PlayerBotStepResult.Blocked;
             }
             _exact = next;                                  // a snap back onto the mesh counts, though the bot stays put
             if (Vector3.DistanceSquared(next, current) < 1)
             {
+                if (_stalledSteps == 0) _stallFirst = $"first={Exact(current)}->{Exact(next)} {Cursor(_path)}";
                 if (++_stalledSteps < StallSteps) return PlayerBotStepResult.Moving;
+                LastStall = $"here={Exact(here)} last={Exact(current)}->{Exact(next)} step={step:0.0} " +
+                            $"speed={_player.MaxSpeed} sitting={_player.IsSitting} stealthed={_player.IsStealthed} " +
+                            $"combat={_player.InCombat} {_stallFirst} | last {Cursor(_path)} | {StallQueries(current, goal, step)}";
                 _stalledSteps = 0;
                 _path.Clear();
                 LastBlock = "stalled";
@@ -193,6 +244,26 @@ public sealed class PlayerBotPathMover
                Replay(zone, here, goal);
     }
 
+    // #166: the stalled step's own queries, from where it started, toward the cursor's next corner (Tir na Nog,
+    // st-fix5: every step from one spot came back to it, while the same queries offline walk on).
+    private string StallQueries(Vector3 current, Vector3 goal, float step)
+    {
+        Zone zone = _player.CurrentZone;
+        IPathfindingMgr nav = Nav;
+        if (zone == null || !nav.HasNavmesh(zone)) return "queries: navmesh=none";
+        static string P(Vector3? v) => v is Vector3 p ? $"({p.X:0.0},{p.Y:0.0},{p.Z:0.0})" : "none";
+        var nodes = typeof(PlayerTravelPath).GetField("_nodes", System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic)
+            ?.GetValue(_path) as Queue<WrappedPathfindingNode>;
+        if (nodes == null || !nodes.TryPeek(out WrappedPathfindingNode node)) return "queries: corner=none " + Replay(zone, current, goal);
+        Vector3 desired = PlayerTravelPath.Advance(current, node.Position, step);
+        return $"queries: corner={P(node.Position)}[{node.Flags}] desired={P(desired)} " +
+               $"ground={P(AutonomousNavigationSurface.MoveAlongGround(nav, zone, current, desired))} " +
+               $"surface={P(nav.GetMoveAlongSurface(zone, current, desired, nav.DefaultFilters))} " +
+               $"los={nav.HasLineOfSight(zone, current, desired, nav.DefaultFilters)} " +
+               $"box={P(nav.GetClosestPoint(zone, desired, 32, 32, 64, nav.DefaultFilters))} " +
+               $"underfoot={P(nav.GetClosestPoint(zone, current, 2, 2, 64, nav.DefaultFilters))} " + Replay(zone, current, goal);
+    }
+
     // One step of a fresh corridor cursor from here, as StepToward takes it after its stall cleared the path.
     private string Replay(Zone zone, Vector3 here, Vector3 goal)
     {
@@ -203,6 +274,8 @@ public sealed class PlayerBotPathMover
     }
 
     // The corridor cursor's own state (PlayerTravelPath is upstream's; read only, by reflection, for this log line).
+    private static string Exact(Vector3 v) => $"({v.X:0.00},{v.Y:0.00},{v.Z:0.00})";
+
     private static string Cursor(PlayerTravelPath path)
     {
         const System.Reflection.BindingFlags Hidden = System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic;

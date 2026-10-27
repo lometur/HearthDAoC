@@ -17,6 +17,7 @@ namespace DOL.GS.Commands
         private long _lastProgressTick;
         private int _replans;
         private Vector3? _doorToOpen;
+        private Vector3? _passed, _link; // HearthDAoC: the corridor corner last reached, and the top of the floor link the walker is on (#166)
         public Vector3? DoorNode => _doorToOpen ?? (_nodes.TryPeek(out var node) && (node.Flags & EDtPolyFlags.AnyDoor) != 0
             ? node.Position : null);
 
@@ -44,6 +45,20 @@ namespace DOL.GS.Commands
             float height = Math.Abs(current.Z - corner.Z);
             return flat <= 32 * 32 && height <= 24 || flat <= 2 * 2 && height <= 64;
         }
+
+        // HearthDAoC: whether a step brought the walker less than a unit closer to a point. A step that only drops it
+        // back onto the floor under the point brings it no closer. Player bots (#166).
+        public static bool NoStepCloser(Vector3 from, Vector3 to, Vector3 toward) =>
+            Vector3.Distance(to, toward) > Vector3.Distance(from, toward) - 1;
+
+        // HearthDAoC: whether two corridor corners make a floor link: a short way across (64 units or less) but more than
+        // the surface moves' 64 units up or down, the upper or lower one on a floor (within a corner's 24 units of height).
+        // In Tir na Nog the mesh joins two stacked floors 167 units apart over 41, with no floor between; half way up the
+        // moves found a middle floor 30 units aside, and a player bot (#166) stood on its edge.
+        public static bool IsFloorLink(IPathfindingMgr nav, Zone zone, Vector3 foot, Vector3 corner) =>
+            Math.Abs(corner.Z - foot.Z) > 64 &&
+            Vector2.DistanceSquared(new(foot.X, foot.Y), new(corner.X, corner.Y)) <= 64 * 64 &&
+            nav.GetClosestPoint(zone, corner, 2, 2, 24, nav.DefaultFilters) is Vector3 floor && Math.Abs(floor.Z - corner.Z) <= 24;
 
         public static bool TryBuildCorridor(IPathfindingMgr nav, Zone zone, Vector3 start, Vector3 goal,
             out List<WrappedPathfindingNode> route)
@@ -130,6 +145,7 @@ namespace DOL.GS.Commands
                     return false;
                 }
                 foreach (var node in route) _nodes.Enqueue(node);
+                _passed = _link = null; // HearthDAoC: a new corridor (#166)
             }
             // Detour's straight-path corners and surface projection can differ
             // by one mesh voxel (observed 13-24 units near Cotswold). Requiring
@@ -138,6 +154,7 @@ namespace DOL.GS.Commands
             while (_nodes.TryPeek(out var reached) && HasReachedCorner(current, reached.Position))
             {
                 if ((reached.Flags & EDtPolyFlags.AnyDoor) != 0) _doorToOpen = reached.Position;
+                _passed = reached.Position; // HearthDAoC: #166
                 _nodes.Dequeue();
             }
             if (_nodes.Count == 0)
@@ -174,6 +191,23 @@ namespace DOL.GS.Commands
                     Vector3.Distance(current, floor.Value) <= distance + 2 &&
                     nav.HasLineOfSight(zone, current, floor.Value, nav.DefaultFilters)) snapped = floor;
             }
+            // HearthDAoC: no step closer to the corner, yet the mesh is open along the corridor: the step follows it, as a
+            // GameBot walks its path. Detour's straight-path corners take the polygons' height, which on steep ground lies
+            // far off the floor the surface moves keep: player bots (#166) stood for the rest of a run beside a corner 70
+            // units below them, bounced under one 123 units above, or stood at a polygon edge no surface move crossed.
+            // The step stays where the surface moves still find the mesh (their 32/64 box, LocalPathfindingMgr.cs:50):
+            // from beyond it every step lost the walkable surface for good. A floor link (IsFloorLink) it starts from its
+            // foot, where it reached the corner before, and follows to the next corner whatever the moves find, as they may
+            // find another floor. Only from the foot: Detour's ray is 2D and cannot tell a link from two floors stacked, so
+            // a walker beside the link on another floor is not taken through a floor (the review of #168).
+            Vector3 corner = _nodes.Peek().Position;
+            if (_link != corner)
+                _link = _passed is Vector3 foot && HasReachedCorner(current, foot) && IsFloorLink(nav, zone, foot, corner) ? corner : null;
+            if (Vector3.DistanceSquared(current, desired) >= 1 &&
+                (_link.HasValue ||
+                 snapped.HasValue && NoStepCloser(current, snapped.Value, corner) &&
+                 nav.HasLineOfSight(zone, current, desired, nav.DefaultFilters) &&
+                 nav.GetClosestPoint(zone, desired, 32, 32, 64, nav.DefaultFilters).HasValue)) snapped = desired;
             if (!snapped.HasValue)
             {
                 failure = "Lost the walkable surface; manual control restored.";

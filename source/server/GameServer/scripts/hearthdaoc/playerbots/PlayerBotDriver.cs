@@ -1053,7 +1053,8 @@ public static class PlayerBotDriver
         Vector3 here = new(player.X, player.Y, player.Z);
         Log.Info($"PLAYER_BOT_BLOCKED bot={player.Name} level={player.Level} walk={walk} at=({here.X:0},{here.Y:0},{here.Z:0}) " +
                  $"goal=({goal.X:0},{goal.Y:0},{goal.Z:0}) distance={(int)Vector3.Distance(here, goal)} zone={player.CurrentZone?.ID} " +
-                 $"why=\"{state.Mover.LastBlock}\" count={state.BlockedSinceLine}");
+                 $"why=\"{state.Mover.LastBlock}\" count={state.BlockedSinceLine}" +
+                 (state.Mover.LastBlock == "stalled" ? $" stall: {state.Mover.LastStall}" : ""));
         state.BlockedSinceLine = 0;
     }
 
