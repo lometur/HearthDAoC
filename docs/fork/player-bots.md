@@ -128,7 +128,14 @@ Nog). GameBots do the same, but a player bot should look like a player: worth a 
 Tir na Nog. A floor step is a visible jump: 14 in one run, of 50-198 units.
 
 Known gaps:
-- LIVE_GAPS
+- **Brief stalls remain.** In a 15-minute run of 390 hunting bots, 20 bots logged 32 blocked walks (306 from 86 bots
+  before these fixes). No bot was blocked 3 or more times at one spot, and none was stuck as the run ended (16 before).
+  Most of the 14 stalls had one shape: the corridor's next corner lay on another level than the bot (a ramp above
+  it), while a fresh corridor from the same spot walks on. After 3 seconds the stall clears the corridor and the bot
+  takes a new goal. Planning again once before calling it a stall would keep the goal (not done).
+- In an earlier run a Tir na Nog bot stalled at one spot (21263, 35215), as it did before these fixes, but the same
+  step replayed offline walks on (same navmesh, same Detour library). Each stall line now gives the stalled step's own
+  queries (`queries:`), to find what differs live.
 - Within 300 units of its goal, in the open, a bot takes the plain surface move, which keeps the height of the straight
   line to the goal. Grounded steps there would also need arrival judged by the floor, for targets that hover or swim
   above it.
@@ -141,7 +148,7 @@ All start `PLAYER_BOT_`:
   An NPC counts once per think, under its first reason: target, attacker or pet, then quest, then the scan's (an
   aggressive monster a quest names counts as `quest`);
 - `FIGHT`, `DEATH`, `RELOCATE`, `IDLE`, `BLOCKED`: one per event. A stalled walk's `BLOCKED` line ends with `stall:`,
-  the bot's last step and state;
+  the bot's last step and state, and `queries:`, the stalled step's own navmesh queries and a fresh corridor's step;
 - `FLOOR_STEP`: a step onto the nearest floor, with where from and to and why;
 - `ERRAND`: the quest bot's steps;
 - `SPOT`, `KIT`, `RETRAIN`: start spots and level-matched bots; `TALLY`, every few minutes, a line per bot.
