@@ -91,6 +91,14 @@ public class UT_PlayerBotWalkReplay
             Vector3 sunk = new(24140, 33873, 6582);
             Assert.That(PlayerBotPathMover.FloorStep(nav, zone, sunk),
                 Is.EqualTo(new Vector3(24140, 33873, 6660.8f)).Using<Vector3>((a, b) => Vector3.Distance(a, b) < 1));
+
+            // st-fix4: here the mesh joins the floor at 6494 to the one at 6661, 167 units up over 41, with no floor
+            // between. Half way up, the surface moves found a middle floor (6574) 30 units aside, and the bot stood on its
+            // edge for minutes, its next corner 87 units overhead. It goes up the link to the corner, as a GameBot does.
+            Vector3 middle = new(24084.06f, 33671.36f, 6574.4f), upstairs = new(24298, 33669, 6661);
+            Assert.That(UT_PlayerBotDriver.Walk(nav, region, zone, middle, upstairs, keepExact: true), Is.InRange(1, 200));
+            Vector3 below = new(24063.2f, 33648, 6494.4f);
+            Assert.That(UT_PlayerBotDriver.Walk(nav, region, zone, below, upstairs, keepExact: true), Is.InRange(1, 200));
         });
 
     private static void OnZone(ushort id, string name, int offsetX, int offsetY, Action<IPathfindingMgr, Region, Zone> walk)

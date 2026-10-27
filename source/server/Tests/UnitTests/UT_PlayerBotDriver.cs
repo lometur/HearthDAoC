@@ -415,6 +415,71 @@ public sealed class UT_PlayerBotDriver
         Assert.That(position.Z, Is.EqualTo(100), "no step 100 units under the floor");
     }
 
+    // Floors as in Tir na Nog by the link of st-fix4 (#166): a lower floor (Z 0) everywhere, an upper one (Z 167) from
+    // X 30 on, and a middle one (Z 80) from Y 30 on, beside the link. The mesh joins lower and upper at X 30-41, with no
+    // floor between. A query from a point takes the nearest floor its box reaches; a move or a ray keeps to that floor.
+    private sealed class StackedMesh : PathfindingMgrBase
+    {
+        public Vector3[] Corners;
+        public override bool HasNavmesh(Zone zone) => true;
+        public override PathfindingResult GetPathStraight(Zone zone, Vector3 start, Vector3 end,
+            EDtPolyFlags[] filters, Span<WrappedPathfindingNode> destination)
+        {
+            for (int i = 0; i < Corners.Length; i++) destination[i] = new(Corners[i], EDtPolyFlags.Walk);
+            return new(PathfindingStatus.PathFound, Corners.Length);
+        }
+        private static Vector3 On(float floor, Vector3 p) => floor switch
+        {
+            167 => new(Math.Max(p.X, 30), p.Y, 167),
+            80 => new(p.X, Math.Max(p.Y, 30), 80),
+            _ => new(p.X, p.Y, 0),
+        };
+        private static float? Floor(Vector3 p, float xRange, float yRange, float zRange)
+        {
+            float? best = null;
+            foreach (float floor in new float[] { 0, 167, 80 })
+            {
+                Vector3 q = On(floor, p);
+                if (Math.Abs(q.X - p.X) > xRange || Math.Abs(q.Y - p.Y) > yRange || Math.Abs(q.Z - p.Z) > zRange) continue;
+                if (best == null || Vector3.Distance(p, q) < Vector3.Distance(p, On(best.Value, p))) best = floor;
+            }
+            return best;
+        }
+        public override Vector3? GetClosestPoint(Zone zone, Vector3 position, float xRange, float yRange, float zRange,
+            EDtPolyFlags[] filters) => Floor(position, xRange, yRange, zRange) is float f ? On(f, position) : null;
+        public override Vector3? GetMoveAlongSurface(Zone zone, Vector3 start, Vector3 end, EDtPolyFlags[] filters) =>
+            Floor(start, 32, 32, 64) is float f ? On(f, end) : null;
+        public override bool HasLineOfSight(Zone zone, Vector3 start, Vector3 end, EDtPolyFlags[] filters) =>
+            Floor(start, 32, 32, 64) is float f && Vector2.Distance(new(On(f, end).X, On(f, end).Y), new(end.X, end.Y)) < 0.01f;
+    }
+
+    // st-fix4 (#166): in Tir na Nog the mesh joins two stacked floors 167 units apart over 41, with no floor between. Half
+    // way up, the surface moves found a middle floor beside the link and the bot stood on its edge for minutes, its next
+    // corner 87 units overhead. The walker goes up the link to the corner, as a GameBot does, whatever the moves find.
+    [Test]
+    public void AWalkerGoesUpALinkBetweenStackedFloorsToItsCorner()
+    {
+        var (region, zone) = World();
+        var mesh = new StackedMesh { Corners = new[] { new Vector3(0, 0, 0), new Vector3(30, 0, 0), new Vector3(41, 0, 167), new Vector3(300, 0, 167) } };
+        var path = new PlayerTravelPath();
+        Vector3 position = mesh.Corners[0];
+        for (int tick = 0; tick < 12; tick++)
+            Assert.That(path.TryStep(region, zone, position, mesh.Corners[^1], 47.75f, tick * 250, mesh, out position, out string failure),
+                Is.True, failure);
+        Assert.That(position.Z, Is.EqualTo(167), "on the upper floor");
+        Assert.That(position.X, Is.GreaterThan(100), "and on along it");
+        Assert.That(position.Y, Is.LessThan(30), "never on the middle floor");
+
+        // From the middle floor's edge, the corner overhead: up to it, and on to the goal (the mover stops within 20).
+        path = new PlayerTravelPath();
+        mesh = new StackedMesh { Corners = new[] { new Vector3(41, 30, 80), new Vector3(41, 0, 167), new Vector3(300, 0, 167) } };
+        position = mesh.Corners[0];
+        for (int tick = 0; tick < 12 && Vector3.Distance(position, mesh.Corners[^1]) > 20.25f; tick++)
+            Assert.That(path.TryStep(region, zone, position, mesh.Corners[^1], 47.75f, tick * 250, mesh, out position, out string failure),
+                Is.True, failure);
+        Assert.That(Vector3.Distance(position, mesh.Corners[^1]), Is.LessThanOrEqualTo(20.25f));
+    }
+
     // The promotion check after the run 1 rerun (2026-10-21): by Cotswold the surface mover returned the bot's own spot,
     // and the mesh floor at the next corner lay 5 units above the corner (Z 1826 against 1821), within one voxel. The
     // fallback wanted 2 units, so the bot stood there for good. Coordinates are moved into the test zone (480000/580000
