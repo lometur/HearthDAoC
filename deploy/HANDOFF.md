@@ -92,7 +92,10 @@ whether to begin in its realm's Shrouded Isles town; `off` turns the question of
 at a safe spot and comes back just as it is worth realm points again; `off` sends it straight back) and
 `HEARTHDAOC_BOT_CPU` (default `off`: `on` starts the bot CPU meter with the server, which every minute writes
 the game loop's CPU per kind of bot and player to the server log; a GM's `/botcpu` turns it on or off in game
-until the next start); after editing `.env`, `./hdc up` recreates the server with them.
+until the next start) and `HEARTHDAOC_PLAYER_BOTS` (default `off`: player bots, real characters the server plays
+itself, for test worlds only; any other value also turns Discord posts off for the run and pauses the game loop once at
+minute 51, so leave it `off` on the world people play on); after editing `.env`,
+`./hdc up` recreates the server with them.
 Before remote players join: `./hdc auto-accounts off` and create their accounts with
 `./hdc account create <name> <password>`.
 

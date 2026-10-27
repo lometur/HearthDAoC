@@ -1,5 +1,10 @@
 # Player-bot prototype: run 4 on your server
 
+**A dated record (2026-10-22), not a current guide.** Run 4 was not completed: the pasted steps ran without their
+waits, so nothing was measured. The cost was measured on our PC instead, with the bots at your GameBots' levels
+(#137, issuecomment-6441658806). The image below is the prototype at `74e7b49`, before the lever and the walking
+fixes; the CI step that built such images is gone. To try player bots now, see `docs/fork/player-bots.md`.
+
 For the owner (#137). Runs 1-3 measured 30 player bots on our PC. Run 4 measures them once on your server, beside
 your real roster of GameBots, on a **second, throwaway server**: its own folder, its own container and its own copy of
 today's world. Your live server keeps running and nothing in it changes. The copy is deleted at the end.
