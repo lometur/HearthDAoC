@@ -82,12 +82,13 @@ Each bot thinks every 250 ms, a thin copy of the `/bot` pilot's think:
 - A monster within 2,000 units that has the bot as its target counts as an attacker before its first hit, so the bot
   stands up and fights it first. Before it sits, a bot within reach of an aggressive monster from its last search
   walks to the nearest spot out of that reach, 1,200 units away at most.
-- After a release it first steps out of the reach of every monster round it that would aggro. If it died at its camp,
-  it then plans a new camp from where it died, one it can walk to from there, before it walks back. It plans once the
-  release's 10-s immunity is over: until then a player can attack no monster, so a plan found none. It takes no camp
-  it died at in the last 15 minutes while another camp that cons yellow or easier is left. From its third death with
-  no XP in between it waits 30-120 s out there, as a GameBot does, and it waits out the resurrection illness there
-  too. It pulls nothing until then, but fights back. No hold for a camp lasts over 60 s: then it hunts where it is.
+- After a release it first steps out of the reach of every monster round it that would aggro. Wherever it died (at its
+  camp or on a walk), it then plans a new camp from where it died, one it can walk to from there, before it walks
+  back. It plans once the release's 10-s immunity is over: until then a player can attack no monster, so a plan found
+  none. It takes no camp it died at in the last 15 minutes while another camp that cons yellow or easier is left. From
+  its third death with no XP in between it waits 30-120 s out there, as a GameBot does, and it waits out the
+  resurrection illness there too. It pulls nothing until then, but fights back. No hold for a camp lasts over 60 s:
+  then it hunts where it is.
 - It walks on the navmesh. A bot made at a level from a spots line also trains on each level-up.
 - In a run of 3 bots or fewer, `hdbot-alb-01` also does quest 20206 (Immediate Resolution) and its class promotion.
 

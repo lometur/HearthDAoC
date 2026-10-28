@@ -139,7 +139,7 @@ public sealed class PlayerBotState
     public int EngageBuffs, FightPetCasts, FightWaits;           // #167 FIGHT buffs=, petCasts= and waits=
     public long SitSince;                                        // #167 PLAYER_BOT_REST: when the bot sat down, 0 standing
     public (string Head, PlayerBotDeathDetail Detail, GameObject Target)? PendingDeath;   // a DEATH line awaiting Dying (AwaitsDying)
-    public Vector3 DeathSpot;                                    // #167 F4: where it died last; at its camp (DiedAtCamp)
+    public Vector3 DeathSpot;                                    // #167 F4: where it died last; after any death (C1b)
     public bool ReplanAfterDeath;                                //   it owes a relocation (Died), planned from there, held
     public long ReplanSince;                                     //   MaxHoldMilliseconds at most from the release; its
     public int NoXpDeaths;                                       //   deaths with no XP between them (the GameBot's streak)
@@ -1024,7 +1024,7 @@ public static class PlayerBotDriver
     /// level-up. A capped bot moves to a camp that fits instead (PlanRelocation; DEATHS.md A4).</summary>
     public static int NextDeathSteps(int deathSteps) => Math.Min(deathSteps + 1, MaxDeathSteps);
 
-    /// <summary>Why the bot moves its leash now, or null: Died after a death at its camp, before it walks back (#167 F4:
+    /// <summary>Why the bot moves its leash now, or null: Died after a death (OwesReplan), before it walks back (#167 F4:
     /// the GameBot replans 2.5-4 s after a solo death, AWBC:3780-3816); Capped when its searches have found monsters in
     /// reach but none under its cap for CappedRelocateMilliseconds (DEATHS.md A4), Outgrown when it has reached no target
     /// for RelocateAfterMilliseconds. None while the bot is immune (#167 C1): the release starts a 10-s immunity
@@ -1071,7 +1071,7 @@ public static class PlayerBotDriver
     /// <summary>A capped bot that can relocate stands where it is until it does, unless it walks to its anchor (a
     /// relocation's spot, or back to the leash): no roam into a camp it cannot hunt, as a GameBot holds still after a
     /// death until it plans its next camp (HoldSoloDeathRecovery, AWBC:2998-3012). So does one owed a relocation after a
-    /// death at its camp, from its release (replanSince, #167 F4). One that cannot roams as before (FallbackInPlace):
+    /// death (OwesReplan), from its release (replanSince, #167 F4). One that cannot roams as before (FallbackInPlace):
     /// held, it stood there for good. No hold lasts MaxHoldMilliseconds: FallbackInPlace has no cap for a death's
     /// relocation, nor for a capped bot that passed over only names it avoids, so with no camp planned by then the bot
     /// hunts where it is, under its cap and its avoided names.</summary>
@@ -1081,14 +1081,12 @@ public static class PlayerBotDriver
     /// <summary>A hold begun at since (0: none) and not yet MaxHoldMilliseconds old.</summary>
     public static bool Holding(long since, long now) => since != 0 && now - since < MaxHoldMilliseconds;
 
-    /// <summary>A death at the bot's camp (#167 F4): within its anchor's leash and roam, where FindWithin hunts.</summary>
-    public static bool DiedAtCamp(Vector3 death, Vector3 anchor) =>
-        Vector3.Distance(death, anchor) <= LeashRadius + RoamRadius;
-
     /// <summary>Whether a death owes a replan before the walk back (#167 F4): on no task, a leash it can move
-    /// (CanRelocate: no lever spot bot, in its anchor's region) and a death at its camp (DiedAtCamp).</summary>
-    public static bool OwesReplan(bool onTask, bool canRelocate, Vector3 death, Vector3 anchor) =>
-        !onTask && canRelocate && DiedAtCamp(death, anchor);
+    /// (CanRelocate: no lever spot bot, in its anchor's region), wherever it died (#167 C1b). Only a death within its
+    /// anchor's leash and roam owed one before: a bot that died on a walk walked back past that camp, and those lives
+    /// held 44 of st-deathsB's 146 again deaths. The plan starts from the death spot (RelocationOrigin) and bars the camp
+    /// it died at, as every death's (RememberFailedCamp in HandleDeath).</summary>
+    public static bool OwesReplan(bool onTask, bool canRelocate) => !onTask && canRelocate;
 
     /// <summary>Where a relocation plans from (PlanRelocation's here): after a death (Died) the spot the bot died at, not
     /// its bind; else where it is.</summary>
@@ -1104,7 +1102,7 @@ public static class PlayerBotDriver
 
     /// <summary>The recovery after a release (#167 F4), this think's step: it fights back what hits it (attacked); else
     /// it steps out of the reach of any monster that would aggro (stepsOut: in reach, with a clear spot to go to); then
-    /// it plans the relocation owed after a death at its camp (replanOwed); then it waits out its back-off (the GameBot's
+    /// it plans the relocation owed after a death (replanOwed, OwesReplan); then it waits out its back-off (the GameBot's
     /// no-XP death streak, AutonomousDeathRecoveryPolicy) and the resurrection illness out there; then it is done. The
     /// release restores health, power and endurance (GamePlayer.cs:1723-1725): no rest to full.</summary>
     public static PlayerBotRecovery AfterReleaseStep(bool attacked, bool stepsOut, bool replanOwed, bool backingOff, bool ill) =>
@@ -1680,7 +1678,7 @@ public static class PlayerBotDriver
     // can walk to (a GameBot leaves an outgrown camp for one at its level, AWBC:3244-3300). A capped one moves after 30 s
     // (DEATHS.md A4): both to the nearest camp that fits the death cap, else to the safest one, as a GameBot falls back
     // after a death (PlanRelocation). A capped bot that cannot move takes the safest con in reach (FallbackInPlace).
-    // After a death at its camp (#167 F4) it plans before it walks back, from where it died, in its anchor's region and
+    // After a death (#167 F4, C1b) it plans before it walks back, from where it died, in its anchor's region and
     // the zone it died in (the bind may lie elsewhere; then the corridors start at the death spot, CorridorOrigin), the
     // failed camps barred; with no camp it hunts where it is. Not while the release's immunity lasts (RelocateReason,
     // #167 C1): it returns before NextRelocateTick, so the next think tries again, and the replan's hold (ReplanSince,
@@ -1926,7 +1924,7 @@ public static class PlayerBotDriver
             state.NoXpDeaths = AutonomousDeathRecoveryPolicy.NextNoExperienceDeathStreak(state.NoXpDeaths,   // #167 F4:
                 state.LastDeathTick, now, state.Gained > state.GainedAtDeath);          //   the back-off (AWBC:3778-3786)
             (state.LastDeathTick, state.GainedAtDeath) = (now, state.Gained);
-            state.ReplanAfterDeath = OwesReplan(state.Task != null, CanRelocate(state, player), state.DeathSpot, state.Anchor);
+            state.ReplanAfterDeath = OwesReplan(state.Task != null, CanRelocate(state, player));   // wherever (C1b)
             state.NextRelocateTick = 0;                                                 //   and the plan before the walk back
             state.AfterRelease = false;
             state.CappedSince = 0;

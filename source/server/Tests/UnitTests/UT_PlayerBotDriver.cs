@@ -145,7 +145,7 @@ public sealed class UT_PlayerBotDriver
 
     // DEATHS.md A4: a bot whose searches find monsters in reach but none under its cap takes none and, 30 s on, moves to
     // a camp that fits; one that has reached no target for 2 minutes has outgrown its ground. The cap's reason wins.
-    // A death at its camp (#167 F4) owes a relocation at once, before the capped and outgrown clocks. None while the
+    // A death (#167 F4; anywhere, C1b) owes a relocation at once, before the capped and outgrown clocks. None while the
     // release's immunity lasts (#167 C1): every monster then fails IsAttackable (AbstractServerRules.cs:385-392), and the
     // death's replan found none (279 of 312 st-deathsB died replans: none checked=0, all 10-19 s after the death).
     [TestCase(0L, 0L, 1_000_000L, false, false, null)]
@@ -288,7 +288,7 @@ public sealed class UT_PlayerBotDriver
         Assert.That(PlayerBotDriver.FallbackInPlace(reason, safest), Is.EqualTo(cap));
 
     // A capped bot stands while it waits to move its leash, unless it walks to its anchor; one that cannot move it now
-    // (FallbackInPlace) roams as before. So does one owed a relocation after a death at its camp (#167 F4), from its
+    // (FallbackInPlace) roams as before. So does one owed a relocation after a death (#167 F4), from its
     // release. Neither holds past 60 s: with no camp planned by then it hunts where it is, under its cap (FallbackInPlace
     // has no cap for a death's relocation, so nothing else would end that hold).
     [TestCase(true, 5_000L, 0L, false, 5_000L, true)] [TestCase(true, 0L, 0L, false, 5_000L, false)]
@@ -376,21 +376,13 @@ public sealed class UT_PlayerBotDriver
 
     // --- the recovery from a death (#167 F4) ---
 
-    // A death within its anchor's leash and roam (LeashRadius + RoamRadius, the reach FindWithin hunts in) is a death at
-    // its camp: it owes a relocation before it walks back.
-    [TestCase(5_000f, true)] [TestCase(5_400f, true)] [TestCase(5_401f, false)] [TestCase(5_500f, false)]
-    public void A_death_within_its_hunting_reach_is_a_death_at_its_camp(float distance, bool atCamp) =>
-        Assert.That(PlayerBotDriver.DiedAtCamp(new Vector3(distance, 0, 0), Vector3.Zero), Is.EqualTo(atCamp));
-
-    // A death owes a replan before the walk back when the bot is on no task, can move its leash (no lever spot bot, in
-    // its anchor's region: CanRelocate) and died at its camp (DiedAtCamp). The review of 77ba437: with it always false,
-    // no test failed.
-    [TestCase(false, true, 5_000f, true)] [TestCase(false, true, 5_400f, true)]
-    [TestCase(true, true, 5_000f, false)] [TestCase(false, false, 5_000f, false)] [TestCase(false, true, 5_401f, false)]
-    public void A_death_at_its_camp_owes_a_replan_unless_on_a_task_or_held(bool onTask, bool canRelocate, float distance,
-        bool owes) =>
-        Assert.That(PlayerBotDriver.OwesReplan(onTask, canRelocate, new Vector3(distance, 0, 0), Vector3.Zero),
-            Is.EqualTo(owes));
+    // A death owes a replan before the walk back when the bot is on no task and can move its leash (no lever spot bot,
+    // in its anchor's region: CanRelocate). The review of 77ba437: with it always false, no test failed. Wherever it
+    // died (#167 C1b): a death more than LeashRadius + RoamRadius from its anchor (on a walk, a relocation) owed none,
+    // and the bot walked back past the camp it died at; those lives held 44 of st-deathsB's 146 again deaths.
+    [TestCase(false, true, true)] [TestCase(true, true, false)] [TestCase(false, false, false)] [TestCase(true, false, false)]
+    public void A_death_owes_a_replan_wherever_it_died_unless_on_a_task_or_held(bool onTask, bool canRelocate, bool owes) =>
+        Assert.That(PlayerBotDriver.OwesReplan(onTask, canRelocate), Is.EqualTo(owes));
 
     // The plan's origin: after a death the spot it died at, not where it stands (its bind: 5,808 units off at the median
     // in st-deathsA, the review of 77ba437); a capped or outgrown bot plans from where it is.
@@ -470,8 +462,8 @@ public sealed class UT_PlayerBotDriver
             Assert.That(Vector3.Distance(points[i], expected[i]), Is.LessThan(0.01f), $"point {i}: {points[i]}");
     }
 
-    // After a release: it fights back what hits it; else it steps out of reach, then plans the relocation it owes (a
-    // death at its camp), then waits out its back-off (the GameBot's, from the third death with no XP:
+    // After a release: it fights back what hits it; else it steps out of reach, then plans the relocation it owes (any
+    // death, C1b), then waits out its back-off (the GameBot's, from the third death with no XP:
     // AutonomousDeathRecoveryPolicy) and the resurrection illness; then the recovery is over.
     [TestCase(true, true, true, true, true, PlayerBotRecovery.Fight)]
     [TestCase(false, true, true, true, true, PlayerBotRecovery.StepOut)]
