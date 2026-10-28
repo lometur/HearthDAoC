@@ -2341,9 +2341,9 @@ public sealed class UT_PlayerBotDriver
     // World-DB spells (Spell, LineXSpell): a Sorcerer's Body Destruction roots and Mind Twisting mezzes, a Wizard's
     // Path of Ice root, an Eldritch's Way of the Sun stun, a Bonedancer's snare and a Wizard's area root.
     private static Spell Control(int id, string name, string type, int level, double value, int radius = 0,
-        double castTime = 2.5) =>
+        double castTime = 2.5, int duration = 20) =>
         new(new DbSpell { SpellID = id, Name = name, Type = type, Target = "Enemy", Value = value, Range = 1500,
-            Radius = radius, CastTime = castTime, Duration = 20 }, level);
+            Radius = radius, CastTime = castTime, Duration = duration }, level);
 
     private static readonly SpellLine BodyLine = new("Body Destruction", "Body Destruction", Specs.Body_Magic, true),
         SunLine = new("Way of the Sun", "Way of the Sun", Specs.Light, true);
@@ -2366,6 +2366,20 @@ public sealed class UT_PlayerBotDriver
         Assert.That(PlayerBotDriver.IsControlSpell(ShroudOfDoubt), Is.False, "a snare (50%) is no root");
         Assert.That(PlayerBotDriver.IsControlSpell(TremblingEarth), Is.False, "an area root");
         Assert.That(PlayerBotDriver.IsControlSpell(FungalOoze), Is.False, "a nuke");
+    }
+
+    // The review of 9aacd69: a Minstrel's Instruments mezzes (Compelling Cadence and the rest: Mesmerize, Enemy, range
+    // 1,500, InstrumentRequirement 3) counted as controls, so its add step spent its 3 tries an add on a mez the server
+    // refuses with no instrument (SpellHandler.cs:546-553). A song is no control, as the damage spells, heals, self-buffs
+    // and chants already leave it out; a Bard's mezzes need no instrument (InstrumentRequirement 0) and stay.
+    [Test]
+    public void A_song_that_needs_an_instrument_is_no_control()
+    {
+        Spell cadence = new(new DbSpell { SpellID = 5001, Name = "Compelling Cadence", Type = "Mesmerize", Target = "Enemy",
+            Range = 1500, CastTime = 3.0, Duration = 20, InstrumentRequirement = 3 }, 20);
+        Spell melody = new(new DbSpell { SpellID = 5002, Name = "Mesmerizing Melody", Type = "Mesmerize", Target = "Enemy",
+            Range = 1500, CastTime = 3.0, Duration = 20 }, 20);
+        Assert.That((PlayerBotDriver.IsControlSpell(cadence), PlayerBotDriver.IsControlSpell(melody)), Is.EqualTo((false, true)));
     }
 
     // The stun first (damage doesn't break it, GameLiving.cs:1784-1803), then the root, then the mez (the server resists
@@ -2414,6 +2428,37 @@ public sealed class UT_PlayerBotDriver
         Assert.That(PlayerBotDriver.DiminishedAllows(afterSheen, 8_000), Is.False, "800 ms, the sixth time");
         Assert.That(PlayerBotDriver.DiminishedAllows(Immunity(flash), 1_500), Is.False, "750 ms the second time");
     }
+
+    // Takes as the controls read it (the review of 9aacd69: with the old "any immunity effect is immune" terms put back
+    // in Takes no test failed): the server's own tests by kind. After one Prismatic Sheen the monster takes the next for
+    // 4 s (the old rule: immune), not the sixth (800 ms); a CC-immune monster or one immune to the kind takes none; a mez
+    // only from 75% health (CCSpellHandler.cs:173-177); a root reads no diminishing immunity.
+    [Test]
+    public void A_monster_takes_a_control_by_the_servers_own_tests_of_its_kind()
+    {
+        Spell sheen = Control(4124, "Prismatic Sheen", "Stun", 36, 0, duration: 8);
+        var afterSheen = new NpcStunImmunityEffect(new ECSGameEffectInitParams(null, 60_000, 1,
+            new DOL.GS.Spells.StunSpellHandler(null, sheen, SunLine)));
+        Assert.That(PlayerBotDriver.Takes(sheen, false, false, afterSheen, 100), Is.True, "the second hold, 4 s");
+        Assert.That(PlayerBotDriver.Takes(sheen, false, false, null, 100), Is.True);
+        Assert.That((PlayerBotDriver.Takes(sheen, true, false, null, 100), PlayerBotDriver.Takes(sheen, false, true, null, 100)),
+            Is.EqualTo((false, false)), "CC-immune, stun-immune");
+        for (int i = 0; i < 4; i++) afterSheen.OnApplyNewEffect();
+        Assert.That(PlayerBotDriver.Takes(sheen, false, false, afterSheen, 100), Is.False, "the sixth hold, 800 ms");
+        Assert.That((PlayerBotDriver.Takes(LesserMesmerization, false, false, null, 75),
+            PlayerBotDriver.Takes(LesserMesmerization, false, false, null, 74)), Is.EqualTo((true, false)));
+        Assert.That(PlayerBotDriver.Takes(Cripple, false, false, afterSheen, 10), Is.True, "a root");
+        Assert.That(PlayerBotDriver.Takes(Cripple, false, true, null, 100), Is.False, "root-immune");
+    }
+
+    // CasterStep's filter on its target (C8; the review of 9aacd69: with MezWanted dropped from it no test failed): one the
+    // target takes, and a mez only as the escape.
+    [TestCase(false, true, 5_000L, true)] [TestCase(true, true, 3_500L, true)] [TestCase(true, true, 3_501L, false)]
+    [TestCase(false, false, 0L, false)] [TestCase(true, false, 0L, false)]
+    public void A_caster_controls_its_target_with_what_it_takes_and_a_mez_only_as_the_escape(bool mez, bool takes,
+        long contactMs, bool allowed) =>
+        Assert.That(PlayerBotDriver.CasterControlAllowed(mez ? LesserMesmerization : Cripple, takes, contactMs),
+            Is.EqualTo(allowed));
 
     // #167 C8: a mez goes on the target only as the escape, the monster in reach before the mez and its margin end (it
     // breaks on the next nuke's damage, GameLiving.cs:1784-1803); an add takes it whenever (C4).
@@ -2633,6 +2678,19 @@ public sealed class UT_PlayerBotDriver
             Is.EqualTo(PlayerBotCasterAction.StepBack), "a held one: as before");
     }
 
+    // CasterStep's killsFirst as it reads it (the review of 9aacd69: forced false there, no test failed): the nukes the
+    // fight's casts say the target needs land before contact, the bot at 60% health or more and one monster at most on it.
+    [TestCase(100, 65, 1, 6_100L, 3_000, true, (byte)100, 1, true)]
+    [TestCase(100, 65, 1, 6_100L, 3_000, false, (byte)100, 1, false)]                        // no Quickcast: 1 lands
+    [TestCase(100, 65, 1, 6_100L, 3_000, true, (byte)59, 1, false)]                          // under 60%
+    [TestCase(100, 65, 1, 6_100L, 3_000, true, (byte)60, 1, true)]
+    [TestCase(100, 65, 1, 6_100L, 3_000, true, (byte)100, 2, false)]                         // an add on it
+    [TestCase(100, 100, 0, 60_000L, 3_000, true, (byte)100, 0, false)]                       // nothing measured
+    public void A_caster_skips_its_control_when_its_nukes_kill_first_healthy_and_alone(int engageHealth, int health,
+        int casts, long contactMs, int nukeCastMs, bool quickcastReady, byte botHealth, int attackers, bool killsFirst) =>
+        Assert.That(PlayerBotDriver.KillsFirstNow(engageHealth, health, casts, contactMs, nukeCastMs, quickcastReady, botHealth,
+            attackers), Is.EqualTo(killsFirst));
+
     // --- the add's control (#167 C4) ---
 
     // Caster add fights were fatal 96% of the time in st-deathsB (51 of 53): casters controlled their target, never an add
@@ -2686,23 +2744,29 @@ public sealed class UT_PlayerBotDriver
 
     // The add's control (a 2,500-ms cast, the 500-ms margin), for every role with a control: cast while it ends before
     // the add's contact and no hit interrupts the bot; else only with Quickcast (Quickcast ready: turn it on; on: cast).
-    // Not while the target's control comes first (TargetFirst), nor with no add or no control.
-    [TestCase(false, 4_000L, false, 2_500, false, false, false, PlayerBotAddAction.None)]
-    [TestCase(true, 4_000L, false, 2_500, false, false, false, PlayerBotAddAction.Control)]
-    [TestCase(true, 3_001L, false, 2_500, false, true, false, PlayerBotAddAction.Control)]
-    [TestCase(true, 3_000L, false, 2_500, false, true, false, PlayerBotAddAction.QcControl)]
-    [TestCase(true, 3_000L, false, 2_500, false, false, false, PlayerBotAddAction.None)]          // no Quickcast
-    [TestCase(true, 0L, false, 2_500, true, true, false, PlayerBotAddAction.QcControl)]
-    [TestCase(true, 0L, false, 2_500, true, false, true, PlayerBotAddAction.Control)]            // Quickcast on
-    [TestCase(true, 0L, false, 2_500, true, false, false, PlayerBotAddAction.None)]             // a healer once hit
-    [TestCase(true, 6_000L, true, 2_500, false, false, false, PlayerBotAddAction.None)]          // the target's first
-    [TestCase(true, 6_000L, false, 0, false, false, false, PlayerBotAddAction.None)]             // no control
-    [TestCase(true, 6_000L, false, 2_500, true, false, false, PlayerBotAddAction.None)]          // the target's hits
-    [TestCase(true, 6_000L, false, 2_500, true, true, false, PlayerBotAddAction.QcControl)]
-    public void A_bot_controls_the_add_before_it_arrives_else_with_quickcast(bool hasAdd, long addContactMs, bool targetFirst,
-        int controlCastMs, bool interrupted, bool quickcastReady, bool quickcastOn, PlayerBotAddAction expected) =>
-        Assert.That(PlayerBotDriver.AddAction(hasAdd, addContactMs, targetFirst, controlCastMs, interrupted, quickcastReady,
-            quickcastOn), Is.EqualTo(expected));
+    // Not while the target's control comes first (TargetFirst), nor with no add or no control. The review of 9aacd69: an
+    // instant control (a cast time of 0: a Skald's Stunning Shout and Disabling Shout, a Minstrel's Stunning Yell) read
+    // as none; it goes whatever the hits and the contact, as CombatAction casts an uninterruptible spell.
+    [TestCase(false, true, 4_000L, false, 2_500, true, false, false, false, PlayerBotAddAction.None)]
+    [TestCase(true, true, 4_000L, false, 2_500, true, false, false, false, PlayerBotAddAction.Control)]
+    [TestCase(true, true, 3_001L, false, 2_500, true, false, true, false, PlayerBotAddAction.Control)]
+    [TestCase(true, true, 3_000L, false, 2_500, true, false, true, false, PlayerBotAddAction.QcControl)]
+    [TestCase(true, true, 3_000L, false, 2_500, true, false, false, false, PlayerBotAddAction.None)]          // no Quickcast
+    [TestCase(true, true, 0L, false, 2_500, true, true, true, false, PlayerBotAddAction.QcControl)]
+    [TestCase(true, true, 0L, false, 2_500, true, true, false, true, PlayerBotAddAction.Control)]            // Quickcast on
+    [TestCase(true, true, 0L, false, 2_500, true, true, false, false, PlayerBotAddAction.None)]             // a healer once hit
+    [TestCase(true, true, 6_000L, true, 2_500, true, false, false, false, PlayerBotAddAction.None)]          // the target's first
+    [TestCase(true, false, 6_000L, false, 0, true, false, false, false, PlayerBotAddAction.None)]            // no control
+    [TestCase(true, true, 6_000L, false, 2_500, true, true, false, false, PlayerBotAddAction.None)]          // the target's hits
+    [TestCase(true, true, 6_000L, false, 2_500, true, true, true, false, PlayerBotAddAction.QcControl)]
+    [TestCase(true, true, 0L, false, 0, false, true, false, false, PlayerBotAddAction.Control)]              // instant, in melee, hit
+    [TestCase(true, true, 6_000L, false, 0, false, false, false, false, PlayerBotAddAction.Control)]         // instant
+    [TestCase(true, true, 0L, true, 0, false, true, false, false, PlayerBotAddAction.None)]                  // the target's first
+    public void A_bot_controls_the_add_before_it_arrives_else_with_quickcast(bool hasAdd, bool hasControl, long addContactMs,
+        bool targetFirst, int controlCastMs, bool interruptible, bool interrupted, bool quickcastReady, bool quickcastOn,
+        PlayerBotAddAction expected) =>
+        Assert.That(PlayerBotDriver.AddAction(hasAdd, hasControl, addContactMs, targetFirst, controlCastMs, interruptible,
+            interrupted, quickcastReady, quickcastOn), Is.EqualTo(expected));
 
     // One Quickcast in 30 s (SpellHandler.cs:1430-1434): an add hitting the bot (contact 0) while its target comes at 6 s
     // took it on the target (CasterAction's "an add hits it" row); the add step runs first now, turns it on for the add,
@@ -2712,10 +2776,10 @@ public sealed class UT_PlayerBotDriver
     {
         Assert.That(PlayerBotDriver.CasterAction(true, 6_000, false, false, 2_500, 3_000, true, true, false, false),
             Is.EqualTo(PlayerBotCasterAction.QcControl), "the target's, after the add step");
-        Assert.That(PlayerBotDriver.AddAction(true, 0, PlayerBotDriver.TargetFirst(true, false, true, 6_000, 0), 2_500, true,
-            true, false), Is.EqualTo(PlayerBotAddAction.QcControl), "the add's first");
-        Assert.That(PlayerBotDriver.AddAction(true, 0, false, 2_500, true, false, true), Is.EqualTo(PlayerBotAddAction.Control),
-            "the next think, Quickcast on");
+        Assert.That(PlayerBotDriver.AddAction(true, true, 0, PlayerBotDriver.TargetFirst(true, false, true, 6_000, 0), 2_500,
+            true, true, true, false), Is.EqualTo(PlayerBotAddAction.QcControl), "the add's first");
+        Assert.That(PlayerBotDriver.AddAction(true, true, 0, false, 2_500, true, true, false, true),
+            Is.EqualTo(PlayerBotAddAction.Control), "the next think, Quickcast on");
         Assert.That(PlayerBotDriver.QuickcastReady(true, true, 0, 0, false, 5_000), Is.False, "CasterStep's view: on already");
     }
 
@@ -2732,6 +2796,25 @@ public sealed class UT_PlayerBotDriver
         Assert.That(PlayerBotDriver.TargetFirst(controlsTarget, targetHeld, closing, targetContactMs, addContactMs),
             Is.EqualTo(first));
 
+    // The review of 9aacd69: TargetFirst counted any control the target takes, not one CasterStep would cast now. The
+    // target's only control a mez not yet wanted (contact 5,000 against its 3,000-ms cast: MezWanted) gave the add's step
+    // None, and CasterStep nuked: the add reached melee uncontrolled. Now it is CasterStep's own choice (its filter,
+    // CasterControlAllowed), so with none the add's mez goes (6,000 ms off).
+    [Test]
+    public void The_target_comes_first_only_with_a_control_casterstep_would_cast_now()
+    {
+        (Spell, SpellLine)[] onlyMez = [(LesserMesmerization, BodyLine)];
+        Spell forTarget = PlayerBotDriver.ChooseControl(onlyMez, _ => true,
+            spell => PlayerBotDriver.CasterControlAllowed(spell, takes: true, contactMs: 5_000), false, false).Item1;
+        Assert.That(forTarget, Is.Null, "a mez not yet wanted");
+        bool targetFirst = PlayerBotDriver.TargetFirst(forTarget != null, false, true, 5_000, 6_000);
+        Assert.That(PlayerBotDriver.AddAction(true, true, 6_000, targetFirst, 3_000, true, false, false, false),
+            Is.EqualTo(PlayerBotAddAction.Control));
+        Spell escape = PlayerBotDriver.ChooseControl(onlyMez, _ => true,
+            spell => PlayerBotDriver.CasterControlAllowed(spell, takes: true, contactMs: 3_000), false, false).Item1;
+        Assert.That(PlayerBotDriver.TargetFirst(escape != null, false, true, 3_000, 6_000), Is.True, "the escape: the target's");
+    }
+
     // The verifier's correction: CheckBeginCast and CheckEndCast need the spell's target in the front 180 degrees
     // (SpellHandler.cs:725, :939), and Engage faced the target every think before its IsCasting return. While a cast at
     // the add is under way the bot faces the add.
@@ -2742,6 +2825,29 @@ public sealed class UT_PlayerBotDriver
         Assert.That(PlayerBotDriver.FacesWhom("target", "add", casting: false), Is.EqualTo("target"));
         Assert.That(PlayerBotDriver.FacesWhom("target", null, casting: true), Is.EqualTo("target"));
     }
+
+    // Whom Engage faces, from the add a cast was made at (the review of 9aacd69: with Engage's facing set back to the target
+    // no test failed): the add while the cast at it is under way and it lives; once it died, or the cast ended, the target.
+    [TestCase("add", true, true, "add")] [TestCase("add", true, false, "target")] [TestCase("add", false, true, "target")]
+    [TestCase(null, true, true, "target")]
+    public void Engage_faces_the_add_while_its_cast_is_under_way_and_it_lives(string addCast, bool casting, bool addAlive,
+        string faced) =>
+        Assert.That(PlayerBotDriver.EngageFacing("target", addCast, casting, addAlive), Is.EqualTo(faced));
+
+    // The order of Engage's steps (the review of 9aacd69: with the add's step switched off no test failed): a cast under
+    // way, nothing; at a due cast choice the add's step first when it acts (its control, Quickcast for it, or a
+    // Theurgist's pets at it), then the pet leads, then CasterStep and CombatAction.
+    [TestCase(true, true, PlayerBotAddAction.Control, true, PlayerBotEngageStep.Wait)]
+    [TestCase(true, false, PlayerBotAddAction.Control, true, PlayerBotEngageStep.Add)]
+    [TestCase(true, false, PlayerBotAddAction.QcControl, false, PlayerBotEngageStep.Add)]
+    [TestCase(true, false, PlayerBotAddAction.Pets, false, PlayerBotEngageStep.Add)]
+    [TestCase(false, false, PlayerBotAddAction.Control, true, PlayerBotEngageStep.PetLeads)]
+    [TestCase(true, false, PlayerBotAddAction.None, true, PlayerBotEngageStep.PetLeads)]
+    [TestCase(true, false, PlayerBotAddAction.None, false, PlayerBotEngageStep.Caster)]
+    [TestCase(false, false, PlayerBotAddAction.Control, false, PlayerBotEngageStep.Caster)]
+    public void The_adds_control_comes_before_the_pet_leads_and_the_casters_step(bool due, bool casting,
+        PlayerBotAddAction addAction, bool petLeads, PlayerBotEngageStep step) =>
+        Assert.That(PlayerBotDriver.EngageStepOrder(due, casting, addAction, petLeads), Is.EqualTo(step));
 
     // A mezzed or stunned monster keeps the bot as its target (CrowdControlECSEffect.cs:26-37 stops its attack only), but
     // it hits nothing: it is not on the bot for the break-off (C2), so a controlled add doesn't start one.

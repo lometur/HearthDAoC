@@ -30,8 +30,13 @@ public enum PlayerBotBreakOff { Run, NextPoint, Done, Fight }
 /// CombatAction.</summary>
 public enum PlayerBotCasterAction { Nuke, Control, StepBack, QcControl }
 
-/// <summary>The bot's step against an add (PlayerBotDriver.AddAction, #167 C4).</summary>
-public enum PlayerBotAddAction { None, Control, QcControl }
+/// <summary>The bot's step against an add (PlayerBotDriver.AddAction, #167 C4); Pets, a Theurgist's pets at an add hitting
+/// it (AddPlan).</summary>
+public enum PlayerBotAddAction { None, Control, QcControl, Pets }
+
+/// <summary>Engage's step once in reach (PlayerBotDriver.EngageStepOrder, #167 C4): Wait out a cast, the add's step, the
+/// pet leads, or CasterStep and CombatAction.</summary>
+public enum PlayerBotEngageStep { Wait, Add, PetLeads, Caster }
 
 /// <summary>What the bot does in reach of its target this think (PlayerBotDriver.CombatAction, #167 F6).</summary>
 public enum PlayerBotCombatAction { Cast, WaitToCast, Quickcast, Swing }
@@ -572,7 +577,8 @@ public static class PlayerBotDriver
             return;
         }
         state.Mover.Stop(now);
-        Face(player, FacesWhom(target, addCast, player.IsCasting));   // in front: AttackComponent.cs:1065; the add (C4)
+        Face(player, EngageFacing(target, addCast, player.IsCasting, addCast?.IsAlive == true));   // in front:
+                                                                        //   AttackComponent.cs:1065; the add (C4)
         if (now >= state.NextLosTick)                         // TargetInView: AttackComponent.cs:1065, SpellHandler.cs:450
         {
             state.NextLosTick = now + LosRefreshMilliseconds;
@@ -618,13 +624,18 @@ public static class PlayerBotDriver
         if (BrokeHold(state.TargetHeldBreaks, held && breaksOnHit, state.Swings > swings)) state.FightCtlBroken++;   // #167 C3
         state.TargetHeldBreaks = held && breaksOnHit;
         if (opening && !player.IsCasting && FightBuff(state, player, now)) return;     // #167 C9: a Surge first
-        if (player.IsCasting) return;
-        if (due && AddStep(state, player, target, held, distance, now, interrupted, quickcastReady, quickcasting, quickcast))
-            return;                                                                     // #167 C4: the add's control first
         GameNPC pet = player.ControlledBrain?.Body;
-        if (action is not PlayerBotCombatAction.Swing && PetLeads(pet?.IsAlive == true, pet != null && target.TargetObject == pet,
-                target.TargetObject == player, Attacker(state, player, now, anyHitter: true) != null, now - state.PetOrderTick,
-                PetLeadMilliseconds))
+        bool petLeads = !player.IsCasting && action is not PlayerBotCombatAction.Swing && PetLeads(pet?.IsAlive == true,
+            pet != null && target.TargetObject == pet, target.TargetObject == player,
+            Attacker(state, player, now, anyHitter: true) != null, now - state.PetOrderTick, PetLeadMilliseconds);
+        (PlayerBotAddAction addStep, GameNPC add, Spell addSpell, SpellLine addLine) = due && !player.IsCasting
+            ? AddPlan(state, player, target, held, distance, now, interrupted, quickcastReady, quickcasting) : default;
+        PlayerBotEngageStep engageStep = EngageStepOrder(due, player.IsCasting, addStep, petLeads);   // #167 C4: the add's
+        if (engageStep is PlayerBotEngageStep.Add &&                                                  //   control first
+            !AddAct(state, player, target, add, addStep, addSpell, addLine, now, quickcasting, quickcast))
+            engageStep = EngageStepOrder(due, false, PlayerBotAddAction.None, petLeads);  // refused (no sight): on as before
+        if (engageStep is PlayerBotEngageStep.Wait or PlayerBotEngageStep.Add) return;
+        if (engageStep is PlayerBotEngageStep.PetLeads)
         {
             player.attackComponent.StopAttack();                                        // the pet leads (#167 F10c)
             state.Activity = PlayerBotActivity.Fighting;
@@ -1584,11 +1595,13 @@ public static class PlayerBotDriver
     /// IncomingRadius. It counts as an attacker before its first hit: the bot stands, and engages it first.</summary>
     /// <summary>A control spell (#167 F11): the GameBot's split (GameBot.cs:1957-1962: a mez, or a speed decrease of 99,
     /// a root), and a stun; on an enemy, single-target (an area one would pull the adds round the target), with a
-    /// range.</summary>
+    /// range; no song (an instrument), as the damage spells, heals, self-buffs and chants leave out (the review of
+    /// 9aacd69: a Minstrel's Instruments mezzes, InstrumentRequirement 3, went to its add step for every role, and the
+    /// server refused each with no instrument, SpellHandler.cs:546-553).</summary>
     public static bool IsControlSpell(Spell spell) =>
         (spell.SpellType is eSpellType.Stun or eSpellType.Mesmerize ||
          spell.SpellType is eSpellType.SpeedDecrease && spell.Value >= 99) &&
-        spell.Target is eSpellTarget.ENEMY && spell.Radius <= 0 && spell.Range > 0;
+        spell.Target is eSpellTarget.ENEMY && spell.Radius <= 0 && spell.Range > 0 && !spell.NeedInstrument;
 
     /// <summary>The control to cast (#167 F11): on the target a stun first (damage doesn't break it, GameLiving.cs:1784-1803;
     /// the GameBot keeps stuns on its own target too, BotBrain.cs:3887-3890), then a root, then a mez (any damage breaks
@@ -1629,6 +1642,11 @@ public static class PlayerBotDriver
     /// of a nuke. An add takes one whenever (#167 C4).</summary>
     public static bool MezWanted(long contactMs, int mezCastMs) => contactMs <= mezCastMs + ControlMarginMilliseconds;
 
+    /// <summary>CasterStep's filter on its target's controls (#167 C8): one the target takes (takes, Takes), and a mez only
+    /// as the escape (MezWanted at contactMs). TargetFirst reads the same choice (the review of 9aacd69).</summary>
+    public static bool CasterControlAllowed(Spell spell, bool takes, long contactMs) =>
+        takes && (spell.SpellType is not eSpellType.Mesmerize || MezWanted(contactMs, spell.CastTime));
+
     /// <summary>The add the bot controls (#167 C4): the nearest monster with the bot as its target (TargetsBot), not held
     /// (Held: a stun, a root or a mez) and not its target; none, null. Caster add fights were fatal 51 times in 53 in
     /// st-deathsB: CasterStep controlled only the target.</summary>
@@ -1643,16 +1661,19 @@ public static class PlayerBotDriver
         return best;
     }
 
-    /// <summary>The bot's step against its add (#167 C4), for every role with a control (controlCastMs, 0 for none): it
-    /// controls the add while the cast ends before the add's contact with its margin and no hit interrupts the bot;
-    /// else only with Quickcast, which it turns on when ready (then CasterStep sees it as not ready: one Quickcast in
-    /// 30 s, SpellHandler.cs:1430-1434, goes to an un-held add first) and casts with when on. Nothing while the target's
-    /// control comes first (targetFirst, TargetFirst).</summary>
-    public static PlayerBotAddAction AddAction(bool hasAdd, long addContactMs, bool targetFirst, int controlCastMs,
-        bool interrupted, bool quickcastReady, bool quickcastOn)
+    /// <summary>The bot's step against its add (#167 C4), for every role with a control (hasControl; its cast time,
+    /// controlCastMs, and whether hits interrupt it, interruptible): it controls the add while the cast ends before the
+    /// add's contact with its margin and no hit interrupts the bot; else only with Quickcast, which it turns on when ready
+    /// (then CasterStep sees it as not ready: one Quickcast in 30 s, SpellHandler.cs:1430-1434, goes to an un-held add
+    /// first) and casts with when on. An instant or uninterruptible control goes whatever the hits and the contact, as
+    /// CombatAction casts one (the review of 9aacd69: a cast time of 0 read as no control, so a Skald's shouts and a
+    /// Minstrel's yells never went at an add). Nothing while the target's control comes first (targetFirst,
+    /// TargetFirst).</summary>
+    public static PlayerBotAddAction AddAction(bool hasAdd, bool hasControl, long addContactMs, bool targetFirst,
+        int controlCastMs, bool interruptible, bool interrupted, bool quickcastReady, bool quickcastOn)
     {
-        if (!hasAdd || controlCastMs <= 0 || targetFirst) return PlayerBotAddAction.None;
-        if (quickcastOn) return PlayerBotAddAction.Control;
+        if (!hasAdd || !hasControl || targetFirst) return PlayerBotAddAction.None;
+        if (quickcastOn || !interruptible) return PlayerBotAddAction.Control;
         if (addContactMs > controlCastMs + ControlMarginMilliseconds && !interrupted) return PlayerBotAddAction.Control;
         return quickcastReady ? PlayerBotAddAction.QcControl : PlayerBotAddAction.None;
     }
@@ -1675,6 +1696,23 @@ public static class PlayerBotDriver
     /// (SpellHandler.cs:725, :939); else its target.</summary>
     public static T FacesWhom<T>(T target, T addCast, bool casting) where T : class =>
         casting && addCast != null ? addCast : target;
+
+    /// <summary>The add a cast under way is at (#167 C4, CastAtAdd's addCastTarget): while the bot casts and the add lives;
+    /// else none.</summary>
+    public static T AddCastNow<T>(T addCastTarget, bool casting, bool addAlive) where T : class =>
+        casting && addAlive ? addCastTarget : null;
+
+    /// <summary>Whom Engage faces this think (#167 C4; the review of 9aacd69): FacesWhom over the add a cast under way is
+    /// at (AddCastNow).</summary>
+    public static T EngageFacing<T>(T target, T addCastTarget, bool casting, bool addAlive) where T : class =>
+        FacesWhom(target, AddCastNow(addCastTarget, casting, addAlive), casting);
+
+    /// <summary>The order of Engage's steps once in reach (#167 C4; the review of 9aacd69): a cast under way, it waits; at a
+    /// due cast choice the add's step first when it acts (addAction: AddPlan's), then the pet leads (petLeads, PetLeads),
+    /// then CasterStep and CombatAction.</summary>
+    public static PlayerBotEngageStep EngageStepOrder(bool due, bool casting, PlayerBotAddAction addAction, bool petLeads) =>
+        casting ? PlayerBotEngageStep.Wait : due && addAction is not PlayerBotAddAction.None ? PlayerBotEngageStep.Add :
+        petLeads ? PlayerBotEngageStep.PetLeads : PlayerBotEngageStep.Caster;
 
     /// <summary>Whether a monster is on the bot for the break-off (#167 C2, C4): it attacks the bot and isn't mezzed or
     /// stunned (crowdControlled). A held monster keeps the bot as its target (CrowdControlECSEffect.cs:26-37 stops its
@@ -1729,6 +1767,14 @@ public static class PlayerBotDriver
     /// Quickcast ready (the killing nuke through the hits, CombatAction's Quickcast).</summary>
     public static bool KillsFirst(int needed, long contactMs, int nukeCastMs, bool quickcastReady) =>
         needed <= contactMs / Math.Max(1, nukeCastMs + 250) + (quickcastReady ? 1 : 0);
+
+    /// <summary>CasterStep's killsFirst (#167 C11; the review of 9aacd69): the nukes the fight's casts say the target still
+    /// needs (NukesNeeded, from its health at the fight's first think) land first (KillsFirst), the bot at
+    /// KillFirstHealthPercent or more and one monster at most on it.</summary>
+    public static bool KillsFirstNow(int engageHealth, int health, int casts, long contactMs, int nukeCastMs,
+        bool quickcastReady, byte botHealth, int attackers) =>
+        KillsFirst(NukesNeeded(engageHealth, health, casts), contactMs, nukeCastMs, quickcastReady) &&
+        botHealth >= KillFirstHealthPercent && attackers <= 1;
 
     /// <summary>Where a caster steps back to (#167 F11): range units from its target, straight away from it (along +X when
     /// on top of it), else turned by KiteTurns, the first out of every potential add's reach (InAddReach) so the step
@@ -2906,15 +2952,9 @@ public static class PlayerBotDriver
         bool closing = npc.TargetObject == player;
         long contact = TimeToContact(distance, npc.MaxSpeedBase);
         int nukeCast = state.Spell?.CastTime ?? 3_000;                  // (inf.) 3 s: the casters' nukes cast in 2.5-3 s
-        (Spell control, SpellLine line) = default((Spell, SpellLine));
-        if (!held && closing && due && now >= state.NextControlTick && state.ControlTries < MaxControlTries)
-            (control, line) = ChooseControl(state.Controls, spell => player.GetSkillDisabledDuration(spell) <= 0 &&
-                    HasPowerFor(player.MaxMana, player.Mana, spell.Power) &&
-                    player.IsWithinRadius(npc, player.castingComponent.CalculateSpellRange(spell)),
-                spell => Takes(npc, spell) && (spell.SpellType is not eSpellType.Mesmerize || MezWanted(contact, spell.CastTime)),
-                forAdd: false, petClass: false);
-        bool killsFirst = KillsFirst(NukesNeeded(state.EngageTargetHealth, npc.HealthPercent, state.FightCasts), contact,
-            nukeCast, quickcastReady) && player.HealthPercent >= KillFirstHealthPercent && state.Attackers <= 1;   // #167 C11
+        (Spell control, SpellLine line) = !held && closing && due ? TargetControl(state, player, npc, contact, now) : default;
+        bool killsFirst = KillsFirstNow(state.EngageTargetHealth, npc.HealthPercent, state.FightCasts, contact, nukeCast,
+            quickcastReady, player.HealthPercent, state.Attackers);                                         // #167 C11
         PlayerBotCasterAction step = CasterAction(closing, contact, held, breaksOnHit, control?.CastTime ?? 0, nukeCast,
             interrupted, quickcastReady, quickcasting, killsFirst);
         switch (step)
@@ -2947,51 +2987,72 @@ public static class PlayerBotDriver
         }
     }
 
-    // #167 C4: the add's control, for every role with a control (healers, pet classes and melee cast none at an add in
-    // st-deathsB, casters only at their target), at a due cast choice before the pet leads and CasterStep. The add (Add)
-    // from the monsters on the bot and those coming at it; the control (AddControl) cast at it (CastAtAdd) and counted
-    // in ctl= and addCtl=, or Quickcast turned on for it first (AddAction). MaxControlTries casts that held nothing on an
-    // add and it stops trying on that one. With no control to cast, a Theurgist casts its pets at an add hitting it, as
-    // at its target (FindCombatPetSpell; AutonomousPetSupport.cs:636-650). targetHeld and targetDistance: Engage's.
-    // True when it acted.
-    private static bool AddStep(PlayerBotState state, GamePlayer player, GameLiving target, bool targetHeld,
-        int targetDistance, long now, bool interrupted, bool quickcastReady, bool quickcasting, Ability quickcast)
+    // #167 F11, C8: the control CasterStep casts at its target now (TargetFirst reads it too, the review of 9aacd69): its
+    // next control due and tries left, one the target takes (Takes) and a mez only as the escape (CasterControlAllowed),
+    // in range, ready and paid for, the highest of ChooseControl's target order; none, default.
+    private static (Spell, SpellLine) TargetControl(PlayerBotState state, GamePlayer player, GameNPC npc, long contact,
+        long now) =>
+        now < state.NextControlTick || state.ControlTries >= MaxControlTries ? default :
+        ChooseControl(state.Controls, spell => player.GetSkillDisabledDuration(spell) <= 0 &&
+                HasPowerFor(player.MaxMana, player.Mana, spell.Power) &&
+                player.IsWithinRadius(npc, player.castingComponent.CalculateSpellRange(spell)),
+            spell => CasterControlAllowed(spell, Takes(npc, spell), contact), forAdd: false, petClass: false);
+
+    // #167 C4: the add's step, for every role with a control (healers, pet classes and melee cast none at an add in
+    // st-deathsB, casters only at their target), at a due cast choice before the pet leads and CasterStep
+    // (EngageStepOrder). The add (Add) from the monsters on the bot and those coming at it; its control (AddControl), or
+    // Quickcast turned on for it first (AddAction). MaxControlTries casts that held nothing on an add and it stops
+    // trying on that one. With no control to cast, a Theurgist casts its pets at an add hitting it (Pets), as at its
+    // target (FindCombatPetSpell; AutonomousPetSupport.cs:636-650). targetHeld and targetDistance: Engage's. None, default.
+    private static (PlayerBotAddAction Step, GameNPC Add, Spell Spell, SpellLine Line) AddPlan(PlayerBotState state,
+        GamePlayer player, GameLiving target, bool targetHeld, int targetDistance, long now, bool interrupted,
+        bool quickcastReady, bool quickcasting)
     {
-        if (now < state.NextAddTick) return false;
+        if (now < state.NextAddTick) return default;
         KnowSpells(state, player);
-        if (state.Controls.Count == 0 && state.CombatPets.Count == 0) return false;
-        if (Add(state, player, target, now) is not GameNPC add) return false;
+        if (state.Controls.Count == 0 && state.CombatPets.Count == 0) return default;
+        if (Add(state, player, target, now) is not GameNPC add) return default;
         (PlayerBotAddAction step, Spell control, SpellLine line) = AddControl(state, player, target, targetHeld,
-            targetDistance, add, interrupted, quickcastReady, quickcasting);
+            targetDistance, add, interrupted, quickcastReady, quickcasting, now);
+        if (step is not PlayerBotAddAction.None) return (step, add, control, line);
+        if (state.CombatPets.Count == 0 || !IsAttacking(player, add) ||
+            !player.attackComponent.AttackerTracker.Attackers.Contains(add))
+            return default;
+        (Spell pet, SpellLine petLine) = CombatPet(state, player, add, now, inView: true);     // its sight: CastAtAdd's
+        return pet == null ? default : (PlayerBotAddAction.Pets, add, pet, petLine);
+    }
+
+    // #167 C4: the add's step (AddPlan) carried out: Quickcast turned on (the next think casts with it), or the control
+    // or the pet cast at the add (CastAtAdd), a control counted in ctl= and addCtl=, a pet in petCasts= and casts=. False
+    // when the cast was refused (no sight to the add): Engage goes on as without it.
+    private static bool AddAct(PlayerBotState state, GamePlayer player, GameLiving target, GameNPC add,
+        PlayerBotAddAction step, Spell spell, SpellLine line, long now, bool quickcasting, Ability quickcast)
+    {
         if (step is PlayerBotAddAction.QcControl)
         {
             UseQuickcast(state, player, now, quickcast);                                // then the next think casts it
             return true;
         }
-        if (step is PlayerBotAddAction.Control)
+        bool pets = step is PlayerBotAddAction.Pets;
+        if (!CastAtAdd(state, player, target, add, spell, line, now))
         {
-            if (!CastAtAdd(state, player, target, add, control, line, now)) return false;
+            if (pets) state.NextCombatPetTick = now + SummonRetryMilliseconds;
+            return false;
+        }
+        if (pets)
+        {
+            state.NextCombatPetTick = now + Math.Max(250, spell.CastTime + 100);        // as Engage's
+            state.FightPetCasts++;
+            state.FightCasts++;
+        }
+        else
+        {
             state.AddControlTries++;
             state.FightControls++;
             state.FightAddControls++;
             state.FightQuickcast |= quickcasting;
-            state.NextCombatChoiceTick = now + Math.Max(900, control.CastTime + 250);
-            return true;
         }
-        if (state.CombatPets.Count == 0 || !IsAttacking(player, add) ||
-            !player.attackComponent.AttackerTracker.Attackers.Contains(add))
-            return false;
-        (Spell pet, SpellLine petLine) = CombatPet(state, player, add, now, inView: true);     // its sight: CastAtAdd's
-        if (pet == null) return false;
-        if (!CastAtAdd(state, player, target, add, pet, petLine, now))
-        {
-            state.NextCombatPetTick = now + SummonRetryMilliseconds;
-            return false;
-        }
-        state.NextCombatPetTick = now + Math.Max(250, pet.CastTime + 100);              // as Engage's
-        state.FightPetCasts++;
-        state.FightCasts++;
-        state.NextCombatChoiceTick = now + Math.Max(900, pet.CastTime + 250);
+        state.NextCombatChoiceTick = now + Math.Max(900, spell.CastTime + 250);
         return true;
     }
 
@@ -3027,10 +3088,11 @@ public static class PlayerBotDriver
     // #167 C4: the add step at this add (AddAction) and its control: ChooseControl's add order (no mez from a pet class),
     // one the add takes now (Takes) that keeps it off (ControlKeepsAddOff), in range, ready and paid for; none after
     // MaxControlTries casts on it that held nothing. A caster's control on its target comes first while the target
-    // reaches it first (TargetFirst: CasterStep's tries left and a control the target takes).
+    // reaches it first (TargetFirst) with a control CasterStep would cast at it now (TargetControl; the review of
+    // 9aacd69: any control the target takes, recasting, unpaid or a mez not yet wanted, held the add's back).
     private static (PlayerBotAddAction Step, Spell Spell, SpellLine Line) AddControl(PlayerBotState state,
         GamePlayer player, GameLiving target, bool targetHeld, int targetDistance, GameNPC add, bool interrupted,
-        bool quickcastReady, bool quickcasting)
+        bool quickcastReady, bool quickcasting, long now)
     {
         if (state.AddControlTries >= MaxControlTries || state.Controls.Count == 0) return default;
         PlayerBotRole role = RoleOf(player.CharacterClass.ID);
@@ -3041,11 +3103,13 @@ public static class PlayerBotDriver
             spell => Takes(add, spell) && ControlKeepsAddOff(spell, distance), forAdd: true, petClass: role == PlayerBotRole.Pet);
         if (control == null) return default;
         long contact = TimeToContact(distance, add.MaxSpeedBase);
-        bool targetFirst = role == PlayerBotRole.Caster && target is GameNPC npc && TargetFirst(
-            state.ControlTries < MaxControlTries && state.Controls.Exists(pair => Takes(npc, pair.Spell)), targetHeld,
-            npc.TargetObject == player, TimeToContact(targetDistance, npc.MaxSpeedBase), contact);
-        return (AddAction(true, contact, targetFirst, control.CastTime, interrupted, quickcastReady, quickcasting), control,
-            line);
+        GameNPC targetNpc = role == PlayerBotRole.Caster && !targetHeld ? target as GameNPC : null;   // else none first
+        bool closing = targetNpc?.TargetObject == player;
+        long targetContact = closing ? TimeToContact(targetDistance, targetNpc.MaxSpeedBase) : long.MaxValue;
+        bool targetFirst = closing && TargetFirst(TargetControl(state, player, targetNpc, targetContact, now).Item1 != null,
+            targetHeld, closing, targetContact, contact);
+        return (AddAction(true, true, contact, targetFirst, control.CastTime, Interruptible(control), interrupted,
+            quickcastReady, quickcasting), control, line);
     }
 
     // #167 C4: a cast at the add as a player makes one (the verifier's corrections): the add in sight (the cast's start
@@ -3081,9 +3145,9 @@ public static class PlayerBotDriver
         return true;
     }
 
-    // #167 C4: the add a cast under way is at (CastAtAdd), while the bot casts and the add lives; else none.
+    // #167 C4: the add a cast under way is at (CastAtAdd), while the bot casts and the add lives (AddCastNow); else none.
     private static GameLiving AddCastUnderWay(PlayerBotState state, GamePlayer player) =>
-        state.AddCastTarget = player.IsCasting && state.AddCastTarget?.IsAlive == true ? state.AddCastTarget : null;
+        state.AddCastTarget = AddCastNow(state.AddCastTarget, player.IsCasting, state.AddCastTarget?.IsAlive == true);
 
     // #167 C4 for C2's break-off (BreaksOff's addControlReady): the add step would control an add now (AddControl, the
     // same inputs as Engage's), the bot engaged with its target alive (at a kill the one still on it becomes the target:
@@ -3100,7 +3164,7 @@ public static class PlayerBotDriver
             quickcast == null ? 0 : player.GetSkillDisabledDuration(quickcast), state.NextQuickcastTick, player.IsCasting, now);
         bool held = RoleOf(player.CharacterClass.ID) == PlayerBotRole.Caster && Hold(target).Held;
         return AddControl(state, player, target, held, player.GetDistanceTo(target), add,
-            player.IsBeingInterruptedByOther && !quickcasting, quickcastReady, quickcasting).Step != PlayerBotAddAction.None;
+            player.IsBeingInterruptedByOther && !quickcasting, quickcastReady, quickcasting, now).Step != PlayerBotAddAction.None;
     }
 
     // #167 F11: a step back under way (CasterStep): on to its point while the bot keeps its hold (casterHold: the target
@@ -3173,18 +3237,28 @@ public static class PlayerBotDriver
     // immune).
     private static bool Takes(GameLiving target, Spell spell) => spell.SpellType switch
     {
-        eSpellType.Stun => !target.HasAbility(Abilities.CCImmunity) && !target.HasAbility(Abilities.StunImmunity) &&
-            !target.effectListComponent.ContainsEffectForEffectType(eEffect.StunImmunity) &&
-            DiminishedAllows(EffectListService.GetEffectOnTarget(target, eEffect.NPCStunImmunity) as NpcImmunityEffect,
-                spell.Duration),
-        eSpellType.Mesmerize => !target.HasAbility(Abilities.CCImmunity) && !target.HasAbility(Abilities.MezzImmunity) &&
-            !target.effectListComponent.ContainsEffectForEffectType(eEffect.MezImmunity) &&
-            DiminishedAllows(EffectListService.GetEffectOnTarget(target, eEffect.NPCMezImmunity) as NpcImmunityEffect,
-                spell.Duration) && target.HealthPercent >= 75,
-        _ => !target.HasAbility(Abilities.CCImmunity) && !target.HasAbility(Abilities.RootImmunity) &&
-            !target.effectListComponent.ContainsEffectForEffectType(eEffect.SnareImmunity) &&
-            !target.effectListComponent.ContainsEffectForEffectType(eEffect.SpeedOfSound),
+        eSpellType.Stun => Takes(spell, target.HasAbility(Abilities.CCImmunity), target.HasAbility(Abilities.StunImmunity) ||
+            target.effectListComponent.ContainsEffectForEffectType(eEffect.StunImmunity),
+            EffectListService.GetEffectOnTarget(target, eEffect.NPCStunImmunity) as NpcImmunityEffect, target.HealthPercent),
+        eSpellType.Mesmerize => Takes(spell, target.HasAbility(Abilities.CCImmunity),
+            target.HasAbility(Abilities.MezzImmunity) || target.effectListComponent.ContainsEffectForEffectType(eEffect.MezImmunity),
+            EffectListService.GetEffectOnTarget(target, eEffect.NPCMezImmunity) as NpcImmunityEffect, target.HealthPercent),
+        _ => Takes(spell, target.HasAbility(Abilities.CCImmunity), target.HasAbility(Abilities.RootImmunity) ||
+            target.effectListComponent.ContainsEffectForEffectType(eEffect.SnareImmunity) ||
+            target.effectListComponent.ContainsEffectForEffectType(eEffect.SpeedOfSound), null, target.HealthPercent),
     };
+
+    /// <summary>Whether a monster takes a control now (#167 C8; the review of 9aacd69: the rule Takes reads, tested): not
+    /// CC-immune (ccImmune), not immune to its kind (kindImmune: a stun's, a mez's, a root's ability or effect), its
+    /// diminishing immunity (diminishing: a stun's or a mez's NpcImmunityEffect, none for a root) still allowing this hold
+    /// (DiminishedAllows), and a mez only from 75% health (CCSpellHandler.cs:173-177).</summary>
+    public static bool Takes(Spell spell, bool ccImmune, bool kindImmune, NpcImmunityEffect diminishing, byte healthPercent) =>
+        !ccImmune && !kindImmune && spell.SpellType switch
+        {
+            eSpellType.Stun => DiminishedAllows(diminishing, spell.Duration),
+            eSpellType.Mesmerize => DiminishedAllows(diminishing, spell.Duration) && healthPercent >= 75,
+            _ => true,
+        };
 
     // A healer's heal on itself (DEATHS.md A6), before a rest as a GameBot's (AWBC:2725): below 60% health whatever its
     // power; out of a fight (MayRest's view) from 85% with power to spare, then it sits for power (#167 F2). The gate

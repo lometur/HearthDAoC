@@ -75,14 +75,18 @@ Each bot thinks every 250 ms, a thin copy of the `/bot` pilot's think:
   isn't immune to by the server's own rules: a monster stunned or mezzed in the last minute takes the next one for
   half the time, then a quarter, and none under 1 s. A mez on its target only as the last escape, the monster about to
   reach it, and only on a monster above 75% health.
-- Any bot with a control spell (casters, healers, pet classes) also controls an add: the nearest other monster coming
-  at it or hitting it that isn't held. A mez first, then a root, then a stun; no mez from a pet class (its pet would
-  hit the add and free it), and no root on an add already in melee (it still hits from there). It casts while the
-  cast ends before the add reaches it and no hit interrupts it, else only with Quickcast, which goes to the add before
-  the target. A caster whose target reaches it first controls the target first. It faces the add, checks its own line
-  of sight to it and keeps its target. After 3 casts that held nothing it stops trying on that add. A Theurgist with
-  no control to cast casts its pets at an add hitting it. A mezzed or stunned add no longer counts as on the bot for
-  the break-off, and a control it can cast at an add comes before one.
+- Any bot with a control spell (casters, healers, pet classes, a Skald or a Minstrel) also controls an add: the
+  nearest other monster coming at it or hitting it that isn't held. A mez first, then a root, then a stun; no mez
+  from a pet class (its pet would hit the add and free it), and no root on an add already in melee (it still hits
+  from there). Songs that need an instrument don't count as controls (the bots carry none). It casts while the cast
+  ends before the add reaches it and no hit interrupts it, else only with Quickcast, which goes to the add before
+  the target. An instant control (a Skald's or a Minstrel's shout) goes at once, whatever the hits. A caster whose
+  target reaches it first controls the target first, but only when it would cast that control now (ready, paid for,
+  in range, and a mez only as the last escape). The add's control comes before the pet's lead and the caster's own
+  step. It faces the add while that cast is under way, checks its own line of sight to it and keeps its target.
+  After 3 casts that held nothing it stops trying on that add. A Theurgist with no control to cast casts its pets at
+  an add hitting it. A mezzed or stunned add no longer counts as on the bot for the break-off, and a control it can
+  cast at an add comes before one.
 - An Animist pulls from beside its turret, so the monster comes into the turret's reach. When the turret can't reach
   the spot it pulls from, it releases the turret and plants a new one near the target, if the summon is ready and it
   has the power. Its bombers count as damage spells only when their payload does damage, so it no longer casts the
