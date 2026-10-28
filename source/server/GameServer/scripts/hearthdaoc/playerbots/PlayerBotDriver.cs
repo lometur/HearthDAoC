@@ -389,15 +389,14 @@ public static class PlayerBotDriver
             ChooseCombatSpell(state, player, target, now);                              //   damage spell (#167 F1)
         bool interruptible = state.Spell != null && Interruptible(state.Spell);
         Ability quickcast = player.GetAbility(Abilities.Quickcast);
-        PlayerBotCombatAction action = CombatAction(                                    // #167 F6
-            ShouldCast(state.Spell != null, player.ManaPercent, now, state.SpellBlockedUntil),
-            player.IsBeingInterruptedByOther && !quickcasting,                          // a quickcast one goes (SpellHandler.cs:581)
-            quickcasting ? 0 : Math.Max(0, player.SelfInterruptTime - now), interruptible,
-            QuickcastReady(quickcast != null, quickcasting, quickcast == null ? 0 : player.GetSkillDisabledDuration(quickcast),
-                state.NextQuickcastTick, player.IsCasting, now),
-            due);
-        int stop = action is PlayerBotCombatAction.Swing ? MeleeStopDistance(player.attackComponent.AttackRange)
-                                                         : SpellStopDistance(player.castingComponent.CalculateSpellRange(state.Spell));
+        bool canCast = ShouldCast(state.Spell != null, player.ManaPercent, now, state.SpellBlockedUntil);
+        bool interrupted = player.IsBeingInterruptedByOther && !quickcasting;           // a quickcast one goes (SpellHandler.cs:581)
+        bool quickcastReady = QuickcastReady(quickcast != null, quickcasting,
+            quickcast == null ? 0 : player.GetSkillDisabledDuration(quickcast), state.NextQuickcastTick, player.IsCasting, now);
+        PlayerBotCombatAction action = CombatAction(canCast, interrupted,               // #167 F6
+            quickcasting ? 0 : Math.Max(0, player.SelfInterruptTime - now), interruptible, quickcastReady, due);
+        int stop = CombatStopDistance(canCast, interrupted, interruptible, quickcastReady, player.attackComponent.AttackRange,
+            player.castingComponent.CalculateSpellRange(state.Spell));
         if (distance > stop)
         {
             player.attackComponent.StopAttack();
@@ -517,15 +516,25 @@ public static class PlayerBotDriver
     /// it can, else swings, as a GameBot under melee fights (BotBrain.cs:3336-3370). Otherwise its own swing's interrupt
     /// (selfInterruptMilliseconds, GameLiving.cs:686-693) and the time between casts (the choice not due, which the old
     /// think filled with a swing that blocked the next cast) are waited out with auto-attack off, as a GameBot caster
-    /// ends its own swings before a spell (BotBrain.cs:3074-3080); then it casts.</summary>
+    /// ends its own swings before a spell (BotBrain.cs:3074-3080); then it casts. due has no default: a caller that left
+    /// it out would bring back the swing between casts.</summary>
     public static PlayerBotCombatAction CombatAction(bool canCastSpell, bool interruptedByOther, long selfInterruptMilliseconds,
-        bool interruptible, bool quickcastReady, bool due = true)
+        bool interruptible, bool quickcastReady, bool due)
     {
         if (!canCastSpell) return PlayerBotCombatAction.Swing;
         if (!interruptible) return due ? PlayerBotCombatAction.Cast : PlayerBotCombatAction.Swing;
         if (interruptedByOther) return quickcastReady ? PlayerBotCombatAction.Quickcast : PlayerBotCombatAction.Swing;
         return selfInterruptMilliseconds > 0 || !due ? PlayerBotCombatAction.WaitToCast : PlayerBotCombatAction.Cast;
     }
+
+    /// <summary>Where the bot stops short of its target (#167 F6): at its spell's range while it has a spell it would
+    /// cast at a cast choice (CombatAction with the choice due is no swing), between casts too; else in melee. Taken from
+    /// this think's action, it walked an instant caster toward melee after each cast until its next choice (a swing
+    /// between casts). A hit that blocks an interruptible spell with no Quickcast ready means melee, as at d1d524d.</summary>
+    public static int CombatStopDistance(bool canCastSpell, bool interruptedByOther, bool interruptible, bool quickcastReady,
+        int attackRange, int spellRange) =>
+        CombatAction(canCastSpell, interruptedByOther, 0, interruptible, quickcastReady, due: true) is PlayerBotCombatAction.Swing
+            ? MeleeStopDistance(attackRange) : SpellStopDistance(spellRange);
 
     /// <summary>Whether a player's use of Quickcast would take (QuickCastAbilityHandler.cs:41-84): the ability, not on
     /// already (it toggles off, :51-55), out of its 30-s disable after a quickcast spell (SpellHandler.cs:1430-1434,

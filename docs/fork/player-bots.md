@@ -53,9 +53,9 @@ Each bot thinks every 250 ms, a thin copy of the `/bot` pilot's think:
   half its power is left after the heal. A caster doesn't start a cast that a hit would interrupt, and uses
   Quickcast once a monster's hits interrupt it. Its own swing doesn't block its next cast: with a spell to cast, it
   stops swinging until its own swing's interrupt runs out, and it doesn't swing between casts (an instant spell does
-  not mind). A pet class summons its pet and sends it in, then holds its spells until the monster turns on the pet,
-  4 s at most, and never while the monster is hitting it. A Theurgist casts its pets at its
-  target whenever it can, as a GameBot does, and its damage spell between them.
+  not mind). Between casts it keeps its spell range. A pet class summons its pet and sends it in, then holds its
+  spells until the monster turns on the pet, 4 s at most, and never while the monster is hitting it. A Theurgist casts
+  its pets at its target whenever it can, as a GameBot does, and its damage spell between them.
 - Each cast it picks the damage spell ready now: its bolt when off its recast, else its best single-target spell,
   else an area one, never an area one while another monster stands in its radius. It drops the low ranks a GameBot
   drops. With none ready (a Shaman's two 20-s spells both on recast), it swings until one is.

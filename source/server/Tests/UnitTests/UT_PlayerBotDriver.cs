@@ -1632,7 +1632,7 @@ public sealed class UT_PlayerBotDriver
     public void A_bot_starts_no_interruptible_cast_while_hits_interrupt_it(bool hasSpell, byte mana, long blockedUntil,
         bool interrupted, bool interruptible, bool casts) =>
         Assert.That(PlayerBotDriver.CombatAction(PlayerBotDriver.ShouldCast(hasSpell, mana, 1_000, blockedUntil), interrupted, 0,
-            interruptible, false) == PlayerBotCombatAction.Cast, Is.EqualTo(casts));
+            interruptible, false, due: true) == PlayerBotCombatAction.Cast, Is.EqualTo(casts));
 
     // A class with Quickcast, its damage spell blocked only by the hits' interrupt, uses it as a player does, then casts
     // (SpellHandler.cs:578-590 lets a quickcast spell through). Not while it is on (the ability toggles it off,
@@ -1654,8 +1654,8 @@ public sealed class UT_PlayerBotDriver
         long nextTry, bool casting, bool hasSpell, byte mana, long blockedUntil, bool interrupted, bool interruptible,
         bool uses) =>
         Assert.That(PlayerBotDriver.CombatAction(PlayerBotDriver.ShouldCast(hasSpell, mana, 1_000, blockedUntil), interrupted, 0,
-            interruptible, PlayerBotDriver.QuickcastReady(hasQuickcast, quickcastOn, disabled, nextTry, casting, 1_000)) ==
-            PlayerBotCombatAction.Quickcast, Is.EqualTo(uses));
+            interruptible, PlayerBotDriver.QuickcastReady(hasQuickcast, quickcastOn, disabled, nextTry, casting, 1_000),
+            due: true) == PlayerBotCombatAction.Quickcast, Is.EqualTo(uses));
 
     // #167 F6: the bot's own swing must not block its next cast. A swing interrupts the swinger for 3 s
     // (StartInterruptTimer, GameLiving.cs:686-693; InterruptRemainingDuration, :736), and a player then gets "must wait"
@@ -1672,8 +1672,8 @@ public sealed class UT_PlayerBotDriver
     [TestCase(false, false, 2_000L, true, false, PlayerBotCombatAction.Swing)]             // nothing to cast
     public void The_bots_own_swing_does_not_block_its_next_cast(bool canCastSpell, bool interruptedByOther, long selfInterrupt,
         bool interruptible, bool quickcastReady, PlayerBotCombatAction action) =>
-        Assert.That(PlayerBotDriver.CombatAction(canCastSpell, interruptedByOther, selfInterrupt, interruptible, quickcastReady),
-            Is.EqualTo(action));
+        Assert.That(PlayerBotDriver.CombatAction(canCastSpell, interruptedByOther, selfInterrupt, interruptible, quickcastReady,
+            due: true), Is.EqualTo(action));
 
     // Between casts (the cast choice not due yet, :417) the old think restarted the swing after every cast, and that swing
     // blocked the next cast: with a spell it can cast the bot waits instead. An instant spell does not mind the swing.
@@ -1685,6 +1685,26 @@ public sealed class UT_PlayerBotDriver
         long selfInterrupt, bool interruptible, PlayerBotCombatAction action) =>
         Assert.That(PlayerBotDriver.CombatAction(canCastSpell, interruptedByOther, selfInterrupt, interruptible, false,
             due: false), Is.EqualTo(action));
+
+    // The stop distance comes from the spell the bot may cast, not from this think's action: between casts it swings
+    // with an instant spell (above), yet holds its spell range. A Bonedancer's Crunch Skeleton (Lifedrain, instant,
+    // 1,500 units) cast from 1,420 units walked it toward melee until its next choice, every 4 s. A hit that blocks an
+    // interruptible spell with no Quickcast ready, or nothing to cast, still means melee, as at d1d524d.
+    [TestCase(true, false, false, false, 1_420)]                                          // an instant spell
+    [TestCase(true, false, true, false, 1_420)]
+    [TestCase(true, true, false, false, 1_420)]                                           // an instant spell, hit
+    [TestCase(true, true, true, true, 1_420)]                                             // hit, Quickcast ready
+    [TestCase(true, true, true, false, 152)]                                              // hit, no Quickcast: melee
+    [TestCase(false, false, false, false, 152)]                                           // nothing to cast
+    public void Between_casts_a_bot_holds_its_spell_range(bool canCastSpell, bool interruptedByOther, bool interruptible,
+        bool quickcastReady, int stop)
+    {
+        Assert.That(PlayerBotDriver.CombatStopDistance(canCastSpell, interruptedByOther, interruptible, quickcastReady, 200, 1_500),
+            Is.EqualTo(stop));
+        Assert.That(PlayerBotDriver.CombatAction(true, false, 0, false, false, due: false), Is.EqualTo(PlayerBotCombatAction.Swing));
+        Assert.That(1_420 > PlayerBotDriver.CombatStopDistance(true, false, false, false, 200, 1_500), Is.False,
+            "at 1,420 units an instant caster between casts takes no step toward its target");
+    }
 
     [Test]
     public void A_cast_is_interruptible_unless_it_is_instant_or_uninterruptible()   // SpellHandler.cs:571
