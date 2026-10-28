@@ -588,28 +588,15 @@ public static class PlayerBotDriver
         bool opening = !state.Engaged;
         if (opening)                                          // the fight's first think in reach: PLAYER_BOT_FIGHT's start
         {
-            state.EngagedSince = now;
-            state.EngageHealth = player.HealthPercent;
-            state.EngageMana = PowerPercent(player.MaxMana, player.ManaPercent);
-            state.FightAdds = state.Swings = state.NotVisible = state.FightCasts = state.FightHeals = 0;
-            state.FightPetCasts = state.FightWaits = state.FightControls = state.FightKites = state.FightCtlBroken = 0;
-            state.TargetHeldBreaks = false;                                             // #167 C3
-            state.FightAddControls = 0;                                                 // #167 C4
-            (state.FightAdd, state.EngageDistance) = ((-1, -1), distance);              // #167 FIGHT addAt=, engageDist=
-            state.NextAddScanTick = 0;                                                  //   and a fresh add scan (ScanComing)
-            state.EngageTargetHealth = target.HealthPercent;                            // #167 C11
-            state.ControlTries = 0;                                                     // #167 F11
-            state.NextKiteTick = 0;
-            state.KilledWithAdds = false;                                               // #167 C2: the kill's case over
-            if (state.BackPending) ReportBack(state, player, now);                      // #167 C1: the first since a release
+            if (OpenFight(state, now, player.HealthPercent, PowerPercent(player.MaxMana, player.ManaPercent), distance,
+                    target.HealthPercent))
+                ReportBack(state, player, now);                                         // #167 C1: the first since a release
             state.EngageBuffs = SelfBuffsUp(player.effectListComponent.GetSpellEffects()     // FIGHT buffs= (#167 F8)
                 .Where(effect => effect.SpellHandler?.Spell != null).Select(effect => effect.SpellHandler.Spell.SpellType));
             state.EngagePet = player.ControlledBrain?.Body?.IsAlive == true;
             state.EngageIll = Ill(player);                                              // DEATH ill= (#167 F4)
-            state.FightQuickcast = false;
             if (player.ControlledBrain != null)                                         // its pet too: the pet window's
                 player.CommandNpcAttack();                                              //   attack (PetWindowHandler.cs:79-82)
-            state.PetOrderTick = now;
         }
         state.Engaged = true;
         state.FightAdds = Math.Max(state.FightAdds, state.Attackers);
@@ -978,6 +965,10 @@ public static class PlayerBotDriver
         return kinds;
     }
 
+    /// <summary>Whether the bot rests for its chant (WantedChant's resting, #167 C13; the review of 9aacd69: with it false
+    /// in SelfBuff no test failed and no Song of Rest ran): sitting, or wanting a rest (WantsRest).</summary>
+    public static bool Resting(bool sitting, bool wantsRest) => sitting || wantsRest;
+
     /// <summary>The chant the bot runs (#167 C13; one at a time, EffectListComponent.cs:362-371): while it rests (resting:
     /// sitting, or WantsRest), the regeneration chant of what is short of its rest's stop (Recovered's: full health, the
     /// power stop, RestEnduranceStop), as a Skald runs its Song of Rest (a pulse runs on while it sits, SpellHandler.cs:196-232:
@@ -1006,6 +997,12 @@ public static class PlayerBotDriver
     /// casts, each a stand out of the sitting regeneration. The missing buffs go up in the post-kill window instead
     /// (SettleTarget scans at once), back to back.</summary>
     public static bool BuffScanAllowed(bool sitting, bool recovered) => !sitting || recovered;
+
+    /// <summary>SelfBuff's gate (#167 F8, C9; the review of 9aacd69: with BuffScanAllowed switched off in SelfBuff no test
+    /// failed): its scan due (nextTick), no cast under way, out of a live fight (fighting: engaged with a live target) and
+    /// never mid-rest (BuffScanAllowed). A monster coming at it (Threat) SelfBuff asks after these.</summary>
+    public static bool SelfBuffScanDue(long now, long nextTick, bool casting, bool fighting, bool sitting, bool recovered) =>
+        now >= nextTick && !casting && !fighting && BuffScanAllowed(sitting, recovered);
 
     /// <summary>Whether the bot keeps a self-buff up out of a fight (#167 C9): a chant, or a buff of ShortBuffMilliseconds or
     /// more (or with no end: a concentration one), yes; a shorter one only a regeneration buff while its resource is under
@@ -1109,7 +1106,7 @@ public static class PlayerBotDriver
         state.FromDefence = found != null && IsAttacking(player, found);                  // FIGHT and DEATH from=
         state.PickCrowd = crowd;                                                           //   and crowd= (#167)
         (state.TargetSpawn, state.TargetRespawnReach) = found?.Brain is StandardMobBrain brain   // #167 C7: its respawn
-            ? RespawnOf(found.SpawnPoint, brain.AggroLevel, brain.AggroRange, player.IsObjectGreyCon(found)) : default;
+            ? RespawnOf(found, brain.AggroLevel, brain.AggroRange, player.IsObjectGreyCon(found)) : default;
         state.Engaged = false;
         state.NextLosTick = 0;
         state.SpellBlockedUntil = 0;                                                       // a new target clears the watch
@@ -1176,16 +1173,15 @@ public static class PlayerBotDriver
             npc.IsAttacking && npc.TargetObject is GameLiving other && other != player)
             ? brain.AggroRange : 0;
 
-    // #167 C5: the stop a pull takes (Engage's CombatStopDistance at its first think, no hit on the bot yet): the spell's
-    // with a damage spell ready to cast now (Nuke's choice, no add looked for), else melee's.
+    // #167 C5: the stop a pull takes (PullStopDistance) with the damage spell ready to cast now (Nuke's choice, no add
+    // looked for).
     private static int PullStop(PlayerBotState state, GamePlayer player)
     {
         KnowSpells(state, player);
         (Spell nuke, _) = ChooseNuke(state.Nukes, spell => player.GetSkillDisabledDuration(spell) <= 0 &&
             HasPowerFor(player.MaxMana, player.Mana, spell.Power), false);
-        return CombatStopDistance(ShouldCast(nuke != null, player.ManaPercent, 0, 0), false, nuke != null && Interruptible(nuke),
-            false, player.attackComponent.AttackRange, nuke == null ? 0 : player.castingComponent.CalculateSpellRange(nuke),
-            casterHold: false);
+        return PullStopDistance(nuke, player.ManaPercent, player.attackComponent.AttackRange,
+            nuke == null ? 0 : player.castingComponent.CalculateSpellRange(nuke));
     }
 
     // Self-defence: the nearest monster that is hitting the bot (its AttackerTracker, as BotGroupSupport.UnderAttack
@@ -1370,6 +1366,57 @@ public static class PlayerBotDriver
     /// it died at, as every death's (RememberFailedCamp in HandleDeath).</summary>
     public static bool OwesReplan(bool onTask, bool canRelocate) => !onTask && canRelocate;
 
+    /// <summary>The replan a death owes, as HandleDeath sets it (#167 F4, C1b; the review of 9aacd69: the rule tested
+    /// where it applies): Died when it owes one (OwesReplan), however far from its anchor (anchor) it died (deathSpot):
+    /// the old limit, LeashRadius + RoamRadius, let a bot that died on a walk walk back past that camp; else none.</summary>
+    public static string ReplanOwedAfterDeath(bool onTask, bool canRelocate, Vector3 deathSpot, Vector3 anchor) =>
+        OwesReplan(onTask, canRelocate) ? Died : null;
+
+    /// <summary>A camp planned (RelocateIfOutgrown's move to spot, for reason): the leash and the walk go there (a task bot
+    /// levelling for its errand has no leash to pull it), its rejects start afresh, that camp's con the fallback cap
+    /// (fallback; none: the death cap, Cap) and at a camp of avoided names (stale) those too (FindWithin), the capped
+    /// clock afresh (the next search starts it, on the way there too), BACK replan=moved after a death (#167 C1), and
+    /// the relocation owed planned (#167 F4, C2). The review of 9aacd69: with BackMoved's line dropped no test failed.</summary>
+    public static void PlanCamp(PlayerBotState state, Vector3 spot, ConColor? fallback, bool stale, string reason)
+    {
+        state.Anchor = spot;
+        state.RoamDestination = spot;
+        state.RelocateRejected.Clear();
+        state.FallbackCap = fallback;
+        state.HuntAvoided = stale;
+        state.CappedSince = 0;
+        state.BackMoved |= reason == Died;
+        state.ReplanOwed = null;
+        state.ReplanSince = 0;
+    }
+
+    /// <summary>The fight's first think in reach (Engage's opening; PLAYER_BOT_FIGHT's start): its counts afresh, the bot's
+    /// health and power (mana: PowerPercent), its distance and the target's health then (#167 FIGHT engageDist=, C11's
+    /// NukesNeeded), a fresh add scan (ScanComing), no control tried (F11) or step back due, the kill's second-monster case
+    /// over (C2), and the pet's lead from now (F10c). True for the first fight since a release (BackPending, cleared):
+    /// PLAYER_BOT_BACK then (#167 C1; the review of 9aacd69: with Engage's ReportBack dropped no test failed).</summary>
+    public static bool OpenFight(PlayerBotState state, long now, byte health, byte mana, int distance, byte targetHealth)
+    {
+        state.EngagedSince = now;
+        state.EngageHealth = health;
+        state.EngageMana = mana;
+        state.FightAdds = state.Swings = state.NotVisible = state.FightCasts = state.FightHeals = 0;
+        state.FightPetCasts = state.FightWaits = state.FightControls = state.FightKites = state.FightCtlBroken = 0;
+        state.TargetHeldBreaks = false;                                             // #167 C3
+        state.FightAddControls = 0;                                                 // #167 C4
+        (state.FightAdd, state.EngageDistance) = ((-1, -1), distance);              // #167 FIGHT addAt=, engageDist=
+        state.NextAddScanTick = 0;                                                  //   and a fresh add scan (ScanComing)
+        state.EngageTargetHealth = targetHealth;                                    // #167 C11
+        state.ControlTries = 0;                                                     // #167 F11
+        state.NextKiteTick = 0;
+        state.KilledWithAdds = false;                                               // #167 C2: the kill's case over
+        state.FightQuickcast = false;
+        state.PetOrderTick = now;                                                   // #167 F10c
+        bool back = state.BackPending;                                              // #167 C1: the first since a release
+        state.BackPending = false;
+        return back;
+    }
+
     /// <summary>PLAYER_BOT_BACK replan= (#167 C1): notOwed when the release owed no replan (OwesReplan); else moved once
     /// a camp was planned since, none when not (none found, or the hold ran out, or still owed at the fight).</summary>
     public static string BackReplan(bool owed, bool moved) => !owed ? "notOwed" : moved ? "moved" : "none";
@@ -1544,10 +1591,11 @@ public static class PlayerBotDriver
 
     /// <summary>Where a target respawns and the reach it aggroes from then (#167 C7), read at the pick: its spawn spot
     /// (GameNPC.SpawnPoint; RespawnTimerCallback puts it back there, GameNPC.cs:3278-3280), not where it stands (the
-    /// verifier's correction: a defence pick often stands far from it), and its aggro range when it would aggro the bot
-    /// at all (IsPotentialAdd: it respawns busy with no one); else none (Reach 0).</summary>
-    public static (Vector3 At, int Reach) RespawnOf(Point3D spawn, int aggroLevel, int aggroRange, bool greyToBot) =>
-        spawn != null && IsPotentialAdd(aggroLevel, aggroRange, greyToBot, false)
+    /// verifier's correction: a defence pick often stands far from it; the review of 9aacd69: read from the monster
+    /// here, as a spot passed in could be either), and its aggro range when it would aggro the bot at all
+    /// (IsPotentialAdd: it respawns busy with no one); else none (Reach 0).</summary>
+    public static (Vector3 At, int Reach) RespawnOf(GameNPC npc, int aggroLevel, int aggroRange, bool greyToBot) =>
+        npc?.SpawnPoint is Point3D spawn && IsPotentialAdd(aggroLevel, aggroRange, greyToBot, false)
             ? (new Vector3(spawn.X, spawn.Y, spawn.Z), aggroRange) : default;
 
     /// <summary>A kill's respawn (#167 C7), kept with the bot's other kills of the last RespawnWatchMilliseconds, the last
@@ -2060,6 +2108,14 @@ public static class PlayerBotDriver
     public static int MeleeStopDistance(int attackRange) => Math.Max(48, (attackRange > 0 ? attackRange : 128) - 48);
     public static int SpellStopDistance(int spellRange) => Math.Max(145, spellRange - 80);   // APP:320
 
+    /// <summary>The stop a pull takes (#167 C5; FindWithin's walk-in check, PickUncrowded): Engage's CombatStopDistance at
+    /// its first think, no hit on the bot yet: the spell's with a damage spell ready to cast now (nuke: Nuke's choice, no
+    /// add looked for; its range, spellRange) and the power for it (ShouldCast), else melee's (attackRange). The review
+    /// of 9aacd69: with no stop passed no test failed.</summary>
+    public static int PullStopDistance(Spell nuke, byte manaPercent, int attackRange, int spellRange) =>
+        CombatStopDistance(ShouldCast(nuke != null, manaPercent, 0, 0), false, nuke != null && Interruptible(nuke), false,
+            attackRange, nuke == null ? 0 : spellRange, casterHold: false);
+
     /// <summary>Whether a monster would join a fight by it (the adds rule; in the diagnostic smoke 26% of the deaths with a
     /// named killer were to a monster other than the target): aggressive (aggro level and range above 0,
     /// StandardMobBrain.cs:705, as PlayerBotWake.ScanReason reads them), not grey to the bot (a grey monster never aggroes,
@@ -2406,15 +2462,7 @@ public static class PlayerBotDriver
             if (Log.IsInfoEnabled)
                 Log.Info(RelocateLine(player.Name, player.Level, state.Anchor, spot, (int)Vector3.Distance(here, spot), npc.Name,
                     npc.EffectiveLevel, zone.ID, reason, fallback, now - state.ReleasedAt));
-            state.Anchor = spot;
-            state.RoamDestination = spot;   // walk there: a task bot levelling for its errand has no leash to pull it
-            state.RelocateRejected.Clear();
-            state.FallbackCap = fallback;   // that camp's con, or none: the death cap (Cap)
-            state.HuntAvoided = stale;      //   and at a camp of avoided names, those too (FindWithin)
-            state.CappedSince = 0;          // the next search starts the clock afresh, on the way there too
-            state.BackMoved |= died;        //   and BACK replan=moved (#167 C1)
-            state.ReplanOwed = null;        // planned (#167 F4, C2)
-            state.ReplanSince = 0;
+            PlanCamp(state, spot, fallback, stale, reason);                         // and BACK replan=moved (#167 C1)
             return;
         }
         if (Log.IsInfoEnabled)
@@ -2763,7 +2811,8 @@ public static class PlayerBotDriver
             state.NoXpDeaths = AutonomousDeathRecoveryPolicy.NextNoExperienceDeathStreak(state.NoXpDeaths,   // #167 F4:
                 state.LastDeathTick, now, state.Gained > state.GainedAtDeath);          //   the back-off (AWBC:3778-3786)
             (state.LastDeathTick, state.GainedAtDeath) = (now, state.Gained);
-            state.ReplanOwed = OwesReplan(state.Task != null, CanRelocate(state, player)) ? Died : null;   // wherever (C1b)
+            state.ReplanOwed = ReplanOwedAfterDeath(state.Task != null, CanRelocate(state, player), state.DeathSpot,
+                state.Anchor);                                                          // wherever (C1b)
             state.NextRelocateTick = 0;                                                 //   and the plan before the walk back
             state.AfterRelease = false;
             state.CappedSince = 0;
@@ -2825,10 +2874,9 @@ public static class PlayerBotDriver
 
     // #167 C1: PLAYER_BOT_BACK at the first fight in reach after a release (the verifier's logging: the 40 s more from a
     // death to the next fight in st-deathsB was not the failed replan, gap.py). Its phases are counted by think; the
-    // rest of sec= is the rests, heals, buffs and the walk to the target.
+    // rest of sec= is the rests, heals, buffs and the walk to the target. OpenFight says when (BackPending).
     private static void ReportBack(PlayerBotState state, GamePlayer player, long now)
     {
-        state.BackPending = false;
         if (Log.IsInfoEnabled)
             Log.Info(PlayerBotDriverReport.FormatBack(player.Name, player.Level, (now - state.ReleasedAt) / 1000,
                 state.BackStepOutMs / 1000, state.BackHoldMs / 1000, state.BackWalkMs / 1000,
@@ -3327,15 +3375,15 @@ public static class PlayerBotDriver
     // scan allowed again) its combat one back.
     private static bool SelfBuff(PlayerBotState state, GamePlayer player, long now)
     {
-        if (now < state.NextSelfBuffTick || player.IsCasting || state.Engaged && state.Target?.IsAlive == true ||
-            !BuffScanAllowed(player.IsSitting, Recovered(player)) ||                    // #167 C9
+        if (!SelfBuffScanDue(now, state.NextSelfBuffTick, player.IsCasting, state.Engaged && state.Target?.IsAlive == true,
+                player.IsSitting, Recovered(player)) ||                                 // #167 C9
             Threat(state, player, now) != null)                                         // MayRest's view, and one coming
             return false;                                                               //   at it (#167 F7)
         state.NextSelfBuffTick = now + SelfBuffScanMilliseconds;
         byte health = player.HealthPercent, mana = player.ManaPercent, endurance = player.EndurancePercent,
             powerStop = RestPowerStop(RoleOf(player.CharacterClass.ID));
         List<(Spell Spell, SpellLine Line)> usable = UsableSpells(player).ToList();
-        bool resting = player.IsSitting || WantsRest(player, state.RecoverBeforePull);  // #167 C13: the chant it runs
+        bool resting = Resting(player.IsSitting, WantsRest(player, state.RecoverBeforePull));   // #167 C13: its chant's
         eSpellType? chant = WantedChant(ChantKinds(usable, player.Level), resting, health, endurance, player.MaxMana, mana,
             powerStop);
         (Spell buff, SpellLine line) = NextSelfBuff(usable, ActiveSpellTypes(player), chant, ChantUp(player), player.Level,

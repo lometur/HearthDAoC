@@ -161,6 +161,26 @@ public sealed class UT_PlayerBotDriver
         long now, string owed, bool immune, string reason) =>
         Assert.That(PlayerBotDriver.RelocateReason(roamingSince, cappedSince, now, owed, immune), Is.EqualTo(reason));
 
+    // A player the server holds immune (GamePlayer.cs:12284-12287): the release's 10 s.
+    private sealed class ImmunePlayer : GamePlayer
+    {
+        private ImmunePlayer() : base(null, null) { }
+        public override bool IsInvulnerableToAttack => true;
+    }
+
+    // The replan reads the bot's own immunity where it runs (RelocateIfOutgrown; the review of 9aacd69: with that term put
+    // back to false no test failed, the rows above call RelocateReason alone): a bot still immune after its release
+    // keeps its death's replan owed and plans nothing yet; it no longer falls back to the bind (ReplanOwed none).
+    [Test]
+    public void A_bot_still_immune_after_its_release_keeps_its_replan_for_after()
+    {
+        var player = (ImmunePlayer)RuntimeHelpers.GetUninitializedObject(typeof(ImmunePlayer));
+        var state = new PlayerBotState(Player(null)) { ReplanOwed = PlayerBotDriver.Died };
+        typeof(PlayerBotDriver).GetMethod("RelocateIfOutgrown", BindingFlags.Static | BindingFlags.NonPublic)!
+            .Invoke(null, [state, player, 20_000L]);
+        Assert.That((state.ReplanOwed, state.NextRelocateTick), Is.EqualTo((PlayerBotDriver.Died, 0L)));
+    }
+
     // The capped clock: it starts at the first search that passed a monster over for the cap and found nothing, keeps
     // running while that lasts, and stops at a search that found a target or nothing at all to pass over.
     [TestCase(0L, false, true, 5_000L, 5_000L)] [TestCase(2_000L, false, true, 5_000L, 2_000L)]
@@ -386,6 +406,16 @@ public sealed class UT_PlayerBotDriver
     public void A_death_owes_a_replan_wherever_it_died_unless_on_a_task_or_held(bool onTask, bool canRelocate, bool owes) =>
         Assert.That(PlayerBotDriver.OwesReplan(onTask, canRelocate), Is.EqualTo(owes));
 
+    // The replan a death owes as HandleDeath sets it, from the death spot and the anchor (the review of 9aacd69: with
+    // the old LeashRadius + RoamRadius limit put back at the call no test failed): died 5,401 or 9,322 units from its
+    // anchor (on a walk, a relocation) it owes one as at its camp; on a task or a lever spot bot, none.
+    [TestCase(false, true, 0f, "died")] [TestCase(false, true, 5_401f, "died")] [TestCase(false, true, 9_322f, "died")]
+    [TestCase(true, true, 5_401f, null)] [TestCase(false, false, 9_322f, null)] [TestCase(true, false, 0f, null)]
+    public void A_deaths_replan_is_owed_however_far_from_its_anchor_it_died(bool onTask, bool canRelocate, float away,
+        string owed) =>
+        Assert.That(PlayerBotDriver.ReplanOwedAfterDeath(onTask, canRelocate, new Vector3(1_000 + away, 2_000, 0),
+            new Vector3(1_000, 2_000, 0)), Is.EqualTo(owed));
+
     // The plan's origin: after a death the spot it died at, not where it stands (its bind: 5,808 units off at the median
     // in st-deathsA, the review of 77ba437); a capped or outgrown bot plans from where it is.
     [Test]
@@ -533,6 +563,37 @@ public sealed class UT_PlayerBotDriver
         var login = new PlayerBotState(Player(null));
         PlayerBotDriver.StartLife(login, 5_000);
         Assert.That(login.BackPending, Is.False);
+    }
+
+    // A camp planned (PlanCamp, RelocateIfOutgrown's move) after a death sets BACK replan=moved; a capped or outgrown
+    // move doesn't. Either way the relocation owed is planned (none owed after), the leash and the walk go to the spot,
+    // the capped clock starts afresh. The review of 9aacd69: with BackMoved's line dropped no test failed.
+    [TestCase("died", true)] [TestCase("brokeoff", false)] [TestCase("capped", false)]
+    public void A_planned_camp_ends_the_replan_owed_and_counts_for_the_way_back_after_a_death(string reason, bool moved)
+    {
+        var state = new PlayerBotState(Player(null)) { ReplanOwed = reason == "capped" ? null : reason,
+            ReplanSince = 4_000, CappedSince = 3_000, BackOwed = true };
+        Vector3 spot = new(5_000, 6_000, 70);
+        PlayerBotDriver.PlanCamp(state, spot, ConColor.BLUE, stale: true, reason);
+        Assert.That((state.Anchor, state.RoamDestination, state.FallbackCap, state.HuntAvoided, state.CappedSince),
+            Is.EqualTo((spot, (Vector3?)spot, (ConColor?)ConColor.BLUE, true, 0L)));
+        Assert.That((state.ReplanOwed, state.ReplanSince, state.BackMoved), Is.EqualTo(((string)null, 0L, moved)));
+    }
+
+    // The fight's first think in reach (OpenFight) starts its counts afresh, ends the kill's second-monster case (C2) and
+    // gives BACK once since the release: the review of 9aacd69, with Engage's ReportBack dropped no test failed.
+    [Test]
+    public void A_fights_first_think_starts_its_counts_and_gives_the_way_back_once()
+    {
+        var state = new PlayerBotState(Player(null)) { BackPending = true, KilledWithAdds = true, ControlTries = 3,
+            FightCasts = 4, FightAdd = (2, 50), NextAddScanTick = 9_000, NextKiteTick = 9_000, TargetHeldBreaks = true };
+        Assert.That(PlayerBotDriver.OpenFight(state, 10_000, 90, 60, 1_420, 100), Is.True, "the first fight since a release");
+        Assert.That((state.BackPending, state.KilledWithAdds, state.ControlTries, state.FightCasts, state.FightAdd),
+            Is.EqualTo((false, false, 0, 0, (-1, -1))));
+        Assert.That((state.EngagedSince, state.EngageHealth, state.EngageMana, state.EngageDistance, state.EngageTargetHealth),
+            Is.EqualTo((10_000L, (byte)90, (byte)60, 1_420, (byte)100)));
+        Assert.That((state.NextAddScanTick, state.NextKiteTick, state.TargetHeldBreaks), Is.EqualTo((0L, 0L, false)));
+        Assert.That(PlayerBotDriver.OpenFight(state, 30_000, 90, 60, 1_420, 100), Is.False, "the next one");
     }
 
     // --- the break-off when losing to two (#167 C2) ---
@@ -817,13 +878,26 @@ public sealed class UT_PlayerBotDriver
     // At the pick the bot reads its target's spawn spot, where it respawns (GameNPC.cs:3278-3280), not where it stands
     // (the verifier's correction: a defence pick often stands far from it), and the reach it will aggro from: its aggro
     // range when it would aggro the bot at all (IsPotentialAdd), else none.
+    // The review of 9aacd69: RespawnOf took any spot, and with where the target stood passed in no test failed; it reads
+    // the monster's own spawn spot now, here 4,900 units from where it stands.
     [Test]
     public void A_targets_respawn_is_its_spawn_spot_and_aggro_range_when_it_would_aggro()
     {
-        Point3D spawn = new(100, 200, 30);
-        Assert.That(PlayerBotDriver.RespawnOf(spawn, 50, 500, false), Is.EqualTo((new Vector3(100, 200, 30), 500)));
-        Assert.That((PlayerBotDriver.RespawnOf(spawn, 0, 500, false).Reach, PlayerBotDriver.RespawnOf(spawn, 50, 500, true).Reach,
-            PlayerBotDriver.RespawnOf(null, 50, 500, false).Reach), Is.EqualTo((0, 0, 0)), "passive, grey, no spawn spot");
+        GameNPC Monster(Point3D spawn)
+        {
+            var npc = (GameNPC)RuntimeHelpers.GetUninitializedObject(typeof(GameNPC));
+            var mover = (NpcMovementComponent)RuntimeHelpers.GetUninitializedObject(typeof(NpcMovementComponent));
+            typeof(MovementComponent).GetField("_ownerPosition", Hidden)!.SetValue(mover, new Vector3(5_000, 200, 30));
+            npc.movementComponent = mover;
+            npc.SpawnPoint = spawn;
+            return npc;
+        }
+        GameNPC wolf = Monster(new Point3D(100, 200, 30)), unplaced = Monster(null);
+        Assert.That(wolf.X, Is.EqualTo(5_000), "where it stands");
+        Assert.That(PlayerBotDriver.RespawnOf(wolf, 50, 500, false), Is.EqualTo((new Vector3(100, 200, 30), 500)));
+        Assert.That((PlayerBotDriver.RespawnOf(wolf, 0, 500, false).Reach, PlayerBotDriver.RespawnOf(wolf, 50, 500, true).Reach,
+            PlayerBotDriver.RespawnOf(unplaced, 50, 500, false).Reach, PlayerBotDriver.RespawnOf(null, 50, 500, false).Reach),
+            Is.EqualTo((0, 0, 0, 0)), "passive, grey, no spawn spot, none");
     }
 
     // A kill remembers that spot (RememberKill); a target that would not aggro, or a fight the bot never had, none.
@@ -1553,6 +1627,14 @@ public sealed class UT_PlayerBotDriver
             Is.LessThan(0.01f));
         Assert.That(PlayerBotDriver.StandPoint(Vector3.Zero, new(1_000, 0, 0), 1_420), Is.EqualTo(Vector3.Zero));
     }
+
+    // The stop the pick checks the walk in to (PullStopDistance, FindWithin's): Engage's first think's, the spell's with
+    // a damage spell it can cast now and the power for it (18%, ShouldCast), else melee's. The review of 9aacd69: with
+    // no stop passed (the walk in unchecked) no test failed.
+    [TestCase(true, 50, 1_420)] [TestCase(true, 18, 1_420)] [TestCase(true, 17, 152)] [TestCase(false, 100, 152)]
+    public void The_pick_checks_the_walk_in_to_the_stop_its_pull_takes(bool nuke, int mana, int stop) =>
+        Assert.That(PlayerBotDriver.PullStopDistance(nuke ? FungalOoze : null, (byte)mana, 200, nuke ? 1_500 : 0),
+            Is.EqualTo(stop));
 
     // An add counts once when its reach (aggro + 200) covers the target or the walk from the bot, at (0,0), to its stand
     // point: st-deathsB's 82 defence fights begun 2 s or more after a recovered rest were jumped on the way in (59% with
@@ -3334,6 +3416,15 @@ public sealed class UT_PlayerBotDriver
     public void The_self_buff_scan_never_stands_the_bot_mid_rest(bool sitting, bool recovered, bool allowed) =>
         Assert.That(PlayerBotDriver.BuffScanAllowed(sitting, recovered), Is.EqualTo(allowed));
 
+    // SelfBuff's whole gate (SelfBuffScanDue; the review of 9aacd69: with BuffScanAllowed switched off in it no test
+    // failed): its scan due, no cast under way, no live fight, and never mid-rest.
+    [TestCase(5_000L, 5_000L, false, false, false, false, true)] [TestCase(4_999L, 5_000L, false, false, false, false, false)]
+    [TestCase(5_000L, 0L, true, false, false, false, false)] [TestCase(5_000L, 0L, false, true, false, false, false)]
+    [TestCase(5_000L, 0L, false, false, true, false, false)] [TestCase(5_000L, 0L, false, false, true, true, true)]
+    public void The_self_buff_scan_runs_due_out_of_a_cast_and_a_fight_and_never_mid_rest(long now, long next, bool casting,
+        bool fighting, bool sitting, bool recovered, bool due) =>
+        Assert.That(PlayerBotDriver.SelfBuffScanDue(now, next, casting, fighting, sitting, recovered), Is.EqualTo(due));
+
     // Out of a fight the bot keeps up chants and buffs of 2 minutes or more (or for good); a shorter one only a
     // regeneration buff while its resource is under its rest's stop: Benison (176 stands in st-deathsB), Surge (85, up at
     // engage in 35% of the Reaver's fights) and Frigg's Cure at full health (157) were cast again and again between fights.
@@ -3392,6 +3483,12 @@ public sealed class UT_PlayerBotDriver
         Assert.That(Wanted([eSpellType.DamageAdd], true, 70), Is.EqualTo(eSpellType.DamageAdd), "no Song");
         Assert.That(Wanted([], true, 70), Is.Null, "no chant");
     }
+
+    // It rests for the chant while sitting or wanting a rest (Resting, SelfBuff's; the review of 9aacd69: with it false
+    // no test failed and no Song of Rest ran).
+    [TestCase(true, false, true)] [TestCase(false, true, true)] [TestCase(false, false, false)] [TestCase(true, true, true)]
+    public void A_bot_sings_for_its_rest_while_it_sits_or_wants_one(bool sitting, bool wantsRest, bool resting) =>
+        Assert.That(PlayerBotDriver.Resting(sitting, wantsRest), Is.EqualTo(resting));
 
     // The chants it can run: of a kind it keeps, at or below its level, no song that needs an instrument and none that
     // costs power each pulse.
