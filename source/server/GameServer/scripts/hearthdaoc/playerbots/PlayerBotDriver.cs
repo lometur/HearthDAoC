@@ -1811,11 +1811,12 @@ public static class PlayerBotDriver
     // the zone it died in (the bind may lie elsewhere; then the corridors start at the death spot, CorridorOrigin), the
     // failed camps barred; with no camp it hunts where it is. Not while the release's immunity lasts (RelocateReason,
     // #167 C1): it returns before NextRelocateTick, so the next think tries again, and the replan's hold (ReplanSince,
-    // HoldsForRelocation) keeps the bot out of the camp meanwhile.
+    // HoldsForRelocation) keeps the bot out of the camp meanwhile. The immunity hides monsters from a plan only: a bot
+    // that cannot plan (CanRelocate) falls back as before, and a lever spot bot reads no player here.
     private static void RelocateIfOutgrown(PlayerBotState state, GamePlayer player, long now)
     {
         string reason = RelocateReason(state.RoamingSince, state.CappedSince, now, state.ReplanOwed,
-            player.IsInvulnerableToAttack);                                     // GamePlayer.cs:12284-12287
+            CanRelocate(state, player) && player.IsInvulnerableToAttack);       // GamePlayer.cs:12284-12287
         if (reason == null || now < state.NextRelocateTick) return;
         bool died = reason == Died;
         if (!CanRelocate(state, player) ||                                         // the lever test keeps its bots on
