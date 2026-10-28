@@ -110,11 +110,12 @@ public sealed class PlayerBotState
     public long NextSelfHealTick, NextSummonTick;                //   A6, A5), the next tries, and the level at which it
     public byte NoPetSpellLevel;                                 //   found no main-pet summon (not looked for again then)
     public byte NoSelfHealLevel;                                 //   or no heal (#167 F2: looked for from 85% too)
-    public long NextCombatPetTick;                               // #167 F1: a Theurgist's next pet at its target, and the
-    public byte NoCombatPetLevel;                                //   level at which it found no such summon
+    public long NextCombatPetTick;                               // #167 F1: a Theurgist's next pet at its target
+    public long NextSpellChoiceTick;                             //   and the next spell choice while no cast follows
     public long NextSelfBuffTick;                                // #167 F8: the next self-buff scan
-    public List<(Spell Spell, SpellLine Line)> Nukes;            // #167 F9: its damage spells (DamageSpells) at NukesLevel,
-    public int NukesLevel = -1;                                  //   built once per level and after a training
+    public List<(Spell Spell, SpellLine Line)> Nukes;            // #167 F9, F1: its damage spells (DamageSpells) and the
+    public List<(Spell Spell, SpellLine Line)> CombatPets;       //   pets a Theurgist casts at its target, at NukesLevel:
+    public int NukesLevel = -1;                                  //   built once per level and after a training (KnowSpells)
     public long PetOrderTick;                                    // #167 F10c: when its pet was sent at the target
     public long NextQuickcastTick;                               // Quickcast's next try (UseQuickcast)
     public bool EngagePet;                                       // PLAYER_BOT_FIGHT pet=, heals= and qc=: a living pet at
@@ -176,6 +177,7 @@ public static class PlayerBotDriver
     public const byte RestEnduranceStop = 60;                //   its 95th-percentile fight cost + 18%); all, endurance
     public const int SelfBuffScanMilliseconds = 5_000;       // #167 F8: the self-buffs' scan, out of a fight
     public const int PetLeadMilliseconds = 4_000;            // #167 F10c: the owner's longest wait for its pet to lead
+    public const int SpellChoiceMilliseconds = 1_000;        // (inf.) as the sight check's: the spell choice while no cast
 
     private static readonly ConcurrentDictionary<GamePlayer, PlayerBotState> _states = new();
     [ThreadStatic] private static List<(GameNPC Npc, Vector3 At, int Score)> _candidates;      // FindWithin's, per timer
@@ -385,8 +387,11 @@ public static class PlayerBotDriver
         int distance = player.GetDistanceTo(target);
         bool quickcasting = player.effectListComponent.ContainsEffectForEffectType(eEffect.QuickCast);
         bool due = now >= state.NextCombatChoiceTick;
-        if (due && !player.IsCasting)                                                   // a cast choice: the pet or the
-            ChooseCombatSpell(state, player, target, now);                              //   damage spell (#167 F1)
+        if (ChoosesSpell(due, player.IsCasting, now, state.NextSpellChoiceTick))       // a cast choice: the pet or the
+        {                                                                               //   damage spell (#167 F1)
+            state.NextSpellChoiceTick = now + SpellChoiceMilliseconds;
+            ChooseCombatSpell(state, player, target, now);
+        }
         bool interruptible = state.Spell != null && Interruptible(state.Spell);
         Ability quickcast = player.GetAbility(Abilities.Quickcast);
         bool canCast = ShouldCast(state.Spell != null, player.ManaPercent, now, state.SpellBlockedUntil);
@@ -451,33 +456,31 @@ public static class PlayerBotDriver
             player.IsWithinRadius(target, player.castingComponent.CalculateSpellRange(state.Spell)))
         {
             player.attackComponent.StopAttack();
-            if (!CountsInCastWatch(state.Spell))                                        // a pet at the target (#167 F1)
+            bool petCast = !CountsInCastWatch(state.Spell);                             // a pet at the target (#167 F1)
+            (state.CastTarget, state.CastAttempts, state.CastHealthMark, bool stalled) =
+                WatchStep(state.Spell, state.CastTarget, target, state.CastAttempts, state.CastHealthMark, target.HealthPercent);
+            if (stalled || !player.CastSpell(state.Spell, state.SpellLine))             // APP:345-353 without the Animist policy
             {
-                if (!player.CastSpell(state.Spell, state.SpellLine))
+                state.Activity = PlayerBotActivity.Fighting;
+                if (petCast)
                 {
                     state.NextCombatPetTick = now + SummonRetryMilliseconds;           // the damage spell at the next think
-                    state.Activity = PlayerBotActivity.Fighting;
+                    state.NextSpellChoiceTick = 0;
                     return;
                 }
+                // CastSpell only queues the request (CastingComponent.cs:116-144); range and sight fail later
+                // (SpellHandler.cs:681, :694, :731). A run of requests that hurt nothing: swing instead for a while.
+                state.SpellBlockedUntil = now + SpellBlockMilliseconds;
+                state.CastAttempts = 0;
+                state.CastFailures++;
+                return;                                                                 // the next think walks into melee
+            }
+            if (petCast)
+            {
                 state.NextCombatPetTick = now + Math.Max(250, state.Spell.CastTime + 100);   // AutonomousPetSupport.cs:646
                 state.FightPetCasts++;
             }
-            else
-            {
-                (state.CastAttempts, state.CastHealthMark, bool stalled) =
-                    WatchCast(state.CastTarget == target, state.CastAttempts, state.CastHealthMark, target.HealthPercent);
-                state.CastTarget = target;
-                if (stalled || !player.CastSpell(state.Spell, state.SpellLine))         // APP:345-353 without the Animist policy
-                {
-                    // CastSpell only queues the request (CastingComponent.cs:116-144); range and sight fail later
-                    // (SpellHandler.cs:681, :694, :731). A run of requests that hurt nothing: swing instead for a while.
-                    state.SpellBlockedUntil = now + SpellBlockMilliseconds;
-                    state.CastAttempts = 0;
-                    state.CastFailures++;
-                    state.Activity = PlayerBotActivity.Fighting;
-                    return;                                                             // the next think walks into melee
-                }
-            }
+            state.NextSpellChoiceTick = 0;                                              // the next due think chooses
             state.NextCombatChoiceTick = now + Math.Max(900, state.Spell.CastTime + 250);
             state.FightCasts++;
             state.FightQuickcast |= quickcasting;
@@ -640,6 +643,21 @@ public static class PlayerBotDriver
     /// once it reaches it, so three summons in a row would read as fruitless and block the bot's spells (#167 F1).</summary>
     public static bool CountsInCastWatch(Spell spell) => spell.SpellType is not eSpellType.SummonTheurgistPet;
 
+    /// <summary>The cast watch's step for one cast request at target (Engage): a damage spell's goes through WatchCast and
+    /// makes target the watch's; a pet's (CountsInCastWatch) leaves the watch as it was, its target too (#167 F1).</summary>
+    public static (T CastTarget, int Attempts, byte Mark, bool Stalled) WatchStep<T>(Spell spell, T castTarget, T target,
+        int attempts, byte mark, byte targetHealth) where T : class
+    {
+        if (!CountsInCastWatch(spell)) return (castTarget, attempts, mark, false);
+        (attempts, mark, bool stalled) = WatchCast(ReferenceEquals(castTarget, target), attempts, mark, targetHealth);
+        return (target, attempts, mark, stalled);
+    }
+
+    /// <summary>Whether Engage makes the spell choice this think (#167 F1, F9): due, out of a cast, and at most every
+    /// SpellChoiceMilliseconds while no cast follows (walking in, swinging, waiting), so a Theurgist's pet lookup and an
+    /// area spell's add scan do not run every think. A cast, a refused pet and a new target reset the timer.</summary>
+    public static bool ChoosesSpell(bool due, bool casting, long now, long nextChoice) => due && !casting && now >= nextChoice;
+
     // #167 F8: the self-buffs a bot keeps up, in this order: armour factor, absorb, bladeturn, ablative, damage shield,
     // damage add, base then spec stat buffs, the regeneration buffs (spells/RegenBuff.cs); then the Paladin's resist
     // chants, as chants only.
@@ -756,6 +774,7 @@ public static class PlayerBotDriver
         state.NextLosTick = 0;
         state.SpellBlockedUntil = 0;                                                       // a new target clears the watch
         state.CastTarget = null;
+        state.NextSpellChoiceTick = 0;                                                     //   and chooses at once
         (state.Spell, state.SpellLine) = found == null ? (null, null) : Nuke(state, player, found);
     }
 
@@ -1249,11 +1268,7 @@ public static class PlayerBotDriver
     // but one already on the bot.
     private static (Spell, SpellLine) Nuke(PlayerBotState state, GamePlayer player, GameLiving target)
     {
-        if (state.NukesLevel != player.Level)
-        {
-            state.Nukes = DamageSpells(UsableSpells(player), player.Level);
-            state.NukesLevel = player.Level;
-        }
+        KnowSpells(state, player);
         bool Ready(Spell spell) => player.GetSkillDisabledDuration(spell) <= 0 && HasPowerFor(player.MaxMana, player.Mana, spell.Power);
         (Spell spell, SpellLine line) = ChooseNuke(state.Nukes, Ready, false);
         if (spell == null || spell.Radius <= 0 || target == null) return (spell, line);
@@ -1613,18 +1628,29 @@ public static class PlayerBotDriver
         else (state.Spell, state.SpellLine) = Nuke(state, player, target);              // #167 F9: chosen per cast
     }
 
+    // From the summons known at this level (KnowSpells): none for every class but the Theurgist.
     private static (Spell, SpellLine) CombatPet(PlayerBotState state, GamePlayer player, GameLiving target, long now)
     {
-        if (player.Level == state.NoCombatPetLevel || now < state.NextCombatPetTick) return default;
+        KnowSpells(state, player);
+        if (state.CombatPets.Count == 0 || now < state.NextCombatPetTick) return default;
         bool underCap = DOL.GS.Spells.SummonTheurgistPet.PetLimitAllowsAnother(player.PetCount,
             DOL.GS.ServerProperties.Properties.THEURGIST_PET_CAP);                      // the server's own test (:67)
-        (Spell pet, SpellLine line) = FindCombatPetSpell(UsableSpells(player), player.Level, spell => underCap &&
+        (Spell pet, SpellLine line) = FindCombatPetSpell(state.CombatPets, player.Level, spell => underCap &&
             player.GetSkillDisabledDuration(spell) <= 0 && HasPowerFor(player.MaxMana, player.Mana, spell.Power));
-        if (pet == null && FindCombatPetSpell(UsableSpells(player), player.Level, _ => true).Item1 == null)
-            state.NoCombatPetLevel = player.Level;                                     // none at this level: not looked for
-        bool inRange = pet != null && player.TargetInView &&                            //   again until the next
+        bool inRange = pet != null && player.TargetInView &&
             player.IsWithinRadius(target, player.castingComponent.CalculateSpellRange(pet));
         return WantsCombatPet(pet != null, inRange, player.IsCasting, now, state.NextCombatPetTick) ? (pet, line) : default;
+    }
+
+    // #167 F9, F1: the damage spells and the pet summons a Theurgist casts at its target, from one walk of the usable
+    // spells per level and after a training (ObserveXp clears NukesLevel).
+    private static void KnowSpells(PlayerBotState state, GamePlayer player)
+    {
+        if (state.NukesLevel == player.Level) return;
+        List<(Spell Spell, SpellLine Line)> usable = UsableSpells(player).ToList();
+        state.Nukes = DamageSpells(usable, player.Level);
+        state.CombatPets = usable.FindAll(pair => pair.Spell.SpellType is eSpellType.SummonTheurgistPet);
+        state.NukesLevel = player.Level;
     }
 
     // A spell on the bot itself, stopped and standing (no cast sitting, SpellHandler.cs:556-562). Targeted as a player
@@ -1713,7 +1739,7 @@ public static class PlayerBotDriver
             {
                 if (PlayerBotKit.TrainTo(player, state.Kit, out string line) > 0) state.Retrains++;
                 if (Log.IsInfoEnabled) Log.Info(line);
-                state.NukesLevel = -1;                                               // new spells (#167 F9)
+                state.NukesLevel = -1;                                               // new spells (#167 F9, F1)
                 if (state.Target != null) (state.Spell, state.SpellLine) = Nuke(state, player, state.Target);
             }
         }

@@ -1969,6 +1969,38 @@ public sealed class UT_PlayerBotDriver
         Assert.That(PlayerBotDriver.CountsInCastWatch(Damage("Bolt", 20, 90)), Is.True);
     }
 
+    // The watch's step Engage takes per cast request: 4 pet casts at an unhurt target never stall it and leave it as it
+    // was (its target too); 4 damage casts do. Pets between damage casts neither stall the run nor start a new one.
+    [Test]
+    public void Pet_casts_never_stall_the_cast_watch_and_damage_casts_do()
+    {
+        object monster = new(), earlier = new();
+        Spell pet = TheurgistPet(20, 104).Item1, nuke = Damage("DirectDamage", 20, 90);
+        (object castTarget, int attempts, byte mark, bool stalled) = (earlier, 2, (byte)100, false);
+        for (int i = 1; i <= 4; i++)
+        {
+            (castTarget, attempts, mark, stalled) = PlayerBotDriver.WatchStep(pet, castTarget, monster, attempts, mark, 100);
+            Assert.That(stalled, Is.False, $"pet cast {i}");
+        }
+        Assert.That((castTarget, attempts, mark), Is.EqualTo((earlier, 2, (byte)100)), "the watch as it was");
+        for (int i = 1; i <= 4; i++)
+            (castTarget, attempts, mark, stalled) = PlayerBotDriver.WatchStep(nuke, castTarget, monster, attempts, mark, 100);
+        Assert.That((castTarget, attempts, stalled), Is.EqualTo((monster, 4, true)), "a new target's run, stalled at 4");
+        (castTarget, attempts, mark, stalled) = (null, 0, (byte)0, false);
+        foreach (Spell spell in new[] { nuke, pet, nuke, pet, nuke, pet })
+            (castTarget, attempts, mark, stalled) = PlayerBotDriver.WatchStep(spell, castTarget, monster, attempts, mark, 100);
+        Assert.That((attempts, stalled), Is.EqualTo((3, false)));
+        Assert.That(PlayerBotDriver.WatchStep(nuke, castTarget, monster, attempts, mark, 100).Stalled, Is.True);
+    }
+
+    // The spell choice (the pet, then the damage spell, with its add scan) is made when the choice is due, out of a cast,
+    // at most once a second while no cast follows (walking in, swinging, waiting); a cast, a refused pet and a new
+    // target make the next due think choose afresh (Engage, RefreshTarget).
+    [TestCase(true, false, 1_000L, true)] [TestCase(false, false, 0L, false)] [TestCase(true, true, 0L, false)]
+    [TestCase(true, false, 1_001L, false)] [TestCase(true, false, 0L, true)]
+    public void A_bot_chooses_its_spell_when_due_at_most_once_a_second(bool due, bool casting, long nextChoice, bool chooses) =>
+        Assert.That(PlayerBotDriver.ChoosesSpell(due, casting, 1_000, nextChoice), Is.EqualTo(chooses));
+
     // --- the pet leads (#167 F10c) ---
 
     [Test]
