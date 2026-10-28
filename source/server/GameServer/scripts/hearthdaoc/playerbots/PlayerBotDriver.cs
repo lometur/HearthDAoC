@@ -115,6 +115,7 @@ public sealed class PlayerBotState
     public long NextSelfBuffTick;                                // #167 F8: the next self-buff scan
     public List<(Spell Spell, SpellLine Line)> Nukes;            // #167 F9: its damage spells (DamageSpells) at NukesLevel,
     public int NukesLevel = -1;                                  //   built once per level and after a training
+    public long PetOrderTick;                                    // #167 F10c: when its pet was sent at the target
     public long NextQuickcastTick;                               // Quickcast's next try (UseQuickcast)
     public bool EngagePet;                                       // PLAYER_BOT_FIGHT pet=, heals= and qc=: a living pet at
     public int FightHeals;                                       //   the fight's first think, its heals on itself since,
@@ -172,6 +173,7 @@ public static class PlayerBotDriver
     public const byte CasterPowerStop = 70;                  // #167 F3: a caster stops resting power here (rest-work:
     public const byte RestEnduranceStop = 60;                //   its 95th-percentile fight cost + 18%); all, endurance
     public const int SelfBuffScanMilliseconds = 5_000;       // #167 F8: the self-buffs' scan, out of a fight
+    public const int PetLeadMilliseconds = 4_000;            // #167 F10c: the owner's longest wait for its pet to lead
 
     private static readonly ConcurrentDictionary<GamePlayer, PlayerBotState> _states = new();
     [ThreadStatic] private static List<(GameNPC Npc, Vector3 At, int Score)> _candidates;      // FindWithin's, per timer
@@ -421,11 +423,20 @@ public static class PlayerBotDriver
             state.FightQuickcast = false;
             if (player.ControlledBrain != null)                                         // its pet too: the pet window's
                 player.CommandNpcAttack();                                              //   attack (PetWindowHandler.cs:79-82)
+            state.PetOrderTick = now;
         }
         state.Engaged = true;
         state.FightAdds = Math.Max(state.FightAdds, state.Attackers);
         CountSwing(state, player.attackComponent.attackAction.LastAttackData);
         if (player.IsCasting) return;
+        GameNPC pet = player.ControlledBrain?.Body;
+        if (action is not PlayerBotCombatAction.Swing && PetLeads(pet?.IsAlive == true, pet != null && target.TargetObject == pet,
+                target.TargetObject == player, now - state.PetOrderTick, PetLeadMilliseconds))
+        {
+            player.attackComponent.StopAttack();                                        // the pet leads (#167 F10c)
+            state.Activity = PlayerBotActivity.Fighting;
+            return;
+        }
         if (action is PlayerBotCombatAction.Cast &&
             player.IsWithinRadius(target, player.castingComponent.CalculateSpellRange(state.Spell)))
         {
@@ -596,6 +607,12 @@ public static class PlayerBotDriver
     /// retry timer due.</summary>
     public static bool WantsCombatPet(bool hasSpell, bool inRange, bool casting, long now, long nextTry) =>
         hasSpell && inRange && !casting && now >= nextTry;
+
+    /// <summary>The pet leads (#167 F10c, our own rule): after sending its pet in, the owner holds its nukes until the
+    /// target is on the pet or maxWaitMs pass, so the pet takes the monster and the owner is not hit. The GameBot holds
+    /// one pulse only (AutonomousPetSupport.cs:888-921) and never while the target is on it (:913): nor does the bot.</summary>
+    public static bool PetLeads(bool petAlive, bool targetOnPet, bool targetOnBot, long sinceOrderMs, long maxWaitMs) =>
+        petAlive && !targetOnPet && !targetOnBot && sinceOrderMs < maxWaitMs;
 
     /// <summary>Whether a cast counts in the cast watch (WatchCast): a damage spell. A summon's pet hurts the target only
     /// once it reaches it, so three summons in a row would read as fruitless and block the bot's spells (#167 F1).</summary>

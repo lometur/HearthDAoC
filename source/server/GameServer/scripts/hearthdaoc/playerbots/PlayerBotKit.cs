@@ -10,8 +10,9 @@ using static System.FormattableString;
 namespace DOL.GS.HearthDAoC.PlayerBots;
 
 /// <summary>One level-matched bot's plan: its class's GameBot spec plan (BotSpec: the GameBot's own lines, caps and
-/// ratios, and its weapon plan), with the variant a GameBot keeps for a stored bot (ChoosePersistentSpecialization).
-/// Made once per slot (SlotState.Kit), so a login retry keeps it.</summary>
+/// ratios, and its weapon plan), with the variant a GameBot keeps for a stored bot (ChoosePersistentSpecialization),
+/// and the player bots' own changes to its lines (PlayerBotKit.PlayerLines). Made once per slot (SlotState.Kit), so a
+/// login retry keeps it.</summary>
 public sealed class PlayerBotKitPlan
 {
     public PlayerBotKitPlan(PlayerBotBuild build, eSpecType choice, BotSpec spec)
@@ -19,7 +20,8 @@ public sealed class PlayerBotKitPlan
         Build = build;
         Choice = choice;
         Spec = spec;
-        Lines = spec.SpecLines.OrderByDescending(line => line.levelRatio).ToArray();   // GameBot.cs:3312, a stable sort
+        Lines = PlayerBotKit.PlayerLines(spec.SpecType, spec.SpecLines)
+            .OrderByDescending(line => line.levelRatio).ToArray();                       // GameBot.cs:3312, a stable sort
     }
     public PlayerBotBuild Build { get; }
     public eSpecType Choice { get; }
@@ -48,6 +50,28 @@ public static class PlayerBotKit
         BotSpec spec = BotSpec.GetSpec(build.Class, choice);                            // BotSpec.cs:28-77; weapon rolls are Util.Random
         return spec == null ? null : new(build, choice, spec);
     }
+
+    /// <summary>The player bots' own changes to a GameBot plan's lines; the GameBot's plan stays as it is. #167 F10a: a
+    /// Druid's pet is its Nature level's (Nature 7 a level-12 pet, 12 a level-20, 20 a level-32), and the plan gives a
+    /// Nurture or Regrowth Druid Nature at ratio 0 (Druid.cs:32, :40, :47), so 1 until 50: a level-7 pet. Allocate
+    /// raises the lines in ratio order and the first take the points (Nurture at 0.9 takes about 80% of them), so Nature
+    /// comes first, at 0.6 to 20 (reached by 30), and the plan's two lines follow in their own order at 0.55 and 0.5,
+    /// within their caps.</summary>
+    public static IEnumerable<BotSpecLine> PlayerLines(eSpecType type, IEnumerable<BotSpecLine> lines)
+    {
+        if (type is not (eSpecType.NurtureDruid or eSpecType.RegrowthDruid)) return lines;
+        List<BotSpecLine> mine = [new(DOL.GS.Specs.Nature, DruidNatureCap, 0.6f)];
+        float ratio = 0.55f;
+        foreach (BotSpecLine line in lines.Where(l => !string.Equals(l.Spec, DOL.GS.Specs.Nature, StringComparison.OrdinalIgnoreCase))
+                     .OrderByDescending(l => l.levelRatio))
+        {
+            mine.Add(new(line.Spec, line.SpecCap, ratio));
+            ratio -= 0.05f;
+        }
+        return mine;
+    }
+
+    private const uint DruidNatureCap = 20;                                             // the level-32 pet (#167 F10a)
 
     /// <summary>GameBot.GetSpecPointsForLevel (GameBot.cs:3374-3386). With botCreation the half levels from 41 on.</summary>
     public static int SpecPointsForLevel(int level, int multiplier, bool botCreation)

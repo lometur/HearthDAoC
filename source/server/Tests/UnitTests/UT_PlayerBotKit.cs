@@ -218,6 +218,30 @@ public sealed class UT_PlayerBotKit
             Is.EqualTo(new Dictionary<string, int> { ["Fire Magic"] = 1, ["Slash"] = 20 }));
     }
 
+    // #167 F10a: a Druid's pet is its Nature level's (Nature 7 a level-12 pet, 12 a level-20, 20 a level-32). The GameBot
+    // plan gives a Nurture or Regrowth Druid Nature at ratio 0 (Druid.cs:32, :40, :47), so 1 until 50: a level-7 pet.
+    [Test]
+    public void A_nurture_or_regrowth_druid_kit_trains_nature_for_a_pet_near_its_level()
+    {
+        var build = new PlayerBotBuild(35, eCharacterClass.Druid, eRace.Celt);
+        var seen = new HashSet<eSpecType>();
+        for (long seed = 1; seed <= 300; seed++)
+        {
+            PlayerBotKitPlan kit = PlayerBotKit.Plan(build, seed);
+            if (kit.Spec.SpecType is not (eSpecType.NurtureDruid or eSpecType.RegrowthDruid)) continue;
+            seen.Add(kit.Spec.SpecType);
+            HashSet<string> open = kit.Lines.Select(l => l.Spec).ToHashSet(StringComparer.OrdinalIgnoreCase);
+            Dictionary<string, int> at35 = PlayerBotKit.Allocate(kit.Lines, open, 35, 10, out int left);
+            Assert.That(at35[Specs.Nature], Is.GreaterThanOrEqualTo(20), $"{seed} {kit.Spec.SpecType}");      // the level-32 pet
+            Assert.That(at35.Values.Sum(PlayerBotKit.Cost) + left, Is.EqualTo(Earned(35, 10)));
+            Assert.That(PlayerBotKit.Allocate(kit.Lines, open, 20, 10, out _)[Specs.Nature], Is.GreaterThanOrEqualTo(12));  // level 20
+        }
+        Assert.That(seen, Is.EquivalentTo(new[] { eSpecType.NurtureDruid, eSpecType.RegrowthDruid }));
+        foreach (eSpecType type in new[] { eSpecType.NurtureDruid, eSpecType.RegrowthDruid })           // the GameBot's own plan
+            Assert.That(BotSpec.GetSpec(eCharacterClass.Druid, type).SpecLines.Single(l => l.Spec == Specs.Nature).levelRatio,
+                Is.EqualTo(0f));
+    }
+
     [Test]
     public void The_plan_is_the_same_for_the_same_slot_and_a_choice_of_the_class()
     {

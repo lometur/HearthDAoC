@@ -34,7 +34,9 @@ Two more settings are read only when bots are on:
 - `HEARTHDAOC_PLAYER_BOT_SPOTS`: a file in the data volume, for example `/data/player-bot-spots.txt`. Each line is
   `realm|region|x|y[|z[|level|class|race]]` and places one bot there, and the bot keeps that spot.
   - A line with a level, class and race makes the bot at that level. It is not levelled through play: its specs come
-    from its class's GameBot plan, and it gets gear by the GameBot rules at its first login.
+    from its class's GameBot plan, and it gets gear by the GameBot rules at its first login. One change to the plan is
+    the player bots' own: a Nurture or Regrowth Druid trains Nature first, to 20 (by level 30), for a pet near its
+    level; the GameBot plan leaves Nature at 1, a level-7 pet, until 50.
   - A bad value or an unreadable file keeps the bots off, with a `HEARTHDAOC_PLAYER_BOTS error` line.
 
 ## What they do
@@ -49,7 +51,8 @@ Each bot thinks every 250 ms, a thin copy of the `/bot` pilot's think:
   half its power is left after the heal. A caster doesn't start a cast that a hit would interrupt, and uses
   Quickcast once a monster's hits interrupt it. Its own swing doesn't block its next cast: with a spell to cast, it
   stops swinging until its own swing's interrupt runs out, and it doesn't swing between casts (an instant spell does
-  not mind). A pet class summons its pet and sends it in. A Theurgist casts its pets at its
+  not mind). A pet class summons its pet and sends it in, then holds its spells until the monster turns on the pet,
+  4 s at most, and never while the monster is hitting it. A Theurgist casts its pets at its
   target whenever it can, as a GameBot does, and its damage spell between them.
 - Each cast it picks the damage spell ready now: its bolt when off its recast, else its best single-target spell,
   else an area one, never an area one while another monster stands in its radius. It drops the low ranks a GameBot

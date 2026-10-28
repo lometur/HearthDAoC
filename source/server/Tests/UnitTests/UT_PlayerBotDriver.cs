@@ -1949,6 +1949,20 @@ public sealed class UT_PlayerBotDriver
         Assert.That(PlayerBotDriver.CountsInCastWatch(Damage("Bolt", 20, 90)), Is.True);
     }
 
+    // --- the pet leads (#167 F10c) ---
+
+    [Test]
+    public void The_owner_holds_its_nuke_until_the_target_is_on_its_pet_or_4_s_pass()
+    {
+        // petAlive, targetOnPet, targetOnBot, sinceOrderMs
+        Assert.That(PlayerBotDriver.PetLeads(true, false, false, 0, 4_000), Is.True);       // the pet just sent in
+        Assert.That(PlayerBotDriver.PetLeads(true, false, false, 3_999, 4_000), Is.True);
+        Assert.That(PlayerBotDriver.PetLeads(true, false, false, 4_000, 4_000), Is.False);  // 4 s: the owner nukes
+        Assert.That(PlayerBotDriver.PetLeads(true, true, false, 500, 4_000), Is.False);     // on the pet: nuke
+        Assert.That(PlayerBotDriver.PetLeads(false, false, false, 500, 4_000), Is.False);   // no pet to lead
+        Assert.That(PlayerBotDriver.PetLeads(true, false, true, 500, 4_000), Is.False);     // hitting the owner: no wait
+    }
+
     // --- the class's own self-buffs (#167 F8) ---
 
     // As the world's rows (Spell, LineXSpell): power, concentration, pulse and pulse power as there.
