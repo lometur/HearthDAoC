@@ -139,11 +139,16 @@ What they don't do yet is under [Known shortcomings](#known-shortcomings).
 Against the GameBots (#167), and between them and a live world. Each line goes when its fix lands.
 
 Playing:
-- **Deaths:** on v0.37b-hearth.9 (`st-layers5`: 15 minutes, 390 level-matched bots) they died 9.5 times per bot-hour,
-  against about 1 for the PvE GameBots: melee 5.1, casters 21.2, healers 9.4, pet classes 10.8, archers 8.2. The
-  buffs, casting and pet rules above are the first step. Still open:
+- **Deaths:** with the rules above (`st-deathsB`: 14 minutes, 390 level-matched bots) they die 4.3 times per
+  bot-hour, against about 1 for the PvE GameBots: melee 3.7, casters 8.2, healers 3.8, pet classes 2.5, archers 6.1.
+  On v0.37b-hearth.9 (`st-layers5`) it was 9.5. Still open:
+  - The replan after a death runs inside the 10 s after the release in which a player can't attack a monster, so it
+    finds no camp nine times in ten and the bot goes back to the camp it died at.
+  - 57% of deaths come with two or more monsters on the bot; a fight with one monster is fatal 4.5% of the time. They
+    never break off and run, and they never control the second monster.
+  - A caster in melee swings at its rooted or mezzed target and breaks the hold.
   - Walks don't look ahead for monsters on the route.
-- **Resting:** 43% of their time on `st-layers5`. Most of it is the real cost of player regeneration.
+- **Resting:** 47% of their time on `st-deathsB`. Most of it is the real cost of player regeneration.
 - **Not done at all:** they don't group, buff others, take part in RvR or battlegrounds, stealth, use realm abilities
   or ride horses (#152, #167).
 - **Ranged and songs:** they can't shoot or play. Archers fight in melee, and Bards and Minstrels have no songs: theirs
