@@ -326,16 +326,7 @@ public static class PlayerBotDriver
             PlayerBotDriverReport.LinkDeathCancelled();
         }
         if (player.CurrentRegionID != state.LastRegion)      // 4. after a release or re-entry in another region
-        {
-            state.LastRegion = player.CurrentRegionID;
-            state.Mover.Reset();
-            state.Target = null;
-            state.RoamDestination = null;
-            state.RoamingSince = 0;
-            state.CappedSince = 0;
-            state.FallbackCap = null;
-            state.HuntAvoided = false;                       //    its failed camps stay (#167 F4): each has its region
-        }
+            ResetOnRegionChange(state, player.CurrentRegionID);
         ObserveXp(state, player);                            // 5
         if (state.PendingDeath is { } held)                                              //    last think's DEATH line, its
         {                                                                                //    killer named since (AwaitsDying)
@@ -426,6 +417,21 @@ public static class PlayerBotDriver
         }
         Engage(state, player, now);                                                      // 16
         if (state.Engaged) state.RoamingSince = 0;   // reached: a target blocked on the way leaves the idle clock running
+    }
+
+    /// <summary>Step 4: a bot in another region (a release to a bind there, a re-entry) starts its hunt afresh: no walk,
+    /// target, idle or capped clock, fallback cap or stale camp's names. Its failed camps stay (#167 F4): each has its
+    /// region (FailedCamps); cleared, a bot that came back planned into the camp it died at.</summary>
+    public static void ResetOnRegionChange(PlayerBotState state, ushort region)
+    {
+        state.LastRegion = region;
+        state.Mover.Reset();
+        state.Target = null;
+        state.RoamDestination = null;
+        state.RoamingSince = 0;
+        state.CappedSince = 0;
+        state.FallbackCap = null;
+        state.HuntAvoided = false;
     }
 
     // A task owns the bot's position while it runs: no leash then.

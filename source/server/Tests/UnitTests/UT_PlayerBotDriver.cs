@@ -255,6 +255,24 @@ public sealed class UT_PlayerBotDriver
             new Vector3(3, 0, 0) }), "the expired camp went");
     }
 
+    // A region change (a release to a bind in another region, a re-entry) starts the hunt afresh there but keeps the
+    // failed camps (#167 F4): a bot that released to another region and came back planned into the camp it died at. The
+    // review of 77ba437: with the old Clear put back, no test failed.
+    [Test]
+    public void A_region_change_starts_the_hunt_afresh_but_keeps_the_failed_camps()
+    {
+        var state = new PlayerBotState(Player(null));
+        PlayerBotDriver.RememberFailedCamp(state.FailedCamps, 51, new Vector3(1, 0, 0), 1_000);
+        state.Target = Player(null);
+        state.RoamDestination = new Vector3(1, 2, 3);
+        (state.RoamingSince, state.CappedSince, state.FallbackCap, state.HuntAvoided) = (5, 6, ConColor.BLUE, true);
+        PlayerBotDriver.ResetOnRegionChange(state, 100);
+        Assert.That((state.LastRegion, state.Target, state.RoamDestination, state.RoamingSince, state.CappedSince,
+            state.FallbackCap, state.HuntAvoided), Is.EqualTo(((ushort)100, (GameLiving)null, (Vector3?)null, 0L, 0L,
+            (ConColor?)null, false)));
+        Assert.That(state.FailedCamps.Select(f => (f.Region, f.At)), Is.EqualTo(new[] { ((ushort)51, new Vector3(1, 0, 0)) }));
+    }
+
     // A capped bot that cannot move its leash (a lever spot bot, out of its anchor region or off the mesh, or no camp
     // in its zone) takes the safest con it passed over where it is, as a GameBot takes the safest camp there is rather
     // than plan forever (AutonomousBotDecisionEngine.cs:287-313); run 1's bots stood idle after two deaths without it.
