@@ -42,8 +42,9 @@ Two more settings are read only when bots are on:
 Each bot thinks every 250 ms, a thin copy of the `/bot` pilot's think:
 - It roams within 4,000 units of its start and hunts monsters within 5,400 that con at most yellow. Each death lowers
   that con by one step, by two at most.
-- It rests to full after each kill, and whenever below a GameBot's rest thresholds (70% health, 45% power, 35%
-  endurance).
+- It rests after each kill, and whenever below a GameBot's rest thresholds (70% health, 45% power, 35% endurance). A
+  rest stops at full health, 60% endurance, and full power, or 70% power for a caster (Wizard, Sorcerer, Runemaster,
+  Eldritch, Mentalist).
 - A bot with a heal heals itself below 60% health in a fight. Out of one it heals itself below 85% before it sits, if
   half its power is left after the heal. A caster doesn't start a cast that a hit would interrupt, and uses
   Quickcast once a monster reaches it. A pet class summons its pet and sends it in. A Theurgist casts its pets at its

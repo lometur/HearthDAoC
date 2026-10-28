@@ -932,6 +932,40 @@ public sealed class UT_PlayerBotDriver
         Assert.That((won.RecoverBeforePull, late.RecoverBeforePull), Is.EqualTo((true, false)), "the late bot never fought it");
     }
 
+    // #167 F3: a rest stops at full health, the role's power stop and 60% endurance; power counts only with a pool.
+    [TestCase((byte)100, 300, (byte)72, (byte)61, true)] [TestCase((byte)99, 300, (byte)100, (byte)100, false)]
+    [TestCase((byte)100, 300, (byte)69, (byte)100, false)] [TestCase((byte)100, 0, (byte)0, (byte)61, true)]
+    [TestCase((byte)100, 300, (byte)100, (byte)59, false)] [TestCase((byte)100, 300, (byte)70, (byte)60, true)]
+    public void A_rest_stops_at_full_health_and_the_power_and_endurance_stops(byte health, int maxMana, byte mana,
+        byte endurance, bool recovered) =>
+        Assert.That(PlayerBotDriver.Recovered(health, maxMana, mana, endurance, 70, 60), Is.EqualTo(recovered));
+
+    // The class roles of tools/lmroles.py (CLASS_ROLES, by class id): the Hunter has a pet and counts as pet.
+    [Test]
+    public void The_class_role_is_the_one_lmroles_gives()
+    {
+        var roles = new Dictionary<PlayerBotRole, int[]>
+        {
+            [PlayerBotRole.Pet] = [5, 12, 13, 25, 27, 30, 41, 47, 55], [PlayerBotRole.Healer] = [6, 10, 26, 28, 46, 48],
+            [PlayerBotRole.Caster] = [7, 8, 29, 40, 42], [PlayerBotRole.Archer] = [3, 50],
+        };
+        foreach ((PlayerBotRole role, int[] ids) in roles)
+            foreach (int id in ids)
+                Assert.That(PlayerBotDriver.RoleOf(id), Is.EqualTo(role), $"class {id}");
+        foreach (int id in Enum.GetValues<eCharacterClass>().Select(c => (int)c).Where(id => !roles.Values.Any(ids => ids.Contains(id))))
+            Assert.That(PlayerBotDriver.RoleOf(id), Is.EqualTo(PlayerBotRole.Melee), $"class {id}");
+    }
+
+    // Casters stop resting power at 70% (rest-work's 95th-percentile fight cost + 18%); pet classes keep 100% (a 75% stop
+    // raised their pet deaths per 100 kills 16% in the model), and so does every other role until measured.
+    [Test]
+    public void Only_a_caster_stops_resting_power_short_of_full()
+    {
+        foreach (PlayerBotRole role in Enum.GetValues<PlayerBotRole>())
+            Assert.That(PlayerBotDriver.RestPowerStop(role), Is.EqualTo(role == PlayerBotRole.Caster ? 70 : 100), role.ToString());
+        Assert.That(PlayerBotDriver.RestEnduranceStop, Is.EqualTo(60));
+    }
+
     [TestCase(1000, ConColor.YELLOW, 1000)] [TestCase(1000, ConColor.BLUE, 1220)] [TestCase(700, ConColor.GREEN, 1140)]
     public void TargetScore(int distance, ConColor con, int expected) =>
         Assert.That(PlayerBotDriver.TargetScore(distance, con), Is.EqualTo(expected));

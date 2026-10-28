@@ -16,6 +16,9 @@ namespace DOL.GS.HearthDAoC.PlayerBots;
 
 public enum PlayerBotActivity { Waiting, Dead, Resting, Hunting, Fighting, Casting, Roaming, Task }
 
+/// <summary>A class's role, as tools/lmroles.py gives it (CLASS_ROLES; levelmatch REVIEW-FIXES 11).</summary>
+public enum PlayerBotRole { Melee, Caster, Healer, Pet, Archer }
+
 /// <summary>A scripted job (the errands: quest 20206, promotion) that runs before grinding until Finished. Tick returns
 /// true when it used this think (walked, stood, acted), false to let the driver grind this think.</summary>
 public interface IPlayerBotTask
@@ -99,7 +102,7 @@ public sealed class PlayerBotState
     public int LifeKills, LifeRests;                             //   this life's fights won and sits, its last kill,
     public long LastKillTick;                                    //   and the killer the Dying event names (OnBotDying)
     public GameObject Killer;
-    public bool RecoverBeforePull;                               // a kill since the last full rest: rest to full first
+    public bool RecoverBeforePull;                               // a kill since the last rest: rest first (Recovered)
     public bool SelfCast;                                        // a heal or summon on itself is being cast (DEATHS.md
     public long NextSelfHealTick, NextSummonTick;                //   A6, A5), the next tries, and the level at which it
     public byte NoPetSpellLevel;                                 //   found no main-pet summon (not looked for again then)
@@ -160,6 +163,8 @@ public static class PlayerBotDriver
     public const int PetPowerPercent = 30;                   // DEATHS.md A5: summon at this much power or more
     public const int SummonRetryMilliseconds = 2_000;        // (inf.) as the heal's
     public const int QuickcastRetryMilliseconds = 2_000;     // (inf.) as the heal's
+    public const byte CasterPowerStop = 70;                  // #167 F3: a caster stops resting power here (rest-work:
+    public const byte RestEnduranceStop = 60;                //   its 95th-percentile fight cost + 18%); all, endurance
 
     private static readonly ConcurrentDictionary<GamePlayer, PlayerBotState> _states = new();
     [ThreadStatic] private static List<(GameNPC Npc, Vector3 At, int Score)> _candidates;      // FindWithin's, per timer
@@ -600,7 +605,7 @@ public static class PlayerBotDriver
         {
             state.LifeKills++;                                    // every fight won, a monster another bot counted too
             state.LastKillTick = GameLoop.GameLoopTime;
-            state.RecoverBeforePull = true;                       // rest to full before the next pull (WantsRest)
+            state.RecoverBeforePull = true;                       // rest before the next pull (WantsRest)
             if (PlayerBotDriverReport.Kill(state.Target)) state.Kills++;
         }
         else if (dead) state.RoamingSince = 0;                   // killed by another before this bot got there: not outgrown
@@ -930,6 +935,32 @@ public static class PlayerBotDriver
     public static bool NeedsRest(byte healthPercent, int maxMana, byte manaPercent, byte endurancePercent) =>
         AutonomousRestPolicy.NeedsRecovery(healthPercent, manaPercent, endurancePercent, maxMana > 0);
 
+    /// <summary>The class's role (#167 F3), as tools/lmroles.py's CLASS_ROLES gives it: the Hunter has a pet and counts as
+    /// pet; any class not named is melee.</summary>
+    public static PlayerBotRole RoleOf(int classId) => (eCharacterClass)classId switch
+    {
+        eCharacterClass.Theurgist or eCharacterClass.Necromancer or eCharacterClass.Cabalist or eCharacterClass.Hunter or
+            eCharacterClass.Spiritmaster or eCharacterClass.Bonedancer or eCharacterClass.Enchanter or eCharacterClass.Druid or
+            eCharacterClass.Animist => PlayerBotRole.Pet,
+        eCharacterClass.Cleric or eCharacterClass.Friar or eCharacterClass.Healer or eCharacterClass.Shaman or
+            eCharacterClass.Warden or eCharacterClass.Bard => PlayerBotRole.Healer,
+        eCharacterClass.Wizard or eCharacterClass.Sorcerer or eCharacterClass.Runemaster or eCharacterClass.Eldritch or
+            eCharacterClass.Mentalist => PlayerBotRole.Caster,
+        eCharacterClass.Scout or eCharacterClass.Ranger => PlayerBotRole.Archer,
+        _ => PlayerBotRole.Melee,
+    };
+
+    /// <summary>Where a rest stops power (#167 F3): CasterPowerStop for a caster, whose fights cost little of it; full for
+    /// every other role (a pet class's fights cost more: a 75% stop raised pet deaths per 100 kills 16% in rest-work's
+    /// model; the rest until measured).</summary>
+    public static byte RestPowerStop(PlayerBotRole role) => role == PlayerBotRole.Caster ? CasterPowerStop : (byte)100;
+
+    /// <summary>The rest's end (APP:389-390, #167 F3): full health, the power stop (only for a class with a pool, as
+    /// NeedsRest reads it) and the endurance stop.</summary>
+    public static bool Recovered(byte healthPercent, int maxMana, byte manaPercent, byte endurancePercent, byte powerStop,
+        byte enduranceStop) =>
+        healthPercent >= 100 && (maxMana <= 0 || manaPercent >= powerStop) && endurancePercent >= enduranceStop;
+
     /// <summary>The rest gate (DEATHS.md A1): nothing is hitting the bot and it has no live target engaged. A player may
     /// sit in combat (GamePlayer.Sit, GamePlayer.cs:8734-8815, has no combat check); the old gate waited out InCombat's
     /// 10 s after the last swing (GameLiving.cs:31, :225-227), and the next pull began in the think of the kill.</summary>
@@ -970,13 +1001,14 @@ public static class PlayerBotDriver
         return head + " " + PlayerBotDriverReport.FormatDeathDetail(detail);
     }
 
-    /// <summary>Low, or sitting and not yet full (APP:290-291 without the combat check), or after a kill until full
-    /// (recoverBeforePull): the driver rests when MayRest says so, and a task that walks lets it.</summary>
+    /// <summary>Low, or sitting and not yet recovered (APP:290-291 without the combat check), or after a kill until
+    /// recovered (recoverBeforePull; Recovered: full health, the role's power stop, 60% endurance, #167 F3): the driver
+    /// rests when MayRest says so, and a task that walks lets it.</summary>
     public static bool WantsRest(GamePlayer player, bool recoverBeforePull = false) =>
         WantsRest(NeedsRest(player.HealthPercent, player.MaxMana, player.ManaPercent, player.EndurancePercent),
             player.IsSitting, recoverBeforePull, Recovered(player));
 
-    /// <summary>After a kill the bot rests to full before it picks the next target, as a GameBot does after a camp fight:
+    /// <summary>After a kill the bot rests before it picks the next target, as a GameBot does after a camp fight:
     /// the fight sets _recoverBeforeNextCampTarget (AWBC:423-424) and WorkCamp rests until IsFullyRecovered before its
     /// next target search (AWBC:2727-2730, HandleCampRecovery :3019-3047).</summary>
     public static bool WantsRest(bool needsRest, bool sitting, bool recoverBeforePull, bool recovered) =>
@@ -1448,8 +1480,8 @@ public static class PlayerBotDriver
         }
     }
 
-    private static bool Recovered(GamePlayer player) =>                                    // APP:389-390
-        player.HealthPercent >= 100 && (player.MaxMana <= 0 || player.ManaPercent >= 100) && player.EndurancePercent >= 100;
+    private static bool Recovered(GamePlayer player) => Recovered(player.HealthPercent, player.MaxMana, player.ManaPercent,
+        player.EndurancePercent, RestPowerStop(RoleOf(player.CharacterClass.ID)), RestEnduranceStop);
 
     private static void TryLoot(PlayerBotState state, GamePlayer player, long now)       // APP:403-414
     {
