@@ -164,6 +164,9 @@ public sealed class PlayerBotState
     public readonly List<GameNPC> BreakOffChasers = new();       //   start's health, endurance and attackers (BREAKOFF)
     public byte BreakOffHealth, BreakOffEndurance;
     public int BreakOffAttackers;
+    public bool BackPending, BackOwed, BackMoved;                // #167 C1: PLAYER_BOT_BACK, from a release to its first
+    public long BackStepOutMs, BackHoldMs, BackWalkMs;           //   fight: the line due, the replan owed and a camp planned
+                                                                 //   since, and the time stepping out, held and walking
 }
 
 // HearthDAoC player bots (#137): a thin copy of the /bot pilot's think (bots/autonomous/AutonomousPlayerPilot.cs:229-374) for a
@@ -427,8 +430,13 @@ public static class PlayerBotDriver
             {
                 state.Mover.Stop(now);                                                   //    capped, or owed a relocation:
                 state.Activity = PlayerBotActivity.Roaming;                              //    no walk into the camp; it
-            }                                                                            //    cannot hunt (no target)
-            else Roam(state, player, now);
+                state.BackHoldMs += TickMilliseconds;                                    //    cannot hunt (no target);
+            }                                                                            //    #167 C1: BACK hold=
+            else
+            {
+                Roam(state, player, now);
+                state.BackWalkMs += TickMilliseconds;                                    //    #167 C1: BACK walk=
+            }
             ReportIdle(state, player, now);
             return;
         }
@@ -537,6 +545,7 @@ public static class PlayerBotDriver
             state.ControlTries = 0;                                                     // #167 F11
             state.NextKiteTick = 0;
             state.KilledWithAdds = false;                                               // #167 C2: the kill's case over
+            if (state.BackPending) ReportBack(state, player, now);                      // #167 C1: the first since a release
             state.EngageBuffs = SelfBuffsUp(player.effectListComponent.GetSpellEffects()     // FIGHT buffs= (#167 F8)
                 .Where(effect => effect.SpellHandler?.Spell != null).Select(effect => effect.SpellHandler.Spell.SpellType));
             state.EngagePet = player.ControlledBrain?.Body?.IsAlive == true;
@@ -1130,6 +1139,10 @@ public static class PlayerBotDriver
     /// held 44 of st-deathsB's 146 again deaths. The plan starts from the death spot (RelocationOrigin) and bars the camp
     /// it died at, as every death's (RememberFailedCamp in HandleDeath).</summary>
     public static bool OwesReplan(bool onTask, bool canRelocate) => !onTask && canRelocate;
+
+    /// <summary>PLAYER_BOT_BACK replan= (#167 C1): notOwed when the release owed no replan (OwesReplan); else moved once
+    /// a camp was planned since, none when not (none found, or the hold ran out, or still owed at the fight).</summary>
+    public static string BackReplan(bool owed, bool moved) => !owed ? "notOwed" : moved ? "moved" : "none";
 
     /// <summary>Where a relocation plans from (PlanRelocation's here): after a death (Died) the spot the bot died at, not
     /// its bind; else where it is (after a break-off, #167 C2, where it ran to).</summary>
@@ -1869,6 +1882,7 @@ public static class PlayerBotDriver
             state.FallbackCap = fallback;   // that camp's con, or none: the death cap (Cap)
             state.HuntAvoided = stale;      //   and at a camp of avoided names, those too (FindWithin)
             state.CappedSince = 0;          // the next search starts the clock afresh, on the way there too
+            state.BackMoved |= died;        //   and BACK replan=moved (#167 C1)
             state.ReplanOwed = null;        // planned (#167 F4, C2)
             state.ReplanSince = 0;
             return;
@@ -1925,6 +1939,8 @@ public static class PlayerBotDriver
             state.ReleasedAt = now;
             state.RecoverUntil = now + AutonomousDeathRecoveryPolicy.RetryDelayMilliseconds(state.NoXpDeaths);
             state.ReplanSince = state.ReplanOwed != null ? now : 0;
+            (state.BackPending, state.BackOwed, state.BackMoved) = (true, state.ReplanOwed != null, false);   // C1: BACK
+            state.BackStepOutMs = state.BackHoldMs = state.BackWalkMs = 0;
         }
         else state.RecoverUntil = now;
         state.AfterRelease = true;
@@ -1963,6 +1979,7 @@ public static class PlayerBotDriver
                 return false;
             case PlayerBotRecovery.StepOut:
                 state.Activity = PlayerBotActivity.Roaming;
+                state.BackStepOutMs += TickMilliseconds;                                // #167 C1: BACK stepOut=
                 PlayerBotStepResult step = state.Mover.StepToward(state.ClearSpot.Value, 20, now);
                 if (step is PlayerBotStepResult.Blocked)
                 {
@@ -2245,6 +2262,18 @@ public static class PlayerBotDriver
             state.PendingDeath = (head, detail, target);                                   // the next think writes it
         else
             Log.Info(DeathLine(head, detail, state.Killer, target));
+    }
+
+    // #167 C1: PLAYER_BOT_BACK at the first fight in reach after a release (the verifier's logging: the 40 s more from a
+    // death to the next fight in st-deathsB was not the failed replan, gap.py). Its phases are counted by think; the
+    // rest of sec= is the rests, heals, buffs and the walk to the target.
+    private static void ReportBack(PlayerBotState state, GamePlayer player, long now)
+    {
+        state.BackPending = false;
+        if (Log.IsInfoEnabled)
+            Log.Info(PlayerBotDriverReport.FormatBack(player.Name, player.Level, (now - state.ReleasedAt) / 1000,
+                state.BackStepOutMs / 1000, state.BackHoldMs / 1000, state.BackWalkMs / 1000,
+                BackReplan(state.BackOwed, state.BackMoved)));
     }
 
     // One line per fight the bot was in when it settles (SettleTarget), so a fight's cost shows beside the deaths.

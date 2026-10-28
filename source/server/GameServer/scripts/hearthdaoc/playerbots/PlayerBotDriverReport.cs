@@ -173,6 +173,13 @@ public static class PlayerBotDriverReport
     public static string FormatRest(string bot, int level, long seconds, string why) => string.Create(CultureInfo.InvariantCulture,
         $"PLAYER_BOT_REST bot={bot} level={level} sec={seconds} why={why}");
 
+    /// <summary>PLAYER_BOT_BACK (#167 C1), at the first fight after a release (PlayerBotDriver.ReportBack): the seconds
+    /// since the release, those stepping out of reach, held (the back-off, the illness, the replan's hold) and walking
+    /// (Roam), and the replan (PlayerBotDriver.BackReplan).</summary>
+    public static string FormatBack(string bot, int level, long seconds, long stepOut, long hold, long walk, string replan) =>
+        string.Create(CultureInfo.InvariantCulture,
+            $"PLAYER_BOT_BACK bot={bot} level={level} sec={seconds} stepOut={stepOut} hold={hold} walk={walk} replan={replan}");
+
     /// <summary>PLAYER_BOT_BREAKOFF (#167 C2), when a break-off ends (PlayerBotDriver.EndBreakOff): the bot's health,
     /// endurance and attackers when it broke off, the seconds it ran, and how it ended (shook: none still after it;
     /// fought: still chased, or nowhere to run, it turned on them; died).</summary>

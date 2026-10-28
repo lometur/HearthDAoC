@@ -507,6 +507,34 @@ public sealed class UT_PlayerBotDriver
         Assert.That((later.AfterRelease, later.AliveSince), Is.EqualTo((false, 1_000L)), "no new life");
     }
 
+    // PLAYER_BOT_BACK (#167 C1, the verifier's logging): from a release to the first fight, the seconds in all and those
+    // stepping out, held and walking, and the replan: moved (a camp planned since the release), none (owed, no camp
+    // planned) or notOwed. The 40 s more from a death to the next fight in st-deathsB was not the failed replan.
+    [Test]
+    public void The_way_back_line_splits_the_time_from_a_release_to_the_first_fight() =>
+        Assert.That(PlayerBotDriverReport.FormatBack("Pbotaaaaz", 34, 81, 6, 42, 20, "moved"),
+            Is.EqualTo("PLAYER_BOT_BACK bot=Pbotaaaaz level=34 sec=81 stepOut=6 hold=42 walk=20 replan=moved"));
+
+    [TestCase(false, false, "notOwed")] [TestCase(false, true, "notOwed")]
+    [TestCase(true, true, "moved")] [TestCase(true, false, "none")]
+    public void The_way_back_gives_the_replan_owed_at_the_release(bool owed, bool moved, string replan) =>
+        Assert.That(PlayerBotDriver.BackReplan(owed, moved), Is.EqualTo(replan));
+
+    // A release starts the way back's count afresh (the replan owed then, nothing moved, no time in any phase); a login
+    // starts none: no release, no line.
+    [Test]
+    public void A_release_starts_the_way_back_and_a_login_does_not()
+    {
+        var released = new PlayerBotState(Player(null)) { AliveSince = 1_000, DeathRecorded = true,
+            ReplanOwed = PlayerBotDriver.Died, BackMoved = true, BackStepOutMs = 5_000, BackHoldMs = 250, BackWalkMs = 500 };
+        PlayerBotDriver.StartLife(released, 9_000);
+        Assert.That((released.BackPending, released.BackOwed, released.BackMoved, released.BackStepOutMs,
+            released.BackHoldMs, released.BackWalkMs), Is.EqualTo((true, true, false, 0L, 0L, 0L)));
+        var login = new PlayerBotState(Player(null));
+        PlayerBotDriver.StartLife(login, 5_000);
+        Assert.That(login.BackPending, Is.False);
+    }
+
     // --- the break-off when losing to two (#167 C2) ---
 
     // It breaks off with 2 or more monsters on it, or right after a kill in a fight that had 2 or more on it with 1 still

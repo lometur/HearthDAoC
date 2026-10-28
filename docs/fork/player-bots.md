@@ -302,6 +302,9 @@ All start `PLAYER_BOT_`:
 - `BREAKOFF`: one per break-off, when it ends: the bot's `hp=`, `end=` (endurance) and `attackers=` when it broke off,
   `sec=`, the seconds it ran, and `outcome=`: `shook` (none still after it), `fought` (still chased after 30 s, or
   nowhere to run) or `died`;
+- `BACK`: at the first fight after a release, `sec=`, the seconds since the release, and of those `stepOut=` (the step
+  out of reach), `hold=` (the back-off, the illness or the hold for the replan) and `walk=` (roaming, the walk back
+  among it); then `replan=`: `moved` (a camp planned since), `none` (owed, none planned) or `notOwed`;
 - `REST`: one per rest, when the bot stands: `sec=`, the seconds it sat, and `why=`: `recovered`, `hit`, `incoming` (a
   monster coming at it), `heal`, `pet` or `buff` (a cast on itself), `died`, or `other`;
 - `FLOOR_STEP`: a step onto the nearest floor, with where from and to and why;
