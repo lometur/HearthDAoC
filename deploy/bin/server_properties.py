@@ -14,6 +14,8 @@ HEARTHDAOC_BOT_CPU (on or off, case ignored) becomes the bot_cpu_meter property 
 meter then starts with the server, measures the game loop's CPU time per kind of bot and player and writes
 BOT_CPU lines to the server log every minute. The server reads it once, at start; a GM's /botcpu turns the
 meter on or off until the next start.
+The starting_guild property is always False, with no setting (owner 2026-10-28, #176: no starter guilds): the server
+then makes no starter guild and puts no new character in one; world_fixes.py removes the ones a world has.
 Only writes a property when its value differs, and prints a line for each one it changed.
 """
 import argparse
@@ -50,6 +52,14 @@ CPU_KEY = "bot_cpu_meter"
 CPU_DESCRIPTION = ("Measure the game loop's CPU time per kind of bot and player and write BOT_CPU lines to the server "
                    "log every minute; a GM's /botcpu turns it on or off until the next start")
 CPU_DEFAULT = "False"  # the code default (off), as the server itself writes it
+
+# Must match upstream's [ServerProperty("startup", "starting_guild", STARTER_GUILDS_DESCRIPTION, true)] in
+# source/server/GameServer/scripts/gameevents/StartupGuilds.cs (deploy/tests/test_server_properties.py checks).
+STARTER_GUILDS_KEY = "starting_guild"
+STARTER_GUILDS_CATEGORY = "startup"
+STARTER_GUILDS_DESCRIPTION = "Starter Guild - Edit this to enable/disable the starter guilds"
+STARTER_GUILDS_DEFAULT = "True"  # the code default (on), as the server itself writes it
+STARTER_GUILDS_VALUE = "False"
 
 
 class PropertyError(Exception):
@@ -138,6 +148,9 @@ def main(argv=None):
         print(f"Bot realm point timer wait: {a.bot_rp_timer_wait.lower()}")
     if set_property(a.db, CPU_KEY, cpu, description=CPU_DESCRIPTION, default=CPU_DEFAULT):
         print(f"Bot CPU meter: {a.bot_cpu.lower()}")
+    if set_property(a.db, STARTER_GUILDS_KEY, STARTER_GUILDS_VALUE, category=STARTER_GUILDS_CATEGORY,
+                    description=STARTER_GUILDS_DESCRIPTION, default=STARTER_GUILDS_DEFAULT):
+        print("Starter guilds: off")
     return 0
 
 

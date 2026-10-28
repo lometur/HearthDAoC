@@ -8,6 +8,11 @@ first, then /harm, worked). A death tells only the attackers in the target's Att
 spells fill; /harm called TakeDamage alone. A unit test would need a live player, client and region, so these check
 the source.
 
+/gc form needs a group of guild_num (8) again, bots counting (owner 2026-10-28, #176): upstream's two commented-out
+checks are back, the solo form at the registrar needs the number too, only the group's human players are asked, and the
+founding group's bots join the new guild. The rule is unit-tested (UT_GuildForming); its wiring in guild.cs needs live
+players, a group and a registrar, so it is checked here.
+
 /indicator (GM only, a test tool) forces a quest indicator on an NPC for one GM through one marked block in
 GameNPC.GetQuestIndicator; its decisions are unit-tested (UT_QuestIndicatorProbe), the hook and what it relies on are
 checked here.
@@ -141,6 +146,87 @@ class DialogAnswerTests(unittest.TestCase):
 
     def test_the_file_keeps_upstreams_endings(self):
         endings.check(self, DIALOG)
+
+
+GUILD = os.path.join(GAME_SERVER, "commands", "playercommands", "guild.cs")
+# The founders count (the members that join: players, player bots, gamebots), not the group's companions.
+NUM_CHECK = re.compile(r"if \(HearthDAoC\.GuildForming\.Founders\((?:leader|client\.Player), group\) < Properties\.GUILD_NUM\)")
+
+
+def line_above(text, at):
+    return text[:at].rsplit("\n", 2)[-2]
+
+
+class GuildFormTests(unittest.TestCase):
+    def setUp(self):
+        self.text = read(GUILD)
+
+    def body(self, start, end):
+        body = self.text[self.text.index(start):]
+        return body[:body.index(end)]
+
+    def test_both_guild_num_checks_are_back_and_marked(self):
+        self.assertEqual(len(NUM_CHECK.findall(self.text)), 2)
+        self.assertNotIn("group.MemberCount < Properties.GUILD_NUM", self.text)
+        for name in ("private static bool GuildFormCheck(", 'case "form":'):
+            body = self.body(name, "#endregion\n\t\t\t\t\t\t#region Player already" if name == 'case "form":'
+                             else "return true;")
+            if name == 'case "form":':
+                body = body[body.index("#region Enough members to form Check"):]
+            at = NUM_CHECK.search(body).start()
+            self.assertIn("// HearthDAoC:", line_above(body, at), name)
+            self.assertNotIn("*/", body[at:])
+
+    def test_the_solo_form_needs_the_number_too(self):
+        form = self.body('case "form":', 'case "quit":')
+        rule = form.index("HearthDAoC.GuildForming.Rule(HearthDAoC.GuildForming.Founders(client.Player, group),")
+        self.assertIn("HearthDAoC.GuildForming.Humans(client.Player, group).Count, Properties.GUILD_NUM);", form[rule:])
+        self.assertIn("// HearthDAoC:", form[:rule].rsplit("\n", 3)[-3])
+        refused = form.index("if (formStep == HearthDAoC.GuildFormStep.Refused)")
+        now = form.index("if (formStep == HearthDAoC.GuildFormStep.FormNow)")
+        self.assertLess(refused, now)
+        self.assertIn('"Scripts.Player.Guild.FormNoMembers", Properties.GUILD_NUM', form[refused:now])
+        self.assertIn("FormGuildAlone(client.Player,", form[now:now + 200])
+        self.assertNotIn("GetPlayersInTheGroup().All(", form)  # upstream's "only bots" test, which missed player bots
+        self.assertLess(now, form.index("Only the group leader can create a guild"))
+
+    def test_only_the_human_players_are_asked_and_must_accept(self):
+        form = self.body('case "form":', 'case "quit":')
+        ask = form.index("foreach (GamePlayer p in HearthDAoC.GuildForming.Humans(client.Player, group).Where(p => p != @group.Leader))")
+        self.assertIn("// HearthDAoC:", line_above(form, ask))
+        self.assertIn("SendCustomDialog(", form[ask:ask + 400])
+        create = self.body("protected void CreateGuild(GamePlayer player, byte response)", "Group group = player.Group;")
+        check = create.index("memnum != HearthDAoC.GuildForming.Humans(player, player.Group).Count")
+        self.assertIn("// HearthDAoC:", line_above(create, check))
+
+    def test_the_founding_bots_join_and_none_may_be_in_a_guild(self):
+        create = self.body("protected void CreateGuild(GamePlayer player, byte response)", "private void FormGuildAlone(")
+        join = create.index("HearthDAoC.GuildForming.JoinBots(newGuild, group.Leader, group, addPlayerBots: false);")
+        self.assertIn("// HearthDAoC:", line_above(create, join))
+        self.assertLess(create.index("newGuild.AddPlayer(ply, newGuild.GetRankByID(0));"), join)  # the leader is in first
+        alone = self.body("private void FormGuildAlone(", "public void OnCommand(")
+        check = alone.index("HearthDAoC.GuildForming.BotInAGuild(player.Group);")
+        self.assertIn("// HearthDAoC:", line_above(alone, check))
+        self.assertLess(check, alone.index("GuildMgr.CreateGuild("))
+        join = alone.index("HearthDAoC.GuildForming.JoinBots(newGuild, player, player.Group, addPlayerBots: true);")
+        self.assertIn("// HearthDAoC:", line_above(alone, join))
+        self.assertLess(alone.index("newGuild.AddPlayer(player, newGuild.GetRankByID(0));"), join)
+        form = self.body('case "form":', 'case "quit":')
+        check = form.index("HearthDAoC.GuildForming.BotInAGuild(group);")
+        self.assertIn("// HearthDAoC:", line_above(form, check))
+        self.assertLess(check, form.index("GuildFormCheck(client.Player)"))
+
+    def test_the_bots_join_by_the_invite_path(self):
+        # JoinBots takes a gamebot in as /gc invite does; if upstream changes either, review JoinBots.
+        fork = read(os.path.join(GAME_SERVER, "scripts", "hearthdaoc", "GuildForming.cs"))
+        self.assertIn("AutonomousBotGuilds.JoinRefusal(leader, bot)", fork)
+        self.assertIn("AutonomousBotGuilds.Join(leader, bot)", fork)
+        invite = self.body('case "invite":', 'case "remove":')
+        self.assertIn("AutonomousBotGuilds.JoinRefusal(client.Player, invitedBot)", invite)
+        self.assertIn("AutonomousBotGuilds.Join(client.Player, invitedBot)", invite)
+
+    def test_the_file_keeps_upstreams_endings(self):
+        endings.check(self, GUILD)
 
 
 if __name__ == "__main__":

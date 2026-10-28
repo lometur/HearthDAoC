@@ -26,11 +26,11 @@ import world_fixes  # noqa: E402
 TEST_WORLD = os.environ.get("HDC_TEST_WORLD")
 SMOKE = os.path.join(HERE, "smoke.sh")
 HDC_IT = os.path.join(HERE, "hdc_integration.sh")
-# (kind, head) of every world-fix line the container tests check: smoke.sh's two logs_have lines and its six
+# (kind, head) of every world-fix line the container tests check: smoke.sh's two logs_have lines and its seven
 # world-fixes.log lines, and hdc_integration.sh's two whole lines.
 CHECKED = [("in", "Epic chains"), ("in", "Quest dialogue"),
            ("start", "Epic chains"), ("start", "Quest dialogue"), ("start", "Quest camps"), ("start", "Mob fixes"),
-           ("start", "Route fixes"), ("start", "Start towns"),
+           ("start", "Route fixes"), ("start", "Start towns"), ("start", "Starter guilds"),
            ("whole", "Quest dialogue"), ("whole", "Quest dialogue")]
 
 

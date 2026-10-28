@@ -335,6 +335,8 @@ class FixesTests(unittest.TestCase):
             "Isles), Firbolg Forester to the Grove of Domnann (Shrouded Isles), Highlander Scout to Ludlow Village "
             "(Black Mtns. South), Elf Blademaster to Howth (Silvermine Mts.), Elf Champion to Howth (Silvermine Mts.), "
             "Norseman Healer to Fort Atla (Gotar)",
+            "Starter guilds: removed Clan Cotswold, Mularn Protectors, Tir na Nog Adventurers and their ranks; "
+            "they had no members",
         ])
         self.assertEqual(self.q("SELECT Mob_ID FROM fork_removed_mobs WHERE FixId='duplicate-townspeople' ORDER BY Mob_ID"),
                          [(GRAENT_GOES,), ("231313cf-eb6a-408f-9811-f697c705ffb7",),

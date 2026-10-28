@@ -1,4 +1,5 @@
 import os
+import re
 import shutil
 import sqlite3
 import subprocess
@@ -13,6 +14,8 @@ sys.path.insert(0, BIN)
 import server_properties as sp  # noqa: E402
 
 TEST_WORLD = os.environ.get("HDC_TEST_WORLD")
+STARTUP_GUILDS_CS = os.path.join(HERE, "..", "..", "source", "server", "GameServer", "scripts", "gameevents",
+                                 "StartupGuilds.cs")
 SCHEMA = ("CREATE TABLE ServerProperty (Category TEXT NOT NULL DEFAULT '', `Key` VARCHAR(255) NOT NULL DEFAULT '', "
           "Description TEXT NOT NULL DEFAULT '', DefaultValue TEXT NOT NULL DEFAULT '', Value TEXT NOT NULL DEFAULT '', "
           "LastTimeRowUpdated DATETIME NOT NULL DEFAULT '2000-01-01 00:00:00', ServerProperty_ID VARCHAR(255), "
@@ -73,6 +76,18 @@ class SiStartChoiceTests(unittest.TestCase):
         self.assertNotIn("\\", sp.SI_DESCRIPTION)
 
 
+class StarterGuildsTests(unittest.TestCase):
+    """No starter guilds (owner 2026-10-28, #176): starting_guild is written False at every start, with no setting."""
+
+    def test_the_property_matches_the_server_declaration(self):
+        # [ServerProperty("startup", "starting_guild", <description>, true)]: on in code, "True" in the table.
+        with open(STARTUP_GUILDS_CS, encoding="utf-8-sig") as f:
+            found = re.findall(r'\[ServerProperty\(\s*"([^"]*)",\s*"starting_guild",\s*"([^"]*)",\s*(\w+)\s*\)\]', f.read())
+        self.assertEqual(found, [(sp.STARTER_GUILDS_CATEGORY, sp.STARTER_GUILDS_DESCRIPTION, "true")])
+        self.assertEqual((sp.STARTER_GUILDS_KEY, sp.STARTER_GUILDS_DEFAULT, sp.STARTER_GUILDS_VALUE),
+                         ("starting_guild", "True", "False"))
+
+
 class UpsertTests(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
@@ -112,7 +127,7 @@ class UpsertTests(unittest.TestCase):
                     "--bot-cpu", "off")
         self.assertEqual((r.returncode, r.stdout, r.stderr),
                          (0, "GM-only commands: none\nShrouded Isles start choice: on\nBot realm point timer wait: on\n"
-                             "Bot CPU meter: off\n", ""))
+                             "Bot CPU meter: off\nStarter guilds: off\n", ""))
         self.assertEqual(row(self.db, sp.SI_KEY), ("server", sp.SI_DESCRIPTION, "False", "True"))
         r = run_cli(self.db, "--gm-only-commands", "none", "--si-start-choice", "Off", "--bot-rp-timer-wait", "on",
                     "--bot-cpu", "off")
@@ -126,6 +141,20 @@ class UpsertTests(unittest.TestCase):
                     "--bot-cpu", "off")
         self.assertEqual((r.returncode, r.stdout, r.stderr), (0, "", ""))
 
+    def test_cli_turns_the_starter_guilds_off_at_every_start(self):
+        args = ("--gm-only-commands", "/tele;/tc", "--si-start-choice", "on", "--bot-rp-timer-wait", "on", "--bot-cpu", "off")
+        r = run_cli(self.db, *args)
+        self.assertEqual((r.returncode, r.stdout.splitlines()[-1], r.stderr), (0, "Starter guilds: off", ""))
+        self.assertEqual(row(self.db, sp.STARTER_GUILDS_KEY),
+                         ("startup", sp.STARTER_GUILDS_DESCRIPTION, "True", "False"))
+        self.assertEqual(run_cli(self.db, *args).stdout, "")
+        # Turned back on (a GM, or the table edited): the next start turns it off again, and says so.
+        with sqlite3.connect(self.db) as c:
+            c.execute("UPDATE ServerProperty SET Value='True' WHERE `Key`='starting_guild'")
+        r = run_cli(self.db, *args)
+        self.assertEqual((r.returncode, r.stdout, r.stderr), (0, "Starter guilds: off\n", ""))
+        self.assertEqual(row(self.db, sp.STARTER_GUILDS_KEY)[3], "False")
+
     def test_cli_refuses_a_bad_si_start_choice_and_writes_nothing(self):
         r = run_cli(self.db, "--gm-only-commands", "/tele;/tc", "--si-start-choice", "yes", "--bot-rp-timer-wait", "on",
                     "--bot-cpu", "off")
@@ -133,6 +162,7 @@ class UpsertTests(unittest.TestCase):
         self.assertEqual(r.stderr, "ERROR: HEARTHDAOC_SI_START_CHOICE must be on or off, got 'yes'\n")
         self.assertIsNone(value(self.db, sp.OVERRIDES_KEY))
         self.assertIsNone(value(self.db, sp.SI_KEY))
+        self.assertIsNone(value(self.db, sp.STARTER_GUILDS_KEY))
 
     def test_cli_needs_the_si_start_choice(self):
         r = run_cli(self.db, "--gm-only-commands", "/tele;/tc")
@@ -144,14 +174,18 @@ class UpsertTests(unittest.TestCase):
         shutil.copyfile(TEST_WORLD, self.db)
         self.assertIsNone(value(self.db, sp.OVERRIDES_KEY))
         self.assertIsNone(value(self.db, sp.SI_KEY))
+        # The clean world holds the server's row, on.
+        self.assertEqual(row(self.db, "starting_guild"), ("startup", sp.STARTER_GUILDS_DESCRIPTION, "True", "True"))
         sp.set_property(self.db, sp.OVERRIDES_KEY, sp.gm_only_overrides("/tele;/tc"))
         self.assertEqual(value(self.db, sp.OVERRIDES_KEY), "/tele=2;/tc=2")
         r = run_cli(self.db, "--gm-only-commands", "/tele;/tc", "--si-start-choice", "on", "--bot-rp-timer-wait", "on",
                     "--bot-cpu", "off")
         self.assertEqual((r.returncode, r.stdout),
-                         (0, "Shrouded Isles start choice: on\nBot realm point timer wait: on\nBot CPU meter: off\n"),
+                         (0, "Shrouded Isles start choice: on\nBot realm point timer wait: on\nBot CPU meter: off\n"
+                             "Starter guilds: off\n"),
                          r.stderr)
         self.assertEqual(row(self.db, sp.SI_KEY), ("server", sp.SI_DESCRIPTION, "False", "True"))
+        self.assertEqual(row(self.db, sp.STARTER_GUILDS_KEY), ("startup", sp.STARTER_GUILDS_DESCRIPTION, "True", "False"))
 
 
 if __name__ == "__main__":

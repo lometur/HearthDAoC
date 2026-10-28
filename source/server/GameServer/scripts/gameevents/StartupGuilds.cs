@@ -102,6 +102,10 @@ namespace DOL.GS.GameEvents
 				return;
 
 			DbCoreCharacter character = chArgs.Character;
+			// HearthDAoC: a player bot never joins a starter guild, even with starting_guild back on (owner 2026-10-28, #176).
+			if (HearthDAoC.PlayerBots.PlayerBotPlan.IsBotAccount(character.AccountName))
+				return;
+
 			string guildName = LanguageMgr.GetTranslation(Properties.SERV_LANGUAGE, string.Format("Guild.StartupGuild.{0}", GlobalConstants.RealmToName((eRealm) character.Realm)));
 			Guild guild = GuildMgr.GetGuildByName(guildName);
 

@@ -41,6 +41,11 @@ public sealed record PlayerBotPlan(bool On, int Albion, int Midgard, int Hiberni
     public static string AccountName(eRealm realm, int index) =>
         AccountPrefix + RealmKey(realm) + "-" + index.ToString("D2", CultureInfo.InvariantCulture);
 
+    /// <summary>A player bot's account: no client can use the prefix (AccountPrefix). A player bot never joins a starter
+    /// guild (StartupGuilds.AddNewbieToStarterGuild).</summary>
+    public static bool IsBotAccount(string accountName) =>
+        accountName?.StartsWith(AccountPrefix, StringComparison.OrdinalIgnoreCase) == true;
+
     public static PlayerBotPlan Parse(string text)
     {
         string value = text?.Trim() ?? "";

@@ -305,7 +305,7 @@ class EntrypointTests(unittest.TestCase):
         # A new world has no row, so its first start writes False and says so, once (4.2).
         self.assertEqual((r.returncode, r.stdout, r.stderr),
                          (0, "GM-only commands: /tele;/tc\nShrouded Isles start choice: on\n"
-                             "Bot realm point timer wait: on\nBot CPU meter: off\n", ""))
+                             "Bot realm point timer wait: on\nBot CPU meter: off\nStarter guilds: off\n", ""))
         self.assertEqual(row(self.db, sp.CPU_KEY), ("server", sp.CPU_DESCRIPTION, "False", "False"))
         r = self.run_entrypoint_line()
         self.assertEqual((r.returncode, r.stdout, r.stderr), (0, "", ""))
@@ -314,7 +314,7 @@ class EntrypointTests(unittest.TestCase):
         r = self.run_entrypoint_line(HEARTHDAOC_BOT_CPU="ON")
         self.assertEqual((r.returncode, r.stdout, r.stderr),
                          (0, "GM-only commands: /tele;/tc\nShrouded Isles start choice: on\n"
-                             "Bot realm point timer wait: on\nBot CPU meter: on\n", ""))
+                             "Bot realm point timer wait: on\nBot CPU meter: on\nStarter guilds: off\n", ""))
         self.assertEqual(row(self.db, sp.CPU_KEY), ("server", sp.CPU_DESCRIPTION, "False", "True"))
         r = self.run_entrypoint_line()
         self.assertEqual((r.returncode, r.stdout, r.stderr), (0, "Bot CPU meter: off\n", ""))
