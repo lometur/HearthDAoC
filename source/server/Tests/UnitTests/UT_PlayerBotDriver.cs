@@ -1973,7 +1973,7 @@ public sealed class UT_PlayerBotDriver
     public void A_bot_starts_no_interruptible_cast_while_hits_interrupt_it(bool hasSpell, byte mana, long blockedUntil,
         bool interrupted, bool interruptible, bool casts) =>
         Assert.That(PlayerBotDriver.CombatAction(PlayerBotDriver.ShouldCast(hasSpell, mana, 1_000, blockedUntil), interrupted, 0,
-            interruptible, false, due: true) == PlayerBotCombatAction.Cast, Is.EqualTo(casts));
+            interruptible, false, due: true, heldBreaksOnHit: false) == PlayerBotCombatAction.Cast, Is.EqualTo(casts));
 
     // A class with Quickcast, its damage spell blocked only by the hits' interrupt, uses it as a player does, then casts
     // (SpellHandler.cs:578-590 lets a quickcast spell through). Not while it is on (the ability toggles it off,
@@ -1996,7 +1996,7 @@ public sealed class UT_PlayerBotDriver
         bool uses) =>
         Assert.That(PlayerBotDriver.CombatAction(PlayerBotDriver.ShouldCast(hasSpell, mana, 1_000, blockedUntil), interrupted, 0,
             interruptible, PlayerBotDriver.QuickcastReady(hasQuickcast, quickcastOn, disabled, nextTry, casting, 1_000),
-            due: true) == PlayerBotCombatAction.Quickcast, Is.EqualTo(uses));
+            due: true, heldBreaksOnHit: false) == PlayerBotCombatAction.Quickcast, Is.EqualTo(uses));
 
     // #167 F6: the bot's own swing must not block its next cast. A swing interrupts the swinger for 3 s
     // (StartInterruptTimer, GameLiving.cs:686-693; InterruptRemainingDuration, :736), and a player then gets "must wait"
@@ -2014,7 +2014,7 @@ public sealed class UT_PlayerBotDriver
     public void The_bots_own_swing_does_not_block_its_next_cast(bool canCastSpell, bool interruptedByOther, long selfInterrupt,
         bool interruptible, bool quickcastReady, PlayerBotCombatAction action) =>
         Assert.That(PlayerBotDriver.CombatAction(canCastSpell, interruptedByOther, selfInterrupt, interruptible, quickcastReady,
-            due: true), Is.EqualTo(action));
+            due: true, heldBreaksOnHit: false), Is.EqualTo(action));
 
     // Between casts (the cast choice not due yet, :417) the old think restarted the swing after every cast, and that swing
     // blocked the next cast: with a spell it can cast the bot waits instead. An instant spell does not mind the swing.
@@ -2025,7 +2025,7 @@ public sealed class UT_PlayerBotDriver
     public void Between_casts_a_bot_with_a_spell_to_cast_does_not_swing(bool canCastSpell, bool interruptedByOther,
         long selfInterrupt, bool interruptible, PlayerBotCombatAction action) =>
         Assert.That(PlayerBotDriver.CombatAction(canCastSpell, interruptedByOther, selfInterrupt, interruptible, false,
-            due: false), Is.EqualTo(action));
+            due: false, heldBreaksOnHit: false), Is.EqualTo(action));
 
     // The stop distance comes from the spell the bot may cast, not from this think's action: between casts it swings
     // with an instant spell (above), yet holds its spell range. A Bonedancer's Crunch Skeleton (Lifedrain, instant,
@@ -2040,10 +2040,11 @@ public sealed class UT_PlayerBotDriver
     public void Between_casts_a_bot_holds_its_spell_range(bool canCastSpell, bool interruptedByOther, bool interruptible,
         bool quickcastReady, int stop)
     {
-        Assert.That(PlayerBotDriver.CombatStopDistance(canCastSpell, interruptedByOther, interruptible, quickcastReady, 200, 1_500),
-            Is.EqualTo(stop));
-        Assert.That(PlayerBotDriver.CombatAction(true, false, 0, false, false, due: false), Is.EqualTo(PlayerBotCombatAction.Swing));
-        Assert.That(1_420 > PlayerBotDriver.CombatStopDistance(true, false, false, false, 200, 1_500), Is.False,
+        Assert.That(PlayerBotDriver.CombatStopDistance(canCastSpell, interruptedByOther, interruptible, quickcastReady, 200, 1_500,
+            casterHold: false), Is.EqualTo(stop));
+        Assert.That(PlayerBotDriver.CombatAction(true, false, 0, false, false, due: false, heldBreaksOnHit: false),
+            Is.EqualTo(PlayerBotCombatAction.Swing));
+        Assert.That(1_420 > PlayerBotDriver.CombatStopDistance(true, false, false, false, 200, 1_500, casterHold: false), Is.False,
             "at 1,420 units an instant caster between casts takes no step toward its target");
     }
 
@@ -2138,8 +2139,8 @@ public sealed class UT_PlayerBotDriver
     // A caster's action against its target (a nuke of 3 s, a control of 2.5 s): it nukes while there is time for a nuke
     // and the control after it; then it controls the monster coming at it while the cast ends before contact; in melee
     // it quickcasts the control (the GameBot's rule: a caster under melee controls, BotBrain.cs:3874-3901). A held target
-    // it nukes, unless the nuke would break a root or mez with the monster near: then it steps back to range first. Nuke
-    // hands the think back to CombatAction (cast, wait, quickcast or swing).
+    // it nukes, unless the monster is near and the nuke would break a root or mez, or hits interrupt the bot (#167 C3):
+    // then it steps back to range first. Nuke hands the think back to CombatAction (cast, wait, quickcast or swing).
     [TestCase(false, 2_000L, false, false, 2_500, false, false, false, PlayerBotCasterAction.Nuke)]   // not coming at it
     [TestCase(true, 8_000L, false, false, 2_500, false, false, false, PlayerBotCasterAction.Nuke)]    // time for a nuke
     [TestCase(true, 6_000L, false, false, 2_500, false, false, false, PlayerBotCasterAction.Control)]
@@ -2154,6 +2155,10 @@ public sealed class UT_PlayerBotDriver
     [TestCase(true, 1_000L, true, true, 2_500, false, false, false, PlayerBotCasterAction.StepBack)]  // rooted, near
     [TestCase(true, 5_000L, true, true, 2_500, false, false, false, PlayerBotCasterAction.Nuke)]      // rooted, at range
     [TestCase(true, 0L, true, false, 2_500, false, false, false, PlayerBotCasterAction.Nuke)]         // stunned
+    // #167 C3, the caster melee trap (81 of st-deathsB's 111 caster deaths): rooted in melee and hit, it nuked or swung,
+    // and its own hit ended the root (GameLiving.cs:1762-1777); a stun in melee with hits on it, it steps back too.
+    [TestCase(true, 0L, true, true, 0, true, false, false, PlayerBotCasterAction.StepBack)]           // rooted, hit
+    [TestCase(true, 0L, true, false, 0, true, false, false, PlayerBotCasterAction.StepBack)]          // stunned, hit
     // Each threshold from both sides (the review of 5feb32b: no case told them apart). Before contact, Quickcast ready
     // and not hit: the control's cast while it ends before contact (more than 3,000 ms), else Quickcast's.
     [TestCase(true, 3_001L, false, false, 2_500, false, true, false, PlayerBotCasterAction.Control)]
@@ -2168,29 +2173,56 @@ public sealed class UT_PlayerBotDriver
         bool held, bool holdBreaksOnHit, int controlCastMs, bool interrupted, bool quickcastReady, bool quickcastOn,
         PlayerBotCasterAction expected) =>
         Assert.That(PlayerBotDriver.CasterAction(closing, contactMs, held, holdBreaksOnHit, controlCastMs, 3_000, interrupted,
-            quickcastReady, quickcastOn, spellStop: true), Is.EqualTo(expected));
+            quickcastReady, quickcastOn), Is.EqualTo(expected));
 
-    // The step back only while Engage holds the spell's range (the review of 5feb32b). After a quickcast root in melee,
-    // Quickcast is down and the rooted monster's swings keep interrupting the bot: Engage stops it in melee (80 units),
-    // so each step back (48 units a think) ended past the stop and Engage walked it back in; it stood in the monster's
-    // reach casting nothing and swinging at nothing until the root ended. At a melee stop (that, power under 18%, the
-    // cast watch's block) it nukes: CombatAction swings or casts, as before the step back. Quickcast ready, it holds the
-    // spell's range and steps back.
+    // #167 C3, the caster melee trap: after a quickcast root in melee, Quickcast is down and the rooted monster's hits
+    // kept interrupting the bot (AttackComponent.cs:1298), so Engage stopped it in melee (HoldsSpellRange false), the held
+    // branch nuked, CombatAction swung, and the bot's own hit ended the root (a miss a mez, GameLiving.cs:1762-1777). Now
+    // a caster's held target (CasterHolds) keeps the spell's stop, so the step back (83dcb96's gate, spellStop, goes:
+    // Kites runs before the walk in) ends within it; and its swing, which would end a root or mez (SwingBreaksHold), waits
+    // instead, power under 18% too: it stands off until the hold ends rather than break it.
     [Test]
-    public void A_caster_steps_back_from_a_held_monster_only_while_it_holds_its_spell_range()
+    public void A_caster_in_melee_with_a_held_monster_steps_back_and_holds_its_spell_range()
     {
         long contact = PlayerBotDriver.TimeToContact(80, 200);
-        bool spellStop = PlayerBotDriver.HoldsSpellRange(true, true, true, false);         // hit, no Quickcast ready
-        Assert.That((spellStop, PlayerBotDriver.CombatStopDistance(true, true, true, false, 200, 1_500)),
-            Is.EqualTo((false, PlayerBotDriver.MeleeStopDistance(200))));
-        Assert.That(PlayerBotDriver.CasterAction(true, contact, true, true, 2_500, 3_000, true, false, false, spellStop),
-            Is.EqualTo(PlayerBotCasterAction.Nuke));
-        Assert.That(PlayerBotDriver.HoldsSpellRange(false, false, false, false), Is.False, "power under 18%, or blocked");
-        spellStop = PlayerBotDriver.HoldsSpellRange(true, true, true, true);                // Quickcast ready
-        Assert.That((spellStop, PlayerBotDriver.CombatStopDistance(true, true, true, true, 200, 1_500)), Is.EqualTo((true, 1_420)));
-        Assert.That(PlayerBotDriver.CasterAction(true, contact, true, true, 2_500, 3_000, true, true, false, spellStop),
-            Is.EqualTo(PlayerBotCasterAction.StepBack));
+        Assert.That(PlayerBotDriver.CasterAction(true, contact, true, true, 0, 3_000, true, false, false),
+            Is.EqualTo(PlayerBotCasterAction.StepBack), "rooted in melee, hit, no Quickcast ready: it nuked");
+        Assert.That(PlayerBotDriver.CombatStopDistance(true, true, true, false, 200, 1_500, casterHold: true), Is.EqualTo(1_420));
+        Assert.That(PlayerBotDriver.CombatStopDistance(true, true, true, false, 200, 1_500, casterHold: false),
+            Is.EqualTo(PlayerBotDriver.MeleeStopDistance(200)), "no hold: melee, as before");
+        Assert.That(PlayerBotDriver.CombatAction(true, true, 0, true, false, due: true, heldBreaksOnHit: true),
+            Is.EqualTo(PlayerBotCombatAction.WaitToCast));
+        Assert.That(PlayerBotDriver.CombatAction(true, true, 0, true, false, due: true, heldBreaksOnHit: false),
+            Is.EqualTo(PlayerBotCombatAction.Swing));
+        Assert.That(PlayerBotDriver.CombatAction(false, false, 0, true, false, due: true, heldBreaksOnHit: true),
+            Is.EqualTo(PlayerBotCombatAction.WaitToCast), "nothing to cast (power under 18%): it waits, no swing");
+        Assert.That(PlayerBotDriver.CombatAction(true, true, 0, true, true, due: true, heldBreaksOnHit: true),
+            Is.EqualTo(PlayerBotCombatAction.Quickcast), "only a swing becomes a wait");
     }
+
+    // Only a caster, only while its target is held, and only while no other monster hits it that is not held (the guard:
+    // then the add's control, C4, or a break-off, C2): the step back would not shake an add, and a wait with an add's
+    // hits on it would stand the bot idle.
+    [TestCase(PlayerBotRole.Caster, true, false, true)]
+    [TestCase(PlayerBotRole.Caster, true, true, false)]                                     // an add hits it, not held
+    [TestCase(PlayerBotRole.Caster, false, false, false)]                                   // not held
+    [TestCase(PlayerBotRole.Healer, true, false, false)]                                    // no caster: as before
+    [TestCase(PlayerBotRole.Melee, true, false, false)]
+    public void Only_a_caster_alone_with_its_held_target_keeps_the_hold(PlayerBotRole role, bool held, bool otherHitting,
+        bool holds) =>
+        Assert.That(PlayerBotDriver.CasterHolds(role, held, otherHitting), Is.EqualTo(holds));
+
+    // The verifier's correction: a blocked step back pauses KitePauseMilliseconds (Kites), and the wait would stand the bot
+    // idle in the rooted monster's reach that long: then the old rule, a swing (or the cast). A stun, which a hit doesn't
+    // end (GameLiving.cs:1784-1803), takes the swing as before.
+    [TestCase(true, true, false, PlayerBotCombatAction.WaitToCast)]
+    [TestCase(true, true, true, PlayerBotCombatAction.Swing)]                               // its step back blocked
+    [TestCase(true, false, false, PlayerBotCombatAction.Swing)]                             // a stun
+    [TestCase(false, true, false, PlayerBotCombatAction.Swing)]                             // no caster's hold
+    public void A_caster_with_its_step_back_blocked_swings_as_before(bool casterHold, bool breaksOnHit, bool stepBackBlocked,
+        PlayerBotCombatAction action) =>
+        Assert.That(PlayerBotDriver.CombatAction(true, true, 0, true, false, due: true,
+            PlayerBotDriver.SwingBreaksHold(casterHold, breaksOnHit, stepBackBlocked)), Is.EqualTo(action));
 
     // The step back's point keeps the bot within its stop: Engage's distance (GetDistanceTo) is 3D, KiteStep's range flat
     // at the bot's height, and the navmesh may move the point up or down. With a stop of 1,420 and the bot arriving
@@ -2215,6 +2247,21 @@ public sealed class UT_PlayerBotDriver
         Assert.That(Vector3.Distance(turned!.Value, new Vector3(1_229.76f, 710f, 0)), Is.LessThan(0.1f), $"{turned}");
         var round = new List<(string, Vector3, int)> { ("add", Vector3.Zero, 1_500) };
         Assert.That(PlayerBotDriver.KiteStep(new Vector3(300, 0, 0), Vector3.Zero, 1_420, round), Is.Null);
+    }
+
+    // #167 C3 (inf.): with no point clear of the adds, a bot in melee steps back anyway, straight away to 400 units from
+    // its target: a null left it in the held monster's reach. Out of melee, none, as before. A clear point is Clear: its
+    // place on the navmesh is checked against the adds again, the fallback's is not.
+    [Test]
+    public void A_caster_in_melee_with_no_clear_point_steps_back_straight_away_anyway()
+    {
+        var round = new List<(string, Vector3, int)> { ("add", Vector3.Zero, 1_500) };
+        Assert.That(PlayerBotDriver.KiteTarget(new Vector3(100, 0, 0), Vector3.Zero, 1_370, round, inMelee: true),
+            Is.EqualTo((new Vector3(400, 0, 0), false)));
+        Assert.That(PlayerBotDriver.KiteTarget(new Vector3(600, 0, 0), Vector3.Zero, 1_370, round, inMelee: false), Is.Null);
+        var none = new List<(string, Vector3, int)>();
+        Assert.That(PlayerBotDriver.KiteTarget(new Vector3(100, 0, 0), Vector3.Zero, 1_370, none, inMelee: true),
+            Is.EqualTo((new Vector3(1_370, 0, 0), true)));
     }
 
     // --- the nuke per cast (#167 F9) ---
@@ -2746,21 +2793,22 @@ public sealed class UT_PlayerBotDriver
     // living pet at the fight's first think in reach (DEATHS.md A5), and its heals on itself in the fight (A6); then qc=,
     // whether a cast in the fight went with Quickcast on; then (#167) buffs=, its self-buffs up at that first think (F8),
     // petCasts=, a Theurgist's pets cast at the target (F1), and waits=, the thinks a cast due waited for its own swing's
-    // interrupt (WaitToCast, F6); then a caster's control casts, ctl=, and its steps back, kites= (F11).
+    // interrupt (WaitToCast, F6); then a caster's control casts, ctl=, and its steps back, kites= (F11); then ctlBroken=,
+    // the holds its own swing ended (C3).
     [Test]
     public void FightFormat()
     {
         Assert.That(PlayerBotDriverReport.FormatFight(new PlayerBotFight("Pbotaaaac", 40, "widow claw", 40, ConColor.YELLOW, false,
                 true, 100, 38, 100, 12, 21, 1, 9, 2, 4, 0, 0, Pet: true, Heals: 2, Quickcast: true, Buffs: 3, PetCasts: 2, Waits: 5,
-                Controls: 2, Kites: 1)),
+                Controls: 2, Kites: 1, CtlBroken: 1)),
             Is.EqualTo("PLAYER_BOT_FIGHT bot=Pbotaaaac level=40 target=\"widow claw\" targetLevel=40 con=YELLOW from=pull result=kill " +
                        "startHp=100 endHp=38 startMana=100 endMana=12 sec=21 adds=1 swings=9 notVisible=2 casts=4 lifeKills=0 rests=0 " +
-                       "pet=alive heals=2 qc=1 buffs=3 petCasts=2 waits=5 ctl=2 kites=1"));
+                       "pet=alive heals=2 qc=1 buffs=3 petCasts=2 waits=5 ctl=2 kites=1 ctlBroken=1"));
         Assert.That(PlayerBotDriverReport.FormatFight(new PlayerBotFight("Pbothaaab", 43, "empyrean guardian", 36, ConColor.BLUE, true,
                 false, 64, 51, 100, 100, 7, 2, 3, 0, 0, 3, 1)),
             Is.EqualTo("PLAYER_BOT_FIGHT bot=Pbothaaab level=43 target=\"empyrean guardian\" targetLevel=36 con=BLUE from=defence " +
                        "result=dropped startHp=64 endHp=51 startMana=100 endMana=100 sec=7 adds=2 swings=3 notVisible=0 casts=0 " +
-                       "lifeKills=3 rests=1 pet=none heals=0 qc=0 buffs=0 petCasts=0 waits=0 ctl=0 kites=0"));
+                       "lifeKills=3 rests=1 pet=none heals=0 qc=0 buffs=0 petCasts=0 waits=0 ctl=0 kites=0 ctlBroken=0"));
     }
 
     // #167: one PLAYER_BOT_REST line per rest when the bot stands: the seconds it sat and why it stood (recovered, hit,
@@ -2792,21 +2840,23 @@ public sealed class UT_PlayerBotDriver
     // The fields PLAYER_BOT_DEATH appends after task= (its earlier fields stay as they were: runs/legcheck.py reads them),
     // then the names the bot avoided when it died (DEATHS.md A3), before this death's; then (#167 F4) again=, no kill
     // since its last release, sinceRelease=, the seconds since it (-1: none this login), and ill=, the resurrection
-    // illness on at the fatal fight's start.
+    // illness on at the fatal fight's start; then (#167 C3) the fatal fight's caster fields as FIGHT gives them, ctl=,
+    // kites=, casts=, qc= and waits=, and ctlBroken=, the holds its own swing ended: -1 out of a fight.
     [Test]
     public void DeathDetailFormat()
     {
         Assert.That(PlayerBotDriverReport.FormatDeathDetail(new PlayerBotDeathDetail(PlayerBotActivity.Fighting, 62, 14, 71, false,
-                2, 3, 0, 40, 100, 6, 1, "widow claw", 40, true, 748, Avoided: 2, Again: true, SinceRelease: 42, Ill: true)),
+                2, 3, 0, 40, 100, 6, 1, "widow claw", 40, true, 748, Avoided: 2, Again: true, SinceRelease: 42, Ill: true,
+                Controls: 2, Kites: 1, Casts: 4, Quickcast: 1, Waits: 3, CtlBroken: 1)),
             Is.EqualTo("activity=Fighting startHp=62 fightSec=14 targetHp=71 from=pull adds=2 lifeKills=3 rests=0 sinceKillSec=40 " +
                        "mana=100 swings=6 notVisible=1 killer=\"widow claw\" killerLevel=40 killerIsTarget=True fromBind=748 " +
-                       "avoided=2 again=True sinceRelease=42 ill=True"));
+                       "avoided=2 again=True sinceRelease=42 ill=True ctl=2 kites=1 casts=4 qc=1 waits=3 ctlBroken=1"));
         // Out of a fight, no target, no kill this life, no killer named by the Dying event, the bind in another region.
         Assert.That(PlayerBotDriverReport.FormatDeathDetail(new PlayerBotDeathDetail(PlayerBotActivity.Hunting, -1, -1, -1, true,
                 -1, 0, 2, -1, 37, -1, -1, null, 0, false, -1)),
             Is.EqualTo("activity=Hunting startHp=-1 fightSec=-1 targetHp=-1 from=defence adds=-1 lifeKills=0 rests=2 sinceKillSec=-1 " +
                        "mana=37 swings=-1 notVisible=-1 killer=\"\" killerLevel=0 killerIsTarget=False fromBind=-1 avoided=0 " +
-                       "again=False sinceRelease=-1 ill=False"));
+                       "again=False sinceRelease=-1 ill=False ctl=-1 kites=-1 casts=-1 qc=-1 waits=-1 ctlBroken=-1"));
     }
 
     // DEATH again= and sinceRelease= (#167 F4): a death with no kill since the bot's last release; none before the first
@@ -2839,11 +2889,12 @@ public sealed class UT_PlayerBotDriver
         const string head = "PLAYER_BOT_DEATH bot=Pbotaaaac task=False";
         Assert.That(PlayerBotDriver.DeathLine(head, detail, target, target), Is.EqualTo(head + " activity=Fighting startHp=62 fightSec=14 " +
             "targetHp=71 from=pull adds=2 lifeKills=3 rests=0 sinceKillSec=40 mana=100 swings=6 notVisible=1 killer=\"widow claw\" " +
-            "killerLevel=40 killerIsTarget=True fromBind=748 avoided=0 again=False sinceRelease=-1 ill=False"));
+            "killerLevel=40 killerIsTarget=True fromBind=748 avoided=0 again=False sinceRelease=-1 ill=False ctl=-1 kites=-1 casts=-1 " +
+            "qc=-1 waits=-1 ctlBroken=-1"));
         Assert.That(PlayerBotDriver.DeathLine(head, detail, add, target),
-            Does.EndWith(" killer=\"a wolf\" killerLevel=38 killerIsTarget=False fromBind=748 avoided=0 again=False sinceRelease=-1 ill=False"));
+            Does.Contain(" killer=\"a wolf\" killerLevel=38 killerIsTarget=False fromBind=748 avoided=0 again=False sinceRelease=-1 ill=False "));
         Assert.That(PlayerBotDriver.DeathLine(head, detail, null, null),
-            Does.EndWith(" killer=\"\" killerLevel=0 killerIsTarget=False fromBind=748 avoided=0 again=False sinceRelease=-1 ill=False"),
+            Does.Contain(" killer=\"\" killerLevel=0 killerIsTarget=False fromBind=748 avoided=0 again=False sinceRelease=-1 ill=False "),
             "no killer and no target: not the target");
     }
 
@@ -2865,6 +2916,14 @@ public sealed class UT_PlayerBotDriver
         PlayerBotDriver.CountSwing(state, new AttackData { AttackResult = eAttackResult.Missed });
         Assert.That((state.Swings, state.NotVisible), Is.EqualTo((4, 2)));
     }
+
+    // FIGHT and DEATH ctlBroken= (#167 C3): a hold the bot's own swing ended, as a think sees it: its target held by a root
+    // or a mez (a hit or a miss ends them, GameLiving.cs:1762-1777) at the last think, no longer now, and a swing of its
+    // own counted since (CountSwing).
+    [TestCase(true, false, true, true)] [TestCase(true, true, true, false)] [TestCase(true, false, false, false)]
+    [TestCase(false, false, true, false)]
+    public void A_hold_that_ends_with_the_bots_own_swing_counts_as_broken(bool heldBefore, bool heldNow, bool swung, bool broke) =>
+        Assert.That(PlayerBotDriver.BrokeHold(heldBefore, heldNow, swung), Is.EqualTo(broke));
 
     [Test]
     public void The_dying_handler_names_a_bots_killer_ignores_anyone_else_and_goes_with_stop()

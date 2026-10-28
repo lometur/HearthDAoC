@@ -63,9 +63,12 @@ Each bot thinks every 250 ms, a thin copy of the `/bot` pilot's think:
   a nuke and a control spell after it. Then it stuns, roots or mezzes it, in that order of choice, if the cast ends
   before the monster reaches it. In melee it uses Quickcast for the control spell. A rooted or mezzed monster near it
   would break free at the next nuke, so it first steps back to range, on a spot clear of other aggressive monsters,
-  within its spell's range. It steps back only while it can cast: with hits blocking its spells and no Quickcast
-  ready, or with too little power, it fights in melee as before. Only single-target spells the bot has, that the
-  monster isn't immune to; a mez only on a monster above 75% health.
+  within its spell's range; so it does from a stunned one while hits interrupt it. In melee with no clear spot it
+  steps back 400 units straight away anyway. While its target is held it keeps its spell's range, even with hits
+  blocking its spells or too little power, and it never swings at a rooted or mezzed monster (its hit, or a miss,
+  would free it): it waits instead. Not while another monster that isn't held hits it, and not for 5 s after a
+  blocked step back: then it fights as before. Only single-target spells the bot has, that the monster isn't immune
+  to; a mez only on a monster above 75% health.
 - An Animist pulls from beside its turret, so the monster comes into the turret's reach. When the turret can't reach
   the spot it pulls from, it releases the turret and plants a new one near the target, if the summon is ready and it
   has the power. Its bombers count as damage spells only when their payload does damage, so it no longer casts the
@@ -293,9 +296,11 @@ All start `PLAYER_BOT_`:
 - `FIGHT`, `DEATH`, `RELOCATE`, `IDLE`, `BLOCKED`: one per event. A stalled walk's `BLOCKED` line ends with `stall:`,
   the bot's last step and state, and `queries:`, the stalled step's own navmesh queries and a fresh corridor's step.
   `FIGHT` ends with `buffs=` (its self-buffs up when the fight began), `petCasts=` (a Theurgist's pets cast at the
-  target), `waits=` (the thinks a cast waited for its own swing's interrupt), `ctl=` (a caster's control casts) and
-  `kites=` (its steps back). `DEATH` ends with `again=` (no kill since its last release), `sinceRelease=` (the seconds
-  since that release, -1 if none since login) and `ill=` (the resurrection illness on when the fatal fight began).
+  target), `waits=` (the thinks a cast waited for its own swing's interrupt), `ctl=` (a caster's control casts),
+  `kites=` (its steps back) and `ctlBroken=` (the roots and mezzes on its target its own swing ended). `DEATH` ends with
+  `again=` (no kill since its last release), `sinceRelease=` (the seconds since that release, -1 if none since login)
+  and `ill=` (the resurrection illness on when the fatal fight began), then the fatal fight's `ctl=`, `kites=`,
+  `casts=`, `qc=`, `waits=` and `ctlBroken=` as `FIGHT` gives them (-1 out of a fight).
   `BLOCKED`'s `walk=` is `target`, `roam`, `clear` (the step out after a release), `rest`, `kite`, `turret` or
   `breakoff`. `RELOCATE` after a death (`reason=died`) ends with `sinceRelease=`, the milliseconds since the release;
   after a break-off its `reason=` is `brokeoff`. A break-off drops its fight (`FIGHT result=dropped`);
