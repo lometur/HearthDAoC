@@ -178,6 +178,9 @@ public sealed class PlayerBotState
     public bool BackPending, BackOwed, BackMoved;                // #167 C1: PLAYER_BOT_BACK, from a release to its first
     public long BackStepOutMs, BackHoldMs, BackWalkMs;           //   fight: the line due, the replan owed and a camp planned
                                                                  //   since, and the time stepping out, held and walking
+    public Vector3 TargetSpawn;                                  // #167 C7: the target's spawn spot and the reach it aggroes
+    public int TargetRespawnReach;                               //   from (RespawnOf, at the pick), and the last kills'
+    public readonly List<(Vector3 At, int Reach, long KilledAt)> RecentKills = new();   //   (RememberKill): rested out of
 }
 
 // HearthDAoC player bots (#137): a thin copy of the /bot pilot's think (bots/autonomous/AutonomousPlayerPilot.cs:229-374) for a
@@ -232,6 +235,8 @@ public static class PlayerBotDriver
     public const int AnimistStandMargin = 150;                // #167 F10b: by its turret; the turret's reach less this
     public const int IncomingRadius = 2_000;                  // #167 F7: a monster this near with the bot as its target
     public static readonly int[] RestSpotRings = [300, 600, 900, 1_200];   // #167 F7: the rest spot's candidates (inf.)
+    public const int RespawnWatchMilliseconds = 150_000;      // #167 C7: a kill's spawn spot counts this long (inf.: the
+    public const int RecentKillCount = 3;                     //   usual respawn is 80 s), the last 3 kills'
     public static readonly long StuckMilliseconds = (long)AutonomousStuckWatchdog.StuckThreshold.TotalMilliseconds; // 15 min
     public const int MaxFruitlessCasts = 3;                  // the cast watch (levelmatch/DESIGN.md 2.7)
     public const int SpellBlockMilliseconds = 10_000;        // (inf.) a few swings, then the spell again
@@ -931,6 +936,8 @@ public static class PlayerBotDriver
             state.LastKillTick = GameLoop.GameLoopTime;
             state.RecoverBeforePull = true;                       // rest before the next pull (WantsRest)
             if (PlayerBotDriverReport.Kill(state.Target)) state.Kills++;
+            if (state.TargetRespawnReach > 0)                     // #167 C7: rested out of (WalksToRestSpot)
+                RememberKill(state.RecentKills, state.TargetSpawn, state.TargetRespawnReach, GameLoop.GameLoopTime);
         }
         else if (dead) state.RoamingSince = 0;                   // killed by another before this bot got there: not outgrown
         state.KilledWithAdds = state.Engaged && dead && state.FightAdds >= 2;   // #167 C2: the second-monster case
@@ -963,6 +970,8 @@ public static class PlayerBotDriver
         if (found == state.Target) return;
         state.Target = found;
         state.FromDefence = found != null && IsAttacking(player, found);                  // FIGHT and DEATH from=
+        (state.TargetSpawn, state.TargetRespawnReach) = found?.Brain is StandardMobBrain brain   // #167 C7: its respawn
+            ? RespawnOf(found.SpawnPoint, brain.AggroLevel, brain.AggroRange, player.IsObjectGreyCon(found)) : default;
         state.Engaged = false;
         state.NextLosTick = 0;
         state.SpellBlockedUntil = 0;                                                       // a new target clears the watch
@@ -1324,6 +1333,34 @@ public static class PlayerBotDriver
         state.ReplanSince = now;
         state.NextRelocateTick = 0;
         state.RelocateRejected.Clear();
+    }
+
+    /// <summary>Where a target respawns and the reach it aggroes from then (#167 C7), read at the pick: its spawn spot
+    /// (GameNPC.SpawnPoint; RespawnTimerCallback puts it back there, GameNPC.cs:3278-3280), not where it stands (the
+    /// verifier's correction: a defence pick often stands far from it), and its aggro range when it would aggro the bot
+    /// at all (IsPotentialAdd: it respawns busy with no one); else none (Reach 0).</summary>
+    public static (Vector3 At, int Reach) RespawnOf(Point3D spawn, int aggroLevel, int aggroRange, bool greyToBot) =>
+        spawn != null && IsPotentialAdd(aggroLevel, aggroRange, greyToBot, false)
+            ? (new Vector3(spawn.X, spawn.Y, spawn.Z), aggroRange) : default;
+
+    /// <summary>A kill's respawn (#167 C7), kept with the bot's other kills of the last RespawnWatchMilliseconds, the last
+    /// RecentKillCount of them.</summary>
+    public static void RememberKill(List<(Vector3 At, int Reach, long KilledAt)> kills, Vector3 at, int reach, long now)
+    {
+        kills.RemoveAll(kill => now - kill.KilledAt >= RespawnWatchMilliseconds);
+        if (kills.Count >= RecentKillCount) kills.RemoveRange(0, kills.Count - RecentKillCount + 1);
+        kills.Add((at, reach, now));
+    }
+
+    /// <summary>The spawn spots a bot rests out of (#167 C7): its kills' of the last RespawnWatchMilliseconds, each with the
+    /// reach it aggroes from. 142 of st-deathsB's rests were stood up 75-95 s after the kill by a monster with the killed
+    /// one's name (the world's usual RespawnInterval is 80 s, GameNPC.cs:1084-1087), and 18 deaths followed; AddReach
+    /// gives a dead monster none, so F7's rest spot never saw the camp the bot had just emptied.</summary>
+    public static IEnumerable<(Vector3 At, int Reach)> RespawnSpots(IReadOnlyList<(Vector3 At, int Reach, long KilledAt)> kills,
+        long now)
+    {
+        foreach ((Vector3 at, int reach, long killedAt) in kills)
+            if (now - killedAt < RespawnWatchMilliseconds) yield return (at, reach);
     }
 
     /// <summary>Whether a spot is in the reach of a potential add (the adds rule's ring, Crowding's: its aggro range +
@@ -2250,8 +2287,9 @@ public static class PlayerBotDriver
     }
 
     // #167 F7: before it sits, a bot in a potential add's reach walks to the nearest clear spot on the rest rings, once
-    // per rest; the adds are the last search's (FindWithin), where they are now, that would still aggro: no new scan. A
-    // blocked walk, or none clear, and it sits where it is. True while it walks.
+    // per rest; the adds are the last search's (FindWithin), where they are now, that would still aggro: no new scan;
+    // and the spawn spots of its kills of the last 150 s (RespawnSpots, #167 C7). A blocked walk, or none clear, and it
+    // sits where it is. True while it walks.
     private static bool WalksToRestSpot(PlayerBotState state, GamePlayer player, long now)
     {
         if (!state.RestSpotChecked)
@@ -2262,6 +2300,8 @@ public static class PlayerBotDriver
             foreach (GameNPC npc in state.SearchAdds)
                 if (AddReach(player, npc) is > 0 and int reach)
                     adds.Add((npc, new(npc.X, npc.Y, npc.Z), reach));
+            foreach ((Vector3 at, int reach) in RespawnSpots(state.RecentKills, now))    // #167 C7: and its kills'
+                adds.Add((null, at, reach));                                             //   respawns
             state.RestGoal = SpotOutOfReach(player, RestSpotRings, adds);
             adds.Clear();
         }

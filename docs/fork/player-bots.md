@@ -97,8 +97,9 @@ Each bot thinks every 250 ms, a thin copy of the `/bot` pilot's think:
   it would fight from (its spell's range for a caster, else melee). After deaths it moves to an easier camp. It avoids
   what killed it for 15 minutes.
 - A monster within 2,000 units that has the bot as its target counts as an attacker before its first hit, so the bot
-  stands up and fights it first. Before it sits, a bot within reach of an aggressive monster from its last search
-  walks to the nearest spot out of that reach, 1,200 units away at most.
+  stands up and fights it first. Before it sits, a bot within reach of an aggressive monster from its last search,
+  or of the spawn spot of one of its last 3 kills in the last 150 s (where that monster respawns, 80 s after the kill
+  in most of the world), walks to the nearest spot out of that reach, 1,200 units away at most.
 - Losing to two, it breaks off: below 40% health with 2 or more monsters on it, or right after a kill in a fight
   that had 2 or more on it with 1 still on it, unless its target is down to 10% or less. Only from monsters it can
   outrun: none faster than its run (191), or none as fast as its sprint (248) when its endurance holds the sprint long

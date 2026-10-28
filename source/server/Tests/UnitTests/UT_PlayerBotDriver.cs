@@ -676,6 +676,74 @@ public sealed class UT_PlayerBotDriver
             PlayerBotDriver.SpotDirections), adds), Is.EqualTo(clear), "out of every reach: where it is");
     }
 
+    // --- the rest out of the killed monsters' respawns (#167 C7) ---
+
+    // A kill's spawn spot counts for RespawnWatchMilliseconds (150 s; the world's usual RespawnInterval is 80 s): 142 of
+    // st-deathsB's rests were stood up 75-95 s after a kill by a monster of the killed one's name, and 18 deaths followed.
+    [Test]
+    public void A_kills_spawn_spot_counts_for_150_s()
+    {
+        var kills = new List<(Vector3, int, long)> { (Vector3.Zero, 500, 0) };
+        Assert.That((PlayerBotDriver.RespawnSpots(kills, 60_000).Count(), PlayerBotDriver.RespawnSpots(kills, 151_000).Count()),
+            Is.EqualTo((1, 0)));
+    }
+
+    // The bot keeps its last 3 kills, while the watch lasts.
+    [Test]
+    public void A_bot_remembers_its_last_three_kills_while_the_watch_lasts()
+    {
+        var kills = new List<(Vector3 At, int Reach, long KilledAt)>();
+        for (int i = 0; i < 4; i++) PlayerBotDriver.RememberKill(kills, new Vector3(i, 0, 0), 500, i * 10_000L);
+        Assert.That(kills.Select(kill => kill.At.X), Is.EqualTo(new[] { 1f, 2f, 3f }));
+        PlayerBotDriver.RememberKill(kills, new Vector3(9, 0, 0), 500, 175_000);
+        Assert.That(kills.Select(kill => kill.At.X), Is.EqualTo(new[] { 3f, 9f }), "the kills at 10 and 20 s are over 150 s old");
+    }
+
+    private static List<(string, Vector3, int)> Spots(IEnumerable<(Vector3 At, int Reach)> spots) =>
+        spots.Select(spot => ((string)null, spot.At, spot.Reach)).ToList();
+
+    // Before it sits, the bot steps out of the reach of its recent kills' spawn spots as of a live add's: AddReach gives a
+    // dead monster none, so F7's rest spot never saw the camp the bot had just emptied, and a sitting player takes double
+    // melee damage that never misses (AttackAction.cs:236-238, AttackComponent.cs:2206-2208).
+    [Test]
+    public void A_bot_rests_out_of_reach_of_its_kills_spawn_spots_and_the_live_adds()
+    {
+        List<(string, Vector3, int)> adds = Spots(PlayerBotDriver.RespawnSpots(
+            new List<(Vector3, int, long)> { (Vector3.Zero, 500, 0) }, 60_000));
+        Assert.That(PlayerBotDriver.RestSpot(new Vector3(100, 0, 0), [new(600, 0, 0), new(100, 900, 0), new(-900, 0, 0)], adds),
+            Is.EqualTo(new Vector3(100, 900, 0)));
+        adds.Add(("add", new(1_200, 0, 0), 500));
+        Assert.That(PlayerBotDriver.RestSpot(new Vector3(100, 0, 0), [new(600, 0, 0), new(100, -1_500, 0)], adds),
+            Is.EqualTo(new Vector3(100, -1_500, 0)));
+    }
+
+    // At the pick the bot reads its target's spawn spot, where it respawns (GameNPC.cs:3278-3280), not where it stands
+    // (the verifier's correction: a defence pick often stands far from it), and the reach it will aggro from: its aggro
+    // range when it would aggro the bot at all (IsPotentialAdd), else none.
+    [Test]
+    public void A_targets_respawn_is_its_spawn_spot_and_aggro_range_when_it_would_aggro()
+    {
+        Point3D spawn = new(100, 200, 30);
+        Assert.That(PlayerBotDriver.RespawnOf(spawn, 50, 500, false), Is.EqualTo((new Vector3(100, 200, 30), 500)));
+        Assert.That((PlayerBotDriver.RespawnOf(spawn, 0, 500, false).Reach, PlayerBotDriver.RespawnOf(spawn, 50, 500, true).Reach,
+            PlayerBotDriver.RespawnOf(null, 50, 500, false).Reach), Is.EqualTo((0, 0, 0)), "passive, grey, no spawn spot");
+    }
+
+    // A kill remembers that spot (RememberKill); a target that would not aggro, or a fight the bot never had, none.
+    [TestCase(true, 500, 1)] [TestCase(true, 0, 0)] [TestCase(false, 500, 0)]
+    public void A_kill_remembers_its_targets_respawn(bool engaged, int reach, int remembered)
+    {
+        MethodInfo settle = typeof(PlayerBotDriver).GetMethod("SettleTarget", BindingFlags.Static | BindingFlags.NonPublic);
+        var state = new PlayerBotState(Player(null))
+        {
+            Target = (GameNPC)RuntimeHelpers.GetUninitializedObject(typeof(GameNPC)), Engaged = engaged,   // health 0: dead
+            TargetSpawn = new(100, 200, 30), TargetRespawnReach = reach,
+        };
+        settle!.Invoke(null, [state, Player(null)]);
+        Assert.That(state.RecentKills.Select(kill => (kill.At, kill.Reach)),
+            Is.EqualTo(Enumerable.Repeat((new Vector3(100, 200, 30), reach), remembered)));
+    }
+
     // Runs r1-r1h (2026-10-21): on the switchback stairs by Master Lorik the two corners at their foot (Z 1795) counted as
     // reached from the stairs 37 units above, so the bot made for the next corner, under the stairs, along the stair
     // surface: it climbed back to the top and stalled there until the errand failed after 15 minutes.
