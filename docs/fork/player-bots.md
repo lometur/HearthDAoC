@@ -174,20 +174,22 @@ look like a player: worth a look in game near a steep hill and in Tir na Nog. A 
 run, of 50-198 units.
 
 Known gaps:
-- **Stalls are rare.** In three 15-minute runs of 390 hunting bots, 2, 16 and 2 walks stalled (14 after #168, 2,421
-  before these fixes, counting each blocked line's `count=`). 15 of the 16 were one bot on a floor under a Jordheim
-  ramp; in the last run, with the layer-aware queries, that bot roamed Jordheim for the whole run with one replan and
-  no stall. Most other blocked walks were walks to a target with no path (next gap): 70 of 82 in the last run, all
-  to targets earlier runs had found no path to either, and each gives the same result from either corridor query.
+- **Stalls are rare.** In 15-minute runs of 390 hunting bots, 16 walks stalled with #169 (2,421 before #168's fixes,
+  counting each blocked line's `count=`), 15 of them one bot on a floor under a Jordheim ramp, and 1-7 in each of four
+  runs with the layer-aware queries, none in Jordheim. In the last run 44 walks of 13 bots ended blocked: 31 were walks
+  to a target with no path (next gap), which `main`'s code finds no path to either, and 9 lost the walkable surface and
+  stepped back onto a floor, 4 of them one bot by Tir na Nog's stacked floors, as in every run.
 - **Unreachable targets come back.** A bot skips a target it found no path to for 30 seconds, then may pick it again:
-  in that run one bot tried the same monster 51 times between its fights. A GameBot's target and camp choice is part of
+  in one run a bot tried the same monster 51 times between its fights. A GameBot's target and camp choice is part of
   the parity work (#167).
 - A Tir na Nog bot stalled at one spot (21263, 35215) in most runs, though the same step replayed offline walks on
   (same navmesh, same Detour library). It is likely the polygon-edge case above: the log rounds the spot, and starts a
-  few hundredths of a unit apart can differ there. In the last run none stalled there; one churned there once.
+  few hundredths of a unit apart can differ there. In the last four runs none stalled there; one stalled once beside
+  the foot of the jump link by (24081, 33710), where a fresh corridor from the spot walks on (the stall line's replay).
 - Within 300 units of its goal, in the open, a bot takes the plain surface move, which keeps the height of the straight
   line to the goal. Grounded steps there would also need arrival judged by the floor, for targets that hover or swim
-  above it.
+  above it: on the Isle of Glass a bot floated up toward a corpse light 173 units over the floor, lost the floor about
+  100 units up, and its walks ended there (`main` does the same).
 
 ## Log lines
 
