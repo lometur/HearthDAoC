@@ -140,9 +140,14 @@ public sealed class PlayerBotPathMover
         // two corners, one on each floor, that the bot follows straight up or down, as a GameBot walks its path.
         // On a floor link's climb, short of its far corner, the step heads for that corner, not the goal: cut to the goal's
         // distance, it crept 2-8 units a step near the goal (the third review of #166). From the corner on it is cut again:
-        // whole, the step off a link's top took bots up to 58 units inside their stop radius (the fourth review).
+        // whole, the step off a link's top took bots up to 58 units inside their stop radius (the fourth review). So too
+        // where the corridor passes the top short of it, as one not flagged LayerLink within a corner's reach (PTP:177), and
+        // no other link lies ahead: the step is taken again, cut. Whole, it took bots 24 units inside (the fifth review).
         bool climbing = link is Vector3 top && Vector3.DistanceSquared(current, top) >= 1;
-        if (path.TryStep(region, zone, current, goal, climbing ? stepLength : step, now, nav, out next, out failure, layers: true)) // PTP:110-263
+        bool stepped = path.TryStep(region, zone, current, goal, climbing ? stepLength : step, now, nav, out next, out failure, layers: true); // PTP:110-263
+        if (stepped && climbing && step < stepLength && path.LinkEnd is null)
+            stepped = path.TryStep(region, zone, current, goal, step, now, nav, out next, out failure, layers: true);
+        if (stepped)
         {
             // The corridor ends where the bot stands, on the floor TryBuildCorridor takes for the goal (PTP:80-81), and the
             // goal lies off it: a roam goal 106-391 units straight under the bot, on a floor with no way down to it. No step
@@ -157,8 +162,8 @@ public sealed class PlayerBotPathMover
         // No corridor leads on: the walk ends with the failure, also within 300 units where the line runs under the
         // floor. The line would take the bot through the floor (the review of #166: a fallback to it sank bots onto the
         // floors walled in under Jordheim's ramps). Over a drop only, the line still goes, as before the fourth review:
-        // without it, in the offline sweeps, 38 walks to goals that the line reached ended at once, most in Tir na Nog
-        // and Jordheim.
+        // without it, in the offline sweeps, 38 walks to goals that the line reached ended, 37 of them at once, most in
+        // Tir na Nog and Jordheim.
         if (!drop) return false;
         next = DirectStep(nav, zone, current, goal, step);
         failure = string.Empty;
@@ -202,7 +207,8 @@ public sealed class PlayerBotPathMover
     /// review of #166). A plain move that stops short of it met a wall or a link: up to a unit short on the last
     /// sample, it took bots onto the floor walled in by a Jordheim link's foot, and back and forth (the fourth
     /// review). Over a drop only (<paramref name="drop"/>), where no corridor leads on, the bot takes the line
-    /// still.</summary>
+    /// still: the floor walk goes on past the drop, so that a part under the floor, a wall or a link beyond it still ends
+    /// the walk (the fifth review: the line floated a bot off a ledge, and the walk ended in the air before a hill).</summary>
     private static bool LineLeavesFloor(IPathfindingMgr nav, Zone zone, Vector3 current, Vector3 goal, float walked, float spacing,
         out bool drop)
     {
@@ -211,6 +217,7 @@ public sealed class PlayerBotPathMover
         float raised = nav.GetClosestPoint(zone, goal, 2, 2, 64, nav.DefaultFilters) is Vector3 below
             ? Math.Max(0, goal.Z - below.Z) : float.PositiveInfinity;
         Vector3 on = current;
+        bool over = false;
         for (float along = Math.Min(spacing, end); ; along = Math.Min(along + spacing, end))
         {
             Vector3 line = Vector3.Lerp(current, goal, along / length);
@@ -219,11 +226,11 @@ public sealed class PlayerBotPathMover
                 Vector2.Distance(new(reached.X, reached.Y), new(line.X, line.Y)) > (floor.HasValue ? 1 : OnTheEdge)) return true; // a wall, or a link to another floor
             if (floor is Vector3 under)
             {
-                drop = line.Z > under.Z + raised + FloorSag;
-                if (drop || line.Z < under.Z - FloorSag) return true;
+                if (line.Z < under.Z - FloorSag) return true;
+                over |= line.Z > under.Z + raised + FloorSag;
                 on = under;
             }
-            if (along >= end) return false;
+            if (along >= end) return drop = over;
         }
     }
 

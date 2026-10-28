@@ -86,6 +86,11 @@ public class UT_PlayerBotWalkReplay
         {
             Vector3 stall = new(18475, 18946, 4325), goal = new(34053, 13870, 4508);
             Assert.That(UT_PlayerBotDriver.Walk(nav, region, zone, stall, goal, keepExact: true, ticks: 600), Is.InRange(1, 600));
+            // Over Caledon's 7 jump links straight up or down, their two ends on one spot, the layer-aware corridor is the
+            // plain one (TheLayeredCorridorOverAJumpLinkIsThePlainOne). The corner rule of the fourth review put the landing
+            // on the floor before it, the take-off's, and the corridor dropped it: the bot floated 93 units up over 35
+            // across instead of taking the jump (the fifth review of #166).
+            AssertLayeredIsPlain(nav, zone, CaledonJumps);
         });
 
     // st-smoke: in the Gripklosa Mountains Pbotmaaae, 267 units from its target with a wall between, took the straight
@@ -111,9 +116,11 @@ public class UT_PlayerBotWalkReplay
             Assert.That(corners[k].Position.Z, Is.InRange(corners[k + 1].Position.Z, corners[k - 1].Position.Z), "on the slope");
             Vector3 under = new(283424.9f, 289390.7f, 8300.9f), beyond = new(283031.2f, 289587.8f, 8373.9f);
             Assert.That(UT_PlayerBotDriver.Walk(nav, region, zone, under, beyond, keepExact: true, blockEnds: true), Is.InRange(1, 20));
-            // There the corner lies on the floor the bot reaches it on (the fourth review). By a ledge 94 units over a
-            // slope, the bot floated off the ledge toward the corner at the slope's height and went back and forth; up the
-            // slope, a corner on the ledge 81 units over it took the bot onto a piece of the ledge with no way on.
+            // By a ledge 94 units over a slope, the direct step floated the bot off the ledge along the line to its goal,
+            // and the next corridor step took it back up onto the ledge, back and forth for good: over a drop the line now
+            // takes the corridor (LineLeavesFloor, the fourth review). Up the slope, a corner on the ledge 81 units over it
+            // took the bot onto a piece of the ledge with no way on: there the corner lies on the floor the bot reaches it
+            // on (the fourth review).
             Assert.That(UT_PlayerBotDriver.Walk(nav, region, zone, new(285453.5f, 270846.8f, 4504.5f), new(285342.8f, 270532.0f, 4378.8f),
                 keepExact: true, blockEnds: true), Is.InRange(1, 20), "down off the ledge");
             Assert.That(UT_PlayerBotDriver.Walk(nav, region, zone, new(285358.5f, 270605.5f, 4379.6f), new(285611.7f, 270929.5f, 4429.8f),
@@ -202,27 +209,41 @@ public class UT_PlayerBotWalkReplay
     [Test]
     public void TheLayeredCorridorOverAJumpLinkIsThePlainOne() =>
         // Pennine Mountains (region 1, zone 14): OffsetX 69, OffsetY 43, Width 8, Height 8.
-        OnZone(14, "Pennine Mountains", 69, 43, (nav, region, zone) =>
-        {
-            var plain = new WrappedPathfindingNode[256];
-            var layered = new WrappedPathfindingNode[256];
-            foreach ((Vector3 start, Vector3 end) in PennineJumps)
-                foreach ((Vector3 a, Vector3 b) in new[] { (start, end), (end, start) })
-                {
-                    PathfindingResult p = nav.GetPathStraight(zone, a, b, nav.DefaultFilters, plain);
-                    PathfindingResult l = nav.GetPathStraightLayered(zone, a, b, nav.DefaultFilters, layered);
-                    Assert.That(p.NodeCount, Is.GreaterThan(1), $"{a} -> {b}");
-                    Assert.That(l.Status, Is.EqualTo(p.Status), $"{a} -> {b}");
-                    Assert.That(Array.ConvertAll(layered[..l.NodeCount], n => (n.Position.X, n.Position.Y, n.Flags)),
-                        Is.EqualTo(Array.ConvertAll(plain[..p.NodeCount], n => (n.Position.X, n.Position.Y, n.Flags))), $"{a} -> {b}");
-                }
-            Assert.That(LayeredQueriesRan(), Is.True, "lib/Detour has the layer-aware queries");
-        });
+        OnZone(14, "Pennine Mountains", 69, 43, (nav, region, zone) => AssertLayeredIsPlain(nav, zone, PennineJumps));
+
+    private static void AssertLayeredIsPlain(IPathfindingMgr nav, Zone zone, (Vector3, Vector3)[] jumps)
+    {
+        var plain = new WrappedPathfindingNode[256];
+        var layered = new WrappedPathfindingNode[256];
+        foreach ((Vector3 start, Vector3 end) in jumps)
+            foreach ((Vector3 a, Vector3 b) in new[] { (start, end), (end, start) })
+            {
+                PathfindingResult p = nav.GetPathStraight(zone, a, b, nav.DefaultFilters, plain);
+                PathfindingResult l = nav.GetPathStraightLayered(zone, a, b, nav.DefaultFilters, layered);
+                Assert.That(p.NodeCount, Is.GreaterThan(1), $"{a} -> {b}");
+                Assert.That(l.Status, Is.EqualTo(p.Status), $"{a} -> {b}");
+                Assert.That(Array.ConvertAll(layered[..l.NodeCount], n => (n.Position.X, n.Position.Y, n.Flags)),
+                    Is.EqualTo(Array.ConvertAll(plain[..p.NodeCount], n => (n.Position.X, n.Position.Y, n.Flags))), $"{a} -> {b}");
+            }
+        Assert.That(LayeredQueriesRan(), Is.True, "lib/Detour has the layer-aware queries");
+    }
 
     // Whether the layer-aware queries ran on lib/Detour, not on the plain ones it falls back to without them (one warning,
     // which the test host does not show): with those, the comparison above compares the plain corridor with itself.
     private static bool LayeredQueriesRan() =>
         (int)typeof(LocalPathfindingMgr).GetField("_noLayers", BindingFlags.Static | BindingFlags.NonPublic)!.GetValue(null)! == 0;
+
+    // The two ends, near each, of the jump links straight up or down in zone250.nav: two-way, 80-95 units high.
+    private static readonly (Vector3, Vector3)[] CaledonJumps =
+    {
+        (new(53198, 23932, 4595), new(53210, 23932, 4681)),
+        (new(53140, 23905, 4595), new(53156, 23914, 4691)),
+        (new(54870, 24542, 4595), new(54871, 24541, 4690)),
+        (new(54832, 24522, 4595), new(54814, 24529, 4680)),
+        (new(53023, 24888, 4579), new(53025, 24891, 4659)),
+        (new(54333, 25372, 4579), new(54344, 25363, 4659)),
+        (new(54351, 25442, 4579), new(54372, 25422, 4659)),
+    };
 
     // The two ends of the cross-tile two-way off-mesh connections in zone014.nav.
     private static readonly (Vector3, Vector3)[] PennineJumps =
@@ -294,6 +315,8 @@ public class UT_PlayerBotWalkReplay
             Assert.That(UT_PlayerBotDriver.Walk(nav, region, zone, floor.Value, far, keepExact: true, ticks: 400), Is.InRange(1, 400));
         });
 
+    // One test per zone: UnloadNavMesh frees the mesh but leaves the thread's query on it (LocalPathfindingMgr's
+    // _navmeshQueries, by zone ID), and a second load of the zone in the same run then crashes the test host.
     private static void OnZone(ushort id, string name, int offsetX, int offsetY, Action<IPathfindingMgr, Region, Zone> walk)
     {
         string root = Environment.GetEnvironmentVariable("OFFLINE_DAOC_NAV_ROOT");

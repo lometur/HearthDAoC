@@ -143,7 +143,9 @@ registered, test it in game. The mover:
   At such seams in Gripklosa one tile's floor drops 170 units where the other's doesn't, and the corner sank into the
   slope; left at the vertices' height, corners lay 47-65 units off every floor, and a bot went back and forth under one;
   and on the floor after it, a corner on a ledge 81 units over the slope that led up to it took bots onto a piece of the
-  ledge with no way on. The bot goes straight from where it reached the first corner (up to 32 units across) to the
+  ledge with no way on. An off-mesh jump's landing keeps its own floor: a jump straight up or down lands on the
+  take-off's spot, and the floor before it, the take-off's, dropped the landing from the corridor (12 such jumps in
+  three zones). The bot goes straight from where it reached the first corner (up to 32 units across) to the
   second, through the ramp if need be, as on a floor link, and steps straight at its goal only once it stands on the
   second. That corner counts as reached only within 24 units of its height and, once the bot is on the climb, only at
   the corner itself: on the way down, 22.6 units above the foot, a bot took it as reached and walked back onto the ramp
@@ -155,8 +157,8 @@ registered, test it in game. The mover:
   the ledge, for good. With no corridor the walk ends: the line would take the bot through the floor. A walk whose
   corridor ends where the bot stands, its goal off that floor (a roam goal on a floor straight under the bot, with no
   way down), ends at once: 6 such walks stood 3 seconds each and ended stalled. Where the line runs over a drop only,
-  though, the bot takes it in both cases, as before: offline, 38 walks the line took to their goals ended at once
-  without it, most in Tir na Nog and Jordheim. Such links are rare (in the nine zones replayed, 0-158 of
+  though, the bot takes it in both cases, as before: offline, 38 walks the line took to their goals ended without it,
+  37 of them at once, most in Tir na Nog and Jordheim. Such links are rare (in the nine zones replayed, 0-158 of
   1,186-202,142 seam links), and NPCs and GameBots keep Detour's own queries.
 - within 300 units of its goal, walks straight at it only with a clear line of sight, or within a corner's reach (32
   units across), where the corridor has dropped its last corner; otherwise it follows the corridor (a bot crept along
@@ -218,7 +220,7 @@ The bot CPU meter (`/botcpu`) charges them to its own kind, `playerbot`, and the
 `Tests/UnitTests/UT_HeadlessClient.cs`, `UT_PlayerBotPlan.cs`, `UT_PlayerBotDriver.cs`, `UT_PlayerBotErrands.cs`,
 `UT_PlayerBotWake.cs`, `UT_PlayerBotSpots.cs` and `UT_PlayerBotKit.cs` run in CI. `UT_PlayerBotWalkReplay.cs` runs only
 when asked for. It needs `OFFLINE_DAOC_NAV_ROOT`: a folder holding `navmesh/zone008.nav`, `zone012.nav`, `zone014.nav`,
-`zone120.nav`, `zone126.nav`, `zone152.nav`, `zone209.nav` and `zone250.nav` (each from `tools/linux/odaoc_fetch.py
---lock deploy/upstream.lock extract runtime/server/navmesh/zone008.nav FOLDER/navmesh/zone008.nav`, and so on) and under
-`lib/` the Detour library built from `source/server/Pathing/Detour`, as `deploy/Dockerfile` builds it: without the
-layer-aware queries the Jordheim and jump-link replays fail.
+`zone120.nav`, `zone126.nav`, `zone152.nav`, `zone181.nav`, `zone209.nav` and `zone250.nav` (each from
+`tools/linux/odaoc_fetch.py --lock deploy/upstream.lock extract runtime/server/navmesh/zone008.nav
+FOLDER/navmesh/zone008.nav`, and so on) and under `lib/` the Detour library built from `source/server/Pathing/Detour`,
+as `deploy/Dockerfile` builds it: without the layer-aware queries the Jordheim and jump-link replays fail.

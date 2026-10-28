@@ -681,7 +681,9 @@ DLLEXPORT dtStatus PathStraightLayered(dtNavMeshQuery* query, float start[], flo
 			points[(n - 1) * 3 + 1] = to[1];
 		// Every corner on a floor, not at its vertices' height, which on steep ground lies tens of units off it: in
 		// Jordheim a corner 47 units over a floor walled in under a ramp and 50 under the ramp took the walker that reached
-		// it onto that floor, the nearer (the review). Not the walker's start, its goal, nor an off-mesh link's. The floor
+		// it onto that floor, the nearer (the review). Not the walker's start, its goal, nor an off-mesh link's ends: a
+		// jump straight up or down lands on the take-off's spot, and the floor before it, the take-off's, dropped the
+		// landing from the corridor (the fifth review: 12 such links in zones 181, 249 and 250). The floor
 		// is its polygon's, but where the floors on the two sides of the corner's portal part there, it is the one before
 		// the portal, which the walker reaches the corner on; its next step takes it onto the polygon's. At such seams in
 		// Gripklosa a tile's detail edge drops 170 units where the other tile's floor does not, and the walker sank into
@@ -702,8 +704,15 @@ DLLEXPORT dtStatus PathStraightLayered(dtNavMeshQuery* query, float start[], flo
 			dtPolyRef before = 0; // the corridor's polygon before the one the corner enters
 			for (int j = first + 1; j <= i && !before; ++j)
 				if (polys[j] == refs[k])
+				{
+					const dtMeshTile* linkTile = 0;
+					const dtPoly* linkPoly = 0;
+					if (dtStatusFailed(nav->getTileAndPolyByRef(polys[j - 1], &linkTile, &linkPoly)) ||
+						linkPoly->getType() == DT_POLYTYPE_OFFMESH_CONNECTION)
+						break; // an off-mesh link's landing
 					before = k > 0 && j > first + 1 && refs[k - 1] == polys[j - 1] &&
 						dtVdist2DSqr(&points[(k - 1) * 3], &points[k * 3]) < dtSqr(1.0f / 16384.0f) ? polys[j - 2] : polys[j - 1];
+				}
 			const float other = before ? FloorHeightAt(query, before, &points[k * 3]) : floor;
 			points[k * 3 + 1] = dtAbs(other - floor) > cornerTile->header->walkableClimb ? other : floor;
 		}
