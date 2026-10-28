@@ -139,16 +139,21 @@ What they don't do yet is under [Known shortcomings](#known-shortcomings).
 Against the GameBots (#167), and between them and a live world. Each line goes when its fix lands.
 
 Playing:
-- **Deaths:** with the rules above (`st-deathsB`: 14 minutes, 390 level-matched bots) they die 4.3 times per
-  bot-hour, against about 1 for the PvE GameBots: melee 3.7, casters 8.2, healers 3.8, pet classes 2.5, archers 6.1.
+- **Deaths:** with the rules above (`st-deathsC`: 15 minutes, 390 level-matched bots) they die 2.1 times per
+  bot-hour, against about 1 for the PvE GameBots: melee 1.6, casters 5.2, healers 1.9, pet classes 0.9, archers 2.5.
   On v0.37b-hearth.9 (`st-layers5`) it was 9.5. Still open:
-  - The replan after a death runs inside the 10 s after the release in which a player can't attack a monster, so it
-    finds no camp nine times in ten and the bot goes back to the camp it died at.
-  - 57% of deaths come with two or more monsters on the bot; a fight with one monster is fatal 4.5% of the time. They
-    never break off and run, and they never control the second monster.
-  - A caster in melee swings at its rooted or mezzed target and breaks the hold.
+  - Casters die most. One that pulls from spell range keeps nuking while the monster closes, and its own swing still
+    ends a root or mez in 8% of its controls. Out-of-power caster deaths doubled (9 to 18).
+  - A caster controls the add in only 1 add fight in 6: its Quickcast has usually gone on the target before the add
+    comes.
+  - After a release, a bot dies again before its next kill as often as before (43%): the new camp's first fight is no
+    safer.
+  - A break-off often comes late (half the deaths on the run come in its first 4 s), and a bot caught on the run
+    usually dies (10 of 13).
   - Walks don't look ahead for monsters on the route.
-- **Resting:** 47% of their time on `st-deathsB`. Most of it is the real cost of player regeneration.
+- **Resting:** 49% of their time on `st-deathsC`. Rest per kill fell 2%; the share rose because they die less and
+  kill 5% more per hour. Most of it is the real cost of player regeneration. A buff cast as a bot recovers makes it sit
+  again (84 times), and a Skald stands and sits again within a second (38).
 - **Not done at all:** they don't group, buff others, take part in RvR or battlegrounds, stealth, use realm abilities
   or ride horses (#152, #167).
 - **Ranged and songs:** they can't shoot or play. Archers fight in melee, and Bards and Minstrels have no songs: theirs
