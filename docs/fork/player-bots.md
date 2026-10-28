@@ -71,8 +71,47 @@ Each bot thinks every 250 ms, a thin copy of the `/bot` pilot's think:
 - It walks on the navmesh. A bot made at a level from a spots line also trains on each level-up.
 - In a run of 3 bots or fewer, `hdbot-alb-01` also does quest 20206 (Immediate Resolution) and its class promotion.
 
-They don't group, take part in RvR or battlegrounds, buff others or sing, use bows, stealth, use realm abilities, ride
-horses, or travel to sell or train.
+What they don't do yet is under [Known shortcomings](#known-shortcomings).
+
+## Known shortcomings
+
+Against the GameBots (#167), and between them and a live world. Each line goes when its fix lands.
+
+Playing:
+- **Deaths:** on v0.37b-hearth.9 (`st-layers5`: 15 minutes, 390 level-matched bots) they died 9.5 times per bot-hour,
+  against about 1 for the PvE GameBots: melee 5.1, casters 21.2, healers 9.4, pet classes 10.8, archers 8.2. The
+  buffs, casting and pet rules above are the first step. Still open:
+  - After a death a bot goes back to the camp it died at.
+  - It doesn't see monsters coming at it, or rest out of their reach.
+  - Casters don't root, stun or step back.
+  - Walks don't look ahead for monsters on the route.
+  - How Animists use their turrets is unchecked.
+- **Resting:** 43% of their time on `st-layers5`. Most of it is the real cost of player regeneration.
+- **Not done at all:** they don't group, buff others, take part in RvR or battlegrounds, stealth, use realm abilities
+  or ride horses (#152, #167).
+- **Ranged and songs:** they can't shoot or sing. Archers fight in melee, and Bards, Minstrels and Skalds have no
+  songs. The level-matched kit gives no bows or instruments.
+- **Trips:** they don't travel to sell, train or buy gear (#157).
+
+Going live, without the test-world side effects:
+- **No live mode:** any value but `off` puts the server in test-world mode (above). hdc will manage both kinds of bots
+  and run player bots live (#171).
+- **Training:** a bot spends its spec points on level-up only when it was made from a spots line with a level, class
+  and race. Without one it never trains.
+- **Deaths cost more live:**
+  - A PvE death costs XP, and again at release unless the bot prays at its grave. It also costs constitution.
+  - GameBots lose nothing.
+  - At level 45 a player bot breaks even at about 0.2-0.7 deaths per hour, so live it must die about as rarely as
+    the GameBots.
+- **Resurrection illness:** from level 6, a released bot doesn't wait out the illness before its next fight.
+- **Bind and prayer:**
+  - A spots bot is bound at its spot.
+  - Live, a bot needs to bind at a bind stone near its camp, and to pray at its grave when it's safe.
+- **Gear:**
+  - A bot has only what it starts with, or the level-matched kit, and no jewellery.
+  - Whether it loots and wears upgrades isn't checked.
+- **Camps:** the test spots were picked to avoid orange and named monsters. A live bot's choice of camp has no such
+  filter.
 
 ## The lever and the quest rule
 
