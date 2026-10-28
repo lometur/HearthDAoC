@@ -103,6 +103,7 @@ public sealed class PlayerBotState
     public bool SelfCast;                                        // a heal or summon on itself is being cast (DEATHS.md
     public long NextSelfHealTick, NextSummonTick;                //   A6, A5), the next tries, and the level at which it
     public byte NoPetSpellLevel;                                 //   found no main-pet summon (not looked for again then)
+    public byte NoSelfHealLevel;                                 //   or no heal (#167 F2: looked for from 85% too)
     public long NextCombatPetTick;                               // #167 F1: a Theurgist's next pet at its target, and the
     public byte NoCombatPetLevel;                                //   level at which it found no such summon
     public long NextQuickcastTick;                               // Quickcast's next try (UseQuickcast)
@@ -153,6 +154,8 @@ public static class PlayerBotDriver
     public const int MaxFruitlessCasts = 3;                  // the cast watch (levelmatch/DESIGN.md 2.7)
     public const int SpellBlockMilliseconds = 10_000;        // (inf.) a few swings, then the spell again
     public const int SelfHealBelowPercent = 60;              // DEATHS.md A6 (a GameBot's: below 65%, BotBrain.cs:4897)
+    public const int RestHealBelowPercent = 85;              // #167 F2: out of a fight, a heal before the sit,
+    public const int RestHealPowerPercent = 50;              //   with this much power left after it (rest-work's model)
     public const int SelfHealRetryMilliseconds = 2_000;      // (inf.) a refused heal is not asked for every think
     public const int PetPowerPercent = 30;                   // DEATHS.md A5: summon at this much power or more
     public const int SummonRetryMilliseconds = 2_000;        // (inf.) as the heal's
@@ -471,9 +474,19 @@ public static class PlayerBotDriver
     /// <summary>The server's own test for the interrupt timer (SpellHandler.cs:571).</summary>
     public static bool Interruptible(Spell spell) => !spell.Uninterruptible && !spell.IsInstantCast;
 
-    /// <summary>The self-heal's gate (DEATHS.md A6): below SelfHealBelowPercent, out of a cast, the retry timer due.</summary>
-    public static bool WantsSelfHeal(byte healthPercent, bool casting, long now, long nextTry) =>
-        !casting && healthPercent < SelfHealBelowPercent && now >= nextTry;
+    /// <summary>The self-heal's gate, out of a cast and the retry timer due: in a fight below SelfHealBelowPercent
+    /// (DEATHS.md A6); out of one below RestHealBelowPercent with RestHealPowerPercent of its power or more left after the
+    /// heal's cost (#167 F2), then it sits for power: a heal is quicker than sitting for health.</summary>
+    public static bool WantsSelfHeal(byte healthPercent, bool casting, long now, long nextTry, bool inFight, byte manaPercent,
+        int costPercent) =>
+        !casting && now >= nextTry && (inFight
+            ? healthPercent < SelfHealBelowPercent
+            : healthPercent < RestHealBelowPercent && manaPercent - costPercent >= RestHealPowerPercent);
+
+    /// <summary>A spell's nominal cost in percent of the pool, rounded up: a negative power is a percent already
+    /// (SpellHandler.cs:1207-1213); 0 with no pool.</summary>
+    public static int CostPercent(int maxMana, int power) =>
+        power < 0 ? -power : maxMana <= 0 ? 0 : (power * 100 + maxMana - 1) / maxMana;
 
     /// <summary>The heal a bot casts on itself (DEATHS.md A6): a Heal on a realm mate, itself or its group, at or below
     /// its level, no song, ready, and while hits interrupt the bot an instant or uninterruptible one only (a GameBot's
@@ -1335,15 +1348,26 @@ public static class PlayerBotDriver
         return true;
     }
 
-    // A healer's heal on itself (DEATHS.md A6), before a rest as a GameBot's (AWBC:2725).
+    // A healer's heal on itself (DEATHS.md A6), before a rest as a GameBot's (AWBC:2725); out of a fight (MayRest's
+    // view) from 85% health, then it sits for power (#167 F2). The gate runs first at no cost, then with the heal's.
     private static bool SelfHeal(PlayerBotState state, GamePlayer player, long now)
     {
-        if (!WantsSelfHeal(player.HealthPercent, player.IsCasting, now, state.NextSelfHealTick)) return false;
+        bool inFight = !MayRest(Attacker(state, player, now, anyHitter: true) != null, state.Engaged && state.Target?.IsAlive == true);
+        byte mana = PowerPercent(player.MaxMana, player.ManaPercent);
+        long nextTry = state.NextSelfHealTick;
+        if (player.Level == state.NoSelfHealLevel ||
+            !WantsSelfHeal(player.HealthPercent, player.IsCasting, now, nextTry, inFight, mana, 0))
+            return false;
         state.NextSelfHealTick = now + SelfHealRetryMilliseconds;
-        (Spell heal, SpellLine line) = FindSelfHeal(UsableSpells(player), player.Level, player.MaxHealth,
-            player.IsBeingInterruptedByOther,
+        IEnumerable<(Spell, SpellLine)> spells = UsableSpells(player);
+        (Spell heal, SpellLine line) = FindSelfHeal(spells, player.Level, player.MaxHealth, player.IsBeingInterruptedByOther,
             spell => player.GetSkillDisabledDuration(spell) <= 0 && HasPowerFor(player.MaxMana, player.Mana, spell.Power));
-        if (heal == null || !CastOnSelf(state, player, now, heal, line)) return false;
+        if (heal == null && FindSelfHeal(spells, player.Level, player.MaxHealth, false, _ => true).Item1 == null)
+            state.NoSelfHealLevel = player.Level;                                      // no heal at this level: none looked
+        if (heal == null ||                                                             //   for until the next
+            !WantsSelfHeal(player.HealthPercent, player.IsCasting, now, nextTry, inFight, mana, CostPercent(player.MaxMana, heal.Power)) ||
+            !CastOnSelf(state, player, now, heal, line))
+            return false;
         if (state.Engaged) state.FightHeals++;
         return true;
     }

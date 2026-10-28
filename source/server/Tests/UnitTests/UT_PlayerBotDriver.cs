@@ -1669,12 +1669,27 @@ public sealed class UT_PlayerBotDriver
         PlayerBotDriver.FindSelfHeal(spells, level, maxHealth, interrupted, ready ?? (_ => true)) is (Spell s, SpellLine)
             ? FormattableString.Invariant($"{s.Name}:{s.Value}") : "-";
 
-    // Below 60% and out of a cast, as a GameBot heals itself below 65% before it fights or rests (BotBrain.cs:4890-4897,
-    // AutonomousWorldBotController.cs:2725), with the retry timer's wait.
+    // In a fight: below 60% and out of a cast, as a GameBot heals itself below 65% before it fights or rests
+    // (BotBrain.cs:4890-4897, AutonomousWorldBotController.cs:2725), with the retry timer's wait; whatever its power.
     [TestCase((byte)59, false, 0L, true)] [TestCase((byte)60, false, 0L, false)] [TestCase((byte)30, true, 0L, false)]
     [TestCase((byte)30, false, 1_001L, false)] [TestCase((byte)30, false, 1_000L, true)]
     public void A_bot_heals_itself_below_60_percent_out_of_a_cast(byte health, bool casting, long nextTry, bool heals) =>
-        Assert.That(PlayerBotDriver.WantsSelfHeal(health, casting, 1_000, nextTry), Is.EqualTo(heals));
+        Assert.That(PlayerBotDriver.WantsSelfHeal(health, casting, 1_000, nextTry, inFight: true, 10, 8), Is.EqualTo(heals));
+
+    // Out of a fight (#167 F2): below 85%, with half its power or more left after the heal's cost, then it sits for power;
+    // a heal is quicker than sitting for health. In a fight the 60% rule stands.
+    [TestCase((byte)84, false, 1_000L, false, (byte)70, 8, true)] [TestCase((byte)84, false, 1_000L, true, (byte)70, 8, false)]
+    [TestCase((byte)59, false, 1_000L, true, (byte)70, 8, true)] [TestCase((byte)84, false, 1_000L, false, (byte)55, 8, false)]
+    [TestCase((byte)90, false, 1_000L, false, (byte)70, 8, false)] [TestCase((byte)84, false, 1_000L, false, (byte)58, 8, true)]
+    [TestCase((byte)84, true, 1_000L, false, (byte)70, 8, false)] [TestCase((byte)84, false, 1_001L, false, (byte)70, 8, false)]
+    public void Out_of_a_fight_a_bot_heals_itself_below_85_percent_before_it_sits(byte health, bool casting, long nextTry,
+        bool inFight, byte mana, int cost, bool heals) =>
+        Assert.That(PlayerBotDriver.WantsSelfHeal(health, casting, 1_000, nextTry, inFight, mana, cost), Is.EqualTo(heals));
+
+    // A spell's cost in percent of the pool, rounded up: a negative power is a percent already (SpellHandler.cs:1207-1213).
+    [TestCase(300, 24, 8)] [TestCase(300, 25, 9)] [TestCase(300, -12, 12)] [TestCase(0, 24, 0)] [TestCase(300, 0, 0)]
+    public void A_spells_cost_in_percent_of_the_pool(int maxMana, int power, int percent) =>
+        Assert.That(PlayerBotDriver.CostPercent(maxMana, power), Is.EqualTo(percent));
 
     // A heal on the bot itself: a Heal on a realm mate, itself or its group, at or below its level, with no instrument;
     // the most health back (a negative value is a percent of its health, GameBot.cs:1887-1892).
