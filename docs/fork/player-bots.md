@@ -59,6 +59,11 @@ Each bot thinks every 250 ms, a thin copy of the `/bot` pilot's think:
   holds its spells until the monster turns on the pet, 4 s at most, and never while the bot is being hit. A Theurgist
   casts a pet at its target at each cast choice while it can cast one, as a GameBot does, and its damage spell only
   when it can't (the target out of the pet's range or view, or a pet just refused).
+- A caster (Wizard, Sorcerer, Runemaster, Eldritch, Mentalist) nukes a monster coming at it while there is time for
+  a nuke and a control spell after it. Then it stuns, roots or mezzes it, in that order of choice, if the cast ends
+  before the monster reaches it. In melee it uses Quickcast for the control spell. A rooted or mezzed monster near it
+  would break free at the next nuke, so it first steps back to range, on a spot clear of other aggressive monsters.
+  Only single-target spells the bot has, that the monster isn't immune to; a mez only on a monster above 75% health.
 - Each cast it picks the damage spell ready now: its bolt when off its recast, else its best single-target spell,
   else an area one, never an area one while another monster stands in its radius. It drops the low ranks a GameBot
   drops. With none ready (a Shaman's two 20-s spells both on recast), it swings until one is.
@@ -89,7 +94,6 @@ Playing:
 - **Deaths:** on v0.37b-hearth.9 (`st-layers5`: 15 minutes, 390 level-matched bots) they died 9.5 times per bot-hour,
   against about 1 for the PvE GameBots: melee 5.1, casters 21.2, healers 9.4, pet classes 10.8, archers 8.2. The
   buffs, casting and pet rules above are the first step. Still open:
-  - Casters don't root, stun or step back.
   - Walks don't look ahead for monsters on the route.
   - How Animists use their turrets is unchecked.
 - **Resting:** 43% of their time on `st-layers5`. Most of it is the real cost of player regeneration.

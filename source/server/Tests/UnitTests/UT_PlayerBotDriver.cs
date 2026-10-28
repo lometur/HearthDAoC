@@ -1850,6 +1850,103 @@ public sealed class UT_PlayerBotDriver
         Assert.That(PlayerBotDriver.BestDamageSpellName(Caster(40, [(storm, null)], [(fire, [])])), Is.EqualTo("-"));
     }
 
+    // --- casters control and step back (#167 F11) ---
+
+    // World-DB spells (Spell, LineXSpell): a Sorcerer's Body Destruction roots and Mind Twisting mezzes, a Wizard's
+    // Path of Ice root, an Eldritch's Way of the Sun stun, a Bonedancer's snare and a Wizard's area root.
+    private static Spell Control(int id, string name, string type, int level, double value, int radius = 0,
+        double castTime = 2.5) =>
+        new(new DbSpell { SpellID = id, Name = name, Type = type, Target = "Enemy", Value = value, Range = 1500,
+            Radius = radius, CastTime = castTime, Duration = 20 }, level);
+
+    private static readonly SpellLine BodyLine = new("Body Destruction", "Body Destruction", Specs.Body_Magic, true),
+        SunLine = new("Way of the Sun", "Way of the Sun", Specs.Light, true);
+
+    private static readonly Spell LesserCrippling = Control(682, "Lesser Crippling", "SpeedDecrease", 6, 99),
+        Cripple = Control(683, "Cripple", "SpeedDecrease", 13, 99),
+        MinorMesmerization = Control(911, "Minor Mesmerization", "Mesmerize", 1, 0, castTime: 3.0),
+        LesserMesmerization = Control(912, "Lesser Mesmerization", "Mesmerize", 5, 0, castTime: 3.0),
+        ColdsBitterGrip = Control(171, "Cold's Bitter Grip (Lesser)", "SpeedDecrease", 5, 99),
+        PrismaticFlare = Control(4121, "Prismatic Flare", "Stun", 5, 0),
+        ShroudOfDoubt = Control(10082, "Shroud of Doubt", "SpeedDecrease", 14, 50, castTime: 3.0),
+        TremblingEarth = Control(78, "Trembling Earth", "SpeedDecrease", 13, 99, radius: 350);
+
+    // The GameBot's control split (GameBot.cs:1957-1962: a mez, or a speed decrease of 99, a root), with the stun the
+    // brief adds, single-target only: an area one would pull the adds round the target.
+    [Test]
+    public void A_control_spell_is_a_single_target_root_mez_or_stun()
+    {
+        Assert.That(new[] { ColdsBitterGrip, Cripple, MinorMesmerization, PrismaticFlare }.All(PlayerBotDriver.IsControlSpell));
+        Assert.That(PlayerBotDriver.IsControlSpell(ShroudOfDoubt), Is.False, "a snare (50%) is no root");
+        Assert.That(PlayerBotDriver.IsControlSpell(TremblingEarth), Is.False, "an area root");
+        Assert.That(PlayerBotDriver.IsControlSpell(FungalOoze), Is.False, "a nuke");
+    }
+
+    // The stun first (damage doesn't break it, GameLiving.cs:1784-1803), then the root, then the mez (the server resists
+    // a mez on a monster under 75% health, CCSpellHandler.cs:173-177); the highest level of each; only one the target
+    // can take (its immunities) and that is ready.
+    [Test]
+    public void A_caster_controls_with_a_stun_then_a_root_then_a_mez_the_highest_ready()
+    {
+        (Spell, SpellLine)[] sorcerer = [(LesserCrippling, BodyLine), (Cripple, BodyLine), (MinorMesmerization, BodyLine),
+            (LesserMesmerization, BodyLine)];
+        Assert.That(PlayerBotDriver.ChooseControl(sorcerer, _ => true, true, true, true).Item1, Is.SameAs(Cripple));
+        Assert.That(PlayerBotDriver.ChooseControl(sorcerer, s => s != Cripple, true, true, true).Item1, Is.SameAs(LesserCrippling));
+        Assert.That(PlayerBotDriver.ChooseControl(sorcerer, _ => true, true, false, true).Item1, Is.SameAs(LesserMesmerization),
+            "a target that can't be rooted");
+        Assert.That(PlayerBotDriver.ChooseControl(sorcerer, _ => true, true, false, false).Item1, Is.Null);
+        (Spell, SpellLine)[] both = [(Cripple, BodyLine), (PrismaticFlare, SunLine)];
+        Assert.That(PlayerBotDriver.ChooseControl(both, _ => true, true, true, true).Item1, Is.SameAs(PrismaticFlare));
+        Assert.That(PlayerBotDriver.ChooseControl(both, _ => true, false, true, true).Item1, Is.SameAs(Cripple), "stun-immune");
+    }
+
+    // The time a monster needs to reach the bot: to ContactDistance (250) at its own speed, none at a speed of 0.
+    [TestCase(1_250, 200, 5_000L)] [TestCase(250, 200, 0L)] [TestCase(100, 200, 0L)] [TestCase(1_000, 0, long.MaxValue)]
+    public void A_monster_reaches_the_bot_at_its_own_speed(int distance, int speed, long contactMs) =>
+        Assert.That(PlayerBotDriver.TimeToContact(distance, speed), Is.EqualTo(contactMs));
+
+    // A caster's action against its target (a nuke of 3 s, a control of 2.5 s): it nukes while there is time for a nuke
+    // and the control after it; then it controls the monster coming at it while the cast ends before contact; in melee
+    // it quickcasts the control (the GameBot's rule: a caster under melee controls, BotBrain.cs:3874-3901). A held target
+    // it nukes, unless the nuke would break a root or mez with the monster near: then it steps back to range first. Nuke
+    // hands the think back to CombatAction (cast, wait, quickcast or swing).
+    [TestCase(false, 2_000L, false, false, 2_500, false, false, false, PlayerBotCasterAction.Nuke)]   // not coming at it
+    [TestCase(true, 8_000L, false, false, 2_500, false, false, false, PlayerBotCasterAction.Nuke)]    // time for a nuke
+    [TestCase(true, 6_000L, false, false, 2_500, false, false, false, PlayerBotCasterAction.Control)]
+    [TestCase(true, 3_000L, false, false, 2_500, false, false, false, PlayerBotCasterAction.Control)]
+    [TestCase(true, 2_900L, false, false, 2_500, false, false, false, PlayerBotCasterAction.Control)] // not yet hit
+    [TestCase(true, 0L, false, false, 2_500, false, true, false, PlayerBotCasterAction.QcControl)]    // in melee
+    [TestCase(true, 0L, false, false, 2_500, true, false, true, PlayerBotCasterAction.Control)]       // quickcast on
+    [TestCase(true, 0L, false, false, 2_500, true, false, false, PlayerBotCasterAction.Nuke)]         // hit, no quickcast
+    [TestCase(true, 6_000L, false, false, 2_500, true, true, false, PlayerBotCasterAction.QcControl)] // an add hits it
+    [TestCase(true, 6_000L, false, false, 2_500, true, false, false, PlayerBotCasterAction.Nuke)]
+    [TestCase(true, 0L, false, false, 0, false, true, false, PlayerBotCasterAction.Nuke)]             // no control ready
+    [TestCase(true, 1_000L, true, true, 2_500, false, false, false, PlayerBotCasterAction.StepBack)]  // rooted, near
+    [TestCase(true, 5_000L, true, true, 2_500, false, false, false, PlayerBotCasterAction.Nuke)]      // rooted, at range
+    [TestCase(true, 0L, true, false, 2_500, false, false, false, PlayerBotCasterAction.Nuke)]         // stunned
+    public void A_caster_nukes_controls_the_monster_coming_at_it_and_steps_back_from_a_held_one(bool closing, long contactMs,
+        bool held, bool holdBreaksOnHit, int controlCastMs, bool interrupted, bool quickcastReady, bool quickcastOn,
+        PlayerBotCasterAction expected) =>
+        Assert.That(PlayerBotDriver.CasterAction(closing, contactMs, held, holdBreaksOnHit, controlCastMs, 3_000, interrupted,
+            quickcastReady, quickcastOn), Is.EqualTo(expected));
+
+    // The step back: a point at range from the target, straight away from it, else turned 30, 60 or 90 degrees either
+    // way, the first out of every potential add's reach (the adds rule's ring) so the step pulls nothing; none, null.
+    [Test]
+    public void A_caster_steps_back_away_from_its_target_clear_of_the_adds()
+    {
+        var none = new List<(string, Vector3, int)>();
+        Assert.That(PlayerBotDriver.KiteStep(new Vector3(300, 0, 0), Vector3.Zero, 1_420, none), Is.EqualTo(new Vector3(1_420, 0, 0)));
+        Assert.That(PlayerBotDriver.KiteStep(Vector3.Zero, Vector3.Zero, 1_420, none), Is.EqualTo(new Vector3(1_420, 0, 0)),
+            "on top of it: along +X");
+        var behind = new List<(string, Vector3, int)> { ("add", new(1_400, 0, 0), 300) };
+        Vector3? turned = PlayerBotDriver.KiteStep(new Vector3(300, 0, 0), Vector3.Zero, 1_420, behind);
+        Assert.That(turned, Is.Not.Null);
+        Assert.That(Vector3.Distance(turned!.Value, new Vector3(1_229.76f, 710f, 0)), Is.LessThan(0.1f), $"{turned}");
+        var round = new List<(string, Vector3, int)> { ("add", Vector3.Zero, 1_500) };
+        Assert.That(PlayerBotDriver.KiteStep(new Vector3(300, 0, 0), Vector3.Zero, 1_420, round), Is.Null);
+    }
+
     // --- the nuke per cast (#167 F9) ---
 
     // World-DB spells (Spell, LineXSpell): a Shaman's Subterranean bolts and its direct damage, a Wizard's Pyromancy.

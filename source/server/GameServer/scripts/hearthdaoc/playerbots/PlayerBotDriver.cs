@@ -22,6 +22,10 @@ public enum PlayerBotRole { Melee, Caster, Healer, Pet, Archer }
 /// <summary>The recovery's step after a release (PlayerBotDriver.AfterReleaseStep, #167 F4).</summary>
 public enum PlayerBotRecovery { Fight, StepOut, Replan, Wait, Done }
 
+/// <summary>A caster's step against its target (PlayerBotDriver.CasterAction, #167 F11); Nuke hands the think to
+/// CombatAction.</summary>
+public enum PlayerBotCasterAction { Nuke, Control, StepBack, QcControl }
+
 /// <summary>What the bot does in reach of its target this think (PlayerBotDriver.CombatAction, #167 F6).</summary>
 public enum PlayerBotCombatAction { Cast, WaitToCast, Quickcast, Swing }
 
@@ -119,6 +123,12 @@ public sealed class PlayerBotState
     public List<(Spell Spell, SpellLine Line)> Nukes;            // #167 F9, F1: its damage spells (DamageSpells) and the
     public List<(Spell Spell, SpellLine Line)> CombatPets;       //   pets a Theurgist casts at its target, at NukesLevel:
     public int NukesLevel = -1;                                  //   built once per level and after a training (KnowSpells)
+    public List<(Spell Spell, SpellLine Line)> Controls;         // #167 F11: a caster's roots, mezzes and stuns, then;
+    public long NextControlTick;                                 //   its next control cast, the tries on this target, and
+    public int ControlTries;                                     //   the point it steps back to (KiteStep)
+    public Vector3? KiteGoal;
+    public long NextKiteTick;
+    public int FightControls, FightKites;                        // #167 FIGHT ctl= and kites=
     public long PetOrderTick;                                    // #167 F10c: when its pet was sent at the target
     public long NextQuickcastTick;                               // Quickcast's next try (UseQuickcast)
     public bool EngagePet;                                       // PLAYER_BOT_FIGHT pet=, heals= and qc=: a living pet at
@@ -184,6 +194,11 @@ public static class PlayerBotDriver
     public static readonly int[] StepOutRings = [500, 900, 1_300, 1_700, 2_100, 2_500];   // #167 F4: a released bot's
     public const int SpotDirections = 12;                    //   candidate spots, every 30 degrees on each ring
     public const int StepOutPauseMilliseconds = 10_000;      // (inf.) after a blocked step out, it stands this long
+    public const int ContactDistance = 250;                   // #167 F11: a monster this near is in melee (inf.)
+    public const int ControlMarginMilliseconds = 500;         //   a cast's slack before contact (inf.)
+    public const int MaxControlTries = 3;                     //   control casts per target that held nothing (inf.)
+    public const int KitePauseMilliseconds = 5_000;           //   after a blocked step back (inf.)
+    public static readonly int[] KiteTurns = [0, 30, -30, 60, -60, 90, -90];   // degrees off straight away from the target
     public const int IncomingRadius = 2_000;                  // #167 F7: a monster this near with the bot as its target
     public static readonly int[] RestSpotRings = [300, 600, 900, 1_200];   // #167 F7: the rest spot's candidates (inf.)
     public static readonly long StuckMilliseconds = (long)AutonomousStuckWatchdog.StuckThreshold.TotalMilliseconds; // 15 min
@@ -450,6 +465,7 @@ public static class PlayerBotDriver
             }
             return;
         }
+        if (Kites(state, player, target, now)) return;      // #167 F11: a step back under way
         state.Mover.Stop(now);
         Face(player, target);                                 // in front: AttackComponent.cs:1065
         if (now >= state.NextLosTick)                         // TargetInView: AttackComponent.cs:1065, SpellHandler.cs:450
@@ -464,7 +480,9 @@ public static class PlayerBotDriver
             state.EngageHealth = player.HealthPercent;
             state.EngageMana = PowerPercent(player.MaxMana, player.ManaPercent);
             state.FightAdds = state.Swings = state.NotVisible = state.FightCasts = state.FightHeals = 0;
-            state.FightPetCasts = state.FightWaits = 0;
+            state.FightPetCasts = state.FightWaits = state.FightControls = state.FightKites = 0;
+            state.ControlTries = 0;                                                     // #167 F11
+            state.NextKiteTick = 0;
             state.EngageBuffs = SelfBuffsUp(player.effectListComponent.GetSpellEffects()     // FIGHT buffs= (#167 F8)
                 .Where(effect => effect.SpellHandler?.Spell != null).Select(effect => effect.SpellHandler.Spell.SpellType));
             state.EngagePet = player.ControlledBrain?.Body?.IsAlive == true;
@@ -486,6 +504,8 @@ public static class PlayerBotDriver
             state.Activity = PlayerBotActivity.Fighting;
             return;
         }
+        if (CasterStep(state, player, target, distance, now, due, interrupted, quickcastReady, quickcasting, quickcast))
+            return;                                                                     // #167 F11
         if (action is PlayerBotCombatAction.Cast &&
             player.IsWithinRadius(target, player.castingComponent.CalculateSpellRange(state.Spell)))
         {
@@ -791,6 +811,7 @@ public static class PlayerBotDriver
         player.StopCurrentSpellcast();
         state.Target = null;
         state.Engaged = false;
+        state.KiteGoal = null;                                                          // #167 F11
     }
 
     private static void RefreshTarget(PlayerBotState state, GamePlayer player, long now)
@@ -814,6 +835,7 @@ public static class PlayerBotDriver
         state.SpellBlockedUntil = 0;                                                       // a new target clears the watch
         state.CastTarget = null;
         state.NextSpellChoiceTick = 0;                                                     //   and chooses at once
+        state.KiteGoal = null;                                                             // #167 F11
         (state.Spell, state.SpellLine) = found == null ? (null, null) : Nuke(state, player, found);
     }
 
@@ -1063,6 +1085,77 @@ public static class PlayerBotDriver
     /// <summary>A monster coming at the bot (#167 F7): it may attack it (a live monster, IsAttackable), the bot is its
     /// target (a monster's aggro state sets it and its exit clears it, StandardMobState.cs:113) and it is within
     /// IncomingRadius. It counts as an attacker before its first hit: the bot stands, and engages it first.</summary>
+    /// <summary>A control spell (#167 F11): the GameBot's split (GameBot.cs:1957-1962: a mez, or a speed decrease of 99,
+    /// a root), and a stun; on an enemy, single-target (an area one would pull the adds round the target), with a
+    /// range.</summary>
+    public static bool IsControlSpell(Spell spell) =>
+        (spell.SpellType is eSpellType.Stun or eSpellType.Mesmerize ||
+         spell.SpellType is eSpellType.SpeedDecrease && spell.Value >= 99) &&
+        spell.Target is eSpellTarget.ENEMY && spell.Radius <= 0 && spell.Range > 0;
+
+    /// <summary>The control to cast (#167 F11): a stun first (damage doesn't break it, GameLiving.cs:1784-1803; the GameBot
+    /// keeps stuns on its own target too, BotBrain.cs:3887-3890), then a root, then a mez (any damage breaks both); of a
+    /// kind the target can take now (stunOk, rootOk, mezOk: its immunities, and a mez on a monster under 75% health is
+    /// resisted, CCSpellHandler.cs:173-177), the highest level ready.</summary>
+    public static (Spell, SpellLine) ChooseControl(IEnumerable<(Spell Spell, SpellLine Line)> controls, Func<Spell, bool> ready,
+        bool stunOk, bool rootOk, bool mezOk)
+    {
+        (Spell Spell, SpellLine Line) best = default;
+        int bestRank = int.MaxValue;
+        foreach ((Spell spell, SpellLine line) in controls)
+        {
+            int rank = spell.SpellType switch { eSpellType.Stun => 0, eSpellType.Mesmerize => 2, _ => 1 };
+            if (!(rank == 0 ? stunOk : rank == 1 ? rootOk : mezOk) || !ready(spell)) continue;
+            if (best.Spell == null || rank < bestRank || rank == bestRank && spell.Level > best.Spell.Level)
+                (best, bestRank) = ((spell, line), rank);
+        }
+        return best;
+    }
+
+    /// <summary>The milliseconds a monster needs to come within ContactDistance of the bot at its own speed (its base
+    /// speed: a rooted one's is 0); none at a speed of 0.</summary>
+    public static long TimeToContact(int distance, int speed) =>
+        speed <= 0 ? long.MaxValue : Math.Max(0, distance - ContactDistance) * 1000L / speed;
+
+    /// <summary>A caster's step against its target (#167 F11). A held one (rooted, mezzed or stunned) it nukes, unless the
+    /// hold breaks on the nuke's damage (a root or a mez, GameLiving.cs:1784-1803) and the monster would then reach it
+    /// before the next nuke ends: then it steps back to range first. One coming at it (closing) with a control ready
+    /// (controlCastMs, 0 for none): it nukes while there is time for a nuke and the control after it; then it controls
+    /// while the cast ends before contact (Quickcast first when hits interrupt it); in melee it quickcasts the control
+    /// (the GameBot's rule: a caster under melee controls, BotBrain.cs:3874-3901), or casts it before the first hit, or
+    /// with Quickcast on. Else Nuke: CombatAction's cast, wait, quickcast or swing.</summary>
+    public static PlayerBotCasterAction CasterAction(bool closing, long contactMs, bool held, bool holdBreaksOnHit,
+        int controlCastMs, int nukeCastMs, bool interrupted, bool quickcastReady, bool quickcastOn)
+    {
+        if (held)
+            return holdBreaksOnHit && contactMs < nukeCastMs + ControlMarginMilliseconds
+                ? PlayerBotCasterAction.StepBack : PlayerBotCasterAction.Nuke;
+        if (!closing || controlCastMs <= 0 || contactMs > nukeCastMs + controlCastMs + 2L * ControlMarginMilliseconds)
+            return PlayerBotCasterAction.Nuke;
+        if (contactMs > controlCastMs + ControlMarginMilliseconds)
+            return quickcastOn || !interrupted ? PlayerBotCasterAction.Control
+                : quickcastReady ? PlayerBotCasterAction.QcControl : PlayerBotCasterAction.Nuke;
+        return quickcastOn ? PlayerBotCasterAction.Control : quickcastReady ? PlayerBotCasterAction.QcControl
+            : !interrupted ? PlayerBotCasterAction.Control : PlayerBotCasterAction.Nuke;
+    }
+
+    /// <summary>Where a caster steps back to (#167 F11): range units from its target, straight away from it (along +X when
+    /// on top of it), else turned by KiteTurns, the first out of every potential add's reach (InAddReach) so the step
+    /// pulls nothing; none, null. The caller puts it on the navmesh.</summary>
+    public static Vector3? KiteStep<T>(Vector3 bot, Vector3 target, int range, IReadOnlyList<(T Npc, Vector3 At, int AggroRange)> adds)
+        where T : class
+    {
+        Vector2 away = new(bot.X - target.X, bot.Y - target.Y);
+        double heading = away.LengthSquared() < 1 ? 0 : Math.Atan2(away.Y, away.X);
+        foreach (int turn in KiteTurns)
+        {
+            double angle = heading + turn * Math.PI / 180;
+            Vector3 point = new(target.X + (float)(Math.Cos(angle) * range), target.Y + (float)(Math.Sin(angle) * range), bot.Z);
+            if (!InAddReach(point, adds)) return point;
+        }
+        return null;
+    }
+
     public static bool IsIncoming(bool targetsBot, bool attackable, int distance) =>
         targetsBot && attackable && distance <= IncomingRadius;
 
@@ -1669,14 +1762,18 @@ public static class PlayerBotDriver
     {
         Vector3 here = new(player.X, player.Y, player.Z);
         if (!InAddReach(here, adds)) return null;
-        IPathfindingMgr nav = PathfindingProvider.Instance;
-        Zone zone = player.CurrentZone;
-        IEnumerable<Vector3> points = RingPoints(here, rings, SpotDirections);
-        if (zone != null && nav.HasNavmesh(zone))
-            points = points.Select(p => nav.GetClosestPoint(zone, p, 64, 64, 256, nav.DefaultFilters))
-                .Where(p => p.HasValue).Select(p => p.Value);
+        IEnumerable<Vector3> points = RingPoints(here, rings, SpotDirections)
+            .Select(p => OnMesh(player, p)).Where(p => p.HasValue).Select(p => p.Value);
         Vector3 spot = RestSpot(here, points, adds);
         return spot == here ? null : spot;
+    }
+
+    // A point's nearest navmesh point, or none; with no navmesh in the zone, the point.
+    private static Vector3? OnMesh(GamePlayer player, Vector3 point)
+    {
+        IPathfindingMgr nav = PathfindingProvider.Instance;
+        Zone zone = player.CurrentZone;
+        return zone != null && nav.HasNavmesh(zone) ? nav.GetClosestPoint(zone, point, 64, 64, 256, nav.DefaultFilters) : point;
     }
 
     // #167 F7: before it sits, a bot in a potential add's reach walks to the nearest clear spot on the rest rings, once
@@ -1840,6 +1937,119 @@ public static class PlayerBotDriver
         state.Activity = PlayerBotActivity.Casting;
     }
 
+    // #167 F11: a caster's control and step back against a monster (CasterAction), between its casts; Nuke leaves the
+    // think to CombatAction. A control the target can take (its immunities: SpeedDecreaseSpellHandler.cs:25-33,
+    // CCSpellHandler.cs:155-177, :276-285), in range, ready and paid for, at a cast choice; MaxControlTries casts that held
+    // nothing and it stops trying on this target until one holds. Control casts do no damage: no cast watch. The time to
+    // contact is at the monster's base speed (a rooted one's speed is 0). True when it acted.
+    private static bool CasterStep(PlayerBotState state, GamePlayer player, GameLiving target, int distance, long now, bool due,
+        bool interrupted, bool quickcastReady, bool quickcasting, Ability quickcast)
+    {
+        if (RoleOf(player.CharacterClass.ID) != PlayerBotRole.Caster || target is not GameNPC npc) return false;
+        KnowSpells(state, player);
+        (bool held, bool breaksOnHit) = Hold(npc);
+        if (held) state.ControlTries = 0;
+        else if (state.Controls.Count == 0) return false;
+        bool closing = npc.TargetObject == player;
+        (Spell control, SpellLine line) = default((Spell, SpellLine));
+        if (!held && closing && due && now >= state.NextControlTick && state.ControlTries < MaxControlTries)
+            (control, line) = ChooseControl(state.Controls, spell => player.GetSkillDisabledDuration(spell) <= 0 &&
+                    HasPowerFor(player.MaxMana, player.Mana, spell.Power) &&
+                    player.IsWithinRadius(npc, player.castingComponent.CalculateSpellRange(spell)),
+                StunOk(npc), RootOk(npc), MezOk(npc));
+        PlayerBotCasterAction step = CasterAction(closing, TimeToContact(distance, npc.MaxSpeedBase), held,
+            breaksOnHit, control?.CastTime ?? 0, state.Spell?.CastTime ?? 3_000, interrupted, quickcastReady, quickcasting);
+        switch (step)                                                                   // (inf.) 3 s: the casters' nukes
+        {                                                                               //   cast in 2.5-3 s
+            case PlayerBotCasterAction.StepBack:
+                if (now < state.NextKiteTick || KitePoint(state, player, npc) is not Vector3 goal) return false;
+                state.KiteGoal = goal;                                                  // none clear: it nukes from here
+                state.FightKites++;
+                return Kites(state, player, npc, now);
+            case PlayerBotCasterAction.Control:
+                player.attackComponent.StopAttack();
+                state.ControlTries++;
+                state.NextControlTick = now + control.CastTime + ControlMarginMilliseconds;
+                if (!player.CastSpell(control, line)) return false;
+                state.FightControls++;
+                state.FightQuickcast |= quickcasting;
+                state.NextCombatChoiceTick = now + Math.Max(900, control.CastTime + 250);
+                state.Activity = PlayerBotActivity.Casting;
+                return true;
+            case PlayerBotCasterAction.QcControl:
+                UseQuickcast(state, player, now, quickcast);                            // then the next think casts it
+                return true;
+            default:
+                return false;
+        }
+    }
+
+    // #167 F11: a step back under way (CasterStep): on to its point while the target stays held; a blocked one stands the
+    // bot KitePauseMilliseconds (it nukes from where it is). True while it walks.
+    private static bool Kites(PlayerBotState state, GamePlayer player, GameLiving target, long now)
+    {
+        if (state.KiteGoal is not Vector3 goal) return false;
+        if (!target.IsAlive || !Hold(target).Held)
+        {
+            state.KiteGoal = null;
+            return false;
+        }
+        player.attackComponent.StopAttack();
+        state.Activity = PlayerBotActivity.Fighting;
+        PlayerBotStepResult step = state.Mover.StepToward(goal, 20, now);
+        if (step is PlayerBotStepResult.Blocked)
+        {
+            ReportBlocked(state, player, "kite", goal, now);
+            state.NextKiteTick = now + KitePauseMilliseconds;
+        }
+        if (step is not (PlayerBotStepResult.Blocked or PlayerBotStepResult.Arrived)) return true;
+        state.KiteGoal = null;
+        return false;
+    }
+
+    // The step back's point (KiteStep) on the navmesh, short of the nuke's stop distance (SpellStopDistance) so Engage
+    // doesn't walk it back in; the adds are the last search's (FindWithin), where they are now, the target not one.
+    private static Vector3? KitePoint(PlayerBotState state, GamePlayer player, GameNPC target)
+    {
+        int range = SpellStopDistance(state.Spell != null ? player.castingComponent.CalculateSpellRange(state.Spell) : 1_500) - 50;
+        List<(GameNPC Npc, Vector3 At, int AggroRange)> adds = _reach ??= new();
+        adds.Clear();
+        foreach (GameNPC npc in state.SearchAdds)
+            if (npc != target && AddReach(player, npc) is > 0 and int reach)
+                adds.Add((npc, new(npc.X, npc.Y, npc.Z), reach));
+        Vector3? point = KiteStep(new Vector3(player.X, player.Y, player.Z), new Vector3(target.X, target.Y, target.Z), range, adds);
+        Vector3? onMesh = point is Vector3 p ? OnMesh(player, p) : null;
+        if (onMesh is Vector3 m && InAddReach(m, adds)) onMesh = null;
+        adds.Clear();
+        return onMesh;
+    }
+
+    // What holds a monster (#167 F11): a stun, which damage doesn't break, or a mez or a root (a speed decrease of 99),
+    // which any damage breaks (GameLiving.cs:1784-1803).
+    private static (bool Held, bool BreaksOnHit) Hold(GameLiving target) =>
+        target.IsStunned ? (true, false) : target.IsMezzed || Rooted(target) ? (true, true) : (false, false);
+
+    private static bool Rooted(GameLiving target) =>
+        EffectListService.GetEffectOnTarget(target, eEffect.MovementSpeedDebuff) is ECSGameSpellEffect effect &&
+        effect.SpellHandler?.Spell is Spell spell && spell.SpellType is eSpellType.SpeedDecrease && spell.Value >= 99;
+
+    // The server's immunities to each kind (SpeedDecreaseSpellHandler.cs:25-33; CCSpellHandler.cs:155-177 for a mez, with
+    // its resist under 75% health; :276-285 for a stun), an NPC's diminishing ones counted as immune (inf.).
+    private static bool StunOk(GameLiving target) =>
+        !target.HasAbility(Abilities.CCImmunity) && !target.HasAbility(Abilities.StunImmunity) &&
+        !target.effectListComponent.ContainsEffectForEffectType(eEffect.StunImmunity) &&
+        !target.effectListComponent.ContainsEffectForEffectType(eEffect.NPCStunImmunity);
+
+    private static bool RootOk(GameLiving target) =>
+        !target.HasAbility(Abilities.CCImmunity) && !target.HasAbility(Abilities.RootImmunity) &&
+        !target.effectListComponent.ContainsEffectForEffectType(eEffect.SnareImmunity) &&
+        !target.effectListComponent.ContainsEffectForEffectType(eEffect.SpeedOfSound);
+
+    private static bool MezOk(GameLiving target) =>
+        !target.HasAbility(Abilities.CCImmunity) && !target.HasAbility(Abilities.MezzImmunity) &&
+        !target.effectListComponent.ContainsEffectForEffectType(eEffect.MezImmunity) &&
+        !target.effectListComponent.ContainsEffectForEffectType(eEffect.NPCMezImmunity) && target.HealthPercent >= 75;
+
     // A healer's heal on itself (DEATHS.md A6), before a rest as a GameBot's (AWBC:2725): below 60% health whatever its
     // power; out of a fight (MayRest's view) from 85% with power to spare, then it sits for power (#167 F2). The gate
     // runs first at no cost, then with the heal's.
@@ -1930,14 +2140,15 @@ public static class PlayerBotDriver
         return WantsCombatPet(pet != null, inRange, player.IsCasting, now, state.NextCombatPetTick) ? (pet, line) : default;
     }
 
-    // #167 F9, F1: the damage spells and the pet summons a Theurgist casts at its target, from one walk of the usable
-    // spells per level and after a training (ObserveXp clears NukesLevel).
+    // #167 F9, F1, F11: the damage spells, the pet summons a Theurgist casts at its target and the control spells, from one
+    // walk of the usable spells per level and after a training (ObserveXp clears NukesLevel).
     private static void KnowSpells(PlayerBotState state, GamePlayer player)
     {
         if (state.NukesLevel == player.Level) return;
         List<(Spell Spell, SpellLine Line)> usable = UsableSpells(player).ToList();
         state.Nukes = DamageSpells(usable, player.Level);
         state.CombatPets = usable.FindAll(pair => pair.Spell.SpellType is eSpellType.SummonTheurgistPet);
+        state.Controls = usable.FindAll(pair => IsControlSpell(pair.Spell) && pair.Spell.Level <= player.Level);   // #167 F11
         state.NukesLevel = player.Level;
     }
 
