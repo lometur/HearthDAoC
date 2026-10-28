@@ -89,6 +89,8 @@ Each bot thinks every 250 ms, a thin copy of the `/bot` pilot's think:
   its third death with no XP in between it waits 30-120 s out there, as a GameBot does, and it waits out the
   resurrection illness there too. It pulls nothing until then, but fights back. No hold for a camp lasts over 60 s:
   then it hunts where it is.
+- At login it also first steps out of the reach of every monster round it that would aggro, then hunts: no wait and
+  no new camp.
 - It walks on the navmesh. A bot made at a level from a spots line also trains on each level-up.
 - In a run of 3 bots or fewer, `hdbot-alb-01` also does quest 20206 (Immediate Resolution) and its class promotion.
 

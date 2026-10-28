@@ -334,16 +334,7 @@ public static class PlayerBotDriver
             if (Log.IsInfoEnabled) Log.Info(DeathLine(held.Head, held.Detail, state.Killer, held.Target));
         }
         if (!player.IsAlive) { HandleDeath(state, player, now); return; }               // 6
-        if (state.DeathRecorded || state.AliveSince == 0)                                //    a new life
-        {
-            if (state.DeathRecorded) StartRecovery(state, now);                          //    after a release (#167 F4)
-            state.AliveSince = now;
-            state.LifeKills = state.LifeRests = 0;
-            state.Killer = null;
-            state.KillerAvoided = false;
-            state.RecoverBeforePull = false;                                             //    the release restores it all
-            state.NextSelfBuffTick = 0;                                                  //    and ends its buffs: scan now
-        }
+        StartLife(state, now);                                                           //    a new life
         if (state.SitSince != 0 && !player.IsSitting)                                    //    stood by the server (a hit)
             EndRest(state, player, now, Attacker(state, player, now, anyHitter: true) != null ? "hit" : "other");
         state.DeathRecorded = false;
@@ -377,7 +368,7 @@ public static class PlayerBotDriver
             }
         }
         TryLoot(state, player, now);                                                     // 11. APP:403-414, before a sit
-        if (WaitsForSelfCast(state, player) || StepsOutOfReach(state, player, now))      // 11a. #167 F4: after a release
+        if (WaitsForSelfCast(state, player) || StepsOutOfReach(state, player, now))      // 11a. #167 F4, C6: a release, a login
             return;
         if (SelfHeal(state, player, now) || SummonPet(state, player, now) || SelfBuff(state, player, now))
             return;                                                                      // 11b. DEATHS.md A6, A5, #167 F8: before a rest
@@ -418,6 +409,29 @@ public static class PlayerBotDriver
         Engage(state, player, now);                                                      // 16
         if (state.Engaged) state.RoamingSince = 0;   // reached: a target blocked on the way leaves the idle clock running
     }
+
+    /// <summary>Step 6, a new life (after a release, or the login's first): the recovery LifeStart gives (StartRecovery),
+    /// this life's counts afresh. The release restores it all and ends its buffs: the self-buffs scan at once.</summary>
+    public static void StartLife(PlayerBotState state, long now)
+    {
+        if (!state.DeathRecorded && state.AliveSince != 0) return;
+        (bool stepOut, bool backOff) = LifeStart(state.DeathRecorded, state.AliveSince == 0);
+        if (stepOut) StartRecovery(state, now, backOff);                                // #167 F4, C6
+        state.AliveSince = now;
+        state.LifeKills = state.LifeRests = 0;
+        state.Killer = null;
+        state.KillerAvoided = false;
+        state.RecoverBeforePull = false;
+        state.NextSelfBuffTick = 0;
+    }
+
+    /// <summary>The recovery a new life starts (#167 F4, C6): (stepOut, backOff). After a release (afterDeath), all of it:
+    /// the step out of reach, the back-off and the replan owed (AfterReleaseStep). The login's first life (firstLife) only
+    /// the step out: the test spots are camp centres (5 or more monsters within 1,400), and 73 of st-deathsB's 370 logins
+    /// died in their first fight, 37 of the 42 login-life deaths with adds within 60 s. No back-off (no death) and no
+    /// replan owed. Live, it matters only for a logout inside a camp.</summary>
+    public static (bool StepOut, bool BackOff) LifeStart(bool afterDeath, bool firstLife) =>
+        (afterDeath || firstLife, afterDeath);
 
     /// <summary>Step 4: a bot in another region (a release to a bind there, a re-entry) starts its hunt afresh: no walk,
     /// target, idle or capped clock, fallback cap or stale camp's names. Its failed camps stay (#167 F4): each has its
@@ -842,8 +856,8 @@ public static class PlayerBotDriver
         if (state.Target != null && (fighting || !searchDue)) return;  // keep a target while fighting it
         if (searchDue) state.NextTargetRefreshTick = now + TargetRefreshMilliseconds;
         // Self-defence every think, then a monster coming at it (#167 F7: its scan every 2 s); the rings only every 2 s,
-        // so an idle bot doesn't scan 5,000 units 4 times a second; none during the recovery after a release (#167 F4): it
-        // pulls nothing until that is over
+        // so an idle bot doesn't scan 5,000 units 4 times a second; none during the recovery after a release (#167 F4) or
+        // a login's step out (C6): it pulls nothing until that is over
         GameNPC found = Attacker(state, player, now) ?? Incoming(state, player, now) ??     // self-defence first
             (searchDue && !state.AfterRelease                                              // AWBC:3148
                 ? FindWithin(state, player, ImmediateSearchRadius, now) ?? FindWithin(state, player, SearchRadius, now)
@@ -1785,13 +1799,18 @@ public static class PlayerBotDriver
     }
 
     // #167 F4: a release starts the recovery (AfterReleaseStep): the back-off from now (the GameBot's, from its replan
-    // after the release, AWBC:3778-3786), and the hold for the relocation owed.
-    private static void StartRecovery(PlayerBotState state, long now)
+    // after the release, AWBC:3778-3786), and the hold for the relocation owed. #167 C6: a login only its step out (no
+    // backOff): no release time (DEATH again= and sinceRelease= stay the release's), no back-off, no replan owed.
+    private static void StartRecovery(PlayerBotState state, long now, bool backOff)
     {
-        state.ReleasedAt = now;
+        if (backOff)
+        {
+            state.ReleasedAt = now;
+            state.RecoverUntil = now + AutonomousDeathRecoveryPolicy.RetryDelayMilliseconds(state.NoXpDeaths);
+            state.ReplanSince = state.ReplanAfterDeath ? now : 0;
+        }
+        else state.RecoverUntil = now;
         state.AfterRelease = true;
-        state.RecoverUntil = now + AutonomousDeathRecoveryPolicy.RetryDelayMilliseconds(state.NoXpDeaths);
-        state.ReplanSince = state.ReplanAfterDeath ? now : 0;
         state.ClearSpot = null;
         state.NextReachTick = state.StepOutBlockedUntil = 0;
     }
@@ -1806,11 +1825,11 @@ public static class PlayerBotDriver
         player.effectListComponent.ContainsEffectForEffectType(eEffect.ResurrectionIllness) ||
         player.effectListComponent.ContainsEffectForEffectType(eEffect.RvrResurrectionIllness);
 
-    // #167 F4: the recovery's step out of reach (AfterReleaseStep), after a release: its own ring test every 2 s, over the
-    // monsters round it that would aggro (AddReach), and a walk to the nearest clear spot on the navmesh, unless it sits
-    // (a rest after it fought back). A blocked walk stands it for StepOutPauseMilliseconds. Its other steps run in Think:
-    // the relocation owed and the holds at step 15, no search at step 14 while the recovery lasts; when it is over, the
-    // idle clock starts afresh. True while it walks.
+    // #167 F4: the recovery's step out of reach (AfterReleaseStep), after a release and at login (C6): its own ring
+    // test every 2 s, over the monsters round it that would aggro (AddReach), and a walk to the nearest clear spot on
+    // the navmesh, unless it sits (a rest after it fought back). A blocked walk stands it for StepOutPauseMilliseconds.
+    // Its other steps run in Think: the relocation owed and the holds at step 15, no search at step 14 while the
+    // recovery lasts; when it is over, the idle clock starts afresh. True while it walks.
     private static bool StepsOutOfReach(PlayerBotState state, GamePlayer player, long now)
     {
         if (!state.AfterRelease) return false;

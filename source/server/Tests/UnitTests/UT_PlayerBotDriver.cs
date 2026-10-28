@@ -475,6 +475,34 @@ public sealed class UT_PlayerBotDriver
         bool replanOwed, bool backingOff, bool ill, PlayerBotRecovery step) =>
         Assert.That(PlayerBotDriver.AfterReleaseStep(attacked, stepsOut, replanOwed, backingOff, ill), Is.EqualTo(step));
 
+    // #167 C6: a login's first life steps out of reach too (73 of st-deathsB's 370 logins died in their first fight, 37
+    // of the 42 login-life deaths with adds within 60 s of the login: the test spots are camp centres), with no back-off
+    // and no replan; a life after a release does all three (#167 F4); a later think starts none.
+    [TestCase(true, false, true, true)] [TestCase(false, true, true, false)] [TestCase(false, false, false, false)]
+    [TestCase(true, true, true, true)]
+    public void A_login_steps_out_of_reach_as_a_release_does_with_no_back_off(bool afterDeath, bool firstLife,
+        bool stepOut, bool backOff) =>
+        Assert.That(PlayerBotDriver.LifeStart(afterDeath, firstLife), Is.EqualTo((stepOut, backOff)));
+
+    // Its wiring: the login's life starts the step out only (no release time, so DEATH again= and sinceRelease= stay the
+    // release's); the release's the back-off and the replan's hold too.
+    [Test]
+    public void A_new_life_starts_the_step_out_at_login_and_the_whole_recovery_after_a_release()
+    {
+        var login = new PlayerBotState(Player(null));
+        PlayerBotDriver.StartLife(login, 5_000);
+        Assert.That((login.AfterRelease, login.RecoverUntil, login.ReleasedAt, login.ReplanSince, login.AliveSince),
+            Is.EqualTo((true, 5_000L, 0L, 0L, 5_000L)));
+        var released = new PlayerBotState(Player(null)) { AliveSince = 1_000, DeathRecorded = true, ReplanAfterDeath = true,
+            NoXpDeaths = 3 };
+        PlayerBotDriver.StartLife(released, 9_000);
+        Assert.That((released.AfterRelease, released.RecoverUntil, released.ReleasedAt, released.ReplanSince,
+            released.AliveSince), Is.EqualTo((true, 39_000L, 9_000L, 9_000L, 9_000L)), "the third death with no XP: 30 s");
+        var later = new PlayerBotState(Player(null)) { AliveSince = 1_000 };
+        PlayerBotDriver.StartLife(later, 9_000);
+        Assert.That((later.AfterRelease, later.AliveSince), Is.EqualTo((false, 1_000L)), "no new life");
+    }
+
     // --- monsters coming, and the rest out of their reach (#167 F7) ---
 
     // A live monster the bot may attack, within IncomingRadius (2,000) and with the bot as its target, is coming at it:
