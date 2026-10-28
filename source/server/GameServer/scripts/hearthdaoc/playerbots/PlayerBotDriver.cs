@@ -1499,9 +1499,10 @@ public static class PlayerBotDriver
     /// <summary>The damage spells a bot casts (#167 F9): APP:667-692's filter without the quickbar, the Animist policy and
     /// the range filter (checked at cast time), less the ranks a GameBot never casts (BotBrain.IsOutclassedDamageSpell,
     /// BotBrain.cs:3413): a lower rank of a kind it knows higher (Fungal Pin once it has Fungal Thistle), or one under half
-    /// the level of its best.</summary>
+    /// the level of its best. payload resolves a bomber's payload (NoDamageBomber); it has no default (the review of
+    /// 451121c: a caller that left it out brought back the root bomber as a nuke, and no test failed).</summary>
     public static List<(Spell Spell, SpellLine Line)> DamageSpells(IEnumerable<(Spell Spell, SpellLine Line)> usable, int level,
-        Func<int, Spell> payload = null)
+        Func<int, Spell> payload)
     {
         List<(Spell Spell, SpellLine Line)> all = usable.Where(pair => !NoDamageBomber(pair.Spell, payload)).ToList(), nukes = new();
         List<Spell> known = all.ConvertAll(pair => pair.Spell);
@@ -1515,9 +1516,9 @@ public static class PlayerBotDriver
     // #167 F10b: an Animist's bomber does only its payload (BomberBrain.cs:32-34, its SubSpellID); the bomber's own
     // Damage (50 on every one) is no damage. One whose payload does none (Spreading Vines: a root) is no nuke, nor does it
     // outrank a damage bomber (BotBrain.IsOutclassedDamageSpell compares spell types). Production resolves payloads with
-    // SkillBase.GetSpellByID; with no resolver, as before.
+    // SkillBase.GetSpellByID; a payload it cannot resolve is none.
     private static bool NoDamageBomber(Spell spell, Func<int, Spell> payload) =>
-        payload != null && spell.SpellType is eSpellType.Bomber && !(payload(spell.SubSpellID) is Spell sub && sub.Damage > 0);
+        spell.SpellType is eSpellType.Bomber && !(payload?.Invoke(spell.SubSpellID) is Spell sub && sub.Damage > 0);
 
     /// <summary>Where an Animist stands to pull with its main turret planted (#167 F10b): a turret is planted at the bot's
     /// feet (SummonPet) and reaches turretReach (its TurretSpell, 1,000; 1,350 for a Verdant taunt), and the monster the

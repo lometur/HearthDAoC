@@ -2094,9 +2094,9 @@ public sealed class UT_PlayerBotDriver
     {
         List<(Spell, SpellLine)> usable = [(FungalPin, Subterranean), (FungalThistle, Subterranean),
             (FungalOoze, Subterranean), (Damage("DirectDamage", 30, 90), Subterranean)];
-        Assert.That(PlayerBotDriver.DamageSpells(usable, 20).Select(pair => pair.Spell.Name),
+        Assert.That(PlayerBotDriver.DamageSpells(usable, 20, _ => null).Select(pair => pair.Spell.Name),
             Is.EqualTo(new[] { "Fungal Thistle", "Fungal Ooze" }));                    // Pin: the Thistle outranks it; 30: above
-        Assert.That(PlayerBotDriver.DamageSpells(usable, 19).Select(pair => pair.Spell.Name),
+        Assert.That(PlayerBotDriver.DamageSpells(usable, 19, _ => null).Select(pair => pair.Spell.Name),
             Is.EqualTo(new[] { "Fungal Pin" }));
     }
 
@@ -2129,6 +2129,8 @@ public sealed class UT_PlayerBotDriver
         List<(Spell Spell, SpellLine Line)> nukes = PlayerBotDriver.DamageSpells(usable, 9, id => BomberPayloads.GetValueOrDefault(id));
         Assert.That(nukes.Select(pair => pair.Spell.Name), Is.EqualTo(new[] { "Wisp Spark", "Survival of the Fittest" }));
         Assert.That(PlayerBotDriver.ChooseNuke(nukes, _ => true, false).Item1, Is.SameAs(SurvivalOfTheFittest));
+        Assert.That(PlayerBotDriver.DamageSpells(usable, 9, _ => null).Select(pair => pair.Spell.Name),
+            Is.EqualTo(new[] { "Survival of the Fittest" }), "a payload it cannot resolve is none");
     }
 
     // Where an Animist stands to pull, with its turret planted (reach 1,000) and a spell stop of 1,420: by its turret
