@@ -15,8 +15,8 @@ using NUnit.Framework;
 namespace DOL.GS.Tests;
 
 // HearthDAoC player bots (#137 level-matched run, levelmatch/DESIGN.md): a bot made at a GameBot's level, class and race. The
-// allocator against GameBot.SpendSpecPoints' numbers (with a player's half levels from 41 on, #167 F13) and
-// VerifySpecPoints' budget, the stats against CharacterStatValidator, gender and race, the specs string and its keys,
+// allocator against GameBot.SpendSpecPoints' numbers (with a player's half levels from 41 on, #167 F13), the kit's spare
+// points (KitSpecs) and VerifySpecPoints' budget, the stats against CharacterStatValidator, gender and race, the specs string and its keys,
 // the retrain, the skill counts, the creation row, the gear rules and the KIT line. No server and no database (an empty one
 // for GameObject's type initializer, as UT_PlayerBotDriver.cs:26-38, and SkillBase's property names,
 // PetTestLanguageScope): OpenSpecs (SkillBase's career), EnsureCharacter's database steps and the CharacterCreated
@@ -105,24 +105,46 @@ public sealed class UT_PlayerBotKit
         Assert.That(specs.Values.Sum(PlayerBotKit.Cost) + left, Is.EqualTo(PlayerBotKit.Budget(level, 20)));   // never respecced
     }
 
+    private static HashSet<string> Open(PlayerBotKitPlan kit) =>
+        kit.Lines.Where(l => l.Spec != null).Select(l => l.Spec).ToHashSet(StringComparer.OrdinalIgnoreCase);
+
+    private static int Multiplier(eCharacterClass cls) => ScriptMgr.FindCharacterClass((int)cls).SpecPointsMultiplier;
+
     // #167 F13: a level-45 kit spends its whole budget, half levels too (they were left unspent: Allocate passed
-    // botCreation false), as far as its plan lets it: what is left buys no rank on a line that may still rise.
+    // botCreation false): what is left buys no rank on any plan line below its cap and the level, one a GameBot leaves at
+    // 1 until 50 (ratio 0) too, but for what the plan's other lines take at a later level below 50 (KitSpecs' spare:
+    // the least Allocate leaves at 45 to 49). Allocate alone left a Warrior's two-hander plan 196 points (Axe and Parry
+    // at 45, Thrown Weapons at ratio 0) and every Bonedancer its half levels' 104 (its secondary lines at ratio 0). The
+    // plan's other lines keep Allocate's levels.
     [Test]
     public void A_level_45_kit_spends_its_full_budget()
     {
         foreach (eCharacterClass cls in GameBotClasses)
         {
-            int multiplier = ScriptMgr.FindCharacterClass((int)cls).SpecPointsMultiplier;
+            int multiplier = Multiplier(cls);
             for (long seed = 1; seed <= 40; seed++)
             {
                 PlayerBotKitPlan kit = PlayerBotKit.Plan(new PlayerBotBuild(45, cls, eRace.Briton), seed);
-                HashSet<string> open = kit.Lines.Where(l => l.Spec != null).Select(l => l.Spec).ToHashSet(StringComparer.OrdinalIgnoreCase);
-                Dictionary<string, int> specs = PlayerBotKit.Allocate(kit.Lines, open, 45, multiplier, out int left);
+                HashSet<string> open = Open(kit);
+                Dictionary<string, int> specs = PlayerBotKit.KitSpecs(kit.Lines, open, 45, multiplier, out int left);
+                Dictionary<string, int> allocated = PlayerBotKit.Allocate(kit.Lines, open, 45, multiplier, out int allocatedLeft);
+                int held = Enumerable.Range(45, 5).Min(level =>
+                {
+                    PlayerBotKit.Allocate(kit.Lines, open, level, multiplier, out int unspent);
+                    return unspent;
+                });
+                int spare = held - (allocatedLeft - left);
                 string at = $"{cls} {kit.Spec.SpecType} seed {seed}";
                 Assert.That(specs.Values.Sum(PlayerBotKit.Cost) + left, Is.EqualTo(PlayerBotKit.Budget(45, multiplier)), at);
-                foreach (BotSpecLine line in kit.Lines.Where(l => l.Spec != null && l.levelRatio > 0))
-                    Assert.That(specs[line.Spec] >= Math.Min(45, line.SpecCap) || left < specs[line.Spec] + 1, Is.True,
-                        $"{at}: {line.Spec} at {specs[line.Spec]}, {left} left");
+                foreach (BotSpecLine line in kit.Lines.Where(l => l.Spec != null))
+                    Assert.That(specs[line.Spec] >= Math.Min(45, line.SpecCap) ||
+                        (line.levelRatio > 0 ? left : spare) < specs[line.Spec] + 1, Is.True,
+                        $"{at}: {line.Spec} (ratio {line.levelRatio}) at {specs[line.Spec]}, {left} left, {spare} spare");
+                foreach (string spec in kit.Lines.Where(l => l.Spec != null).GroupBy(l => l.Spec)
+                             .Where(g => g.All(l => l.levelRatio > 0)).Select(g => g.Key))
+                    Assert.That(specs[spec], Is.EqualTo(allocated[spec]), $"{at}: {spec}");
+                if (cls is eCharacterClass.Bonedancer)
+                    Assert.That((allocatedLeft, left), Is.EqualTo((104, 0)), $"{at}: the half levels' points, spent");
             }
         }
         Dictionary<string, int> armsman = Run(Armsman, 45, 20, out int unspent);
@@ -130,20 +152,74 @@ public sealed class UT_PlayerBotKit
         Assert.That(unspent, Is.Zero);
     }
 
+    // The Warrior's two-hander plan (Warrior.cs:47-50: Axe 50 at 0.8, Parry 49 at 0.4, Thrown Weapons 21 at 0): at 45
+    // Allocate leaves 196 points, which raise Thrown Weapons to 19 (Cost 189); at 30 its 16 raise it to 5. An Armsman
+    // two-hander (Armsman.cs:73-81, Crossbows 3 at 0) has 18 left at 45, but its other lines take them all by 48
+    // (Allocate leaves 0 there): spent on Crossbows, a main line would be a rank short at 48 (TrainTo never lowers
+    // one), so they wait.
+    [Test]
+    public void A_kit_spends_what_its_plan_leaves_on_the_lines_a_gamebot_raises_at_50()
+    {
+        BotSpecLine[] warrior = [new(Specs.Axe, 50, 0.8f), new(Specs.Parry, 49, 0.4f), new(Specs.Thrown_Weapons, 21, 0f)];
+        HashSet<string> open = warrior.Select(l => l.Spec).ToHashSet(StringComparer.OrdinalIgnoreCase);
+        Dictionary<string, int> allocated = PlayerBotKit.Allocate(warrior, open, 45, 20, out int was);
+        Dictionary<string, int> kit = PlayerBotKit.KitSpecs(warrior, open, 45, 20, out int left);
+        Assert.That((allocated[Specs.Axe], allocated[Specs.Parry], allocated[Specs.Thrown_Weapons], was), Is.EqualTo((45, 45, 1, 196)));
+        Assert.That((kit[Specs.Axe], kit[Specs.Parry], kit[Specs.Thrown_Weapons], left), Is.EqualTo((45, 45, 19, 7)));
+        Dictionary<string, int> at30 = PlayerBotKit.KitSpecs(warrior, open, 30, 20, out int left30);
+        Assert.That((at30[Specs.Axe], at30[Specs.Parry], at30[Specs.Thrown_Weapons], left30), Is.EqualTo((30, 29, 5, 2)));
+
+        BotSpecLine[] armsman = [new(Specs.Two_Handed, 50, 1f), new(Specs.Slash, 39, 0.6f), new(Specs.Shields, 42, 0.5f),
+            new(Specs.Parry, 18, 0.1f), new(Specs.Crossbow, 3, 0f)];
+        open = armsman.Select(l => l.Spec).ToHashSet(StringComparer.OrdinalIgnoreCase);
+        Assert.That((PlayerBotKit.KitSpecs(armsman, open, 45, 20, out left)[Specs.Crossbow], left), Is.EqualTo((1, 18)));
+        PlayerBotKit.Allocate(armsman, open, 48, 20, out int at48);
+        Assert.That(at48, Is.Zero);
+    }
+
+    // TrainTo raises the specs toward KitSpecs' and never lowers one (Retrain): a kit's specs never fall from one level
+    // to the next, so the leftover spent on a ratio-0 line never holds back a main line later.
+    [Test]
+    public void A_kits_specs_never_fall_from_one_level_to_the_next()
+    {
+        foreach (eCharacterClass cls in GameBotClasses)
+            for (long seed = 1; seed <= 8; seed++)
+            {
+                PlayerBotKitPlan kit = PlayerBotKit.Plan(new PlayerBotBuild(45, cls, eRace.Briton), seed);
+                Dictionary<string, int> before = PlayerBotKit.KitSpecs(kit.Lines, Open(kit), 2, Multiplier(cls), out _);
+                for (int level = 3; level <= 49; level++)
+                {
+                    Dictionary<string, int> now = PlayerBotKit.KitSpecs(kit.Lines, Open(kit), level, Multiplier(cls), out _);
+                    foreach ((string spec, int was) in before)
+                        Assert.That(now[spec], Is.GreaterThanOrEqualTo(was), $"{cls} {kit.Spec.SpecType} seed {seed} {spec} at {level}");
+                    before = now;
+                }
+            }
+    }
+
     // A Suppression Spiritmaster (Spiritmaster.cs:41-44, cases 4 and 5) has its main line, Suppression to 49, at ratio 0,
     // so it stayed at 1 until 50 and a level-35 bot left 377 points unspent. The player-bot plan gives it 1.0, as the
-    // plan's case 6 has (#167 F13); the GameBot's plan is unchanged.
+    // plan's case 6 has (#167 F13); the GameBot's plan is unchanged. The kits are the real plans (PlayerBotKit.Plan; the
+    // case is a random roll within the choice, Spiritmaster.cs:13).
     [Test]
     public void A_suppression_spiritmasters_main_line_rises_from_the_start()
     {
-        BotSpecLine[] plan = [new(Specs.Darkness, 5, 0f), new(Specs.Suppression, 49, 0f), new(Specs.Summoning, 22, 0.1f)];
-        BotSpecLine[] mine = PlayerBotKit.PlayerLines(eSpecType.SuppSpirit, plan).ToArray();
-        Assert.That(mine.Single(l => l.Spec == Specs.Suppression).levelRatio, Is.EqualTo(1f));
-        HashSet<string> open = plan.Select(l => l.Spec).ToHashSet(StringComparer.OrdinalIgnoreCase);
-        Dictionary<string, int> at35 = PlayerBotKit.Allocate(mine, open, 35, 10, out int left);
-        Assert.That((at35[Specs.Suppression], left), Is.EqualTo((35, 0)));
-        Assert.That(PlayerBotKit.Allocate(plan, open, 35, 10, out int was)[Specs.Suppression], Is.EqualTo(1));
-        Assert.That(was, Is.EqualTo(377));
+        int multiplier = Multiplier(eCharacterClass.Spiritmaster), seen = 0;
+        for (long seed = 1; seed <= 400; seed++)
+        {
+            PlayerBotKitPlan kit = PlayerBotKit.Plan(new PlayerBotBuild(35, eCharacterClass.Spiritmaster, eRace.Norseman), seed);
+            if (kit.Choice is not eSpecType.SuppSpirit ||
+                kit.Spec.SpecLines.Single(l => l.Spec == Specs.Suppression).levelRatio > 0)
+                continue;                                                               // cases 6 and 7 rise anyway
+            seen++;
+            Assert.That(kit.Lines.Single(l => l.Spec == Specs.Suppression).levelRatio, Is.EqualTo(1f), $"seed {seed}");
+            Dictionary<string, int> at35 = PlayerBotKit.KitSpecs(kit.Lines, Open(kit), 35, multiplier, out int left);
+            Assert.That((at35[Specs.Suppression], left), Is.EqualTo((35, 0)), $"seed {seed}");
+            Assert.That(PlayerBotKit.Allocate(kit.Spec.SpecLines, Open(kit), 35, multiplier, out int was)[Specs.Suppression],
+                Is.EqualTo(1), "the GameBot's plan");
+            Assert.That(was, Is.EqualTo(377));
+        }
+        Assert.That(seen, Is.GreaterThan(0), "a Suppression Spiritmaster of case 4 or 5");
         BotSpecLine[] dark = [new(Specs.Darkness, 47, 1f), new(Specs.Suppression, 5, 0f), new(Specs.Summoning, 26, 0.1f)];
         Assert.That(PlayerBotKit.PlayerLines(eSpecType.DarkSpirit, dark), Is.EqualTo(dark));   // a minor line keeps its 0
     }

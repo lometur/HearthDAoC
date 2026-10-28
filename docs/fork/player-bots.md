@@ -35,10 +35,12 @@ Two more settings are read only when bots are on:
   `realm|region|x|y[|z[|level|class|race]]` and places one bot there, and the bot keeps that spot.
   - A line with a level, class and race makes the bot at that level. It is not levelled through play: its specs come
     from its class's GameBot plan, and it gets gear by the GameBot rules at its first login. It spends every point a
-    player has, the half levels' points from 41 on too. Two changes to the plan are the player bots' own: a Nurture or
-    Regrowth Druid trains Nature first, to 20 (by level 30), for a pet near its level (the GameBot plan leaves Nature
-    at 1, a level-7 pet, until 50); a Suppression Spiritmaster raises Suppression from the start (the GameBot plan
-    leaves it at 1 until 50).
+    player has, the half levels' points from 41 on too: the points its plan's lines cannot take, now or at a later
+    level, go to the lines the GameBot plan leaves at 1 until 50 (a Warrior's Thrown Weapons, a Bonedancer's second
+    line), as a player spends them. Two changes to the plan are the player bots' own: a Nurture or Regrowth Druid
+    trains Nature first, to 20 (by level 30), for a pet near its level (the GameBot plan leaves Nature at 1, a level-7
+    pet, until 50); a Suppression Spiritmaster raises Suppression from the start (the GameBot plan leaves it at 1
+    until 50).
   - A bad value or an unreadable file keeps the bots off, with a `HEARTHDAOC_PLAYER_BOTS error` line.
 
 ## What they do

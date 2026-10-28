@@ -35,8 +35,10 @@ public sealed class PlayerBotKitPlan
 // starting_level property gives (CharacterCreationSettings.cs:128-133), the stats at N
 // (BotAttributeProgression.Calculate, the formula CharacterStatValidator allows), and the specs a GameBot trained level
 // by level has at N (a port of GameBot.SpendSpecPoints, GameBot.cs:3307-3386), with the half levels' points a player
-// gets from 41 on (#167 F13; REVIEW-FIXES 5 left them out, as an autonomous GameBot's training does): VerifySpecPoints'
-// whole budget (GamePlayer.cs:10078-10113), never more, so the login never respecs. The login reads them all (GamePlayer.cs:10120-10165). TrainTo raises the specs on each level-up. Spec keys
+// gets from 41 on (#167 F13; REVIEW-FIXES 5 left them out, as an autonomous GameBot's training does) and the spare
+// points on the plan's lines a GameBot raises only at 50 (KitSpecs): VerifySpecPoints' whole budget
+// (GamePlayer.cs:10078-10113), never more, so the login never respecs. The login reads them all
+// (GamePlayer.cs:10120-10165). TrainTo raises the specs on each level-up. Spec keys
 // match case-blind, as GetSpecializationByName does (GamePlayer.cs:3130-3142), and are written as the class's own
 // KeyName: the login's SkillBase.GetSpecialization is case-sensitive and fails on a key it does not know
 // (SkillBase.cs:2606-2621).
@@ -105,37 +107,76 @@ public static class PlayerBotKit
     {
         BotSpecLine[] lines = plan.OrderByDescending(line => line.levelRatio).ToArray();
         var specs = open.ToDictionary(key => key, _ => 1, StringComparer.OrdinalIgnoreCase);
-        int left = 0;
+        unspent = 0;
         for (int i = 2; i <= level; i++)
+            unspent = SpendLevel(lines, specs, i, level, multiplier, unspent);
+        return specs;
+    }
+
+    // One level i of Allocate's: its points and those left before, each line toward its ratio's target, then as far as
+    // it may rise; returns what is left. A ratio-0 line waits while the level trained to is below 50.
+    private static int SpendLevel(BotSpecLine[] lines, Dictionary<string, int> specs, int i, int level, int multiplier, int left)
+    {
+        int points = SpecPointsForLevel(i, multiplier, true) + left;                    // the half levels too (#167 F13)
+        bool spent = true, leftOver = false;
+        while (spent)
         {
-            int points = SpecPointsForLevel(i, multiplier, true) + left;                // the half levels too (#167 F13)
-            bool spent = true, leftOver = false;
-            while (spent)
+            spent = false;
+            foreach (BotSpecLine line in lines)
             {
-                spent = false;
-                foreach (BotSpecLine line in lines)
-                {
-                    if (line.levelRatio <= 0 && level < 50 || line.Spec == null || !specs.TryGetValue(line.Spec, out int now))
-                        continue;
-                    if (now >= line.SpecCap || now >= i)
-                        continue;
-                    if (!leftOver && now >= (int)(i * line.levelRatio))
-                        continue;
-                    if (points < now + 1)
-                        continue;
-                    points -= now + 1;
-                    specs[line.Spec] = now + 1;                                        // keeps open's key
-                    spent = true;
-                }
-                if (!spent && !leftOver)
-                {
-                    leftOver = true;
-                    spent = true;
-                }
+                if (line.levelRatio <= 0 && level < 50 || line.Spec == null || !specs.TryGetValue(line.Spec, out int now))
+                    continue;
+                if (now >= line.SpecCap || now >= i)
+                    continue;
+                if (!leftOver && now >= (int)(i * line.levelRatio))
+                    continue;
+                if (points < now + 1)
+                    continue;
+                points -= now + 1;
+                specs[line.Spec] = now + 1;                                            // keeps open's key
+                spent = true;
             }
-            left = points;
+            if (!spent && !leftOver)
+            {
+                leftOver = true;
+                spent = true;
+            }
         }
-        unspent = left;
+        return points;
+    }
+
+    /// <summary>A kit's specs at a level (ApplyToRow, TrainTo): Allocate's, then its spare points spent on the plan's
+    /// ratio-0 lines, which a GameBot raises only at 50 (Allocate skips them below), one level at a time in plan order,
+    /// within their caps and the level (#167 F13). What Allocate leaves buys no rank on its other lines, at their caps
+    /// or the level: a Warrior's two-hander plan left 196 points at 45 (Axe and Parry at 45, Thrown Weapons at 0), every
+    /// Bonedancer its half levels' (its secondary lines at 0), where a player spends them. Spare: the least Allocate
+    /// leaves at this level or any later one below 50, so the other lines still get Allocate's levels on each level-up
+    /// (TrainTo never lowers a line, nor spends past the free points) and no spec falls from one level to the next.</summary>
+    public static Dictionary<string, int> KitSpecs(IEnumerable<BotSpecLine> plan, ICollection<string> open, int level,
+        int multiplier, out int unspent)
+    {
+        BotSpecLine[] lines = plan.OrderByDescending(line => line.levelRatio).ToArray();
+        Dictionary<string, int> specs = Allocate(lines, open, level, multiplier, out unspent);
+        if (level >= 50) return specs;                                                  // Allocate raised them
+        var later = new Dictionary<string, int>(specs, StringComparer.OrdinalIgnoreCase);
+        int spare = unspent;
+        for (int i = level + 1, left = unspent; i < 50 && spare > 0; i++)
+            spare = Math.Min(spare, left = SpendLevel(lines, later, i, level, multiplier, left));
+        BotSpecLine[] waiting = lines.Where(line => line.levelRatio <= 0 && line.Spec != null).ToArray();
+        bool raised = true;
+        while (raised)
+        {
+            raised = false;
+            foreach (BotSpecLine line in waiting)
+            {
+                if (!specs.TryGetValue(line.Spec, out int now) || now >= line.SpecCap || now >= level || spare < now + 1)
+                    continue;
+                spare -= now + 1;
+                unspent -= now + 1;
+                specs[line.Spec] = now + 1;                                            // keeps open's key
+                raised = true;
+            }
+        }
         return specs;
     }
 
@@ -206,7 +247,7 @@ public static class PlayerBotKit
         ch.Level = level;
         ch.Experience = GamePlayer.GetExperienceAmountForLevel(level - 1);            // CharacterCreationSettings.cs:130-131
         SetStats(ch, Stats(kit.Build.Race, level, cls.PrimaryStat, cls.SecondaryStat, cls.TertiaryStat));
-        ch.SerializedSpecs = SerializeSpecs(Allocate(kit.Lines, open, level, cls.SpecPointsMultiplier, out _));
+        ch.SerializedSpecs = SerializeSpecs(KitSpecs(kit.Lines, open, level, cls.SpecPointsMultiplier, out _));
     }
 
     /// <summary>The string GamePlayer saves and reads (GamePlayer.cs:9946; :10325-10345): "Key|Level;Key|Level".</summary>
@@ -219,7 +260,7 @@ public static class PlayerBotKit
     public static int TrainTo(GamePlayer player, PlayerBotKitPlan kit, out string line)
     {
         int level = player.Level, free = player.SkillSpecialtyPoints, spells = Spells(player), styles = Styles(player);
-        Dictionary<string, int> target = Allocate(kit.Lines, OpenSpecs(player.CharacterClass.ID, level), level,
+        Dictionary<string, int> target = KitSpecs(kit.Lines, OpenSpecs(player.CharacterClass.ID, level), level,
             player.CharacterClass.SpecPointsMultiplier, out _);
         Dictionary<string, int> current = Specs(player);
         int raised = 0;
