@@ -420,6 +420,32 @@ public sealed class UT_PlayerBotDriver
         bool replanOwed, bool backingOff, bool ill, PlayerBotRecovery step) =>
         Assert.That(PlayerBotDriver.AfterReleaseStep(attacked, stepsOut, replanOwed, backingOff, ill), Is.EqualTo(step));
 
+    // --- monsters coming, and the rest out of their reach (#167 F7) ---
+
+    // A live monster the bot may attack, within IncomingRadius (2,000) and with the bot as its target, is coming at it:
+    // it counts as an attacker before its first hit, so the bot stands and engages first.
+    [TestCase(true, true, 1_500, true)] [TestCase(true, true, 2_000, true)]
+    [TestCase(true, true, 2_001, false)] [TestCase(true, true, 2_500, false)]
+    [TestCase(false, true, 500, false)] [TestCase(true, false, 500, false)]
+    public void A_monster_with_the_bot_as_its_target_within_2000_is_coming_at_it(bool targetsBot, bool attackable,
+        int distance, bool incoming) =>
+        Assert.That(PlayerBotDriver.IsIncoming(targetsBot, attackable, distance), Is.EqualTo(incoming));
+
+    // The rest spot: where the bot stands when no potential add reaches it; else the nearest clear point on the rest
+    // rings (RestSpotRings, SpotDirections round it). With an add 400 units along +X (aggro 300, reach 500), the ring
+    // of 300 is clear only past 90 degrees, and the first clear point there is at 120.
+    [Test]
+    public void A_bot_rests_where_it_is_unless_an_add_reaches_it_then_on_the_nearest_clear_ring_point()
+    {
+        var adds = new List<(string, Vector3, int)> { ("add", new(400, 0, 0), 300) };
+        Vector3 spot = PlayerBotDriver.RestSpot(Vector3.Zero,
+            PlayerBotDriver.RingPoints(Vector3.Zero, PlayerBotDriver.RestSpotRings, PlayerBotDriver.SpotDirections), adds);
+        Assert.That(Vector3.Distance(spot, new Vector3(-150, 259.81f, 0)), Is.LessThan(0.1f), $"{spot}");
+        Vector3 clear = new(-1_000, 0, 0);
+        Assert.That(PlayerBotDriver.RestSpot(clear, PlayerBotDriver.RingPoints(clear, PlayerBotDriver.RestSpotRings,
+            PlayerBotDriver.SpotDirections), adds), Is.EqualTo(clear), "out of every reach: where it is");
+    }
+
     // Runs r1-r1h (2026-10-21): on the switchback stairs by Master Lorik the two corners at their foot (Z 1795) counted as
     // reached from the stairs 37 units above, so the bot made for the next corner, under the stairs, along the stair
     // surface: it climbed back to the top and stalled there until the errand failed after 15 minutes.
@@ -2340,7 +2366,10 @@ public sealed class UT_PlayerBotDriver
     [Test]
     public void A_rest_ends_recovered_unless_a_fight_stood_the_bot_up()           // PLAYER_BOT_REST why=
     {
-        Assert.That((PlayerBotDriver.RestStop(mayRest: true), PlayerBotDriver.RestStop(mayRest: false)), Is.EqualTo(("recovered", "hit")));
+        Assert.That((PlayerBotDriver.RestStop(mayRest: true, incomingOnly: false),
+            PlayerBotDriver.RestStop(mayRest: false, incomingOnly: false)), Is.EqualTo(("recovered", "hit")));
+        Assert.That(PlayerBotDriver.RestStop(mayRest: false, incomingOnly: true), Is.EqualTo("incoming"),
+            "a monster coming at it, no hit yet (#167 F7)");
     }
 
     // The fields PLAYER_BOT_DEATH appends after task= (its earlier fields stay as they were: runs/legcheck.py reads them),

@@ -136,6 +136,11 @@ public sealed class PlayerBotState
     public bool AfterRelease;                                    //   every monster's reach it steps to, the ring test's
     public Vector3? ClearSpot;                                   //   next scan and a blocked step's pause
     public long NextReachTick, StepOutBlockedUntil;
+    public GameNPC Incoming;                                     // #167 F7: the nearest monster coming at it (Incoming),
+    public long NextIncomingTick;                                //   scanned every 2 s; the last search's potential adds
+    public readonly List<GameNPC> SearchAdds = new();            //   (FindWithin), and the rest spot read from them once
+    public bool RestSpotChecked;                                 //   per rest (RestSpot), walked to before the bot sits
+    public Vector3? RestGoal;
 }
 
 // HearthDAoC player bots (#137): a thin copy of the /bot pilot's think (bots/autonomous/AutonomousPlayerPilot.cs:229-374) for a
@@ -179,6 +184,8 @@ public static class PlayerBotDriver
     public static readonly int[] StepOutRings = [500, 900, 1_300, 1_700, 2_100, 2_500];   // #167 F4: a released bot's
     public const int SpotDirections = 12;                    //   candidate spots, every 30 degrees on each ring
     public const int StepOutPauseMilliseconds = 10_000;      // (inf.) after a blocked step out, it stands this long
+    public const int IncomingRadius = 2_000;                  // #167 F7: a monster this near with the bot as its target
+    public static readonly int[] RestSpotRings = [300, 600, 900, 1_200];   // #167 F7: the rest spot's candidates (inf.)
     public static readonly long StuckMilliseconds = (long)AutonomousStuckWatchdog.StuckThreshold.TotalMilliseconds; // 15 min
     public const int MaxFruitlessCasts = 3;                  // the cast watch (levelmatch/DESIGN.md 2.7)
     public const int SpellBlockMilliseconds = 10_000;        // (inf.) a few swings, then the spell again
@@ -365,16 +372,21 @@ public static class PlayerBotDriver
         if (SelfHeal(state, player, now) || SummonPet(state, player, now) || SelfBuff(state, player, now))
             return;                                                                      // 11b. DEATHS.md A6, A5, #167 F8: before a rest
         if (state.RecoverBeforePull && Recovered(player)) state.RecoverBeforePull = false;
-        bool mayRest = MayRest(Attacker(state, player, now, anyHitter: true) != null, state.Engaged && state.Target?.IsAlive == true);
+        bool hit = Attacker(state, player, now, anyHitter: true) != null, liveFight = state.Engaged && state.Target?.IsAlive == true;
+        bool incoming = !hit && !liveFight && Incoming(state, player, now) != null;      //    #167 F7: one coming at it too
+        bool mayRest = MayRest(hit || incoming, liveFight);
         if (mayRest && WantsRest(player, state.RecoverBeforePull))                       // 12. APP:290-296, DEATHS.md A1
         {
             if (state.Target != null) Disengage(state, player);                         //    a pull not begun: re-picked after
+            if (!player.IsSitting && WalksToRestSpot(state, player, now)) return;       //    #167 F7: out of the adds' reach
             Rest(state, player, now);
             return;
         }
+        state.RestSpotChecked = false;                                                   //    the next rest reads its spot
+        state.RestGoal = null;
         if (player.IsSitting)                                                            // 13. rested, or hit: stand
         {
-            EndRest(state, player, now, RestStop(mayRest));
+            EndRest(state, player, now, RestStop(mayRest, incoming));
             player.Sit(false);
         }
         RefreshTarget(state, player, now);                                               // 14
@@ -787,9 +799,10 @@ public static class PlayerBotDriver
         bool searchDue = now >= state.NextTargetRefreshTick;
         if (state.Target != null && (fighting || !searchDue)) return;  // keep a target while fighting it
         if (searchDue) state.NextTargetRefreshTick = now + TargetRefreshMilliseconds;
-        // Self-defence every think; the rings only every 2 s, so an idle bot doesn't scan 5,000 units 4 times a second;
-        // none during the recovery after a release (#167 F4): it pulls nothing until that is over
-        GameNPC found = Attacker(state, player, now) ??                                    // self-defence first
+        // Self-defence every think, then a monster coming at it (#167 F7: its scan every 2 s); the rings only every 2 s,
+        // so an idle bot doesn't scan 5,000 units 4 times a second; none during the recovery after a release (#167 F4): it
+        // pulls nothing until that is over
+        GameNPC found = Attacker(state, player, now) ?? Incoming(state, player, now) ??     // self-defence first
             (searchDue && !state.AfterRelease                                              // AWBC:3148
                 ? FindWithin(state, player, ImmediateSearchRadius, now) ?? FindWithin(state, player, SearchRadius, now)
                 : null);
@@ -839,8 +852,10 @@ public static class PlayerBotDriver
             }
         }
         GameNPC best = PickUncrowded(candidates, adds, uncrowdedOnly: radius < SearchRadius);
-        candidates.Clear();                                                             // no monster held past the search
-        adds.Clear();
+        state.SearchAdds.Clear();                                                       // #167 F7: the rest spot's, read
+        foreach ((GameNPC add, _, _) in adds) state.SearchAdds.Add(add);                //   live (WalksToRestSpot)
+        candidates.Clear();                                                             // no other monster held past the
+        adds.Clear();                                                                   //   search
         if (best != null || radius >= SearchRadius)
         {
             state.CappedSince = CappedClock(state.CappedSince, best != null, passedOver, now);
@@ -888,6 +903,37 @@ public static class PlayerBotDriver
     /// is engaged with; then the task gives the think to the driver, which fights that one and seeks no other.</summary>
     public static bool UnderAttack(PlayerBotState state, long now) =>
         (state.Engaged && state.Target != null && state.Player.InCombat) || Attacker(state, state.Player, now) != null;
+
+    // A monster hitting the bot, any (the rest gate's), else one coming at it (#167 F7).
+    private static GameNPC Threat(PlayerBotState state, GamePlayer player, long now) =>
+        Attacker(state, player, now, anyHitter: true) ?? Incoming(state, player, now);
+
+    // #167 F7: the nearest monster coming at the bot (IsIncoming), from a scan every TargetRefreshMilliseconds, the search
+    // tick's; between scans the one found while it still comes. The one Engage found unreachable is no threat: it would
+    // keep the bot from ever sitting. The errands' UnderAttack stays the hitters' (no detour for a monster on its way).
+    private static GameNPC Incoming(PlayerBotState state, GamePlayer player, long now)
+    {
+        if (now < state.NextIncomingTick)
+        {
+            if (state.Incoming is GameNPC held && !IsIncoming(held.TargetObject == player, IsAttackable(player, held),
+                    player.GetDistanceTo(held)))
+                state.Incoming = null;
+            return state.Incoming;
+        }
+        state.NextIncomingTick = now + TargetRefreshMilliseconds;
+        GameNPC best = null;
+        int bestDistance = int.MaxValue;
+        foreach (GameNPC npc in player.GetNPCsInRadius(IncomingRadius))
+        {
+            int distance = player.GetDistanceTo(npc);
+            if (distance >= bestDistance || npc == state.Unreachable && now < state.UnreachableUntil ||
+                !IsIncoming(npc.TargetObject == player, IsExperienceTarget(npc) && IsAttackable(player, npc), distance))
+                continue;
+            best = npc;
+            bestDistance = distance;
+        }
+        return state.Incoming = best;
+    }
 
     private static bool IsAttacking(GamePlayer player, GameLiving target) =>
         target is GameNPC npc && npc.TargetObject == player && IsAttackable(player, npc);
@@ -1008,11 +1054,17 @@ public static class PlayerBotDriver
         IReadOnlyList<(T Npc, Vector3 At, int AggroRange)> adds) where T : class =>
         candidates.Where(spot => !InAddReach(spot, adds)).OrderBy(spot => Vector3.DistanceSquared(spot, here)).ToList();
 
-    /// <summary>The spot a bot in a potential add's reach steps to (#167 F4, F7): the nearest clear candidate; with none,
-    /// here.</summary>
+    /// <summary>Where the bot stands out of reach (#167 F4, F7): here when no potential add reaches it; else the nearest
+    /// clear candidate; with none, here.</summary>
     public static Vector3 RestSpot<T>(Vector3 here, IEnumerable<Vector3> candidates,
         IReadOnlyList<(T Npc, Vector3 At, int AggroRange)> adds) where T : class =>
-        ClearSpots(here, candidates, adds) is [Vector3 first, ..] ? first : here;
+        InAddReach(here, adds) && ClearSpots(here, candidates, adds) is [Vector3 first, ..] ? first : here;
+
+    /// <summary>A monster coming at the bot (#167 F7): it may attack it (a live monster, IsAttackable), the bot is its
+    /// target (a monster's aggro state sets it and its exit clears it, StandardMobState.cs:113) and it is within
+    /// IncomingRadius. It counts as an attacker before its first hit: the bot stands, and engages it first.</summary>
+    public static bool IsIncoming(bool targetsBot, bool attackable, int distance) =>
+        targetsBot && attackable && distance <= IncomingRadius;
 
     /// <summary>The candidate spots round here: directions points on each ring, at here's height, the first along +X; the
     /// caller puts each on the navmesh.</summary>
@@ -1572,7 +1624,7 @@ public static class PlayerBotDriver
             state.NextReachTick = now + TargetRefreshMilliseconds;
             state.ClearSpot = now < state.StepOutBlockedUntil ? null : ClearSpotNear(player, StepOutRings);
         }
-        switch (AfterReleaseStep(Attacker(state, player, now, anyHitter: true) != null,
+        switch (AfterReleaseStep(Threat(state, player, now) != null,                    // #167 F7: coming at it too
                     state.ClearSpot != null && !player.IsSitting, state.ReplanAfterDeath, now < state.RecoverUntil, Ill(player)))
         {
             case PlayerBotRecovery.Fight:
@@ -1597,37 +1649,59 @@ public static class PlayerBotDriver
         }
     }
 
-    // The spot out of every potential add's reach nearest the bot (RestSpot), on the navmesh, or null when it stands
-    // clear or finds none: the monsters within the rings' reach (AddScanMargin past the outer one) that would aggro.
+    // The spot out of every potential add's reach nearest the bot (SpotOutOfReach), or null: the monsters within the
+    // rings' reach (AddScanMargin past the outer one) that would aggro.
     private static Vector3? ClearSpotNear(GamePlayer player, int[] rings)
     {
-        Vector3 here = new(player.X, player.Y, player.Z);
         List<(GameNPC Npc, Vector3 At, int AggroRange)> adds = _reach ??= new();
         adds.Clear();
         foreach (GameNPC npc in player.GetNPCsInRadius((ushort)(rings[^1] + AddScanMargin)))
             if (IsExperienceTarget(npc) && AddReach(player, npc) is > 0 and int reach)
                 adds.Add((npc, new(npc.X, npc.Y, npc.Z), reach));
-        Vector3? found = InAddReach(here, adds)
-            ? OnMeshClear(player, ClearSpots(here, RingPoints(here, rings, SpotDirections), adds), adds) : null;
+        Vector3? found = SpotOutOfReach(player, rings, adds);
         adds.Clear();                                                                   // no monster held past the scan
         return found;
     }
 
-    // The first of the clear spots (nearest first) that has a navmesh point near it still clear; with no navmesh, the
-    // first.
-    private static Vector3? OnMeshClear(GamePlayer player, List<Vector3> clear,
-        List<(GameNPC Npc, Vector3 At, int AggroRange)> adds)
+    // RestSpot over the ring points on the navmesh (each one's nearest mesh point; with no navmesh, the points), or null
+    // when the bot stands clear or no point is.
+    private static Vector3? SpotOutOfReach(GamePlayer player, int[] rings, List<(GameNPC Npc, Vector3 At, int AggroRange)> adds)
     {
+        Vector3 here = new(player.X, player.Y, player.Z);
+        if (!InAddReach(here, adds)) return null;
         IPathfindingMgr nav = PathfindingProvider.Instance;
         Zone zone = player.CurrentZone;
-        bool mesh = zone != null && nav.HasNavmesh(zone);
-        foreach (Vector3 spot in clear)
+        IEnumerable<Vector3> points = RingPoints(here, rings, SpotDirections);
+        if (zone != null && nav.HasNavmesh(zone))
+            points = points.Select(p => nav.GetClosestPoint(zone, p, 64, 64, 256, nav.DefaultFilters))
+                .Where(p => p.HasValue).Select(p => p.Value);
+        Vector3 spot = RestSpot(here, points, adds);
+        return spot == here ? null : spot;
+    }
+
+    // #167 F7: before it sits, a bot in a potential add's reach walks to the nearest clear spot on the rest rings, once
+    // per rest; the adds are the last search's (FindWithin), where they are now, that would still aggro: no new scan. A
+    // blocked walk, or none clear, and it sits where it is. True while it walks.
+    private static bool WalksToRestSpot(PlayerBotState state, GamePlayer player, long now)
+    {
+        if (!state.RestSpotChecked)
         {
-            if (!mesh) return spot;
-            if (nav.GetClosestPoint(zone, spot, 64, 64, 256, nav.DefaultFilters) is Vector3 on && !InAddReach(on, adds))
-                return on;
+            state.RestSpotChecked = true;
+            List<(GameNPC Npc, Vector3 At, int AggroRange)> adds = _reach ??= new();
+            adds.Clear();
+            foreach (GameNPC npc in state.SearchAdds)
+                if (AddReach(player, npc) is > 0 and int reach)
+                    adds.Add((npc, new(npc.X, npc.Y, npc.Z), reach));
+            state.RestGoal = SpotOutOfReach(player, RestSpotRings, adds);
+            adds.Clear();
         }
-        return null;
+        if (state.RestGoal is not Vector3 goal) return false;
+        state.Activity = PlayerBotActivity.Resting;
+        PlayerBotStepResult step = state.Mover.StepToward(goal, 20, now);
+        if (step is PlayerBotStepResult.Blocked) ReportBlocked(state, player, "rest", goal, now);
+        if (step is not (PlayerBotStepResult.Blocked or PlayerBotStepResult.Arrived)) return true;
+        state.RestGoal = null;
+        return false;
     }
 
     // APP:561-583 without SaveIntoDatabase.
@@ -1771,7 +1845,8 @@ public static class PlayerBotDriver
     // runs first at no cost, then with the heal's.
     private static bool SelfHeal(PlayerBotState state, GamePlayer player, long now)
     {
-        bool inFight = !MayRest(Attacker(state, player, now, anyHitter: true) != null, state.Engaged && state.Target?.IsAlive == true);
+        bool inFight = state.Engaged && state.Target?.IsAlive == true ||               // MayRest's view, and one coming
+            Threat(state, player, now) != null;                                         //   at it (#167 F7)
         byte mana = PowerPercent(player.MaxMana, player.ManaPercent);
         long nextTry = state.NextSelfHealTick;
         if (player.Level == state.NoSelfHealLevel ||
@@ -1818,9 +1893,9 @@ public static class PlayerBotDriver
     // scans at once (Think).
     private static bool SelfBuff(PlayerBotState state, GamePlayer player, long now)
     {
-        if (now < state.NextSelfBuffTick || player.IsCasting ||
-            !MayRest(Attacker(state, player, now, anyHitter: true) != null, state.Engaged && state.Target?.IsAlive == true))
-            return false;
+        if (now < state.NextSelfBuffTick || player.IsCasting || state.Engaged && state.Target?.IsAlive == true ||
+            Threat(state, player, now) != null)                                         // MayRest's view, and one coming
+            return false;                                                               //   at it (#167 F7)
         state.NextSelfBuffTick = now + SelfBuffScanMilliseconds;
         HashSet<eSpellType> active = new();
         foreach (ECSGameSpellEffect effect in player.effectListComponent.GetSpellEffects())   // a chant's pulse effect too
@@ -1901,10 +1976,11 @@ public static class PlayerBotDriver
         }
     }
 
-    /// <summary>Why a rest ended at step 13 (PLAYER_BOT_REST why=): recovered, or a fight (MayRest false) stood the bot up.
-    /// A cast on itself ends one as heal, pet or buff, a death as died, and the server's stand (a hit while sitting) as hit,
-    /// or other.</summary>
-    public static string RestStop(bool mayRest) => mayRest ? "recovered" : "hit";
+    /// <summary>Why a rest ended at step 13 (PLAYER_BOT_REST why=): recovered, or a fight (MayRest false) stood the bot up,
+    /// incoming when only a monster coming at it did (#167 F7). A cast on itself ends one as heal, pet or buff, a death as
+    /// died, and the server's stand (a hit while sitting) as hit, or other.</summary>
+    public static string RestStop(bool mayRest, bool incomingOnly) =>
+        mayRest ? "recovered" : incomingOnly ? "incoming" : "hit";
 
     // #167: PLAYER_BOT_REST once per rest, when it ends.
     private static void EndRest(PlayerBotState state, GamePlayer player, long now, string why)

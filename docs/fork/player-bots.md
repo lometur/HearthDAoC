@@ -68,6 +68,9 @@ Each bot thinks every 250 ms, a thin copy of the `/bot` pilot's think:
   the server's own checks decide the rest.
 - It picks a monster with no aggressive neighbours. After deaths it moves to an easier camp. It avoids what killed it
   for 15 minutes.
+- A monster within 2,000 units that has the bot as its target counts as an attacker before its first hit, so the bot
+  stands up and fights it first. Before it sits, a bot within reach of an aggressive monster from its last search
+  walks to the nearest spot out of that reach, 1,200 units away at most.
 - After a release it first steps out of the reach of every monster round it that would aggro. If it died at its camp,
   it then plans a new camp from where it died, never one it died at in the last 15 minutes, before it walks back. From
   its third death with no XP in between it waits 30-120 s out there, as a GameBot does, and it waits out the
@@ -86,7 +89,6 @@ Playing:
 - **Deaths:** on v0.37b-hearth.9 (`st-layers5`: 15 minutes, 390 level-matched bots) they died 9.5 times per bot-hour,
   against about 1 for the PvE GameBots: melee 5.1, casters 21.2, healers 9.4, pet classes 10.8, archers 8.2. The
   buffs, casting and pet rules above are the first step. Still open:
-  - It doesn't see monsters coming at it, or rest out of their reach.
   - Casters don't root, stun or step back.
   - Walks don't look ahead for monsters on the route.
   - How Animists use their turrets is unchecked.
