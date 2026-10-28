@@ -1273,13 +1273,16 @@ public sealed class UT_PlayerBotDriver
         Assert.That((won.RecoverBeforePull, late.RecoverBeforePull), Is.EqualTo((true, false)), "the late bot never fought it");
     }
 
-    // #167 F3: a rest stops at full health, the role's power stop and 60% endurance; power counts only with a pool.
-    [TestCase((byte)100, 300, (byte)72, (byte)61, true)] [TestCase((byte)99, 300, (byte)100, (byte)100, false)]
-    [TestCase((byte)100, 300, (byte)69, (byte)100, false)] [TestCase((byte)100, 0, (byte)0, (byte)61, true)]
-    [TestCase((byte)100, 300, (byte)100, (byte)59, false)] [TestCase((byte)100, 300, (byte)70, (byte)60, true)]
+    // #167 F3, C10: a caster's rest stops at full health, its power stop (90) and 60% endurance; power counts only with
+    // a pool.
+    [TestCase((byte)100, 300, (byte)90, (byte)61, true)] [TestCase((byte)99, 300, (byte)100, (byte)100, false)]
+    [TestCase((byte)100, 300, (byte)89, (byte)61, false)] [TestCase((byte)100, 0, (byte)0, (byte)61, true)]
+    [TestCase((byte)100, 300, (byte)100, (byte)59, false)] [TestCase((byte)100, 300, (byte)90, (byte)60, true)]
+    [TestCase((byte)100, 300, (byte)72, (byte)100, false)]
     public void A_rest_stops_at_full_health_and_the_power_and_endurance_stops(byte health, int maxMana, byte mana,
         byte endurance, bool recovered) =>
-        Assert.That(PlayerBotDriver.Recovered(health, maxMana, mana, endurance, 70, 60), Is.EqualTo(recovered));
+        Assert.That(PlayerBotDriver.Recovered(health, maxMana, mana, endurance, PlayerBotDriver.RestPowerStop(PlayerBotRole.Caster),
+            PlayerBotDriver.RestEnduranceStop), Is.EqualTo(recovered));
 
     // The class roles of tools/lmroles.py (CLASS_ROLES, by class id): the Hunter has a pet and counts as pet.
     [Test]
@@ -1297,13 +1300,15 @@ public sealed class UT_PlayerBotDriver
             Assert.That(PlayerBotDriver.RoleOf(id), Is.EqualTo(PlayerBotRole.Melee), $"class {id}");
     }
 
-    // Casters stop resting power at 70% (rest-work's 95th-percentile fight cost + 18%); pet classes keep 100% (a 75% stop
-    // raised their pet deaths per 100 kills 16% in the model), and so does every other role until measured.
+    // Casters stop resting power at 90% (#167 C10: a list caster regenerates at half rate under 50% power,
+    // PowerRegenerationAmountCalculator.cs:38-50, and 46.6% of st-deathsB's caster pulls ended under 50% with batch A's
+    // 70); pet classes keep 100% (a 75% stop raised their pet deaths per 100 kills 16% in the model), and so does every
+    // other role until measured.
     [Test]
     public void Only_a_caster_stops_resting_power_short_of_full()
     {
         foreach (PlayerBotRole role in Enum.GetValues<PlayerBotRole>())
-            Assert.That(PlayerBotDriver.RestPowerStop(role), Is.EqualTo(role == PlayerBotRole.Caster ? 70 : 100), role.ToString());
+            Assert.That(PlayerBotDriver.RestPowerStop(role), Is.EqualTo(role == PlayerBotRole.Caster ? 90 : 100), role.ToString());
         Assert.That(PlayerBotDriver.RestEnduranceStop, Is.EqualTo(60));
     }
 

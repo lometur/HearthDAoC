@@ -242,8 +242,10 @@ public static class PlayerBotDriver
     public const int PetPowerPercent = 30;                   // DEATHS.md A5: summon at this much power or more
     public const int SummonRetryMilliseconds = 2_000;        // (inf.) as the heal's
     public const int QuickcastRetryMilliseconds = 2_000;     // (inf.) as the heal's
-    public const byte CasterPowerStop = 70;                  // #167 F3: a caster stops resting power here (rest-work:
-    public const byte RestEnduranceStop = 60;                //   its 95th-percentile fight cost + 18%); all, endurance
+    public const byte CasterPowerStop = 90;                  // #167 F3, C10: a caster stops resting power here (a list
+    public const byte RestEnduranceStop = 60;                //   caster regenerates at half rate under 50%,
+                                                             //   PowerRegenerationAmountCalculator.cs:38-50: batch A's 70
+                                                             //   left 46.6% of its pulls ending under 50%); all, endurance
     public const int SelfBuffScanMilliseconds = 5_000;       // #167 F8: the self-buffs' scan, out of a fight
     public const int PetLeadMilliseconds = 4_000;            // #167 F10c: the owner's longest wait for its pet to lead
     public const int SpellChoiceMilliseconds = 1_000;        // (inf.) as the sight check's: the spell choice while no cast
@@ -1684,8 +1686,9 @@ public static class PlayerBotDriver
         _ => PlayerBotRole.Melee,
     };
 
-    /// <summary>Where a rest stops power (#167 F3): CasterPowerStop for a caster, whose fights cost little of it; full for
-    /// every other role (a pet class's fights cost more: a 75% stop raised pet deaths per 100 kills 16% in rest-work's
+    /// <summary>Where a rest stops power (#167 F3): CasterPowerStop for a caster, whose fights cost little of it (90, C10:
+    /// under 50% a list caster regenerates at half rate, so the last 10% costs less than a pull that ends under 50%); full
+    /// for every other role (a pet class's fights cost more: a 75% stop raised pet deaths per 100 kills 16% in rest-work's
     /// model; the rest until measured).</summary>
     public static byte RestPowerStop(PlayerBotRole role) => role == PlayerBotRole.Caster ? CasterPowerStop : (byte)100;
 
