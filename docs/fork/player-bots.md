@@ -67,10 +67,11 @@ Each bot thinks every 250 ms, a thin copy of the `/bot` pilot's think:
   with Quickcast ready, which then goes to that nuke), if it has 60% health or more and no other monster on it. A
   rooted or mezzed monster near it would break free at the next nuke, so it first steps back to range, on a spot clear
   of other aggressive monsters, within its spell's range; so it does from a stunned one while hits interrupt it. In
-  melee with no clear spot it steps back 400 units straight away anyway. While its target is held it keeps its spell's
-  range, even with hits blocking its spells or too little power, and it never swings at a rooted or mezzed monster
-  (its hit, or a miss, would free it): it waits instead. Not while another monster that isn't held hits it, and not
-  for 5 s after a blocked step back: then it fights as before. Only single-target spells the bot has, that the monster
+  melee with no clear spot it steps back 400 units straight away anyway, and never to a spot nearer the target than
+  it stands. While its target is held it keeps its spell's range, even with hits blocking its spells or too little
+  power (then its longest damage spell's range), and it never swings at a rooted or mezzed monster (its hit, or a
+  miss, would free it): it waits instead. Not while another monster that isn't held hits it, and not for 5 s after a
+  blocked step back: then it fights as before. Only single-target spells the bot has, that the monster
   isn't immune to by the server's own rules: a monster stunned or mezzed in the last minute takes the next one for
   half the time, then a quarter, and none under 1 s. A mez on its target only as the last escape, the monster about to
   reach it, and only on a monster above 75% health.

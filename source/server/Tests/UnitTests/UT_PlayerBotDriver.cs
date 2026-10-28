@@ -2490,6 +2490,48 @@ public sealed class UT_PlayerBotDriver
             Is.EqualTo(PlayerBotCombatAction.Quickcast), "only a swing becomes a wait");
     }
 
+    // The trap's rows where Engage takes them (the review of 9aacd69: with Engage's casterHold, swingBreaksHold, the
+    // blocked step back or the guard switched off no test failed): one plan gives the action and the stop. A caster with
+    // its target rooted in melee, hit and no Quickcast: a wait, and the spell's stop (1,420), not the swing that freed it;
+    // its step back blocked: the swing, as before, the stop kept; an un-held add hitting it, or a melee class: melee's
+    // (152); a stun: the swing (a hit doesn't end it) and the spell's stop.
+    [TestCase(PlayerBotRole.Caster, true, true, false, false, PlayerBotCombatAction.WaitToCast, 1_420, true)]
+    [TestCase(PlayerBotRole.Caster, true, true, false, true, PlayerBotCombatAction.Swing, 1_420, true)]      // step back blocked
+    [TestCase(PlayerBotRole.Caster, true, true, true, false, PlayerBotCombatAction.Swing, 152, false)]      // an add hits it
+    [TestCase(PlayerBotRole.Caster, true, false, false, false, PlayerBotCombatAction.Swing, 1_420, true)]   // a stun
+    [TestCase(PlayerBotRole.Caster, false, false, false, false, PlayerBotCombatAction.Swing, 152, false)]   // not held
+    [TestCase(PlayerBotRole.Melee, true, true, false, false, PlayerBotCombatAction.Swing, 152, false)]
+    public void A_caster_rooted_in_melee_waits_at_its_spell_range_unless_its_step_back_is_blocked_or_an_add_hits_it(
+        PlayerBotRole role, bool held, bool breaksOnHit, bool otherHitting, bool stepBackBlocked, PlayerBotCombatAction action,
+        int stop, bool holds) =>
+        Assert.That(PlayerBotDriver.CasterHoldPlan(role, held, breaksOnHit, otherHitting, stepBackBlocked, canCast: true,
+            interrupted: true, selfInterruptMs: 0, interruptible: true, quickcastReady: false, due: true, attackRange: 200,
+            spellRange: 1_500), Is.EqualTo((action, stop, holds)));
+
+    // The review of 9aacd69: with no nuke chosen (power under the cheapest one's cost, or all recasting), Engage read the
+    // stop from CalculateSpellRange(null), 32 (CastingComponent.cs:188-192): SpellStopDistance's 145. A caster with its
+    // target rooted 1,000 units off walked in to 145, inside the monster's reach, "stepped back" 95 units from it (nearer
+    // than it stood), and waited there taking hits until the root ended. The stop now reads its longest damage spell's
+    // range; the step back goes only farther out than the bot stands; and with no damage spell at all it holds nothing.
+    [Test]
+    public void A_caster_with_no_nuke_chosen_holds_its_longest_nukes_range_off_a_rooted_monster()
+    {
+        (Spell, SpellLine)[] nukes = [(FungalOoze, null), (FungalThistle, null)];
+        Assert.That(PlayerBotDriver.StopSpellRange(null, nukes, spell => spell.Range), Is.EqualTo(1_875), "the longest");
+        Assert.That(PlayerBotDriver.StopSpellRange(FungalOoze, nukes, spell => spell.Range), Is.EqualTo(FungalOoze.Range));
+        Assert.That(PlayerBotDriver.StopSpellRange(null, [], spell => spell.Range), Is.Zero);
+        Assert.That(PlayerBotDriver.StopSpellRange(null, null, spell => spell.Range), Is.Zero);
+        Assert.That(PlayerBotDriver.CasterHoldPlan(PlayerBotRole.Caster, true, true, false, false, canCast: false,
+            interrupted: false, selfInterruptMs: 0, interruptible: false, quickcastReady: false, due: true, attackRange: 200,
+            spellRange: 1_875), Is.EqualTo((PlayerBotCombatAction.WaitToCast, 1_795, true)), "it stands off, no swing");
+        Assert.That(PlayerBotDriver.CasterHoldPlan(PlayerBotRole.Caster, true, true, false, false, canCast: false,
+            interrupted: false, selfInterruptMs: 0, interruptible: false, quickcastReady: false, due: true, attackRange: 200,
+            spellRange: 0), Is.EqualTo((PlayerBotCombatAction.Swing, 152, false)), "no damage spell: no hold to keep");
+        Assert.That(PlayerBotDriver.KiteRange(1_420, 100), Is.EqualTo(1_370));
+        Assert.That((PlayerBotDriver.KiteRange(145, 145), PlayerBotDriver.KiteRange(1_420, 1_370)),
+            Is.EqualTo(((int?)null, (int?)null)), "never toward the target");
+    }
+
     // Only a caster, only while its target is held, and only while no other monster hits it that is not held (the guard:
     // then the add's control, C4, or a break-off, C2): the step back would not shake an add, and a wait with an add's
     // hits on it would stand the bot idle.
