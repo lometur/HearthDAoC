@@ -55,9 +55,12 @@
    like the steps before it. No marker: at every start it moves a row only while it is at upstream's spot, and names
    the rows at neither that spot nor the period's. New characters only; existing ones keep their location and bind.
 12. The leveling spawns an earlier `hdc spawns restore` brought back next to a quest's kill target named like them but
-   for case (level 20's "arawnite messenger" beside the "Arawnite Messenger"): spawns.remove_quest_twins, last, under
-   its own savepoint. Only rows listed in fork_restored_mobs; they stay in upstream's archive, as `hdc spawns undo`
+   for case (level 20's "arawnite messenger" beside the "Arawnite Messenger"): spawns.remove_quest_twins, under its
+   own savepoint. Only rows listed in fork_restored_mobs; they stay in upstream's archive, as `hdc spawns undo`
    leaves them, and the restore now leaves them out.
+13. No starter guilds (owner 2026-10-28, #176): starter_guilds.py, last, under its own savepoint. Every character and
+   gamebot in one leaves it, and the starter guilds and their ranks go; server_properties.py's starting_guild False
+   keeps the server from making them again. No marker: a world with none has nothing to do.
 
 All of them only apply when needed and leave anything the owner set themselves alone.
 """
@@ -75,6 +78,7 @@ import quest_dialogue
 import route_fixes
 import spawns
 import start_towns
+import starter_guilds
 
 DISCIPLE, SARACEN, INCONNU = 20, 4, 13
 
@@ -202,6 +206,7 @@ def apply(db):
             changes.extend(route_fixes.apply(conn, _now()))
             changes.extend(start_towns.apply(conn, _now()))
             changes.extend(spawns.remove_quest_twins(conn))
+            changes.extend(starter_guilds.apply(conn, _now()))
     finally:
         conn.close()
     return changes

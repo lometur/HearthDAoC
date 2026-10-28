@@ -1,11 +1,12 @@
 using DOL.GS.HearthDAoC;
+using DOL.GS.HearthDAoC.PlayerBots;
 using NUnit.Framework;
 
 namespace DOL.GS.Tests;
 
 // HearthDAoC: forming a guild needs a group of guild_num (8) again, bots included (owner 2026-10-28, #176). GuildForming
 // holds the rule; guild.cs counts the group (every member: players, player bots, gamebots, companions) and its human
-// players, and carries the outcome out.
+// players, and carries the outcome out. Player bots never join a starter guild (StartupGuilds.AddNewbieToStarterGuild).
 [TestFixture]
 public sealed class UT_GuildForming
 {
@@ -65,5 +66,19 @@ public sealed class UT_GuildForming
     {
         Assert.That(Rule(9, 1), Is.EqualTo(GuildFormStep.FormNow));
         Assert.That(Rule(9, 3), Is.EqualTo(GuildFormStep.AskOthers));
+    }
+
+    [TestCase("hdbot-alb-01", true)]
+    [TestCase("hdbot-hib-150", true)]
+    [TestCase("HDBOT-mid-07", true)] // Account.Name is compared without case in the database
+    [TestCase("hdbot", false)]
+    [TestCase("myhdbot-alb-01", false)]
+    [TestCase("lometur", false)]
+    [TestCase("", false)]
+    [TestCase(null, false)]
+    public void APlayerBotIsKnownByItsAccount(string account, bool bot)
+    {
+        // StartupGuilds.AddNewbieToStarterGuild skips these characters, so a player bot never joins a starter guild.
+        Assert.That(PlayerBotPlan.IsBotAccount(account), Is.EqualTo(bot));
     }
 }
