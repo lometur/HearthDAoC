@@ -7,6 +7,7 @@
 #include <DetourCommon.h>
 #include <DetourNavMesh.h>
 #include <DetourNavMeshQuery.h>
+#include <DetourNode.h> // HearthDAoC: dtNodePool, for MoveAlongSurfaceLayered (#166)
 #include <DetourStatus.h>
 #include <functional>
 #include <random>
@@ -405,4 +406,286 @@ DLLEXPORT dtStatus GetPolysInBox(dtNavMeshQuery *query, float center[], float po
 	filter.setIncludeFlags(queryFilter[0]);
 	filter.setExcludeFlags(queryFilter[1]);
 	return query->queryPolygons(center, polyPickExt, &filter, polyRefs, polyCount, maxPolys);
+}
+
+// HearthDAoC: queries for the player bots (#166) that keep a walker on its own floor. When tiles join at load, Detour
+// links a seam edge to any edge across the seam within 2 x walkableClimb at either end of their overlap (overlapSlabs,
+// DetourNavMesh.cpp:56-61), so in Jordheim small floors walled in under a ramp are linked only to the ramp 45-115 units
+// above them (within a tile Recast links nothing over walkableClimb). The surface move is 2D
+// and enters the first linked polygon whose footprint holds its target, the floor first: player bots dropped 80 units
+// through the ramp onto such a floor, and their corridor out went back up the same seam, where the straight path's
+// corner takes the lower polygon's height and hides the jump. These two queries treat such a link as what it is,
+// a change of floor: the move does not take it, and the straight path reports it as two corners, one on each floor.
+// NPCs and GameBots keep the queries above.
+constexpr unsigned short LAYER_LINK = 0x40; // run-time point flag (EDtPolyFlags.LayerLink): the upper or lower end of a layer link
+
+// The height of a polygon's edge nearest to pt (2D), from its vertices, as Detour's portals take it.
+static float EdgeHeightAt(const dtMeshTile* tile, const dtPoly* poly, const float* pt)
+{
+	float best = FLT_MAX, height = pt[1];
+	for (int i = 0, j = poly->vertCount - 1; i < poly->vertCount; j = i++)
+	{
+		const float* vj = &tile->verts[poly->verts[j] * 3];
+		const float* vi = &tile->verts[poly->verts[i] * 3];
+		float t;
+		const float d = dtDistancePtSegSqr2D(pt, vj, vi, t);
+		if (d < best)
+		{
+			best = d;
+			height = vj[1] + (vi[1] - vj[1]) * t;
+		}
+	}
+	return height;
+}
+
+// A link's portal on its polygon's edge vj-vi, clamped as dtNavMeshQuery::getPortalPoints clamps it (a private member,
+// DetourNavMeshQuery.cpp:2315-2330).
+static void LinkPortal(const dtLink* link, const float* vj, const float* vi, float* a, float* b)
+{
+	dtVcopy(a, vj);
+	dtVcopy(b, vi);
+	if (link->side != 0xff && (link->bmin != 0 || link->bmax != 255))
+	{
+		dtVlerp(a, vj, vi, link->bmin / 255.0f);
+		dtVlerp(b, vj, vi, link->bmax / 255.0f);
+	}
+}
+
+// dtQueryFilter::passFilter, which DetourNavMeshQuery.cpp defines inline (DetourNavMeshQuery.cpp:87-92).
+static bool PassFilter(const dtQueryFilter& filter, const dtPoly* poly)
+{
+	return (poly->flags & filter.getIncludeFlags()) != 0 && (poly->flags & filter.getExcludeFlags()) == 0;
+}
+
+// Whether the polygon across a portal lies more than walkableClimb above or below it at x, a point of the portal.
+static bool IsLayerGap(const dtMeshTile* tile, const float* x, const dtMeshTile* neiTile, const dtPoly* neiPoly)
+{
+	return dtAbs(EdgeHeightAt(neiTile, neiPoly, x) - x[1]) > tile->header->walkableClimb;
+}
+
+// Whether a link of a polygon is a layer link: a tile-seam link between two ground polygons across which the other
+// polygon lies more than walkableClimb above or below at both ends of the portal (a, b: the portal on the polygon's
+// edge). The same test for the move and the straight path, so that a link one walls off the other never takes. Not a
+// link inside a tile (side 0xff), nor an off-mesh connection's (edge 0xff, or to or from its polygon). In Jordheim the
+// floors walled in under a ramp are 45-115 units below it at both ends of their links.
+static bool IsLayerLink(const dtMeshTile* tile, const dtPoly* poly, const dtLink* link, const dtMeshTile* neiTile,
+	const dtPoly* neiPoly, float* a, float* b)
+{
+	if (link->side == 0xff || link->edge >= poly->vertCount ||
+		poly->getType() != DT_POLYTYPE_GROUND || neiPoly->getType() != DT_POLYTYPE_GROUND)
+		return false;
+	LinkPortal(link, &tile->verts[poly->verts[link->edge] * 3],
+		&tile->verts[poly->verts[(link->edge + 1) % poly->vertCount] * 3], a, b);
+	return IsLayerGap(tile, a, neiTile, neiPoly) && IsLayerGap(tile, b, neiTile, neiPoly);
+}
+
+// MoveAlongSurface (grounded = 0) or MoveAlongSurfaceGrounded (grounded = 1), with dtNavMeshQuery::moveAlongSurface
+// (DetourNavMeshQuery.cpp:2044-2232) copied here so that a layer link is a wall: the move slides along it as along any
+// wall. Every other link, and the rest of the search, is Detour's.
+DLLEXPORT dtStatus MoveAlongSurfaceLayered(dtNavMeshQuery* query, float start[], float end[], float polyPickExt[], dtPolyFlags queryFilter[], int grounded, float* outputVector)
+{
+	dtQueryFilter filter;
+	filter.setIncludeFlags(queryFilter[0]);
+	filter.setExcludeFlags(queryFilter[1]);
+	dtPolyRef startRef;
+	dtStatus status = query->findNearestPoly(start, polyPickExt, &filter, &startRef, nullptr);
+	if (dtStatusFailed(status))
+		return status;
+	if (!startRef || !dtVisfinite(start) || !dtVisfinite(end))
+		return DT_FAILURE | DT_INVALID_PARAM;
+
+	const dtNavMesh* nav = query->getAttachedNavMesh();
+	thread_local dtNodePool pool(64, 32); // as the query's tiny node pool (DetourNavMeshQuery.cpp:197)
+	pool.clear();
+	static const int MAX_STACK = 48;
+	dtNode* stack[MAX_STACK];
+	int nstack = 0;
+	dtNode* startNode = pool.getNode(startRef);
+	startNode->pidx = 0;
+	startNode->cost = 0;
+	startNode->total = 0;
+	startNode->id = startRef;
+	startNode->flags = DT_NODE_CLOSED;
+	stack[nstack++] = startNode;
+
+	float bestPos[3];
+	float bestDist = FLT_MAX;
+	dtNode* bestNode = 0;
+	dtVcopy(bestPos, start);
+	float searchPos[3];
+	dtVlerp(searchPos, start, end, 0.5f);
+	const float searchRadSqr = dtSqr(dtVdist(start, end) / 2.0f + 0.001f);
+	float verts[DT_VERTS_PER_POLYGON * 3];
+
+	while (nstack)
+	{
+		dtNode* curNode = stack[0];
+		for (int i = 0; i < nstack - 1; ++i)
+			stack[i] = stack[i + 1];
+		nstack--;
+		const dtMeshTile* curTile = 0;
+		const dtPoly* curPoly = 0;
+		nav->getTileAndPolyByRefUnsafe(curNode->id, &curTile, &curPoly);
+		const int nverts = curPoly->vertCount;
+		for (int i = 0; i < nverts; ++i)
+			dtVcopy(&verts[i * 3], &curTile->verts[curPoly->verts[i] * 3]);
+		if (dtPointInPolygon(end, verts, nverts))
+		{
+			bestNode = curNode;
+			dtVcopy(bestPos, end);
+			break;
+		}
+		for (int i = 0, j = nverts - 1; i < nverts; j = i++)
+		{
+			static const int MAX_NEIS = 8;
+			int nneis = 0;
+			dtPolyRef neis[MAX_NEIS];
+			if (curPoly->neis[j] & DT_EXT_LINK)
+			{
+				for (unsigned int k = curPoly->firstLink; k != DT_NULL_LINK; k = curTile->links[k].next)
+				{
+					const dtLink* link = &curTile->links[k];
+					if (link->edge != j || link->ref == 0)
+						continue;
+					const dtMeshTile* neiTile = 0;
+					const dtPoly* neiPoly = 0;
+					nav->getTileAndPolyByRefUnsafe(link->ref, &neiTile, &neiPoly);
+					float a[3], b[3];
+					if (PassFilter(filter, neiPoly) && nneis < MAX_NEIS &&
+						!IsLayerLink(curTile, curPoly, link, neiTile, neiPoly, a, b))
+						neis[nneis++] = link->ref;
+				}
+			}
+			else if (curPoly->neis[j])
+			{
+				const unsigned int idx = (unsigned int)(curPoly->neis[j] - 1);
+				const dtPolyRef ref = nav->getPolyRefBase(curTile) | idx;
+				if (PassFilter(filter, &curTile->polys[idx]))
+					neis[nneis++] = ref;
+			}
+			const float* vj = &verts[j * 3];
+			const float* vi = &verts[i * 3];
+			float tseg;
+			if (!nneis)
+			{
+				const float distSqr = dtDistancePtSegSqr2D(end, vj, vi, tseg);
+				if (distSqr < bestDist)
+				{
+					dtVlerp(bestPos, vj, vi, tseg);
+					bestDist = distSqr;
+					bestNode = curNode;
+				}
+			}
+			else
+			{
+				for (int k = 0; k < nneis; ++k)
+				{
+					dtNode* neighbourNode = pool.getNode(neis[k]);
+					if (!neighbourNode || (neighbourNode->flags & DT_NODE_CLOSED))
+						continue;
+					if (dtDistancePtSegSqr2D(searchPos, vj, vi, tseg) > searchRadSqr)
+						continue;
+					if (nstack < MAX_STACK)
+					{
+						neighbourNode->pidx = pool.getNodeIdx(curNode);
+						neighbourNode->flags |= DT_NODE_CLOSED;
+						stack[nstack++] = neighbourNode;
+					}
+				}
+			}
+		}
+	}
+
+	if (grounded)
+	{
+		// As MoveAlongSurfaceGrounded: the height of the polygon the move ended on.
+		float height;
+		if (!bestNode)
+			return DT_FAILURE | DT_BUFFER_TOO_SMALL;
+		status = query->getPolyHeight(bestNode->id, bestPos, &height);
+		if (dtStatusFailed(status))
+			return status;
+		bestPos[1] = height;
+	}
+	dtVcopy(outputVector, bestPos);
+	return DT_SUCCESS;
+}
+
+// PathStraight, with the corridor split where it takes a layer link (IsLayerLink), at the portal's point nearest to
+// where the part before it starts. Each part is string-pulled on its own floor, and the crossing is reported twice, on
+// the floor it leaves and, flagged LAYER_LINK, on the floor it enters. Without a layer link in the corridor the result
+// is PathStraight's.
+DLLEXPORT dtStatus PathStraightLayered(dtNavMeshQuery* query, float start[], float end[], float polyPickExt[], dtPolyFlags queryFilter[], dtStraightPathOptions pathOptions, int* pointCount, float* pointBuffer, dtPolyFlags* pointFlags)
+{
+	*pointCount = 0;
+	dtQueryFilter filter;
+	filter.setIncludeFlags(queryFilter[0]);
+	filter.setExcludeFlags(queryFilter[1]);
+	dtPolyRef startRef, endRef;
+	dtStatus status;
+	if (dtStatusFailed(status = query->findNearestPoly(start, polyPickExt, &filter, &startRef, nullptr)) ||
+		dtStatusFailed(status = query->findNearestPoly(end, polyPickExt, &filter, &endRef, nullptr)))
+		return status;
+	int npolys = 0;
+	dtPolyRef polys[MAX_POLY];
+	const dtStatus pathStatus = query->findPath(startRef, endRef, start, end, &filter, polys, &npolys, MAX_POLY);
+	if (npolys <= 0 || dtStatusFailed(pathStatus))
+		return pathStatus;
+	const bool isPartialPath = (pathStatus & DT_PARTIAL_RESULT) != 0 || polys[npolys - 1] != endRef;
+
+	const dtNavMesh* nav = query->getAttachedNavMesh();
+	float from[3];
+	dtVcopy(from, start);
+	int first = 0;
+	for (int i = 0; i < npolys; ++i)
+	{
+		float to[3], top[3];
+		const bool last = i + 1 == npolys;
+		if (last)
+			dtVcopy(to, end);
+		else
+		{
+			const dtMeshTile *tile = 0, *neiTile = 0;
+			const dtPoly *poly = 0, *neiPoly = 0;
+			nav->getTileAndPolyByRefUnsafe(polys[i], &tile, &poly);
+			nav->getTileAndPolyByRefUnsafe(polys[i + 1], &neiTile, &neiPoly);
+			const dtLink* link = 0;
+			for (unsigned int k = poly->firstLink; k != DT_NULL_LINK && !link; k = tile->links[k].next)
+				if (tile->links[k].ref == polys[i + 1])
+					link = &tile->links[k];
+			float left[3], right[3], t;
+			if (!link || !IsLayerLink(tile, poly, link, neiTile, neiPoly, left, right))
+				continue; // the same floor on both sides
+			dtDistancePtSegSqr2D(from, left, right, t);
+			dtVlerp(to, left, right, t);
+			dtVcopy(top, to);
+			top[1] = EdgeHeightAt(neiTile, neiPoly, to);
+		}
+		// The part polys[first..i], from 'from' to 'to', with PathStraight's flags.
+		float points[MAX_POLY * 3];
+		unsigned char straightFlags[MAX_POLY];
+		dtPolyRef refs[MAX_POLY];
+		const int count = i - first + 1;
+		int n = 0;
+		status = query->findStraightPath(from, to, polys + first, count, points, straightFlags, refs, &n, MAX_POLY, pathOptions);
+		if (dtStatusFailed(status) || n <= 0)
+			return dtStatusFailed(status) ? status : DT_FAILURE;
+		for (int k = 0; k < n + (last ? 0 : 1) && *pointCount < MAX_POLY; ++k)
+		{
+			const float* point = k < n ? &points[k * 3] : top;
+			if (*pointCount > 0 && dtVequal(&pointBuffer[(*pointCount - 1) * 3], point))
+				continue;
+			dtPolyRef ref = k < n ? refs[k] : polys[i + 1];
+			if (ref == 0)
+				ref = k == 0 ? polys[first] : (k >= count ? polys[i] : polys[first + k]);
+			unsigned short flags = 0;
+			nav->getPolyFlags(ref, &flags);
+			dtVcopy(&pointBuffer[*pointCount * 3], point);
+			pointFlags[(*pointCount)++] = (dtPolyFlags)(k < n ? flags : flags | LAYER_LINK);
+		}
+		if (!last)
+			dtVcopy(from, top);
+		first = i + 1;
+	}
+	return isPartialPath ? (DT_SUCCESS | DT_PARTIAL_RESULT) : DT_SUCCESS;
 }

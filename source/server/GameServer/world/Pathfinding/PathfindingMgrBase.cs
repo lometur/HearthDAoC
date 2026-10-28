@@ -35,6 +35,17 @@ namespace DOL.GS
             return end;
         }
 
+        // HearthDAoC: the player bots' layer-aware queries (#166): here the plain ones, and no grounded move.
+        public virtual PathfindingResult GetPathStraightLayered(Zone zone, Vector3 start, Vector3 end, EDtPolyFlags[] filters, Span<WrappedPathfindingNode> destination)
+        {
+            return GetPathStraight(zone, start, end, filters, destination);
+        }
+
+        public virtual Vector3? GetMoveAlongSurfaceLayered(Zone zone, Vector3 start, Vector3 end, EDtPolyFlags[] filters, bool grounded)
+        {
+            return grounded ? null : GetMoveAlongSurface(zone, start, end, filters);
+        }
+
         public virtual Vector3? GetRandomPoint(Zone zone, Vector3 position, float radius, EDtPolyFlags[] filters)
         {
             return position;

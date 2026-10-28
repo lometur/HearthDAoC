@@ -11,12 +11,13 @@ using NUnit.Framework;
 namespace DOL.UnitTests;
 
 // HearthDAoC: player-bot walks that stalled, replayed on the installed navmesh. Read-only; never starts the server.
-// Set OFFLINE_DAOC_NAV_ROOT to a folder with navmesh/zone008.nav, zone012.nav, zone120.nav, zone126.nav, zone152.nav,
-// zone209.nav, zone250.nav and lib/Detour
+// Set OFFLINE_DAOC_NAV_ROOT to a folder with navmesh/zone008.nav, zone012.nav, zone014.nav, zone120.nav, zone126.nav,
+// zone152.nav, zone209.nav, zone250.nav and lib/Detour
 // (tools/linux/odaoc_fetch.py --lock deploy/upstream.lock extract runtime/server/navmesh/zone008.nav
 // FOLDER/navmesh/zone008.nav, and the same for the others). One test per zone: loading a zone's navmesh twice in one
-// process crashes the test host.
-[TestFixture, NonParallelizable, Explicit("Needs OFFLINE_DAOC_NAV_ROOT: a folder with navmesh/zone008.nav, zone012.nav, zone120.nav, zone126.nav, zone152.nav, zone209.nav, zone250.nav and lib/Detour")]
+// process crashes the test host. lib/Detour must be built from this tree (source/server/Pathing/Detour, as
+// deploy/Dockerfile builds it): the player bots' layer-aware queries (#166) are not in upstream's release library.
+[TestFixture, NonParallelizable, Explicit("Needs OFFLINE_DAOC_NAV_ROOT: a folder with navmesh/zone008.nav, zone012.nav, zone014.nav, zone120.nav, zone126.nav, zone152.nav, zone209.nav, zone250.nav and lib/Detour")]
 public class UT_PlayerBotWalkReplay
 {
     // The quest bot stood 513 units short of Olorustos for 14 minutes (lv-r1-stall, 2026-10-25 04:46): its whole-unit
@@ -102,8 +103,11 @@ public class UT_PlayerBotWalkReplay
 
     // st-final4 (and six runs before it): in Jordheim a roaming bot's corridor crossed a ridge by a corner 35 units up. Its moves
     // toward the corner slid along the ridge's foot into a pocket, and every fresh corridor from there led out and back into it.
+    // The pocket is one of three small floors walled in under the ramps there, which the mesh links only to the ramps 45-115
+    // units above them, at tile seams: the surface moves fell through the ramps onto them, and the corridors out hid the
+    // climb in one corner. With the layer-aware queries (#166) the bot gets out of each of them and walks over them.
     [Test]
-    public void TheBotWalksOutOfThePocketBelowARidge() =>
+    public void TheBotGetsOutOfAndKeepsOffTheFloorsUnderJordheimsRamps() =>
         // Jordheim (region 101, zone 120): OffsetX 1, OffsetY 1, Width 8, Height 8.
         OnZone(120, "Jordheim", 1, 1, (nav, region, zone) =>
         {
@@ -115,7 +119,65 @@ public class UT_PlayerBotWalkReplay
                 Assert.That(UT_PlayerBotDriver.Walk(nav, region, zone, firstStall, goal, keepExact: true, ticks: 400, blockEnds: true),
                     Is.InRange(1, 400), $"from the first stall to {goal}");
             }
+            // Out of the other two and the pocket floor's south end, toward goals bots had there: blocked after 29-40 steps
+            // before.
+            foreach ((Vector3 from, Vector3 goal) in new[] {
+                (new Vector3(32169, 26518, 8766), new Vector3(32145, 26460, 8823)),                             // st-fix6
+                (new Vector3(31257.7f, 26596.0f, 8818.8f), new Vector3(30859, 27162, 8818)),                    // lm-fsmoke
+                (new Vector3(30990.1f, 26822.2f, 8847.4f), new Vector3(31024, 26697, 8891)) })                  // lm-ona
+                Assert.That(UT_PlayerBotDriver.Walk(nav, region, zone, from, goal, keepExact: true, ticks: 400, blockEnds: true),
+                    Is.InRange(1, 100), $"from {from} to {goal}");
+            // Over each of them on the ramp, not down onto it: these walks timed out after 150 steps on the floor below, or
+            // were blocked after 33 and 18.
+            foreach ((Vector3 from, Vector3 goal) in new[] {
+                (new Vector3(32315.82f, 26506.08f, 8796.79f), new Vector3(32091.76f, 26532.80f, 8781.00f)),
+                (new Vector3(31378.30f, 26576.80f, 8864.81f), new Vector3(31235.76f, 26625.87f, 8816.79f)),
+                (new Vector3(31026.96f, 26935.20f, 8804.27f), new Vector3(30992.94f, 26782.56f, 8917.07f)) })
+                Assert.That(UT_PlayerBotDriver.Walk(nav, region, zone, from, goal, keepExact: true, ticks: 400, blockEnds: true),
+                    Is.InRange(1, 20), $"from {from} to {goal}");
         });
+
+    // #166: where no tile seam joins two floors, the layer-aware corridor is the plain one. A first version took an off-mesh
+    // connection's link (Detour gives it edge 0xff) for a seam's: on corridors back across a two-way jump link between
+    // two tiles it read past the polygon's vertices and put corners as far off as (0, 0, z), in zones 8, 12, 14 and 250.
+    // Here the Pennine Mountains' 15 such links, both ways.
+    [Test]
+    public void TheLayeredCorridorOverAJumpLinkIsThePlainOne() =>
+        // Pennine Mountains (region 1, zone 14): OffsetX 69, OffsetY 43, Width 8, Height 8.
+        OnZone(14, "Pennine Mountains", 69, 43, (nav, region, zone) =>
+        {
+            var plain = new WrappedPathfindingNode[256];
+            var layered = new WrappedPathfindingNode[256];
+            foreach ((Vector3 start, Vector3 end) in PennineJumps)
+                foreach ((Vector3 a, Vector3 b) in new[] { (start, end), (end, start) })
+                {
+                    PathfindingResult p = nav.GetPathStraight(zone, a, b, nav.DefaultFilters, plain);
+                    PathfindingResult l = nav.GetPathStraightLayered(zone, a, b, nav.DefaultFilters, layered);
+                    Assert.That(p.NodeCount, Is.GreaterThan(1), $"{a} -> {b}");
+                    Assert.That(l.Status, Is.EqualTo(p.Status), $"{a} -> {b}");
+                    Assert.That(layered[..l.NodeCount], Is.EqualTo(plain[..p.NodeCount]), $"{a} -> {b}");
+                }
+        });
+
+    // The two ends of the cross-tile two-way off-mesh connections in zone014.nav.
+    private static readonly (Vector3, Vector3)[] PennineJumps =
+    {
+        (new(583219.2f, 365446.4f, 6345.6f), new(583180.8f, 365475.2f, 6345.6f)),
+        (new(583158.4f, 365478.4f, 6233.6f), new(583206.4f, 365449.6f, 6246.4f)),
+        (new(581616.0f, 366384.0f, 6345.6f), new(581606.4f, 366406.4f, 6345.6f)),
+        (new(581619.2f, 366428.8f, 6249.6f), new(581625.6f, 366377.6f, 6249.6f)),
+        (new(585212.8f, 396300.8f, 3984.0f), new(585232.0f, 396307.2f, 3984.0f)),
+        (new(585174.4f, 396284.8f, 3792.0f), new(585257.6f, 396316.8f, 3795.2f)),
+        (new(585232.0f, 396307.2f, 3984.0f), new(585212.8f, 396300.8f, 3984.0f)),
+        (new(585232.0f, 396307.2f, 3984.0f), new(585200.0f, 396294.4f, 4070.4f)),
+        (new(585257.6f, 396316.8f, 3795.2f), new(585174.4f, 396284.8f, 3792.0f)),
+        (new(585257.6f, 396316.8f, 3795.2f), new(585164.8f, 396281.6f, 4044.8f)),
+        (new(585484.8f, 396784.0f, 2841.6f), new(585523.2f, 396745.6f, 2841.6f)),
+        (new(585523.2f, 396780.8f, 2710.4f), new(585497.6f, 396812.8f, 2710.4f)),
+        (new(585523.2f, 396745.6f, 2841.6f), new(585484.8f, 396784.0f, 2841.6f)),
+        (new(585497.6f, 396812.8f, 2710.4f), new(585484.8f, 396784.0f, 2841.6f)),
+        (new(575993.6f, 398880.0f, 5552.0f), new(576016.0f, 398883.2f, 5552.0f)),
+    };
 
     // st-fix2: in Tir na Nog Pbothaacw stood 84 units above the floor, off the mesh: every step lost the walkable
     // surface, for the rest of the run. It steps onto the nearest floor, 51 units away, and walks on from there.
