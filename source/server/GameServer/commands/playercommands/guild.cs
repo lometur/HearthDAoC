@@ -55,11 +55,12 @@ namespace DOL.GS.Commands
 			}
 			#endregion
 			#region Enough members to form Check - Ensure our group still has enough players in to form
-/*			if (group.MemberCount < Properties.GUILD_NUM)
+			// HearthDAoC: back on (owner 2026-10-28, #176): the group needs guild_num members, its bots counting.
+			if (group.MemberCount < Properties.GUILD_NUM)
 			{
 				leader.Out.SendMessage(LanguageMgr.GetTranslation(leader.Client.Account.Language, "Scripts.Player.Guild.FormNoMembers", Properties.GUILD_NUM), eChatType.CT_System, eChatLoc.CL_SystemWindow);
 				return false;
-			}*/
+			}
 			#endregion
 
 			return true;
@@ -91,7 +92,8 @@ namespace DOL.GS.Commands
 
 			var memnum = player.Group.GetPlayersInTheGroup().Count(p => p.TempProperties.GetProperty<bool>("Guild_Consider"));
 
-			if (!GuildFormCheck(player) || memnum != player.Group.MemberCount)
+			// HearthDAoC: only the human players are asked, the bots counting as accepting (#176): all of them must have.
+			if (!GuildFormCheck(player) || memnum != HearthDAoC.GuildForming.Humans(player, player.Group).Count)
 				return;
 
 			Group group = player.Group;
@@ -115,6 +117,8 @@ namespace DOL.GS.Commands
 					}
 					ply.TempProperties.RemoveProperty("Guild_Consider");
 				}
+				// HearthDAoC: the group's gamebots join it too (#176); its player bots joined above, with the players.
+				HearthDAoC.GuildForming.JoinBots(newGuild, group.Leader, group, addPlayerBots: false);
 				player.Group.Leader.TempProperties.RemoveProperty("Guild_Name");
 				player.Group.Leader.RemoveMoney(GuildFormCost);
 				player.Out.SendMessage(LanguageMgr.GetTranslation(player.Client.Account.Language, "Scripts.Player.Guild.GuildCreated", guildname, player.Group.Leader.Name), eChatType.CT_Guild, eChatLoc.CL_SystemWindow);
@@ -127,6 +131,13 @@ namespace DOL.GS.Commands
 			if (player.Guild != null)
 			{
 				player.Out.SendMessage(LanguageMgr.GetTranslation(player.Client.Account.Language, "Scripts.Player.Guild.AlreadyInGuild"), eChatType.CT_System, eChatLoc.CL_SystemWindow);
+				return;
+			}
+			// HearthDAoC: nor may a bot of its group be (#176): the group's bots join the guild with the player.
+			string botInAGuild = HearthDAoC.GuildForming.BotInAGuild(player.Group);
+			if (botInAGuild != null)
+			{
+				player.Out.SendMessage(LanguageMgr.GetTranslation(player.Client.Account.Language, "Scripts.Player.Guild.AlreadyInGuildName", botInAGuild), eChatType.CT_System, eChatLoc.CL_SystemWindow);
 				return;
 			}
 			if (guildname.Length > 30)
@@ -158,6 +169,8 @@ namespace DOL.GS.Commands
 			newGuild.AddPlayer(player, newGuild.GetRankByID(0));
 			player.RemoveMoney(GuildFormCost);
 			player.Out.SendMessage(LanguageMgr.GetTranslation(player.Client.Account.Language, "Scripts.Player.Guild.GuildCreated", guildname, player.Name), eChatType.CT_Guild, eChatLoc.CL_SystemWindow);
+			// HearthDAoC: the group's bots join it (#176): player bots as members, gamebots as /gc invite takes them.
+			HearthDAoC.GuildForming.JoinBots(newGuild, player, player.Group, addPlayerBots: true);
 		}
 
 		/// <summary>
@@ -1124,7 +1137,16 @@ namespace DOL.GS.Commands
 						// player of the group to accept, and bots in the group count as members but cannot answer.
 						// Alone, or with only bots in the group, the player forms the guild at the registrar for the
 						// same fee (owner 2026-10-17). Groups with other players keep the accept dialog.
-						if (group == null || group.GetPlayersInTheGroup().All(member => member == client.Player))
+						// HearthDAoC: with guild_num members again, bots counting (owner 2026-10-28, #176). The player alone or
+						// with only bots (player bots too) forms at once; other players in the group are asked.
+						HearthDAoC.GuildFormStep formStep = HearthDAoC.GuildForming.Rule(group?.MemberCount ?? 1,
+							HearthDAoC.GuildForming.Humans(client.Player, group).Count, Properties.GUILD_NUM);
+						if (formStep == HearthDAoC.GuildFormStep.Refused)
+						{
+							client.Out.SendMessage(LanguageMgr.GetTranslation(client.Account.Language, "Scripts.Player.Guild.FormNoMembers", Properties.GUILD_NUM), eChatType.CT_System, eChatLoc.CL_SystemWindow);
+							return;
+						}
+						if (formStep == HearthDAoC.GuildFormStep.FormNow)
 						{
 							FormGuildAlone(client.Player, string.Join(" ", args, 2, args.Length - 2));
 							return;
@@ -1138,11 +1160,12 @@ namespace DOL.GS.Commands
 						}
 						#endregion
 						#region Enough members to form Check
-						/*if (group.MemberCount < Properties.GUILD_NUM)
+						// HearthDAoC: back on (owner 2026-10-28, #176): the group needs guild_num members, its bots counting.
+						if (group.MemberCount < Properties.GUILD_NUM)
 						{
 							client.Out.SendMessage(LanguageMgr.GetTranslation(client.Account.Language, "Scripts.Player.Guild.FormNoMembers", Properties.GUILD_NUM), eChatType.CT_System, eChatLoc.CL_SystemWindow);
 							return;
-						}*/
+						}
 						#endregion
 						#region Player already in guild check and Cross Realm Check
 
@@ -1158,6 +1181,13 @@ namespace DOL.GS.Commands
 								client.Out.SendMessage("All group members must be of the same realm in order to create a guild.", eChatType.CT_System, eChatLoc.CL_SystemWindow);
 								return;
 							}
+						}
+						// HearthDAoC: nor a gamebot of the group (#176): the group's bots join the guild with its players.
+						string botInAGuild = HearthDAoC.GuildForming.BotInAGuild(group);
+						if (botInAGuild != null)
+						{
+							client.Player.Group.SendMessageToGroupMembers(LanguageMgr.GetTranslation(client.Account.Language, "Scripts.Player.Guild.AlreadyInGuildName", botInAGuild), eChatType.CT_System, eChatLoc.CL_SystemWindow);
+							return;
 						}
 						#endregion
 						#region Guild Length Naming Checks
@@ -1195,7 +1225,8 @@ namespace DOL.GS.Commands
 						if (GuildFormCheck(client.Player))
 						{
 							client.Player.Group.Leader.TempProperties.SetProperty("Guild_Consider", true);
-							foreach (GamePlayer p in group.GetPlayersInTheGroup().Where(p => p != @group.Leader))
+							// HearthDAoC: only the human players are asked (#176): a player bot can't answer.
+							foreach (GamePlayer p in HearthDAoC.GuildForming.Humans(client.Player, group).Where(p => p != @group.Leader))
 							{
 								p.Out.SendCustomDialog(string.Format("Do you wish to create the guild {0} with {1} as Guild Leader", guildname, client.Player.Name), new CustomDialogResponse(CreateGuild));
 							}
