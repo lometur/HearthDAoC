@@ -5,8 +5,9 @@ using DOL.GS.PacketHandler;
 namespace DOL.GS.HearthDAoC;
 
 // HearthDAoC: forming a guild needs a group of guild_num (8) again, bots included (owner 2026-10-28, #176: "players
-// should need 8 again too (but this can include bots)"). Every member of the group counts: players, player bots,
-// gamebots and companions. Only the human players are asked: bots can't answer the accept dialog (a player bot leaves
+// should need 8 again too (but this can include bots)"). The founders count: the members that join, players, player
+// bots and gamebots. Companions don't (owner 2026-10-28): they never join, so a player and 7 companions would form a
+// guild of one. Only the human players are asked: bots can't answer the accept dialog (a player bot leaves
 // it pending, or declines it when another dialog replaces it), so they count as accepting. Rule is pure
 // (UT_GuildForming); guild.cs asks it and carries the outcome out, and the founding group's bots join the new guild.
 
@@ -26,6 +27,11 @@ public static class GuildForming
         memberCount < guildNum ? GuildFormStep.Refused
         : humanCount > 1 ? GuildFormStep.AskOthers
         : GuildFormStep.FormNow;
+
+    // The group's members that join the guild (JoinBots): its players, player bots included, and its gamebots; the
+    // player alone when it has no group.
+    public static int Founders(GamePlayer player, Group group) =>
+        group == null ? 1 : group.GetMembersInTheGroup().Count(member => member is GamePlayer or GameBot { IsAutonomousWorldBot: true });
 
     // A player bot: a GamePlayer the server plays itself (its client is an IPlayerBotClient).
     public static bool IsPlayerBot(GamePlayer player) => player?.Client is IPlayerBotClient;

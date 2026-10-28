@@ -149,7 +149,8 @@ class DialogAnswerTests(unittest.TestCase):
 
 
 GUILD = os.path.join(GAME_SERVER, "commands", "playercommands", "guild.cs")
-NUM_CHECK = "if (group.MemberCount < Properties.GUILD_NUM)"
+# The founders count (the members that join: players, player bots, gamebots), not the group's companions.
+NUM_CHECK = re.compile(r"if \(HearthDAoC\.GuildForming\.Founders\((?:leader|client\.Player), group\) < Properties\.GUILD_NUM\)")
 
 
 def line_above(text, at):
@@ -165,20 +166,20 @@ class GuildFormTests(unittest.TestCase):
         return body[:body.index(end)]
 
     def test_both_guild_num_checks_are_back_and_marked(self):
-        self.assertEqual(self.text.count(NUM_CHECK), 2)
-        self.assertNotRegex(self.text, r"/\*\s*if \(group\.MemberCount < Properties\.GUILD_NUM\)")
+        self.assertEqual(len(NUM_CHECK.findall(self.text)), 2)
+        self.assertNotIn("group.MemberCount < Properties.GUILD_NUM", self.text)
         for name in ("private static bool GuildFormCheck(", 'case "form":'):
             body = self.body(name, "#endregion\n\t\t\t\t\t\t#region Player already" if name == 'case "form":'
                              else "return true;")
             if name == 'case "form":':
                 body = body[body.index("#region Enough members to form Check"):]
-            at = body.index(NUM_CHECK)
+            at = NUM_CHECK.search(body).start()
             self.assertIn("// HearthDAoC:", line_above(body, at), name)
             self.assertNotIn("*/", body[at:])
 
     def test_the_solo_form_needs_the_number_too(self):
         form = self.body('case "form":', 'case "quit":')
-        rule = form.index("HearthDAoC.GuildForming.Rule(group?.MemberCount ?? 1,")
+        rule = form.index("HearthDAoC.GuildForming.Rule(HearthDAoC.GuildForming.Founders(client.Player, group),")
         self.assertIn("HearthDAoC.GuildForming.Humans(client.Player, group).Count, Properties.GUILD_NUM);", form[rule:])
         self.assertIn("// HearthDAoC:", form[:rule].rsplit("\n", 3)[-3])
         refused = form.index("if (formStep == HearthDAoC.GuildFormStep.Refused)")

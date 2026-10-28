@@ -55,8 +55,8 @@ namespace DOL.GS.Commands
 			}
 			#endregion
 			#region Enough members to form Check - Ensure our group still has enough players in to form
-			// HearthDAoC: back on (owner 2026-10-28, #176): the group needs guild_num members, its bots counting.
-			if (group.MemberCount < Properties.GUILD_NUM)
+			// HearthDAoC: back on (owner 2026-10-28, #176): the group needs guild_num founders, its bots counting, not companions.
+			if (HearthDAoC.GuildForming.Founders(leader, group) < Properties.GUILD_NUM)
 			{
 				leader.Out.SendMessage(LanguageMgr.GetTranslation(leader.Client.Account.Language, "Scripts.Player.Guild.FormNoMembers", Properties.GUILD_NUM), eChatType.CT_System, eChatLoc.CL_SystemWindow);
 				return false;
@@ -1137,9 +1137,9 @@ namespace DOL.GS.Commands
 						// player of the group to accept, and bots in the group count as members but cannot answer.
 						// Alone, or with only bots in the group, the player forms the guild at the registrar for the
 						// same fee (owner 2026-10-17). Groups with other players keep the accept dialog.
-						// HearthDAoC: with guild_num members again, bots counting (owner 2026-10-28, #176). The player alone or
+						// HearthDAoC: with guild_num founders again, bots counting, not companions (owner 2026-10-28, #176). The player alone or
 						// with only bots (player bots too) forms at once; other players in the group are asked.
-						HearthDAoC.GuildFormStep formStep = HearthDAoC.GuildForming.Rule(group?.MemberCount ?? 1,
+						HearthDAoC.GuildFormStep formStep = HearthDAoC.GuildForming.Rule(HearthDAoC.GuildForming.Founders(client.Player, group),
 							HearthDAoC.GuildForming.Humans(client.Player, group).Count, Properties.GUILD_NUM);
 						if (formStep == HearthDAoC.GuildFormStep.Refused)
 						{
@@ -1160,8 +1160,8 @@ namespace DOL.GS.Commands
 						}
 						#endregion
 						#region Enough members to form Check
-						// HearthDAoC: back on (owner 2026-10-28, #176): the group needs guild_num members, its bots counting.
-						if (group.MemberCount < Properties.GUILD_NUM)
+						// HearthDAoC: back on (owner 2026-10-28, #176): the group needs guild_num founders, its bots counting, not companions.
+						if (HearthDAoC.GuildForming.Founders(client.Player, group) < Properties.GUILD_NUM)
 						{
 							client.Out.SendMessage(LanguageMgr.GetTranslation(client.Account.Language, "Scripts.Player.Guild.FormNoMembers", Properties.GUILD_NUM), eChatType.CT_System, eChatLoc.CL_SystemWindow);
 							return;

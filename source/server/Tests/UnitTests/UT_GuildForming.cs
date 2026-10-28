@@ -14,8 +14,8 @@ using NUnit.Framework;
 namespace DOL.GS.Tests;
 
 // HearthDAoC: forming a guild needs a group of guild_num (8) again, bots included (owner 2026-10-28, #176). GuildForming
-// holds the rule; guild.cs counts the group (every member: players, player bots, gamebots, companions) and its human
-// players, and carries the outcome out. Player bots never join a starter guild (StartupGuilds.AddNewbieToStarterGuild).
+// holds the rule; guild.cs counts the group's founders (the members that join: players, player bots and gamebots, not
+// companions) and its human players, and carries the outcome out. Player bots never join a starter guild (StartupGuilds.AddNewbieToStarterGuild).
 // The group doubles are made without their constructors, as UT_PlayerBotWake.cs:127-140 and
 // UT_PlayerLedPullCoordinator.cs:874-919 make them: a human's client is a plain GameClient, a player bot's a
 // HeadlessClient. GameObject's type initializer reads the database: an empty one stands in (UT_PlayerBotWake.cs:31-35).
@@ -127,7 +127,7 @@ public sealed class UT_GuildForming
         GamePlayer player = Human("Lometur");
         Group group = GroupOf(player, PlayerBots(7));
         Assert.That(GuildForming.Humans(player, group), Is.EqualTo(new[] { player }));
-        Assert.That(GuildForming.Rule(group.MemberCount, GuildForming.Humans(player, group).Count, GuildNum),
+        Assert.That(GuildForming.Rule(GuildForming.Founders(player, group), GuildForming.Humans(player, group).Count, GuildNum),
             Is.EqualTo(GuildFormStep.FormNow));
     }
 
@@ -137,7 +137,7 @@ public sealed class UT_GuildForming
         GamePlayer player = Human("Lometur"), friend = Human("Thelegend");
         Group group = GroupOf(player, [friend, ..PlayerBots(6)]);
         Assert.That(GuildForming.Humans(player, group), Is.EquivalentTo(new[] { player, friend }));
-        Assert.That(GuildForming.Rule(group.MemberCount, GuildForming.Humans(player, group).Count, GuildNum),
+        Assert.That(GuildForming.Rule(GuildForming.Founders(player, group), GuildForming.Humans(player, group).Count, GuildNum),
             Is.EqualTo(GuildFormStep.AskOthers));
     }
 
@@ -146,7 +146,7 @@ public sealed class UT_GuildForming
     {
         GamePlayer player = Human("Lometur");
         Group group = GroupOf(player, PlayerBots(6));
-        Assert.That(GuildForming.Rule(group.MemberCount, GuildForming.Humans(player, group).Count, GuildNum),
+        Assert.That(GuildForming.Rule(GuildForming.Founders(player, group), GuildForming.Humans(player, group).Count, GuildNum),
             Is.EqualTo(GuildFormStep.Refused));
     }
 
@@ -155,8 +155,36 @@ public sealed class UT_GuildForming
     {
         GamePlayer player = Human("Lometur");
         Group group = GroupOf(player, [..PlayerBots(3), ..GameBots(4)]);
-        Assert.That(group.MemberCount, Is.EqualTo(8));
+        Assert.That(GuildForming.Founders(player, group), Is.EqualTo(8));
         Assert.That(GuildForming.Humans(player, group), Is.EqualTo(new[] { player }));
+    }
+
+    [Test]
+    public void CompanionsDoNotCountTowardTheNumber()
+    {
+        // Owner 2026-10-28: a companion never joins the guild, so a player and 7 companions would form a guild of one.
+        GamePlayer player = Human("Lometur");
+        Group group = GroupOf(player, Companions(7));
+        Assert.That(group.MemberCount, Is.EqualTo(8));
+        Assert.That(GuildForming.Founders(player, group), Is.EqualTo(1));
+        Assert.That(GuildForming.Rule(GuildForming.Founders(player, group), 1, GuildNum), Is.EqualTo(GuildFormStep.Refused));
+    }
+
+    [Test]
+    public void ACompanionDoesNotMakeUpTheEighth()
+    {
+        GamePlayer player = Human("Lometur");
+        Group group = GroupOf(player, [..PlayerBots(5), ..GameBots(1), ..Companions(1)]);
+        Assert.That(group.MemberCount, Is.EqualTo(8));
+        Assert.That(GuildForming.Founders(player, group), Is.EqualTo(7));
+        Assert.That(GuildForming.Founders(player, GroupOf(player, [..PlayerBots(6), ..GameBots(1), ..Companions(1)])),
+            Is.EqualTo(8));
+    }
+
+    [Test]
+    public void APlayerWithNoGroupIsTheOnlyFounder()
+    {
+        Assert.That(GuildForming.Founders(Human("Lometur"), null), Is.EqualTo(1));
     }
 
     [Test]
@@ -295,6 +323,9 @@ public sealed class UT_GuildForming
     private static IEnumerable<GameBot> GameBots(int count) =>
         Enumerable.Range(1, count)
             .Select(index => WorldBot($"Rook{index}", worldBot: true, databaseId: 9_000_200 + index));
+
+    private static IEnumerable<GameBot> Companions(int count) =>
+        Enumerable.Range(1, count).Select(index => WorldBot($"Pet{index}", worldBot: false));
 
     private static Group GroupOf(GamePlayer leader, IEnumerable<GameLiving> others)
     {
