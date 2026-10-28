@@ -15,7 +15,7 @@ using NUnit.Framework;
 namespace DOL.GS.Tests;
 
 // HearthDAoC player bots (#137 level-matched run, levelmatch/DESIGN.md): a bot made at a GameBot's level, class and race. The
-// allocator against GameBot.SpendSpecPoints' numbers (an autonomous GameBot's training, REVIEW-FIXES 5) and
+// allocator against GameBot.SpendSpecPoints' numbers (with a player's half levels from 41 on, #167 F13) and
 // VerifySpecPoints' budget, the stats against CharacterStatValidator, gender and race, the specs string and its keys,
 // the retrain, the skill counts, the creation row, the gear rules and the KIT line. No server and no database (an empty one
 // for GameObject's type initializer, as UT_PlayerBotDriver.cs:26-38, and SkillBase's property names,
@@ -67,10 +67,6 @@ public sealed class UT_PlayerBotKit
         return all;
     }
 
-    // What an autonomous GameBot trained level by level has earned: VerifyTotal without the half levels.
-    private static int Earned(int level, int multiplier) =>
-        Enumerable.Range(2, Math.Max(0, level - 1)).Sum(i => PlayerBotKit.SpecPointsForLevel(i, multiplier, false));
-
     private static IEnumerable<ICharacterClass> AdvancedClasses() =>
         typeof(GamePlayer).Assembly.GetTypes()
             .Where(t => !t.IsAbstract && typeof(ICharacterClass).IsAssignableFrom(t) && t.GetCustomAttributes<CharacterClassAttribute>(false).Any())
@@ -98,18 +94,62 @@ public sealed class UT_PlayerBotKit
             Assert.That(PlayerBotKit.Budget(level, multiplier), Is.EqualTo(VerifyTotal(level, multiplier)), $"level {level}");
     }
 
+    // From 41 on the half levels' points too (#167 F13): 45 and 47 were (45, 42, 11, 9, 9) and (47, 44, 12, 9, 3).
     [TestCase(20, 20, 17, 6, 6, 3)] [TestCase(30, 30, 27, 9, 7, 2)] [TestCase(40, 40, 37, 10, 9, 5)]
-    [TestCase(45, 45, 42, 11, 9, 9)] [TestCase(47, 47, 44, 12, 9, 3)]
+    [TestCase(45, 45, 45, 15, 12, 0)] [TestCase(47, 47, 47, 17, 16, 0)]
     public void An_armsman_spends_as_a_gamebot_trained_level_by_level(int level, int slash, int shields, int parry, int bows, int unspent)
     {
         Dictionary<string, int> specs = Run(Armsman, level, 20, out int left);
         Assert.That((specs[Specs.Slash], specs[Specs.Shields], specs[Specs.Parry], specs[Specs.Crossbow], left),
             Is.EqualTo((slash, shields, parry, bows, unspent)));
-        Assert.That(specs.Values.Sum(PlayerBotKit.Cost) + left, Is.EqualTo(Earned(level, 20)));
-        Assert.That(specs.Values.Sum(PlayerBotKit.Cost), Is.LessThanOrEqualTo(PlayerBotKit.Budget(level, 20)));   // never respecced
+        Assert.That(specs.Values.Sum(PlayerBotKit.Cost) + left, Is.EqualTo(PlayerBotKit.Budget(level, 20)));   // never respecced
     }
 
-    [TestCase(30, 30, 1, 0)] [TestCase(47, 47, 1, 0)]
+    // #167 F13: a level-45 kit spends its whole budget, half levels too (they were left unspent: Allocate passed
+    // botCreation false), as far as its plan lets it: what is left buys no rank on a line that may still rise.
+    [Test]
+    public void A_level_45_kit_spends_its_full_budget()
+    {
+        foreach (eCharacterClass cls in GameBotClasses)
+        {
+            int multiplier = ScriptMgr.FindCharacterClass((int)cls).SpecPointsMultiplier;
+            for (long seed = 1; seed <= 40; seed++)
+            {
+                PlayerBotKitPlan kit = PlayerBotKit.Plan(new PlayerBotBuild(45, cls, eRace.Briton), seed);
+                HashSet<string> open = kit.Lines.Where(l => l.Spec != null).Select(l => l.Spec).ToHashSet(StringComparer.OrdinalIgnoreCase);
+                Dictionary<string, int> specs = PlayerBotKit.Allocate(kit.Lines, open, 45, multiplier, out int left);
+                string at = $"{cls} {kit.Spec.SpecType} seed {seed}";
+                Assert.That(specs.Values.Sum(PlayerBotKit.Cost) + left, Is.EqualTo(PlayerBotKit.Budget(45, multiplier)), at);
+                foreach (BotSpecLine line in kit.Lines.Where(l => l.Spec != null && l.levelRatio > 0))
+                    Assert.That(specs[line.Spec] >= Math.Min(45, line.SpecCap) || left < specs[line.Spec] + 1, Is.True,
+                        $"{at}: {line.Spec} at {specs[line.Spec]}, {left} left");
+            }
+        }
+        Dictionary<string, int> armsman = Run(Armsman, 45, 20, out int unspent);
+        Assert.That(armsman.Values.Sum(PlayerBotKit.Cost), Is.EqualTo(PlayerBotKit.Budget(45, 20)).And.EqualTo(2_264));
+        Assert.That(unspent, Is.Zero);
+    }
+
+    // A Suppression Spiritmaster (Spiritmaster.cs:41-44, cases 4 and 5) has its main line, Suppression to 49, at ratio 0,
+    // so it stayed at 1 until 50 and a level-35 bot left 377 points unspent. The player-bot plan gives it 1.0, as the
+    // plan's case 6 has (#167 F13); the GameBot's plan is unchanged.
+    [Test]
+    public void A_suppression_spiritmasters_main_line_rises_from_the_start()
+    {
+        BotSpecLine[] plan = [new(Specs.Darkness, 5, 0f), new(Specs.Suppression, 49, 0f), new(Specs.Summoning, 22, 0.1f)];
+        BotSpecLine[] mine = PlayerBotKit.PlayerLines(eSpecType.SuppSpirit, plan).ToArray();
+        Assert.That(mine.Single(l => l.Spec == Specs.Suppression).levelRatio, Is.EqualTo(1f));
+        HashSet<string> open = plan.Select(l => l.Spec).ToHashSet(StringComparer.OrdinalIgnoreCase);
+        Dictionary<string, int> at35 = PlayerBotKit.Allocate(mine, open, 35, 10, out int left);
+        Assert.That((at35[Specs.Suppression], left), Is.EqualTo((35, 0)));
+        Assert.That(PlayerBotKit.Allocate(plan, open, 35, 10, out int was)[Specs.Suppression], Is.EqualTo(1));
+        Assert.That(was, Is.EqualTo(377));
+        BotSpecLine[] dark = [new(Specs.Darkness, 47, 1f), new(Specs.Suppression, 5, 0f), new(Specs.Summoning, 26, 0.1f)];
+        Assert.That(PlayerBotKit.PlayerLines(eSpecType.DarkSpirit, dark), Is.EqualTo(dark));   // a minor line keeps its 0
+    }
+
+    // At 47 the half levels' points (#167 F13) raise Cold to 16 (it was 1, nothing left over).
+    [TestCase(30, 30, 1, 0)] [TestCase(47, 47, 16, 14)]
     public void A_fire_wizard_spends_as_a_gamebot_trained_level_by_level(int level, int fire, int cold, int unspent)
     {
         Dictionary<string, int> specs = Run(FireWizard, level, 10, out int left);
@@ -125,7 +165,7 @@ public sealed class UT_PlayerBotKit
     }
 
     [Test]
-    public void Every_gamebot_plan_spends_within_its_earned_points_its_level_and_its_caps()
+    public void Every_gamebot_plan_spends_within_its_budget_its_level_and_its_caps()
     {
         foreach (eCharacterClass cls in Enum.GetValues<eCharacterClass>())
         foreach (eSpecType choice in BotSpec.GetSpecializationChoices(cls))
@@ -136,7 +176,7 @@ public sealed class UT_PlayerBotKit
             foreach (int level in new[] { 20, 25, 30, 35, 40, 41, 45, 47 })
             {
                 Dictionary<string, int> specs = PlayerBotKit.Allocate(spec.SpecLines, open, level, 20, out int left);
-                Assert.That(specs.Values.Sum(PlayerBotKit.Cost) + left, Is.EqualTo(Earned(level, 20)), $"{cls} {choice} {level}");
+                Assert.That(specs.Values.Sum(PlayerBotKit.Cost) + left, Is.EqualTo(PlayerBotKit.Budget(level, 20)), $"{cls} {choice} {level}");
                 foreach (BotSpecLine line in spec.SpecLines.Where(l => l.Spec != null))
                     Assert.That(specs[line.Spec], Is.InRange(1, Math.Min(level, (int)spec.SpecLines.Where(l => l.Spec == line.Spec).Max(l => l.SpecCap))),
                         $"{cls} {choice} {level} {line.Spec}");
@@ -233,7 +273,7 @@ public sealed class UT_PlayerBotKit
             HashSet<string> open = kit.Lines.Select(l => l.Spec).ToHashSet(StringComparer.OrdinalIgnoreCase);
             Dictionary<string, int> at35 = PlayerBotKit.Allocate(kit.Lines, open, 35, 10, out int left);
             Assert.That(at35[Specs.Nature], Is.GreaterThanOrEqualTo(20), $"{seed} {kit.Spec.SpecType}");      // the level-32 pet
-            Assert.That(at35.Values.Sum(PlayerBotKit.Cost) + left, Is.EqualTo(Earned(35, 10)));
+            Assert.That(at35.Values.Sum(PlayerBotKit.Cost) + left, Is.EqualTo(PlayerBotKit.Budget(35, 10)));
             Assert.That(PlayerBotKit.Allocate(kit.Lines, open, 20, 10, out _)[Specs.Nature], Is.GreaterThanOrEqualTo(12));  // level 20
         }
         Assert.That(seen, Is.EquivalentTo(new[] { eSpecType.NurtureDruid, eSpecType.RegrowthDruid }));

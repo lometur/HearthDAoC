@@ -33,10 +33,10 @@ public sealed class PlayerBotKitPlan
 // race. The bot is created as a valid level-1 character (PlayerBotAccounts.EnsureCharacter); after the CharacterCreated
 // handlers and before the first save, ApplyToRow raises the row: the advanced class, level N with the experience the
 // starting_level property gives (CharacterCreationSettings.cs:128-133), the stats at N
-// (BotAttributeProgression.Calculate, the formula CharacterStatValidator allows), and the specs an autonomous GameBot
-// trained level by level has at N (a port of GameBot.SpendSpecPoints, GameBot.cs:3307-3386, without the creation half
-// levels: REVIEW-FIXES 5), which stay within VerifySpecPoints' budget (GamePlayer.cs:10078-10113), so the login never
-// respecs. The login reads them all (GamePlayer.cs:10120-10165). TrainTo raises the specs on each level-up. Spec keys
+// (BotAttributeProgression.Calculate, the formula CharacterStatValidator allows), and the specs a GameBot trained level
+// by level has at N (a port of GameBot.SpendSpecPoints, GameBot.cs:3307-3386), with the half levels' points a player
+// gets from 41 on (#167 F13; REVIEW-FIXES 5 left them out, as an autonomous GameBot's training does): VerifySpecPoints'
+// whole budget (GamePlayer.cs:10078-10113), never more, so the login never respecs. The login reads them all (GamePlayer.cs:10120-10165). TrainTo raises the specs on each level-up. Spec keys
 // match case-blind, as GetSpecializationByName does (GamePlayer.cs:3130-3142), and are written as the class's own
 // KeyName: the login's SkillBase.GetSpecialization is case-sensitive and fails on a key it does not know
 // (SkillBase.cs:2606-2621).
@@ -51,7 +51,9 @@ public static class PlayerBotKit
         return spec == null ? null : new(build, choice, spec);
     }
 
-    /// <summary>The player bots' own changes to a GameBot plan's lines; the GameBot's plan stays as it is. #167 F10a: a
+    /// <summary>The player bots' own changes to a GameBot plan's lines; the GameBot's plan stays as it is. #167 F13: a
+    /// Suppression Spiritmaster's main line, Suppression to 49, has ratio 0 (Spiritmaster.cs:41-44, cases 4 and 5), so
+    /// it stayed at 1 until 50 and the points went unspent; it gets 1.0, as the plan's case 6. #167 F10a: a
     /// Druid's pet is its Nature level's (Nature 7 a level-12 pet, 12 a level-20, 20 a level-32), and the plan gives a
     /// Nurture or Regrowth Druid Nature at ratio 0 (Druid.cs:32, :40, :47), so 1 until 50: a level-7 pet. Allocate
     /// raises the lines in ratio order and the first take the points (Nurture at 0.9 takes about 80% of them), so Nature
@@ -59,6 +61,9 @@ public static class PlayerBotKit
     /// within their caps.</summary>
     public static IEnumerable<BotSpecLine> PlayerLines(eSpecType type, IEnumerable<BotSpecLine> lines)
     {
+        if (type is eSpecType.SuppSpirit)
+            return lines.Select(l => string.Equals(l.Spec, DOL.GS.Specs.Suppression, StringComparison.OrdinalIgnoreCase) &&
+                l.levelRatio <= 0 ? new BotSpecLine(l.Spec, l.SpecCap, 1f) : l).ToList();
         if (type is not (eSpecType.NurtureDruid or eSpecType.RegrowthDruid)) return lines;
         List<BotSpecLine> mine = [new(DOL.GS.Specs.Nature, DruidNatureCap, 0.6f)];
         float ratio = 0.55f;
@@ -91,9 +96,10 @@ public static class PlayerBotKit
 
     public static int Cost(int specLevel) => (specLevel * (specLevel + 1) - 2) / 2;      // GamePlayer.cs:10093
 
-    /// <summary>GameBot.SpendSpecPoints (GameBot.cs:3307-3370) for a bot trained level by level up to N (an autonomous
-    /// GameBot's training, GameBot.cs:3068: no half levels), over the specs open to the class at N (a GameBot's
-    /// GetSpecializationByName finds only those, :3335). Every open spec starts at 1; the keys are open's own.</summary>
+    /// <summary>GameBot.SpendSpecPoints (GameBot.cs:3307-3370) for a bot trained level by level up to N, with a player's
+    /// half levels from 41 on (#167 F13: an autonomous GameBot's training, GameBot.cs:3068, has none, and left them
+    /// unspent), over the specs open to the class at N (a GameBot's GetSpecializationByName finds only those, :3335).
+    /// Every open spec starts at 1; the keys are open's own.</summary>
     public static Dictionary<string, int> Allocate(IEnumerable<BotSpecLine> plan, ICollection<string> open, int level,
         int multiplier, out int unspent)
     {
@@ -102,7 +108,7 @@ public static class PlayerBotKit
         int left = 0;
         for (int i = 2; i <= level; i++)
         {
-            int points = SpecPointsForLevel(i, multiplier, false) + left;
+            int points = SpecPointsForLevel(i, multiplier, true) + left;                // the half levels too (#167 F13)
             bool spent = true, leftOver = false;
             while (spent)
             {
