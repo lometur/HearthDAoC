@@ -252,6 +252,8 @@ public static class PlayerBotDriver
                                                              //   PowerRegenerationAmountCalculator.cs:38-50: batch A's 70
                                                              //   left 46.6% of its pulls ending under 50%); all, endurance
     public const int SelfBuffScanMilliseconds = 5_000;       // #167 F8: the self-buffs' scan, out of a fight
+    public const int ShortBuffMilliseconds = 120_000;        // #167 C9: a shorter buff is kept up in fights only, but a
+                                                             //   regeneration one while its resource is low
     public const int PetLeadMilliseconds = 4_000;            // #167 F10c: the owner's longest wait for its pet to lead
     public const int SpellChoiceMilliseconds = 1_000;        // (inf.) as the sight check's: the spell choice while no cast
     public const byte BreakOffHealthPercent = 40;            // #167 C2: below this, losing to two, it breaks off (k12),
@@ -563,7 +565,8 @@ public static class PlayerBotDriver
             player.TargetInView = HeadlessLos.Answer(PathfindingProvider.Instance, player.CurrentZone,
                 new Vector3(player.X, player.Y, player.Z), new Vector3(target.X, target.Y, target.Z));
         }
-        if (!state.Engaged)                                   // the fight's first think in reach: PLAYER_BOT_FIGHT's start
+        bool opening = !state.Engaged;
+        if (opening)                                          // the fight's first think in reach: PLAYER_BOT_FIGHT's start
         {
             state.EngagedSince = now;
             state.EngageHealth = player.HealthPercent;
@@ -592,6 +595,7 @@ public static class PlayerBotDriver
         CountSwing(state, player.attackComponent.attackAction.LastAttackData);
         if (BrokeHold(state.TargetHeldBreaks, held && breaksOnHit, state.Swings > swings)) state.FightCtlBroken++;   // #167 C3
         state.TargetHeldBreaks = held && breaksOnHit;
+        if (opening && !player.IsCasting && FightBuff(state, player, now)) return;     // #167 C9: a Surge first
         if (player.IsCasting) return;
         if (due && AddStep(state, player, target, held, distance, now, interrupted, quickcastReady, quickcasting, quickcast))
             return;                                                                     // #167 C4: the add's control first
@@ -894,6 +898,33 @@ public static class PlayerBotDriver
         return (best, bestLine);
     }
 
+    /// <summary>Whether the self-buff scan runs (#167 C9): standing, or sitting once recovered (it stands to cast,
+    /// CastOnSelf); never mid-rest. 708 of st-deathsB's 788 rests a buff ended were stood up in their middle, 2,989 s of
+    /// casts, each a stand out of the sitting regeneration. The missing buffs go up in the post-kill window instead
+    /// (SettleTarget scans at once), back to back.</summary>
+    public static bool BuffScanAllowed(bool sitting, bool recovered) => !sitting || recovered;
+
+    /// <summary>Whether the bot keeps a self-buff up out of a fight (#167 C9): a chant, or a buff of ShortBuffMilliseconds or
+    /// more (or with no end: a concentration one), yes; a shorter one only a regeneration buff while its resource is under
+    /// its rest's stop (Recovered's: full health, powerStop, RestEnduranceStop). A Spiritmaster's 60-s Benison of the Fallen
+    /// (176 stands in st-deathsB), a Reaver's 30-s Surge of Maiming (85, and up at engage in only 35% of its fights) and a
+    /// Shaman's 30-s Frigg's Cure at full health (157) were cast again and again between fights; an instant one goes up at
+    /// the fight's start instead (OpensFight).</summary>
+    public static bool KeepsUpOutOfFight(Spell spell, byte health, int maxMana, byte mana, byte powerStop, byte endurance) =>
+        spell.IsPulsing || spell.Duration <= 0 || spell.Duration >= ShortBuffMilliseconds || spell.SpellType switch
+        {
+            eSpellType.HealthRegenBuff => health < 100,
+            eSpellType.PowerRegenBuff => maxMana > 0 && mana < powerStop,
+            eSpellType.EnduranceRegenBuff => endurance < RestEnduranceStop,
+            _ => false,
+        };
+
+    /// <summary>A self-buff the bot casts at a fight's first think in reach (#167 C9): an instant one shorter than
+    /// ShortBuffMilliseconds, no chant, that it no longer keeps up between fights (KeepsUpOutOfFight): a Reaver's Surge.
+    /// One with a cast time (a Benison's 4 s) would cost the fight's opening; it is not kept up in fights (later).</summary>
+    public static bool OpensFight(Spell spell) =>
+        spell.IsInstantCast && !spell.IsPulsing && spell.Duration > 0 && spell.Duration < ShortBuffMilliseconds;
+
     /// <summary>A Necromancer in shade form cannot swing (AttackComponent.cs:511-516): its servant fights for it.</summary>
     public static bool CanSwing(GameNPC pet) => pet is not NecromancerPet;
 
@@ -935,6 +966,7 @@ public static class PlayerBotDriver
             state.LifeKills++;                                    // every fight won, a monster another bot counted too
             state.LastKillTick = GameLoop.GameLoopTime;
             state.RecoverBeforePull = true;                       // rest before the next pull (WantsRest)
+            state.NextSelfBuffTick = 0;                           // #167 C9: the self-buffs first, before the rest
             if (PlayerBotDriverReport.Kill(state.Target)) state.Kills++;
             if (state.TargetRespawnReach > 0)                     // #167 C7: rested out of (WalksToRestSpot)
                 RememberKill(state.RecentKills, state.TargetSpawn, state.TargetRespawnReach, GameLoop.GameLoopTime);
@@ -2995,20 +3027,43 @@ public static class PlayerBotDriver
 
     // #167 F8: the class's own self-buffs (NextSelfBuff), one cast at a time, scanned every SelfBuffScanMilliseconds out of
     // a fight (MayRest's view), before a rest as a player buffs and then sits. A release ends them all: the new life
-    // scans at once (Think).
+    // scans at once (Think). #167 C9: never mid-rest (BuffScanAllowed), a kill scans at once (SettleTarget) and each buff
+    // cast the next scan, back to back, and only those it keeps up out of a fight (KeepsUpOutOfFight).
     private static bool SelfBuff(PlayerBotState state, GamePlayer player, long now)
     {
         if (now < state.NextSelfBuffTick || player.IsCasting || state.Engaged && state.Target?.IsAlive == true ||
+            !BuffScanAllowed(player.IsSitting, Recovered(player)) ||                    // #167 C9
             Threat(state, player, now) != null)                                         // MayRest's view, and one coming
             return false;                                                               //   at it (#167 F7)
         state.NextSelfBuffTick = now + SelfBuffScanMilliseconds;
-        HashSet<eSpellType> active = new();
-        foreach (ECSGameSpellEffect effect in player.effectListComponent.GetSpellEffects())   // a chant's pulse effect too
-            if (effect.SpellHandler?.Spell is Spell spell) active.Add(spell.SpellType);
-        (Spell buff, SpellLine line) = NextSelfBuff(UsableSpells(player), active,
+        byte health = player.HealthPercent, mana = player.ManaPercent, endurance = player.EndurancePercent,
+            powerStop = RestPowerStop(RoleOf(player.CharacterClass.ID));
+        (Spell buff, SpellLine line) = NextSelfBuff(UsableSpells(player), ActiveSpellTypes(player),
             player.effectListComponent.GetPulseEffects().Count > 0, player.Level, player.Concentration, player.MaxMana,
-            player.Mana, spell => player.GetSkillDisabledDuration(spell) <= 0);
+            player.Mana, spell => player.GetSkillDisabledDuration(spell) <= 0 &&
+                KeepsUpOutOfFight(spell, health, player.MaxMana, mana, powerStop, endurance));
+        if (buff == null || !CastOnSelf(state, player, now, buff, line, "buff")) return false;
+        state.NextSelfBuffTick = 0;                                                     // #167 C9: the next one at once
+        return true;
+    }
+
+    // #167 C9: at a fight's first think in reach, an instant short self-buff (OpensFight: a Reaver's Surge), as SelfBuff
+    // picks one, cast on itself before the fight's first swing or spell. True when it cast.
+    private static bool FightBuff(PlayerBotState state, GamePlayer player, long now)
+    {
+        (Spell buff, SpellLine line) = NextSelfBuff(UsableSpells(player), ActiveSpellTypes(player), false, player.Level,
+            player.Concentration, player.MaxMana, player.Mana,
+            spell => OpensFight(spell) && player.GetSkillDisabledDuration(spell) <= 0);
         return buff != null && CastOnSelf(state, player, now, buff, line, "buff");
+    }
+
+    // The kinds of the spell effects on the bot, a chant's pulse effect too (NextSelfBuff's active).
+    private static HashSet<eSpellType> ActiveSpellTypes(GamePlayer player)
+    {
+        HashSet<eSpellType> active = new();
+        foreach (ECSGameSpellEffect effect in player.effectListComponent.GetSpellEffects())
+            if (effect.SpellHandler?.Spell is Spell spell) active.Add(spell.SpellType);
+        return active;
     }
 
     // #167 F1: at each cast choice a Theurgist casts a pet at its target before its damage spell, whenever it can, as a

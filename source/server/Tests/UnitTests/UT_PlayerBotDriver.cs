@@ -2915,12 +2915,16 @@ public sealed class UT_PlayerBotDriver
 
     // --- the class's own self-buffs (#167 F8) ---
 
-    // As the world's rows (Spell, LineXSpell): power, concentration, pulse and pulse power as there.
+    // As the world's rows (Spell, LineXSpell): power, concentration, pulse and pulse power as there; the duration (s) and
+    // the cast time (s) as there when given (#167 C9), else 20 minutes and 3 s (none and instant for a concentration buff
+    // and a chant).
     private static (Spell, SpellLine) Buff(int id, string name, string type, string target, int level, int power,
-        int concentration = 0, int pulse = 0, int pulsePower = 0, int instrument = 0) =>
+        int concentration = 0, int pulse = 0, int pulsePower = 0, int instrument = 0, int? duration = null,
+        double? castTime = null) =>
         (new(new DbSpell { SpellID = id, Name = name, Type = type, Target = target, Power = power, Concentration = concentration,
             Pulse = pulse, PulsePower = pulsePower, Frequency = pulse == 0 ? 0 : 50, InstrumentRequirement = instrument,
-            CastTime = pulse == 0 ? 3.0 : 0, Duration = concentration > 0 ? 0 : pulse == 0 ? 1200 : 6 }, level), Mending);
+            CastTime = castTime ?? (pulse == 0 ? 3.0 : 0),
+            Duration = duration ?? (concentration > 0 ? 0 : pulse == 0 ? 1200 : 6) }, level), Mending);
 
     private static readonly (Spell, SpellLine) DiamondShield = Buff(9, "Diamond Shield", "BaseArmorFactorBuff", "Self", 40, 25),
         BufferOfStone = Buff(22, "Buffer of Stone", "ArmorAbsorptionBuff", "Self", 41, 26);
@@ -3008,6 +3012,65 @@ public sealed class UT_PlayerBotDriver
                 Buff(1091, "Elemental Ward", "HeatColdMatterBuff", "Group", 27, 0, pulse: 1),
             ], 50), Is.EqualTo("-"), "a resist chant that pulsed for free");
         Assert.That(PlayerBotDriver.SelfBuffsUp([eSpellType.BodySpiritEnergyBuff, eSpellType.HeatColdMatterBuff]), Is.Zero);
+    }
+
+    // --- self-buffs in the post-kill window, never mid-rest; short ones only in a fight (#167 C9) ---
+
+    // Short buffs as the world has them (c-rest/out-a7.txt): a Spiritmaster's Benison of the Fallen, a Reaver's Surge of
+    // Maiming (12% of its power, instant), a Shaman's Frigg's Cure; a Sorcerer's Perspicuity of Power lasts 20 minutes.
+    private static readonly (Spell, SpellLine) Benison = Buff(3001, "Benison of the Fallen", "DamageShield", "Self", 30, 18,
+            duration: 60, castTime: 4.0),
+        Surge = Buff(3002, "Surge of Maiming", "DamageAdd", "Self", 30, -12, duration: 30, castTime: 0),
+        FriggsCure = Buff(3003, "Frigg's Cure", "HealthRegenBuff", "Realm", 30, 15, duration: 30, castTime: 3.0),
+        Perspicuity = Buff(3004, "Perspicuity of Power", "PowerRegenBuff", "Self", 30, 20, duration: 1_200),
+        ChantOfTheWar = Buff(3005, "Chant of the War", "DamageAdd", "Group", 35, 0, pulse: 1),
+        SongOfRest = Buff(3006, "Magnificent Song of Rest", "HealthRegenBuff", "Group", 30, 0, pulse: 1);
+
+    // The scan runs standing, or sitting once recovered (it stands to cast, CastOnSelf): never mid-rest. 708 of
+    // st-deathsB's 788 rests a buff ended were stood up in their middle, 2,989 s of casts.
+    [TestCase(false, false, true)] [TestCase(true, false, false)] [TestCase(true, true, true)] [TestCase(false, true, true)]
+    public void The_self_buff_scan_never_stands_the_bot_mid_rest(bool sitting, bool recovered, bool allowed) =>
+        Assert.That(PlayerBotDriver.BuffScanAllowed(sitting, recovered), Is.EqualTo(allowed));
+
+    // Out of a fight the bot keeps up chants and buffs of 2 minutes or more (or for good); a shorter one only a
+    // regeneration buff while its resource is under its rest's stop: Benison (176 stands in st-deathsB), Surge (85, up at
+    // engage in 35% of the Reaver's fights) and Frigg's Cure at full health (157) were cast again and again between fights.
+    [Test]
+    public void Out_of_a_fight_a_bot_keeps_up_its_long_buffs_and_its_chant_a_short_one_only_to_regenerate()
+    {
+        bool Keeps((Spell Spell, SpellLine) buff, byte health = 100) =>
+            PlayerBotDriver.KeepsUpOutOfFight(buff.Spell, health, 300, 100, 100, 100);
+        Assert.That((Keeps(Benison), Keeps(Surge), Keeps(FriggsCure, 80), Keeps(FriggsCure, 100)),
+            Is.EqualTo((false, false, true, false)));
+        Assert.That((Keeps(Perspicuity), Keeps(DiamondShield), Keeps(ChantOfTheWar)), Is.EqualTo((true, true, true)));
+        Assert.That(PlayerBotDriver.KeepsUpOutOfFight(Buff(3007, "a short power regeneration", "PowerRegenBuff", "Self", 30, 5,
+            duration: 30).Item1, 100, 300, 89, 90, 100), Is.True, "under the caster's power stop");
+    }
+
+    // The short buffs go up in a fight instead: an instant one at the fight's first think (Surge); one with a cast
+    // (Benison, Frigg's Cure), a long one or a chant not then.
+    [Test]
+    public void A_fight_opens_with_an_instant_short_buff()
+    {
+        Assert.That(PlayerBotDriver.OpensFight(Surge.Item1), Is.True);
+        Assert.That((PlayerBotDriver.OpensFight(Benison.Item1), PlayerBotDriver.OpensFight(FriggsCure.Item1),
+            PlayerBotDriver.OpensFight(DiamondShield.Item1), PlayerBotDriver.OpensFight(ChantOfTheWar.Item1)),
+            Is.EqualTo((false, false, false, false)));
+    }
+
+    // After a kill the self-buffs scan at once, in the window before the rest, and back to back (the verifier's correction:
+    // preset, or the test passes before the fix). A dropped fight leaves the scan's time.
+    [TestCase(true, 0L)] [TestCase(false, 9_000L)]
+    public void A_kill_has_the_self_buffs_scan_at_once(bool engaged, long next)
+    {
+        MethodInfo settle = typeof(PlayerBotDriver).GetMethod("SettleTarget", BindingFlags.Static | BindingFlags.NonPublic);
+        var state = new PlayerBotState(Player(null))
+        {
+            Target = (GameNPC)RuntimeHelpers.GetUninitializedObject(typeof(GameNPC)), Engaged = engaged,   // health 0: dead
+            NextSelfBuffTick = 9_000,
+        };
+        settle!.Invoke(null, [state, Player(null)]);
+        Assert.That(state.NextSelfBuffTick, Is.EqualTo(next));
     }
 
     // A Necromancer in shade form cannot swing (AttackComponent.cs:511-516): its servant fights.

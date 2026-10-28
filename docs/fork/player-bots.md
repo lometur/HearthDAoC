@@ -89,10 +89,14 @@ Each bot thinks every 250 ms, a thin copy of the `/bot` pilot's think:
 - Each cast it picks the damage spell ready now: its bolt when off its recast, else its best single-target spell,
   else an area one, never an area one while another monster stands in its radius. It drops the low ranks a GameBot
   drops. With none ready (a Shaman's two 20-s spells both on recast), it swings until one is.
-- Out of a fight it keeps its class's own self-buffs up, one cast every 5 s at most: armour factor, absorb, bladeturn,
-  ablative, damage shield, damage add, stat buffs and regeneration buffs, and one chant that costs no power each pulse
-  (so no resist chant: the Paladin's cost power each pulse). It uses the buffs' real power, concentration and recast;
-  the server's own checks decide the rest.
+- Out of a fight it keeps its class's own self-buffs up: armour factor, absorb, bladeturn, ablative, damage shield,
+  damage add, stat buffs and regeneration buffs, and one chant that costs no power each pulse (so no resist chant: the
+  Paladin's cost power each pulse). It looks every 5 s, and at once after a kill, before it sits, casting the missing
+  ones back to back; never while it sits, until its rest is done. It uses the buffs' real power, concentration and
+  recast; the server's own checks decide the rest. A buff under 2 minutes it no longer keeps up between fights: an
+  instant one (a Reaver's Surge) goes up at a fight's start instead, one with a cast time (a Spiritmaster's Benison)
+  not at all yet, and a regeneration one (a Shaman's Frigg's Cure) only while what it regenerates is short of where
+  the rest stops.
 - It picks a monster with no aggressive neighbours, none within reach of the target, of its walk in, or of the spot
   it would fight from (its spell's range for a caster, else melee). After deaths it moves to an easier camp. It avoids
   what killed it for 15 minutes.
