@@ -64,6 +64,17 @@ public class UT_PlayerBotWalkReplay
             Vector3 edge = new(536300.6f, 352870.4f, 6563.43f), worryWort = new(546122, 353692, 4510);
             Assert.That(UT_PlayerBotDriver.Walk(nav, region, zone, edge, worryWort, keepExact: true, ticks: 400, blockEnds: true),
                 Is.InRange(1, 400));
+
+            // st-layers2: roam goals 391 and 210 units under the bot, on floors no corridor leads down to. The corridor ends
+            // where the bot stands, and each walk stood 3 seconds and ended stalled; now it ends at the first step.
+            foreach ((Vector3 from, Vector3 under) in new[] {
+                (new Vector3(545789.90f, 356891.30f, 3416.63f), new Vector3(545790, 356889, 3026)),     // Pbotaaabk
+                (new Vector3(547655.20f, 353792.10f, 4363.42f), new Vector3(547628, 353675, 4153)) })   // Pbotaaada
+            {
+                Assert.That(PlayerBotPathMover.TryComputeNext(nav, region, zone, new(), from, under, 0, 47.75f, 0, out _, out string failure),
+                    Is.False, $"from {from}");
+                Assert.That(failure, Is.EqualTo(PlayerBotPathMover.OffTheCorridor));
+            }
         });
 
     // st-smoke: in Caledon Pbothaade's first corner lay 2.2 units beside it and 123 above it. A surface step that only

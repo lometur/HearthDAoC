@@ -143,8 +143,10 @@ registered, test it in game. The mover:
   of its height and, once the bot is on the climb, only at the corner itself: half way up, a bot took it as reached
   and walked back onto the ramp it came from. Within 300 units of its goal the bot takes the corridor instead of the
   straight line when the line runs more than 24 units under the floor before the bot would stop, and the line still
-  where there is no corridor. Such links are rare (in the eight zones replayed, 0-126 of 1,186-202,142 seam links), and
-  NPCs and GameBots keep Detour's own queries.
+  where there is no corridor and the line gets it closer. A walk whose corridor ends where the bot stands, its goal off
+  that floor (a roam goal on a floor straight under the bot, with no way down), ends at once: 6 such walks stood 3
+  seconds each and ended stalled. Such links are rare (in the eight zones replayed, 0-126 of 1,186-202,142 seam links),
+  and NPCs and GameBots keep Detour's own queries.
 - within 300 units of its goal, walks straight at it only with a clear line of sight, or within a corner's reach (32
   units across), where the corridor has dropped its last corner; otherwise it follows the corridor (a bot crept along
   a wall 267 units from its target).

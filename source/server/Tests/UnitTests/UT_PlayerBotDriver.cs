@@ -1197,6 +1197,47 @@ public sealed class UT_PlayerBotDriver
         Assert.That((mesh.Searches, next), Is.EqualTo((1, new Vector3(47.75f, 0, 0))));
     }
 
+    // A shelf at z 0, everywhere, whose floor the closest-point query finds within Reach of z 0 (none further down).
+    private sealed class ShelfMesh : PathfindingMgrBase
+    {
+        public float Reach = float.MaxValue;
+        public override bool HasNavmesh(Zone zone) => true;
+        public override PathfindingResult GetPathStraight(Zone zone, Vector3 start, Vector3 end, EDtPolyFlags[] filters,
+            Span<WrappedPathfindingNode> destination)
+        {
+            destination[0] = new(start, EDtPolyFlags.Walk);
+            destination[1] = new(end, EDtPolyFlags.Walk);
+            return new(PathfindingStatus.PathFound, 2);
+        }
+        public override Vector3? GetMoveAlongSurface(Zone zone, Vector3 start, Vector3 end, EDtPolyFlags[] filters) => new(end.X, end.Y, 0);
+        public override Vector3? GetMoveAlongSurfaceLayered(Zone zone, Vector3 start, Vector3 end, EDtPolyFlags[] filters, bool grounded) =>
+            new(end.X, end.Y, 0);
+        public override Vector3? GetClosestPoint(Zone zone, Vector3 position, float xRange, float yRange, float zRange,
+            EDtPolyFlags[] filters) => Math.Abs(position.Z) <= Reach ? new(position.X, position.Y, 0) : null;
+        public override bool HasLineOfSight(Zone zone, Vector3 start, Vector3 end, EDtPolyFlags[] filters) => true;
+    }
+
+    // A roam goal 300 units straight under the bot: the corridor takes the shelf under it for the goal and ends where the
+    // bot stands, so the walk ends at once, not after a 3-second stall (st-layers2, #166).
+    [Test]
+    public void AWalkToAGoalUnderTheFloorItsCorridorEndsOnEndsAtOnce()
+    {
+        var (region, zone) = World();
+        Assert.That(PlayerBotPathMover.TryComputeNext(new ShelfMesh(), region, zone, new PlayerTravelPath(), Vector3.Zero, new(0, 0, -300), 0,
+            47.75f, 0, out _, out string failure), Is.False);
+        Assert.That(failure, Is.EqualTo(PlayerBotPathMover.OffTheCorridor));
+    }
+
+    // No corridor, and the direct step stands still (no floor under it): the walk ends with the corridor's failure.
+    [Test]
+    public void WithNoCorridorADirectStepThatStandsStillEndsTheWalk()
+    {
+        var (region, zone) = World();
+        Assert.That(PlayerBotPathMover.TryComputeNext(new ShelfMesh { Reach = 24 }, region, zone, new PlayerTravelPath(), Vector3.Zero,
+            new(0, 0, -300), 0, 47.75f, 0, out _, out string failure), Is.False);
+        Assert.That(failure, Does.StartWith("No complete walkable path"));
+    }
+
     // The walkable mesh is the strip y >= 0.4. From a point off it, the surface move only snaps back onto it (0.4 units),
     // as Detour did 0.6 units off the mesh by Olorustos (lv-r1-stall, 2026-10-25), and the line of sight is refused.
     private sealed class SliverMesh : PathfindingMgrBase

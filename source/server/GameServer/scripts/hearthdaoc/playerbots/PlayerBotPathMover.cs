@@ -27,6 +27,7 @@ public sealed class PlayerBotPathMover
     public const int ChurnReplans = 2;                 // churning windows in a row that only replan; the next one blocks
     public const int FloorStepRange = 300;             // the GameBots' step onto the nearest floor (AWBC TryBeginLocalRouteRecovery)
     public const int FloorStepMilliseconds = 5_000;    // at most one such step per bot in this time
+    public const string OffTheCorridor = "The goal lies off the floor its corridor ends on; no walkable way leads to it."; // #166
 
     private static readonly Logger Log = LoggerManager.Create(typeof(PlayerBotPathMover));
 
@@ -130,12 +131,28 @@ public sealed class PlayerBotPathMover
         // above them. Bots fell through the ramp onto them, and their way out back up the link hid its height in one
         // corner: they stood there for good. With layers the moves do not take such a link, and the corridor shows it as
         // two corners, one on each floor, that the bot follows straight up or down, as a GameBot walks its path.
-        if (path.TryStep(region, zone, current, goal, step, now, nav, out next, out failure, layers: true)) return true; // PTP:73-167
+        if (path.TryStep(region, zone, current, goal, step, now, nav, out next, out failure, layers: true)) // PTP:73-167
+        {
+            // The corridor ends where the bot stands, on the floor TryBuildCorridor takes for the goal (PTP:78-79), and the
+            // goal lies off it: a roam goal 106-391 units straight under the bot, on a floor with no way down to it. No step
+            // gets closer, so the walk ends here, not after a 3-second stall (st-layers2: 6 such walks, #166).
+            if (Vector3.DistanceSquared(next, current) < 1 &&
+                nav.GetClosestPoint(zone, goal, 128, 128, 256, nav.DefaultFilters) is Vector3 end &&
+                PlayerTravelPath.HasReachedCorner(current, end) && !PlayerTravelPath.HasReachedCorner(end, goal))
+            {
+                failure = OffTheCorridor;
+                return false;
+            }
+            return true;
+        }
         // Round a sag with no corridor to take, as to a goal on a mesh island the 2D ray sees: the line, as before (the
-        // review of #166: a caster bot 173 units from its target, which it reached in one step, was blocked there).
+        // review of #166: a caster bot 173 units from its target, which it reached in one step, was blocked there). Only
+        // a step that gets closer: one that stands still would stall the walk where it can end now.
         if (!open) return false;
+        Vector3 direct = DirectStep(nav, zone, current, goal, step);
+        if (PlayerTravelPath.NoStepCloser(current, direct, goal)) return false;
         failure = string.Empty;
-        next = DirectStep(nav, zone, current, goal, step);
+        next = direct;
         return true;
     }
 
