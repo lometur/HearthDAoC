@@ -20,7 +20,7 @@ namespace DOL.GS.Commands
         private Vector3? _passed, _link; // HearthDAoC: the corridor corner last reached, and the far corner of the floor link the walker is on (#166)
         public Vector3? DoorNode => _doorToOpen ?? (_nodes.TryPeek(out var node) && (node.Flags & EDtPolyFlags.AnyDoor) != 0
             ? node.Position : null);
-        public bool OnLink => _link is Vector3 end && _nodes.TryPeek(out var head) && head.Position == end; // HearthDAoC: on a floor link, short of its far corner (#166)
+        public Vector3? LinkEnd => _link is Vector3 end && _nodes.TryPeek(out var head) && head.Position == end ? end : null; // HearthDAoC: the far corner of the floor link the walker is on, until it passes it (#166)
 
         public void Clear()
         {

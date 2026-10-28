@@ -618,7 +618,7 @@ DLLEXPORT dtStatus MoveAlongSurfaceLayered(dtNavMeshQuery* query, float start[],
 // PathStraight, with the corridor split where it takes a layer link (IsLayerLink), at the portal's point nearest to
 // where the part before it starts. Each part is string-pulled on its own floor, and the crossing is reported twice, on
 // the floor it leaves and, flagged LAYER_LINK, on the floor it enters. Without a layer link in the corridor the corners
-// are PathStraight's, each put on a floor (below).
+// are PathStraight's, each put on a floor (below); two at one spot that end on one floor count once.
 DLLEXPORT dtStatus PathStraightLayered(dtNavMeshQuery* query, float start[], float end[], float polyPickExt[], dtPolyFlags queryFilter[], dtStraightPathOptions pathOptions, int* pointCount, float* pointBuffer, dtPolyFlags* pointFlags)
 {
 	*pointCount = 0;
@@ -682,11 +682,15 @@ DLLEXPORT dtStatus PathStraightLayered(dtNavMeshQuery* query, float start[], flo
 		// Every corner on a floor, not at its vertices' height, which on steep ground lies tens of units off it: in
 		// Jordheim a corner 47 units over a floor walled in under a ramp and 50 under the ramp took the walker that reached
 		// it onto that floor, the nearer (the review). Not the walker's start, its goal, nor an off-mesh link's. The floor
-		// is its polygon's, but where the floors on the two sides of the corner's portal part there and the vertices lie
-		// on the floor before the portal, not on the polygon's, it is that one: in Gripklosa a tile's detail edge drops
-		// 170 units in the middle of a seam where the other tile's floor does not, and the walker sank into the slope
-		// toward such a corner (the review of the detail floors). The vertices' height itself lay 47-65 units off every
-		// floor at two other such seams there, and the walker went back and forth under it (the third review).
+		// is its polygon's, but where the floors on the two sides of the corner's portal part there, it is the one before
+		// the portal, which the walker reaches the corner on; its next step takes it onto the polygon's. At such seams in
+		// Gripklosa a tile's detail edge drops 170 units where the other tile's floor does not, and the walker sank into
+		// the slope toward the corner (the review of the detail floors); the vertices lay 47-65 units off every floor, and
+		// it went back and forth under them (the third review); and a corner on a ledge 81 units over the slope that led
+		// up to it took the walker onto a piece of the ledge with no way on (the fourth review).
+		// The floor before is the polygon's before the corner's in the corridor, or, where the corridor crosses that one
+		// only at this point (a sliver of no area on the seam, entered by the corner before at the same spot), the one
+		// before that: the sliver's floor lay 35 and 48 units under the floors on its two sides there (the fourth review).
 		for (int k = first > 0 ? 1 : 0; k < n; ++k)
 		{
 			const dtMeshTile* cornerTile = 0;
@@ -698,10 +702,10 @@ DLLEXPORT dtStatus PathStraightLayered(dtNavMeshQuery* query, float start[], flo
 			dtPolyRef before = 0; // the corridor's polygon before the one the corner enters
 			for (int j = first + 1; j <= i && !before; ++j)
 				if (polys[j] == refs[k])
-					before = polys[j - 1];
-			const float other = before ? FloorHeightAt(query, before, &points[k * 3]) : floor, vertices = points[k * 3 + 1],
-				climb = cornerTile->header->walkableClimb;
-			points[k * 3 + 1] = dtAbs(other - floor) > climb && dtAbs(vertices - floor) > climb && dtAbs(vertices - other) <= climb ? other : floor;
+					before = k > 0 && j > first + 1 && refs[k - 1] == polys[j - 1] &&
+						dtVdist2DSqr(&points[(k - 1) * 3], &points[k * 3]) < dtSqr(1.0f / 16384.0f) ? polys[j - 2] : polys[j - 1];
+			const float other = before ? FloorHeightAt(query, before, &points[k * 3]) : floor;
+			points[k * 3 + 1] = dtAbs(other - floor) > cornerTile->header->walkableClimb ? other : floor;
 		}
 		for (int k = first > 0 ? 1 : 0; k < n + (last ? 0 : 1) && *pointCount < MAX_POLY; ++k)
 		{

@@ -129,40 +129,42 @@ registered, test it in game. The mover:
   floor beside the link: the bot stood on its edge for minutes. A link starts only from its foot, where the bot reached
   the corner before: Detour's line of sight is 2D and cannot tell a link from two floors stacked, so a bot on another
   floor than its corridor is not taken through a floor.
-- keeps to its own floor where the mesh joins two floors at a tile seam (#166). When tiles join at load, Detour links
-  a seam edge to any edge across the seam within two climbs (57.6 units) at either end. In Jordheim eight small floors
+- keeps to its own floor where the mesh joins two floors at a tile seam (#166). When tiles join at load, Detour links a
+  seam edge to any edge across the seam within two climbs (57.6 units) at either end. In Jordheim eight small floors
   walled in under the city's ramps are linked that way to the ramps 70-133 units above them, and to nothing else.
   Detour's surface moves are 2D: from a ramp they stepped down onto the first linked polygon under their target, the
-  floor below, and the corridor back out hid the climb in one corner, so bots stood there for minutes (one for nearly
-  3, to the end of a run). The player bots now use two queries added to the server's Detour library, which treat a
-  seam link whose floors lie more than a climb (28.8 units) apart at both ends of its portal as a change of floor: the
+  floor below, and the corridor back out hid the climb in one corner, so bots stood there for minutes (one for nearly 3,
+  to the end of a run). The player bots now use two queries added to the server's Detour library, which treat a seam
+  link whose floors lie more than a climb (28.8 units) apart at both ends of its portal as a change of floor: the
   surface moves don't take it, and the corridor gives it as two corners at one spot, one on each floor. A floor is the
-  polygon's detail surface, not its vertices' height, which on steep ground lies tens of units off it, and the
-  corridor puts each of its corners on a floor (a corner 47 units over a walled-in floor took a bot onto that floor):
-  its polygon's, or, where the floors on the two sides of the corner part and Detour's vertices lie on the floor
-  before it, that one. In Gripklosa one tile's floor drops 170 units in the middle of a seam where the other's
-  doesn't, and the corner sank into the slope; left at the vertices' height, corners at two other such seams lay 47-65
-  units off every floor, and a bot went back and forth under one. The bot goes straight from where it reached the
-  first corner (up to 32 units across) to the second, through the ramp if need be, as on a floor link, and steps
-  straight at its goal only once it stands on the second. That corner counts as reached only within 24 units of its
-  height and, once the bot is on the climb, only at the corner itself: on the way down, 22.6 units above the foot, a
-  bot took it as reached and walked back onto the ramp it came from. Within 300 units of its goal the bot takes the
-  corridor instead of the straight line when the line runs more than 24 units under the floor, or meets a wall or a
-  link to another floor, before the bot would stop: the line of sight is 2D and sees through such a link, and there
+  polygon's detail surface, not its vertices' height, which on steep ground lies tens of units off it, and the corridor
+  puts each of its corners on a floor (a corner 47 units over a walled-in floor took a bot onto that floor): its
+  polygon's, or, where the floors on the two sides of the corner part, the floor before it, which the bot reaches it on.
+  At such seams in Gripklosa one tile's floor drops 170 units where the other's doesn't, and the corner sank into the
+  slope; left at the vertices' height, corners lay 47-65 units off every floor, and a bot went back and forth under one;
+  and on the floor after it, a corner on a ledge 81 units over the slope that led up to it took bots onto a piece of the
+  ledge with no way on. The bot goes straight from where it reached the first corner (up to 32 units across) to the
+  second, through the ramp if need be, as on a floor link, and steps straight at its goal only once it stands on the
+  second. That corner counts as reached only within 24 units of its height and, once the bot is on the climb, only at
+  the corner itself: on the way down, 22.6 units above the foot, a bot took it as reached and walked back onto the ramp
+  it came from. Within 300 units of its goal the bot takes the corridor instead of the straight line when the line runs
+  more than 24 units under the floor, or as far over it beyond the goal's own height over its floor, or meets a wall or
+  a link to another floor, before the bot would stop: the line of sight is 2D and sees through such a link, and there
   direct and corridor steps took turns, back and forth for about 15 seconds, until the churn watch planned the walk
-  again. With no corridor the walk ends: the line would take the bot through the floor. A walk whose corridor ends
-  where the bot stands, its goal off that floor (a roam goal on a floor straight under the bot, with no way down),
-  ends at once: 6 such walks stood 3 seconds each and ended stalled. Such links are rare (in the eight zones replayed,
-  0-126 of 1,186-202,142 seam links), and NPCs and GameBots keep Detour's own queries.
+  again. Off a ledge in Gripklosa the line floated bots over the drop, and the next corridor step took them back up onto
+  the ledge, for good. With no corridor the walk ends: the line would take the bot through the floor. A walk whose
+  corridor ends where the bot stands, its goal off that floor (a roam goal on a floor straight under the bot, with no
+  way down), ends at once: 6 such walks stood 3 seconds each and ended stalled. Such links are rare (in the nine zones
+  replayed, 0-158 of 1,186-202,142 seam links), and NPCs and GameBots keep Detour's own queries.
 - within 300 units of its goal, walks straight at it only with a clear line of sight, or within a corner's reach (32
   units across), where the corridor has dropped its last corner; otherwise it follows the corridor (a bot crept along
   a wall 267 units from its target).
 - when a walk fails or stalls, steps onto the nearest floor within 300 units that leads on, as a GameBot does, with one
   search every 5 seconds at most: bots stood off the mesh, 79-88 units under the floor or 84 above it, where every step
   lost the walkable surface, and one stood 161 units over the floor in Snowdonia, where every step stood still. A bot
-  also steps onto the floor straight above it when that floor lies beyond the surface moves' reach (64 units), even
-  where Detour's 64-unit box finds it, because the floor's polygon reaches down there: in Domnann a bot respawned 124
-  units under the floor, and every walk from the spot ended.
+  also steps onto the floor straight above or below it when that floor lies beyond the surface moves' reach (64 units),
+  even where Detour's 64-unit box finds it, because the floor's polygon reaches down there: in Domnann a bot respawned
+  124 units under the floor, and every walk from the spot ended.
 
 `UT_PlayerBotWalkReplay` replays each of these walks on the installed navmesh but the replan's: offline, a fresh
 corridor from those stalls walks on, and the corridor that stalled can't be rebuilt there. A fake-mesh test covers it.
@@ -170,8 +172,9 @@ corridor from those stalls walks on, and the corridor that stalled can't be rebu
 **The trade-off:** on the corridor line a bot on steep ground can sink into the slope or float above it for a step or
 two (about 44 units at one Snowdonia spot), and on a floor link it floats up or down the link (167 units in Tir na Nog,
 70-133 out of Jordheim's walled-in floors, through the ramp above them). GameBots do the same, but a player bot should
-look like a player: worth a look in game near a steep hill and in Tir na Nog. A floor step is a visible jump: 14 in one
-run, of 50-198 units.
+look like a player: worth a look in game near a steep hill and in Tir na Nog. A floor step is a visible jump: 14 in
+one run, of 50-198 units. Off a ledge within 300 units of its goal a bot now drops to the floor below in a step or
+two, where it floated down the straight line before.
 
 Known gaps:
 - **Stalls are rare.** In 15-minute runs of 390 hunting bots, 16 walks stalled with #169 (2,421 before #168's fixes,

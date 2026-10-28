@@ -11,7 +11,7 @@ namespace DOL.GS.HearthDAoC.PlayerBots;
 public enum PlayerBotStepResult { Arrived, Moving, Waiting, Blocked }
 
 // HearthDAoC player bots (#137): walks a GamePlayer along the navmesh with the existing PlayerTravelPath cursor
-// (commands/playercommands/PlayerTravelPath.cs:9-168: corridor, zone seams, replans), writes X/Y/Z and calls
+// (commands/playercommands/PlayerTravelPath.cs:9-264: corridor, zone seams, replans), writes X/Y/Z and calls
 // GamePlayer.OnPositionUpdateFromPacket (GamePlayer.cs:869-872), so the player's own movement code broadcasts, checks
 // speed and moves subzones as for a client packet. Steps are MaxSpeed x elapsed with no floor: the speed-hack monitor
 // (PlayerMovementMonitor.cs:84-148) now sees them.
@@ -19,6 +19,7 @@ public sealed class PlayerBotPathMover
 {
     public const int DirectStepRange = 300;            // closer than this, in the open: one surface step, no corridor
     public const int FloorSag = 24;                    // the line to the goal this far under the floor takes the corridor (#166)
+    private const float OnTheEdge = 0.05f;             // a plain move this near its end stopped on a border edge, not before it (#166)
     public const int TeleportResetDistance = 256;      // a jump this big (teleport, release, speed-hack correction) drops the corridor
     public const int IdleBroadcastMilliseconds = HeadlessClient.HeartbeatMs; // (est.) < 5 s is proven by PMC:15
     public const int StallSteps = 12;                  // 3 s without progress = blocked
@@ -124,7 +125,8 @@ public sealed class PlayerBotPathMover
         // on a floor link's climb, until the bot stands on its far corner and the corridor has passed it: a direct step
         // from that corner left it queued, and each corridor step after went back to it, for 15 seconds (the review of
         // #166).
-        if (!nav.HasNavmesh(zone) || !path.OnLink && remaining <= DirectStepRange &&
+        Vector3? link = path.LinkEnd;
+        if (!nav.HasNavmesh(zone) || link is null && remaining <= DirectStepRange &&
             (PlayerTravelPath.HasReachedCorner(current, goal) ||
              nav.HasLineOfSight(zone, current, goal, nav.DefaultFilters) && !LineLeavesFloor(nav, zone, current, goal, remaining + 1, stepLength)))
         {
@@ -135,9 +137,11 @@ public sealed class PlayerBotPathMover
         // above them. Bots fell through the ramp onto them, and their way out back up the link hid its height in one
         // corner: they stood there for good. With layers the moves do not take such a link, and the corridor shows it as
         // two corners, one on each floor, that the bot follows straight up or down, as a GameBot walks its path.
-        // On a floor link's climb the step heads for the link's far corner, not the goal: cut to the goal's distance, it
-        // crept 2-8 units a step near the goal (the third review of #166).
-        if (path.TryStep(region, zone, current, goal, path.OnLink ? stepLength : step, now, nav, out next, out failure, layers: true)) // PTP:110-263
+        // On a floor link's climb, short of its far corner, the step heads for that corner, not the goal: cut to the goal's
+        // distance, it crept 2-8 units a step near the goal (the third review of #166). From the corner on it is cut again:
+        // whole, the step off a link's top took bots up to 58 units inside their stop radius (the fourth review).
+        bool climbing = link is Vector3 top && Vector3.DistanceSquared(current, top) >= 1;
+        if (path.TryStep(region, zone, current, goal, climbing ? stepLength : step, now, nav, out next, out failure, layers: true)) // PTP:110-263
         {
             // The corridor ends where the bot stands, on the floor TryBuildCorridor takes for the goal (PTP:80-81), and the
             // goal lies off it: a roam goal 106-391 units straight under the bot, on a floor with no way down to it. No step
@@ -174,31 +178,41 @@ public sealed class PlayerBotPathMover
     }
 
     /// <summary>Whether the straight line to the goal leaves the floor the bot walks on, somewhere on the part it walks
-    /// (<paramref name="walked"/>, to its stop distance): runs more than <see cref="FloorSag"/> under it, or meets a wall
-    /// or a link to another floor there. The floor is followed a step's length at a time (grounded, on its own floor), as
-    /// the bot would walk under the line. That whole part, not the next step: judged a step at a time, the corridor and
-    /// the line took turns, one step back to a corner and one forward to the goal, until the walk was blocked (from
-    /// st-final4's pocket to (31746, 27019), #166). Not past it: a caster stopping 145 units short was sent to a corridor
-    /// that had no complete way, by a sag beyond its stop (the review). A wall or a link counts because the line of sight
-    /// is 2D and sees through a link to another floor: in Jordheim the line and the corridor took turns by such links,
-    /// as the direct steps left the corridor's next corner behind the bot, back and forth for about 15 seconds, until the
-    /// churn watch planned the walk again (the review of #166). On a polygon's border edge the grounded move finds no
-    /// height, though nothing blocks the way: the plain move judges the way there, as in the corridor's steps (PTP:202-206),
-    /// and the floor walk goes on from the floor before it. Taken as a wall, it stalled bots under targets raised over the
-    /// floor beside such an edge (the third review of #166).</summary>
+    /// (<paramref name="walked"/>, to its stop distance): runs more than <see cref="FloorSag"/> under it, or as far
+    /// over it beyond the goal's own height over its floor, or meets a wall or a link to another floor there. The floor
+    /// is followed a step's length at a time (grounded, on its own floor), as the bot would walk under the line. That
+    /// whole part, not the next step: judged a step at a time, the corridor and the line took turns, one step back to a
+    /// corner and one forward to the goal, until the walk was blocked (from st-final4's pocket to (31746, 27019),
+    /// #166). Not past it: a caster stopping 145 units short was sent to a corridor that had no complete way, by a sag
+    /// beyond its stop (the review). A wall or a link counts because the line of sight is 2D and sees through a link to
+    /// another floor: in Jordheim the line and the corridor took turns by such links, as the direct steps left the
+    /// corridor's next corner behind the bot, back and forth for about 15 seconds, until the churn watch planned the
+    /// walk again (the review of #166). Over a drop the line floated the bot off a ledge in Gripklosa, and from the air
+    /// the next corridor step took it back up onto the ledge, Detour's nearest polygon, and so on for good (the fourth
+    /// review); the corridor's grounded steps take it down. A goal raised over its floor, as far as Detour's 64-unit
+    /// box finds that floor, raises the line's limit as much (none beyond the box), as a caster's target floating over
+    /// the floor is walked at straight (the review of 2026-10-21). On a polygon's border edge the grounded move finds
+    /// no height, though nothing blocks the way: the plain move judges the way there if it reaches the sample (within
+    /// <see cref="OnTheEdge"/>), as in the corridor's steps (PTP:202-206), and the floor walk goes on from the floor
+    /// before it. Taken as a wall, it stalled bots under targets raised over the floor beside such an edge (the third
+    /// review of #166). A plain move that stops short of it met a wall or a link: up to a unit short on the last
+    /// sample, it took bots onto the floor walled in by a Jordheim link's foot, and back and forth (the fourth
+    /// review).</summary>
     private static bool LineLeavesFloor(IPathfindingMgr nav, Zone zone, Vector3 current, Vector3 goal, float walked, float spacing)
     {
         float length = Vector3.Distance(current, goal), end = Math.Min(walked, length);
+        float raised = nav.GetClosestPoint(zone, goal, 2, 2, 64, nav.DefaultFilters) is Vector3 below
+            ? Math.Max(0, goal.Z - below.Z) : float.PositiveInfinity;
         Vector3 on = current;
         for (float along = Math.Min(spacing, end); ; along = Math.Min(along + spacing, end))
         {
             Vector3 line = Vector3.Lerp(current, goal, along / length);
             Vector3? floor = nav.GetMoveAlongSurfaceLayered(zone, on, line, nav.DefaultFilters, true);
             if ((floor ?? nav.GetMoveAlongSurfaceLayered(zone, on, line, nav.DefaultFilters, false)) is not Vector3 reached ||
-                Vector2.Distance(new(reached.X, reached.Y), new(line.X, line.Y)) > 1) return true;     // a wall, or a link to another floor
+                Vector2.Distance(new(reached.X, reached.Y), new(line.X, line.Y)) > (floor.HasValue ? 1 : OnTheEdge)) return true; // a wall, or a link to another floor
             if (floor is Vector3 under)
             {
-                if (line.Z < under.Z - FloorSag) return true;
+                if (line.Z < under.Z - FloorSag || line.Z > under.Z + raised + FloorSag) return true;
                 on = under;
             }
             if (along >= end) return false;
@@ -470,7 +484,7 @@ public sealed class PlayerBotStallWatch
 /// <summary>Walking that gets nowhere: a 15 s window of one walk that walked over 300 units and ended less than a third
 /// of that from where it began. The walk replay of 2026-10-21 took 120 steps of about 81 units every 30 s and got 45-50
 /// units nearer its goal, bouncing between two levels below a corridor corner; the corridor's own check (16 units in
-/// 15 s, PlayerTravelPath.cs:95-108) counted that as progress and never replanned. A new goal or a pause starts a new
+/// 15 s, PlayerTravelPath.cs:130-143) counted that as progress and never replanned. A new goal or a pause starts a new
 /// walk: roaming between random points (a leg of about 1,300 units, 2-3 legs a window) often ends a window near
 /// its start without churning.</summary>
 public sealed class PlayerBotChurnWatch

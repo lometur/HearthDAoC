@@ -101,7 +101,7 @@ public class UT_PlayerBotWalkReplay
             // The layered corridor (#166) where the floors on the two sides of a seam part: at one seam a tile's floor drops
             // 170 units in the middle of it, and the corner there stays on the slope the bot walks down, not at the drop's
             // foot. At another, a corner at the vertices' height lay 68 units over the floor, and the bot went back and
-            // forth under it for 52 steps.
+            // forth under it (75 steps here, 62 of them turning back).
             var corners = new WrappedPathfindingNode[64];
             PathfindingResult down = nav.GetPathStraightLayered(zone, new(302508.3f, 275732.9f, 11465.6f), new(302170.2f, 275883.3f, 11711.7f),
                 nav.DefaultFilters, corners);
@@ -111,6 +111,20 @@ public class UT_PlayerBotWalkReplay
             Assert.That(corners[k].Position.Z, Is.InRange(corners[k + 1].Position.Z, corners[k - 1].Position.Z), "on the slope");
             Vector3 under = new(283424.9f, 289390.7f, 8300.9f), beyond = new(283031.2f, 289587.8f, 8373.9f);
             Assert.That(UT_PlayerBotDriver.Walk(nav, region, zone, under, beyond, keepExact: true, blockEnds: true), Is.InRange(1, 20));
+            // There the corner lies on the floor the bot reaches it on (the fourth review). By a ledge 94 units over a
+            // slope, the bot floated off the ledge toward the corner at the slope's height and went back and forth; up the
+            // slope, a corner on the ledge 81 units over it took the bot onto a piece of the ledge with no way on.
+            Assert.That(UT_PlayerBotDriver.Walk(nav, region, zone, new(285453.5f, 270846.8f, 4504.5f), new(285342.8f, 270532.0f, 4378.8f),
+                keepExact: true, blockEnds: true), Is.InRange(1, 20), "down off the ledge");
+            Assert.That(UT_PlayerBotDriver.Walk(nav, region, zone, new(285358.5f, 270605.5f, 4379.6f), new(285611.7f, 270929.5f, 4429.8f),
+                keepExact: true, blockEnds: true), Is.InRange(1, 20), "up the slope and over the ledge");
+            // A sliver of no area on a seam, which the corridor crosses at one point: its two corners there stay two, on
+            // the floors on its two sides, not one on the sliver's own, 35 and 48 units under them.
+            PathfindingResult sliver = nav.GetPathStraightLayered(zone, new(283081.9f, 289800.8f, 8350.1f), new(283046.0f, 289415.8f, 8467.0f),
+                nav.DefaultFilters, corners);
+            Assert.That(sliver.NodeCount, Is.EqualTo(5));
+            Assert.That((corners[2].Position.Z, corners[3].Position.Z), Is.EqualTo((8457.5f, 8470.8f))
+                .Using<(float, float)>((a, b) => Math.Abs(a.Item1 - b.Item1) < 1 && Math.Abs(a.Item2 - b.Item2) < 1), "the sliver's two corners");
             Assert.That(LayeredQueriesRan(), Is.True, "lib/Detour has the layer-aware queries");
         });
 

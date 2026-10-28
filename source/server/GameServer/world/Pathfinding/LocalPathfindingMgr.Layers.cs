@@ -28,7 +28,7 @@ namespace DOL.GS
         /// <summary>GetPathStraight, with each layer link of the corridor (a tile-seam link whose floors lie more than
         /// walkableClimb apart at both ends) as two corners at one spot, the second, on the floor it enters, flagged
         /// <see cref="EDtPolyFlags.LayerLink"/>, and each corner on a floor: its polygon's, or where the floors on the two
-        /// sides of its portal part, the one before it that Detour's vertices lie on.</summary>
+        /// sides of its portal part, the one before it, which the walker reaches it on.</summary>
         public override PathfindingResult GetPathStraightLayered(Zone zone, Vector3 start, Vector3 end, EDtPolyFlags[] filters,
             Span<WrappedPathfindingNode> destination)
         {

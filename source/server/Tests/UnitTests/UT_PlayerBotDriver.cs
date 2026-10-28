@@ -1049,7 +1049,7 @@ public sealed class UT_PlayerBotDriver
         Assert.That(PlayerBotPathMover.TryComputeNext(walled, region, zone, new PlayerTravelPath(), Vector3.Zero, new(30, 0, 0), 0, 47.75f, 0,
             out next, out _), Is.True);
         Assert.That((walled.Searches, next), Is.EqualTo((0, new Vector3(30, 0, 0))));
-        // Blocked: false after two replans (PTP:97-105).
+        // Blocked: false after two replans (PTP:130-143).
         var blocked = new Mesh { Blocked = true };
         path = new PlayerTravelPath();
         for (int i = 0; i < 3; i++)
@@ -1161,9 +1161,10 @@ public sealed class UT_PlayerBotDriver
     }
 
     // Near its goal too, the climb goes on to the link's top in whole steps: they head for the top, not the goal, and cut
-    // to the goal's distance they crept 2-8 units a step (the third review of #166).
+    // to the goal's distance they crept 2-8 units a step (the third review of #166). Only the first, taken before the
+    // corridor knows the link, is cut.
     [Test]
-    public void APlayerBotClimbsALinkNearItsGoalInWholeSteps()
+    public void APlayerBotClimbsALinkNearItsGoalWithoutCreeping()
     {
         var (region, zone) = World();
         var mesh = new SeamMesh();
@@ -1176,8 +1177,24 @@ public sealed class UT_PlayerBotDriver
                 out position, out string failure), Is.True, failure);
             if (position.X == 30) climb.Add(position);
         }
-        Assert.That(climb, Has.Count.EqualTo(3), "to the seam, up it, onto its top");
-        Assert.That(climb[^1], Is.EqualTo(new Vector3(30, 0, 60)));
+        Assert.That(climb, Is.EqualTo(new Vector3[] { new(30, 0, 0), new(30, 0, 44.25f), new(30, 0, 60) })
+            .Using<Vector3>((a, b) => Vector3.Distance(a, b) < 0.01f), "to the seam, up it, onto its top");
+    }
+
+    // From the link's top the step is cut to the goal's distance again: whole, it took bots up to 58 units inside their
+    // stop radius (the fourth review of #166).
+    [Test]
+    public void APlayerBotOffALinksTopStopsAtItsStopDistance()
+    {
+        var (region, zone) = World();
+        var mesh = new SeamMesh();
+        var path = new PlayerTravelPath();
+        Vector3 position = Vector3.Zero, goal = new(100, 0, 60);
+        for (int tick = 0; tick < 10 && !PlayerBotPathMover.Arrived(position, goal, 50); tick++)
+            Assert.That(PlayerBotPathMover.TryComputeNext(mesh, region, zone, path, position, goal, 50, 47.75f, tick * 250,
+                out position, out string failure), Is.True, failure);
+        Assert.That((position.Z, Vector3.Distance(position, goal)), Is.EqualTo((60f, 49f))
+            .Using<(float, float)>((a, b) => a.Item1 == b.Item1 && Math.Abs(a.Item2 - b.Item2) < 0.01f), "on the ramp, one unit inside the stop radius");
     }
 
     // A ramp (Z 60) over a floor walled in under it (Z 0, from X 200 to 300) that the mesh links to it only at tile seams,
@@ -1282,14 +1299,56 @@ public sealed class UT_PlayerBotDriver
 
     // From 50 units on, the line runs along a polygon's border edge, where no grounded move ends though nothing blocks the
     // way: the bot steps straight on. Taken as a wall, it stalled bots under targets raised over the floor by such an edge
-    // (the third review of #166). A link on the edge, where the plain move stops too, still takes the corridor.
-    [TestCase(float.MaxValue, 0)] [TestCase(100f, 1)]
-    public void TheDirectStepGoesOnAlongABorderEdgeButNotOverALink(float link, int searches)
+    // (the third review of #166). A link on the edge, where the plain move stops too, still takes the corridor, also 0.7
+    // units before the last point the bot walks to (stopping 100 short, at X 181): taken as the edge, it put bots by a
+    // Jordheim link's foot onto the floor walled in there, and back and forth (the fourth review).
+    [TestCase(float.MaxValue, 0, 0)] [TestCase(100f, 0, 1)] [TestCase(180.3f, 100, 1)]
+    public void TheDirectStepGoesOnAlongABorderEdgeButNotOverALink(float link, int stop, int searches)
     {
         var (region, zone) = World();
         var mesh = new HillMesh { Edge = 50, Link = link };
-        Assert.That(PlayerBotPathMover.TryComputeNext(mesh, region, zone, new PlayerTravelPath(), Vector3.Zero, new(280, 0, 0), 0, 47.75f, 0,
+        Assert.That(PlayerBotPathMover.TryComputeNext(mesh, region, zone, new PlayerTravelPath(), Vector3.Zero, new(280, 0, 0), stop, 47.75f, 0,
             out _, out string failure), Is.True, failure);
+        Assert.That(mesh.Searches, Is.EqualTo(searches));
+    }
+
+    // A ledge (floor Z Height) up to X 100 and a floor at Z 0 beyond it, joined there, as at a Gripklosa seam whose floors
+    // part (#166). The moves take the floor under their end, the 2D ray sees across, and the closest point is the floor
+    // under the point within the box's height.
+    private sealed class DropMesh : PathfindingMgrBase
+    {
+        public float Height = 100;
+        public int Searches;
+        public override bool HasNavmesh(Zone zone) => true;
+        private Vector3 On(Vector3 p) => new(p.X, p.Y, p.X < 100 ? Height : 0);
+        public override PathfindingResult GetPathStraight(Zone zone, Vector3 start, Vector3 end, EDtPolyFlags[] filters,
+            Span<WrappedPathfindingNode> destination)
+        {
+            Searches++;
+            destination[0] = new(start, EDtPolyFlags.Walk);
+            destination[1] = new(end, EDtPolyFlags.Walk);
+            return new(PathfindingStatus.PathFound, 2);
+        }
+        public override Vector3? GetMoveAlongSurface(Zone zone, Vector3 start, Vector3 end, EDtPolyFlags[] filters) => On(end);
+        public override Vector3? GetMoveAlongSurfaceLayered(Zone zone, Vector3 start, Vector3 end, EDtPolyFlags[] filters, bool grounded) =>
+            On(end);
+        public override Vector3? GetClosestPoint(Zone zone, Vector3 position, float xRange, float yRange, float zRange,
+            EDtPolyFlags[] filters) => Math.Abs(On(position).Z - position.Z) <= zRange ? On(position) : null;
+        public override bool HasLineOfSight(Zone zone, Vector3 start, Vector3 end, EDtPolyFlags[] filters) => true;
+    }
+
+    // From the ledge, the line to a goal on the floor beyond runs more than 24 units over that floor: the corridor takes the
+    // bot down. In Gripklosa the direct step floated it off a ledge 94 units up, and from the air the next corridor step
+    // took it back up onto the ledge, Detour's nearest polygon, back and forth for good (the fourth review of #166). Not
+    // off a ledge 20 units up, and not to a goal raised 40 units over the floor, but at no more than that height either.
+    // A goal raised beyond Detour's 64-unit box, whose floor it does not find, is walked at straight, as before.
+    [TestCase(100f, 0f, 1)] [TestCase(20f, 0f, 0)] [TestCase(60f, 40f, 0)] [TestCase(100f, 40f, 1)] [TestCase(100f, 80f, 0)]
+    public void TheDirectStepTakesTheCorridorOffALedge(float ledge, float raised, int searches)
+    {
+        var (region, zone) = World();
+        var mesh = new DropMesh { Height = ledge };
+        Assert.That(PlayerBotPathMover.TryComputeNext(mesh, region, zone, new PlayerTravelPath(), new(60, 0, ledge), new(280, 0, raised), 0,
+            47.75f, 0, out _, out string failure), Is.True, failure);
         Assert.That(mesh.Searches, Is.EqualTo(searches));
     }
 
