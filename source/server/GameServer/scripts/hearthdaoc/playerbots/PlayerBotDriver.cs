@@ -120,6 +120,8 @@ public sealed class PlayerBotState
     public bool EngagePet;                                       // PLAYER_BOT_FIGHT pet=, heals= and qc=: a living pet at
     public int FightHeals;                                       //   the fight's first think, its heals on itself since,
     public bool FightQuickcast;                                  //   and a cast with Quickcast on
+    public int EngageBuffs, FightPetCasts, FightWaits;           // #167 FIGHT buffs=, petCasts= and waits=
+    public long SitSince;                                        // #167 PLAYER_BOT_REST: when the bot sat down, 0 standing
     public (string Head, PlayerBotDeathDetail Detail, GameObject Target)? PendingDeath;   // a DEATH line awaiting Dying (AwaitsDying)
 }
 
@@ -306,6 +308,8 @@ public static class PlayerBotDriver
             state.RecoverBeforePull = false;                                             //    the release restores it all
             state.NextSelfBuffTick = 0;                                                  //    and ends its buffs: scan now
         }
+        if (state.SitSince != 0 && !player.IsSitting)                                    //    stood by the server (a hit)
+            EndRest(state, player, now, Attacker(state, player, now, anyHitter: true) != null ? "hit" : "other");
         state.DeathRecorded = false;
         state.ReleaseRequested = false;
         state.Attackers = player.attackComponent.AttackerTracker.Count;                 //    Die clears it (GameLiving.cs:2050)
@@ -341,14 +345,18 @@ public static class PlayerBotDriver
             SelfBuff(state, player, now))
             return;                                                                      // 11b. DEATHS.md A6, A5, #167 F8: before a rest
         if (state.RecoverBeforePull && Recovered(player)) state.RecoverBeforePull = false;
-        if (MayRest(Attacker(state, player, now, anyHitter: true) != null, state.Engaged && state.Target?.IsAlive == true) &&
-            WantsRest(player, state.RecoverBeforePull))                                  // 12. APP:290-296, DEATHS.md A1
+        bool mayRest = MayRest(Attacker(state, player, now, anyHitter: true) != null, state.Engaged && state.Target?.IsAlive == true);
+        if (mayRest && WantsRest(player, state.RecoverBeforePull))                       // 12. APP:290-296, DEATHS.md A1
         {
             if (state.Target != null) Disengage(state, player);                         //    a pull not begun: re-picked after
             Rest(state, player, now);
             return;
         }
-        if (player.IsSitting) player.Sit(false);                                         // 13. rested, or hit: stand
+        if (player.IsSitting)                                                            // 13. rested, or hit: stand
+        {
+            EndRest(state, player, now, RestStop(mayRest));
+            player.Sit(false);
+        }
         RefreshTarget(state, player, now);                                               // 14
         if (state.Target == null)                                                        // 15
         {
@@ -419,6 +427,9 @@ public static class PlayerBotDriver
             state.EngageHealth = player.HealthPercent;
             state.EngageMana = PowerPercent(player.MaxMana, player.ManaPercent);
             state.FightAdds = state.Swings = state.NotVisible = state.FightCasts = state.FightHeals = 0;
+            state.FightPetCasts = state.FightWaits = 0;
+            state.EngageBuffs = SelfBuffsUp(player.effectListComponent.GetSpellEffects()     // FIGHT buffs= (#167 F8)
+                .Where(effect => effect.SpellHandler?.Spell != null).Select(effect => effect.SpellHandler.Spell.SpellType));
             state.EngagePet = player.ControlledBrain?.Body?.IsAlive == true;
             state.FightQuickcast = false;
             if (player.ControlledBrain != null)                                         // its pet too: the pet window's
@@ -450,6 +461,7 @@ public static class PlayerBotDriver
                     return;
                 }
                 state.NextCombatPetTick = now + Math.Max(250, state.Spell.CastTime + 100);   // AutonomousPetSupport.cs:646
+                state.FightPetCasts++;
             }
             else
             {
@@ -478,6 +490,7 @@ public static class PlayerBotDriver
         {
             player.attackComponent.StopAttack();                                        // no swing to block the cast
             state.Activity = PlayerBotActivity.Fighting;
+            if (due) state.FightWaits++;                                                // its own swing's interrupt: waits=
         }
         else                                                                            // Swing, or a cast out of its range
         {                                                                               //   (one under SpellStopDistance's
@@ -630,6 +643,9 @@ public static class PlayerBotDriver
         eSpellType.DexterityQuicknessBuff, eSpellType.HealthRegenBuff, eSpellType.PowerRegenBuff,
         eSpellType.EnduranceRegenBuff, eSpellType.BodySpiritEnergyBuff, eSpellType.HeatColdMatterBuff,
     ];
+    /// <summary>The kinds of SelfBuffOrder up, each once: PLAYER_BOT_FIGHT buffs= at the fight's first think (#167 F8).</summary>
+    public static int SelfBuffsUp(IEnumerable<eSpellType> active) => active.Where(kind => Array.IndexOf(SelfBuffOrder, kind) >= 0).Distinct().Count();
+
     private static readonly int FirstChantOnly = Array.IndexOf(SelfBuffOrder, eSpellType.BodySpiritEnergyBuff);
 
     /// <summary>The next self-buff to cast (#167 F8): of the kinds in SelfBuffOrder not active on the bot, the first, its
@@ -1388,6 +1404,7 @@ public static class PlayerBotDriver
     // APP:561-583 without SaveIntoDatabase.
     private static void HandleDeath(PlayerBotState state, GamePlayer player, long now)
     {
+        EndRest(state, player, now, "died");
         PlayerBotActivity last = state.Activity;                                       // what it was doing when killed
         state.Activity = PlayerBotActivity.Dead;
         if (!state.DeathRecorded)
@@ -1460,7 +1477,7 @@ public static class PlayerBotDriver
             ConLevels.GetConColor(player.GetConLevel(target)), state.FromDefence, killed, state.EngageHealth, player.HealthPercent,
             state.EngageMana, PowerPercent(player.MaxMana, player.ManaPercent), (now - state.EngagedSince) / 1000, state.FightAdds,
             state.Swings, state.NotVisible, state.FightCasts, state.LifeKills, state.LifeRests, state.EngagePet,
-            state.FightHeals, state.FightQuickcast)));
+            state.FightHeals, state.FightQuickcast, state.EngageBuffs, state.FightPetCasts, state.FightWaits)));
     }
 
     // APP:585-624, changed: every 10 s, no inventory count, no saves; after 15 minutes with no progress, back to the
@@ -1531,7 +1548,7 @@ public static class PlayerBotDriver
             state.NoSelfHealLevel = player.Level;                                      // no heal at this level: none looked
         if (heal == null ||                                                             //   for until the next
             !WantsSelfHeal(player.HealthPercent, player.IsCasting, now, nextTry, inFight, mana, CostPercent(player.MaxMana, heal.Power)) ||
-            !CastOnSelf(state, player, now, heal, line))
+            !CastOnSelf(state, player, now, heal, line, "heal"))
             return false;
         if (state.Engaged) state.FightHeals++;
         return true;
@@ -1556,7 +1573,7 @@ public static class PlayerBotDriver
             player.GroundTargetInView = true;
             player.SetGroundTarget(player.X, player.Y, player.Z);
         }
-        return CastOnSelf(state, player, now, summon, line);
+        return CastOnSelf(state, player, now, summon, line, "pet");
     }
 
     // #167 F8: the class's own self-buffs (NextSelfBuff), one cast at a time, scanned every SelfBuffScanMilliseconds out of
@@ -1574,7 +1591,7 @@ public static class PlayerBotDriver
         (Spell buff, SpellLine line) = NextSelfBuff(UsableSpells(player), active,
             player.effectListComponent.GetPulseEffects().Count > 0, player.Level, player.Concentration, player.MaxMana,
             player.Mana, spell => player.GetSkillDisabledDuration(spell) <= 0);
-        return buff != null && CastOnSelf(state, player, now, buff, line);
+        return buff != null && CastOnSelf(state, player, now, buff, line, "buff");
     }
 
     // #167 F1: at each cast choice a Theurgist casts a pet at its target before its damage spell, whenever it can, as a
@@ -1606,10 +1623,14 @@ public static class PlayerBotDriver
     // self-target is in view (GamePlayer.cs:127-139), and a Group heal takes the caster with no group
     // (SpellHandler.cs:1807-1811). The request is read in the Casting phase later in this tick (CastingComponent.cs:116-144,
     // SpellHandler.cs:403-406), so the target stays until the next think's Engage.
-    private static bool CastOnSelf(PlayerBotState state, GamePlayer player, long now, Spell spell, SpellLine line)
+    private static bool CastOnSelf(PlayerBotState state, GamePlayer player, long now, Spell spell, SpellLine line, string why)
     {
         state.Mover.Stop(now);
-        if (player.IsSitting) player.Sit(false);
+        if (player.IsSitting)
+        {
+            EndRest(state, player, now, why);                                          // PLAYER_BOT_REST why= (#167)
+            player.Sit(false);
+        }
         if (spell.Target is not eSpellTarget.SELF) player.TargetObject = player;
         if (!player.CastSpell(spell, line)) return false;
         state.SelfCast = true;
@@ -1628,7 +1649,22 @@ public static class PlayerBotDriver
         {
             player.Sit(true);
             state.LifeRests++;                                                             // FIGHT and DEATH rests=
+            if (player.IsSitting) state.SitSince = now;                                    // REST sec= (#167), if it sat
         }
+    }
+
+    /// <summary>Why a rest ended at step 13 (PLAYER_BOT_REST why=): recovered, or a fight (MayRest false) stood the bot up.
+    /// A cast on itself ends one as heal, pet or buff, a death as died, and the server's stand (a hit while sitting) as hit,
+    /// or other.</summary>
+    public static string RestStop(bool mayRest) => mayRest ? "recovered" : "hit";
+
+    // #167: PLAYER_BOT_REST once per rest, when it ends.
+    private static void EndRest(PlayerBotState state, GamePlayer player, long now, string why)
+    {
+        if (state.SitSince == 0) return;
+        if (Log.IsInfoEnabled)
+            Log.Info(PlayerBotDriverReport.FormatRest(player.Name, player.Level, (now - state.SitSince) / 1000, why));
+        state.SitSince = 0;
     }
 
     private static bool Recovered(GamePlayer player) => Recovered(player.HealthPercent, player.MaxMana, player.ManaPercent,

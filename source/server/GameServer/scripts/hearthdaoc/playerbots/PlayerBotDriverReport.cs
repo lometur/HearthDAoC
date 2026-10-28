@@ -17,11 +17,13 @@ public readonly record struct PlayerBotDriverWindow(
 /// <summary>One settled fight (levelmatch/DEATHS.md 2): the bot's health and power at its first think in reach and now,
 /// the most attackers on a think, the swings seen and those the view gate refused, the casts, and this life's kills and
 /// sits before it; then whether it had a living pet at that first think and its heals on itself since (DEATHS.md A5,
-/// A6), and whether a cast in it went with Quickcast on.</summary>
+/// A6), and whether a cast in it went with Quickcast on; then (#167) its self-buffs up at that first think (F8), a
+/// Theurgist's pets cast at the target (F1), and the thinks a cast due waited for its own swing's interrupt (F6).</summary>
 public readonly record struct PlayerBotFight(
     string Bot, int Level, string Target, int TargetLevel, ConColor Con, bool FromDefence, bool Killed,
     byte StartHp, byte EndHp, byte StartMana, byte EndMana, long Seconds, int Adds, int Swings, int NotVisible, int Casts,
-    int LifeKills, int Rests, bool Pet = false, int Heals = 0, bool Quickcast = false);
+    int LifeKills, int Rests, bool Pet = false, int Heals = 0, bool Quickcast = false, int Buffs = 0, int PetCasts = 0,
+    int Waits = 0);
 
 /// <summary>What a PLAYER_BOT_DEATH line adds after its first fields (levelmatch/DEATHS.md 2); -1 for none: the fight's
 /// fields (startHp, fightSec, adds, swings, notVisible) out of a fight, targetHp with no target, sinceKillSec with no kill
@@ -163,7 +165,11 @@ public static class PlayerBotDriverReport
         $"from={(f.FromDefence ? "defence" : "pull")} result={(f.Killed ? "kill" : "dropped")} startHp={f.StartHp} endHp={f.EndHp} " +
         $"startMana={f.StartMana} endMana={f.EndMana} sec={f.Seconds} adds={f.Adds} swings={f.Swings} notVisible={f.NotVisible} " +
         $"casts={f.Casts} lifeKills={f.LifeKills} rests={f.Rests} pet={(f.Pet ? "alive" : "none")} heals={f.Heals} " +
-        $"qc={(f.Quickcast ? 1 : 0)}");
+        $"qc={(f.Quickcast ? 1 : 0)} buffs={f.Buffs} petCasts={f.PetCasts} waits={f.Waits}");
+
+    /// <summary>PLAYER_BOT_REST (#167), when a rest ends: the seconds the bot sat and why it stood (PlayerBotDriver.EndRest).</summary>
+    public static string FormatRest(string bot, int level, long seconds, string why) => string.Create(CultureInfo.InvariantCulture,
+        $"PLAYER_BOT_REST bot={bot} level={level} sec={seconds} why={why}");
 
     /// <summary>The fields PLAYER_BOT_DEATH appends after task= (the ones before stay as they were: legcheck.py reads them).</summary>
     public static string FormatDeathDetail(PlayerBotDeathDetail d) => string.Create(CultureInfo.InvariantCulture,

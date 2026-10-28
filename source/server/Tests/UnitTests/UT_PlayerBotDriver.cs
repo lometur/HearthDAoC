@@ -2135,20 +2135,45 @@ public sealed class UT_PlayerBotDriver
 
     // pet= and heals= come last (the earlier fields stay as they were: runs/tools read them): whether the bot had a
     // living pet at the fight's first think in reach (DEATHS.md A5), and its heals on itself in the fight (A6); then qc=,
-    // whether a cast in the fight went with Quickcast on.
+    // whether a cast in the fight went with Quickcast on; then (#167) buffs=, its self-buffs up at that first think (F8),
+    // petCasts=, a Theurgist's pets cast at the target (F1), and waits=, the thinks a cast due waited for its own swing's
+    // interrupt (WaitToCast, F6).
     [Test]
     public void FightFormat()
     {
         Assert.That(PlayerBotDriverReport.FormatFight(new PlayerBotFight("Pbotaaaac", 40, "widow claw", 40, ConColor.YELLOW, false,
-                true, 100, 38, 100, 12, 21, 1, 9, 2, 4, 0, 0, Pet: true, Heals: 2, Quickcast: true)),
+                true, 100, 38, 100, 12, 21, 1, 9, 2, 4, 0, 0, Pet: true, Heals: 2, Quickcast: true, Buffs: 3, PetCasts: 2, Waits: 5)),
             Is.EqualTo("PLAYER_BOT_FIGHT bot=Pbotaaaac level=40 target=\"widow claw\" targetLevel=40 con=YELLOW from=pull result=kill " +
                        "startHp=100 endHp=38 startMana=100 endMana=12 sec=21 adds=1 swings=9 notVisible=2 casts=4 lifeKills=0 rests=0 " +
-                       "pet=alive heals=2 qc=1"));
+                       "pet=alive heals=2 qc=1 buffs=3 petCasts=2 waits=5"));
         Assert.That(PlayerBotDriverReport.FormatFight(new PlayerBotFight("Pbothaaab", 43, "empyrean guardian", 36, ConColor.BLUE, true,
                 false, 64, 51, 100, 100, 7, 2, 3, 0, 0, 3, 1)),
             Is.EqualTo("PLAYER_BOT_FIGHT bot=Pbothaaab level=43 target=\"empyrean guardian\" targetLevel=36 con=BLUE from=defence " +
                        "result=dropped startHp=64 endHp=51 startMana=100 endMana=100 sec=7 adds=2 swings=3 notVisible=0 casts=0 " +
-                       "lifeKills=3 rests=1 pet=none heals=0 qc=0"));
+                       "lifeKills=3 rests=1 pet=none heals=0 qc=0 buffs=0 petCasts=0 waits=0"));
+    }
+
+    // #167: one PLAYER_BOT_REST line per rest when the bot stands: the seconds it sat and why it stood (recovered, hit,
+    // heal, pet or buff: a cast on itself, died, other).
+    [Test]
+    public void RestFormat()
+    {
+        Assert.That(PlayerBotDriverReport.FormatRest("Pbotaaaac", 40, 37, "recovered"),
+            Is.EqualTo("PLAYER_BOT_REST bot=Pbotaaaac level=40 sec=37 why=recovered"));
+    }
+
+    [Test]
+    public void The_self_buffs_up_count_each_kept_kind_once()                    // FIGHT buffs= (#167 F8)
+    {
+        Assert.That(PlayerBotDriver.SelfBuffsUp([eSpellType.BaseArmorFactorBuff, eSpellType.BaseArmorFactorBuff,
+            eSpellType.StrengthBuff, eSpellType.CombatSpeedBuff, eSpellType.DirectDamage]), Is.EqualTo(2));
+        Assert.That(PlayerBotDriver.SelfBuffsUp([]), Is.Zero);
+    }
+
+    [Test]
+    public void A_rest_ends_recovered_unless_a_fight_stood_the_bot_up()           // PLAYER_BOT_REST why=
+    {
+        Assert.That((PlayerBotDriver.RestStop(mayRest: true), PlayerBotDriver.RestStop(mayRest: false)), Is.EqualTo(("recovered", "hit")));
     }
 
     // The fields PLAYER_BOT_DEATH appends after task= (its earlier fields stay as they were: runs/legcheck.py reads them),

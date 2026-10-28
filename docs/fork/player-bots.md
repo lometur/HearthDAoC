@@ -223,7 +223,11 @@ All start `PLAYER_BOT_`:
   An NPC counts once per think, under its first reason: target, attacker or pet, then quest, then the scan's (an
   aggressive monster a quest names counts as `quest`);
 - `FIGHT`, `DEATH`, `RELOCATE`, `IDLE`, `BLOCKED`: one per event. A stalled walk's `BLOCKED` line ends with `stall:`,
-  the bot's last step and state, and `queries:`, the stalled step's own navmesh queries and a fresh corridor's step;
+  the bot's last step and state, and `queries:`, the stalled step's own navmesh queries and a fresh corridor's step.
+  `FIGHT` ends with `buffs=` (its self-buffs up when the fight began), `petCasts=` (a Theurgist's pets cast at the
+  target) and `waits=` (the thinks a cast waited for its own swing's interrupt);
+- `REST`: one per rest, when the bot stands: `sec=`, the seconds it sat, and `why=`: `recovered`, `hit`, `heal`, `pet`
+  or `buff` (a cast on itself), `died`, or `other`;
 - `FLOOR_STEP`: a step onto the nearest floor, with where from and to and why;
 - `REPLAN`: a stalled walk planned again, with where, the goal, the count in that walk and the stall's first step;
 - `ERRAND`: the quest bot's steps;
