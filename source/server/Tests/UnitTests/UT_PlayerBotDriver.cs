@@ -145,15 +145,19 @@ public sealed class UT_PlayerBotDriver
 
     // DEATHS.md A4: a bot whose searches find monsters in reach but none under its cap takes none and, 30 s on, moves to
     // a camp that fits; one that has reached no target for 2 minutes has outgrown its ground. The cap's reason wins.
-    // A death at its camp (#167 F4) owes a relocation at once, before the capped and outgrown clocks.
-    [TestCase(0L, 0L, 1_000_000L, false, null)]
-    [TestCase(10_000L, 0L, 129_999L, false, null)] [TestCase(10_000L, 0L, 130_000L, false, "outgrown")]
-    [TestCase(0L, 100_000L, 129_999L, false, null)] [TestCase(0L, 100_000L, 130_000L, false, "capped")]
-    [TestCase(10_000L, 100_000L, 130_000L, false, "capped")]
-    [TestCase(0L, 0L, 1_000_000L, true, "died")] [TestCase(10_000L, 100_000L, 130_000L, true, "died")]
+    // A death at its camp (#167 F4) owes a relocation at once, before the capped and outgrown clocks. None while the
+    // release's immunity lasts (#167 C1): every monster then fails IsAttackable (AbstractServerRules.cs:385-392), and the
+    // death's replan found none (279 of 312 st-deathsB died replans: none checked=0, all 10-19 s after the death).
+    [TestCase(0L, 0L, 1_000_000L, false, false, null)]
+    [TestCase(10_000L, 0L, 129_999L, false, false, null)] [TestCase(10_000L, 0L, 130_000L, false, false, "outgrown")]
+    [TestCase(0L, 100_000L, 129_999L, false, false, null)] [TestCase(0L, 100_000L, 130_000L, false, false, "capped")]
+    [TestCase(10_000L, 100_000L, 130_000L, false, false, "capped")]
+    [TestCase(0L, 0L, 1_000_000L, true, false, "died")] [TestCase(10_000L, 100_000L, 130_000L, true, false, "died")]
+    [TestCase(0L, 0L, 1_000_000L, true, true, null)] [TestCase(10_000L, 100_000L, 130_000L, true, true, null)]
+    [TestCase(0L, 100_000L, 130_000L, false, true, null)]
     public void A_capped_bot_relocates_after_30_s_and_an_outgrown_one_after_2_minutes(long roamingSince, long cappedSince,
-        long now, bool diedAtCamp, string reason) =>
-        Assert.That(PlayerBotDriver.RelocateReason(roamingSince, cappedSince, now, diedAtCamp), Is.EqualTo(reason));
+        long now, bool replanAfterDeath, bool immune, string reason) =>
+        Assert.That(PlayerBotDriver.RelocateReason(roamingSince, cappedSince, now, replanAfterDeath, immune), Is.EqualTo(reason));
 
     // The capped clock: it starts at the first search that passed a monster over for the cap and found nothing, keeps
     // running while that lasts, and stops at a search that found a target or nothing at all to pass over.
@@ -299,18 +303,23 @@ public sealed class UT_PlayerBotDriver
             Is.EqualTo(holds));
 
     // PLAYER_BOT_RELOCATE's fields stay as they were (runs/legcheck.py reads bot= and to or none); its reason and, for a
-    // move, the fallback camp's con (none: the death cap) come last.
+    // move, the fallback camp's con (none: the death cap) come last; after a death, the milliseconds since the release
+    // (#167 C1: sinceRelease=, the replan waits out the immunity).
     [Test]
     public void A_relocation_line_gives_its_reason_last()
     {
         Assert.That(PlayerBotDriver.RelocateLine("Pbotaaaaz", 34, new Vector3(572911.4f, 457576.6f, 2000), new Vector3(579794,
-                456080, 2216.6f), 7040, "silver oaken fellwood", 33, 51, PlayerBotDriver.Capped, ConColor.BLUE),
+                456080, 2216.6f), 7040, "silver oaken fellwood", 33, 51, PlayerBotDriver.Capped, ConColor.BLUE, 0),
             Is.EqualTo("PLAYER_BOT_RELOCATE bot=Pbotaaaaz level=34 from=(572911,457577) to=(579794,456080,2217) distance=7040 " +
                        "monster=\"silver oaken fellwood\" monsterLevel=33 zone=51 reason=capped fallback=BLUE"));
         Assert.That(PlayerBotDriver.RelocateLine("Pbotaaaaz", 34, Vector3.Zero, Vector3.One, 1, "m", 30, 51,
-            PlayerBotDriver.Outgrown, null), Does.EndWith(" zone=51 reason=outgrown fallback=-"));
-        Assert.That(PlayerBotDriver.RelocateNoneLine("Pbotaaaaz", 34, 3, 51, PlayerBotDriver.Capped),
+            PlayerBotDriver.Outgrown, null, 0), Does.EndWith(" zone=51 reason=outgrown fallback=-"));
+        Assert.That(PlayerBotDriver.RelocateNoneLine("Pbotaaaaz", 34, 3, 51, PlayerBotDriver.Capped, 0),
             Is.EqualTo("PLAYER_BOT_RELOCATE bot=Pbotaaaaz level=34 none checked=3 zone=51 reason=capped"));
+        Assert.That(PlayerBotDriver.RelocateLine("Pbotaaaaz", 34, Vector3.Zero, Vector3.One, 1, "m", 30, 51,
+            PlayerBotDriver.Died, null, 10_250), Does.EndWith(" zone=51 reason=died fallback=- sinceRelease=10250"));
+        Assert.That(PlayerBotDriver.RelocateNoneLine("Pbotaaaaz", 34, 0, 51, PlayerBotDriver.Died, 10_250),
+            Is.EqualTo("PLAYER_BOT_RELOCATE bot=Pbotaaaaz level=34 none checked=0 zone=51 reason=died sinceRelease=10250"));
     }
 
     // --- the killer memory (DEATHS.md A3) ---

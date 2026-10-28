@@ -83,7 +83,8 @@ Each bot thinks every 250 ms, a thin copy of the `/bot` pilot's think:
   stands up and fights it first. Before it sits, a bot within reach of an aggressive monster from its last search
   walks to the nearest spot out of that reach, 1,200 units away at most.
 - After a release it first steps out of the reach of every monster round it that would aggro. If it died at its camp,
-  it then plans a new camp from where it died, one it can walk to from there, before it walks back. It takes no camp
+  it then plans a new camp from where it died, one it can walk to from there, before it walks back. It plans once the
+  release's 10-s immunity is over: until then a player can attack no monster, so a plan found none. It takes no camp
   it died at in the last 15 minutes while another camp that cons yellow or easier is left. From its third death with
   no XP in between it waits 30-120 s out there, as a GameBot does, and it waits out the resurrection illness there
   too. It pulls nothing until then, but fights back. No hold for a camp lasts over 60 s: then it hunts where it is.
@@ -285,7 +286,8 @@ All start `PLAYER_BOT_`:
   target), `waits=` (the thinks a cast waited for its own swing's interrupt), `ctl=` (a caster's control casts) and
   `kites=` (its steps back). `DEATH` ends with `again=` (no kill since its last release), `sinceRelease=` (the seconds
   since that release, -1 if none since login) and `ill=` (the resurrection illness on when the fatal fight began).
-  `BLOCKED`'s `walk=` is `target`, `roam`, `clear` (the step out after a release), `rest`, `kite` or `turret`;
+  `BLOCKED`'s `walk=` is `target`, `roam`, `clear` (the step out after a release), `rest`, `kite` or `turret`.
+  `RELOCATE` after a death (`reason=died`) ends with `sinceRelease=`, the milliseconds since the release;
 - `REST`: one per rest, when the bot stands: `sec=`, the seconds it sat, and `why=`: `recovered`, `hit`, `incoming` (a
   monster coming at it), `heal`, `pet` or `buff` (a cast on itself), `died`, or `other`;
 - `FLOOR_STEP`: a step onto the nearest floor, with where from and to and why;

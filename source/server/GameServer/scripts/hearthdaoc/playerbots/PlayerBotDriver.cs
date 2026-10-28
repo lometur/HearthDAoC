@@ -1027,23 +1027,35 @@ public static class PlayerBotDriver
     /// <summary>Why the bot moves its leash now, or null: Died after a death at its camp, before it walks back (#167 F4:
     /// the GameBot replans 2.5-4 s after a solo death, AWBC:3780-3816); Capped when its searches have found monsters in
     /// reach but none under its cap for CappedRelocateMilliseconds (DEATHS.md A4), Outgrown when it has reached no target
-    /// for RelocateAfterMilliseconds.</summary>
-    public static string RelocateReason(long roamingSince, long cappedSince, long now, bool diedAtCamp) =>
-        diedAtCamp ? Died :
+    /// for RelocateAfterMilliseconds. None while the bot is immune (#167 C1): the release starts a 10-s immunity
+    /// (TIMER_KILLED_BY_MOB, AbstractServerRules.cs:258-262, :280-285; ServerProperties.cs:1273-1274), during which a
+    /// player may attack no monster (AbstractServerRules.cs:385-392; GST_Normal calls the base, NormalServerRules.cs:28),
+    /// so IsAttackable dropped every monster from the plan and a death's replan found none (279 of 312 in st-deathsB);
+    /// its anchor fell back to the bind. immune has no default: a caller that left it out would bring that back.</summary>
+    public static string RelocateReason(long roamingSince, long cappedSince, long now, bool replanAfterDeath, bool immune) =>
+        immune ? null :
+        replanAfterDeath ? Died :
         cappedSince != 0 && now - cappedSince >= CappedRelocateMilliseconds ? Capped :
         roamingSince != 0 && now - roamingSince >= RelocateAfterMilliseconds ? Outgrown : null;
 
     /// <summary>PLAYER_BOT_RELOCATE for a move: its fields as they were (runs/legcheck.py reads bot= and to), then the
-    /// reason (RelocateReason) and the fallback camp's con, - for none (the death cap holds, Cap).</summary>
+    /// reason (RelocateReason) and the fallback camp's con, - for none (the death cap holds, Cap); after a death, the
+    /// milliseconds since the release (RelocateSuffix).</summary>
     public static string RelocateLine(string bot, int level, Vector3 from, Vector3 to, int distance, string monster,
-        int monsterLevel, ushort zone, string reason, ConColor? fallback) =>
+        int monsterLevel, ushort zone, string reason, ConColor? fallback, long sinceReleaseMs) =>
         $"PLAYER_BOT_RELOCATE bot={bot} level={level} from=({from.X:0},{from.Y:0}) to=({to.X:0},{to.Y:0},{to.Z:0}) " +
         $"distance={distance} monster=\"{monster}\" monsterLevel={monsterLevel} zone={zone} reason={reason} " +
-        $"fallback={fallback?.ToString() ?? "-"}";
+        $"fallback={fallback?.ToString() ?? "-"}" + RelocateSuffix(reason, sinceReleaseMs);
 
     /// <summary>PLAYER_BOT_RELOCATE when no camp checked had a corridor (or none was found): checked= of them.</summary>
-    public static string RelocateNoneLine(string bot, int level, int candidates, ushort zone, string reason) =>
-        $"PLAYER_BOT_RELOCATE bot={bot} level={level} none checked={candidates} zone={zone} reason={reason}";
+    public static string RelocateNoneLine(string bot, int level, int candidates, ushort zone, string reason,
+        long sinceReleaseMs) =>
+        $"PLAYER_BOT_RELOCATE bot={bot} level={level} none checked={candidates} zone={zone} reason={reason}" +
+        RelocateSuffix(reason, sinceReleaseMs);
+
+    // #167 C1: RELOCATE sinceRelease= on a death's replan, last (the fields before it stay as they were).
+    private static string RelocateSuffix(string reason, long sinceReleaseMs) =>
+        reason == Died ? $" sinceRelease={sinceReleaseMs}" : "";
 
     /// <summary>The capped clock after a search of the wider ring (or one that found a target): set at the first that
     /// passed a monster over for the cap and found none, kept while that lasts, 0 once a search finds a target or
@@ -1670,10 +1682,13 @@ public static class PlayerBotDriver
     // after a death (PlanRelocation). A capped bot that cannot move takes the safest con in reach (FallbackInPlace).
     // After a death at its camp (#167 F4) it plans before it walks back, from where it died, in its anchor's region and
     // the zone it died in (the bind may lie elsewhere; then the corridors start at the death spot, CorridorOrigin), the
-    // failed camps barred; with no camp it hunts where it is.
+    // failed camps barred; with no camp it hunts where it is. Not while the release's immunity lasts (RelocateReason,
+    // #167 C1): it returns before NextRelocateTick, so the next think tries again, and the replan's hold (ReplanSince,
+    // HoldsForRelocation) keeps the bot out of the camp meanwhile.
     private static void RelocateIfOutgrown(PlayerBotState state, GamePlayer player, long now)
     {
-        string reason = RelocateReason(state.RoamingSince, state.CappedSince, now, state.ReplanAfterDeath);
+        string reason = RelocateReason(state.RoamingSince, state.CappedSince, now, state.ReplanAfterDeath,
+            player.IsInvulnerableToAttack);                                     // GamePlayer.cs:12284-12287
         if (reason == null || now < state.NextRelocateTick) return;
         bool died = reason == Died;
         if (!CanRelocate(state, player) ||                                         // the lever test keeps its bots on
@@ -1719,7 +1734,7 @@ public static class PlayerBotDriver
             }
             if (Log.IsInfoEnabled)
                 Log.Info(RelocateLine(player.Name, player.Level, state.Anchor, spot, (int)Vector3.Distance(here, spot), npc.Name,
-                    npc.EffectiveLevel, zone.ID, reason, fallback));
+                    npc.EffectiveLevel, zone.ID, reason, fallback, now - state.ReleasedAt));
             state.Anchor = spot;
             state.RoamDestination = spot;   // walk there: a task bot levelling for its errand has no leash to pull it
             state.RelocateRejected.Clear();
@@ -1731,7 +1746,7 @@ public static class PlayerBotDriver
             return;
         }
         if (Log.IsInfoEnabled)
-            Log.Info(RelocateNoneLine(player.Name, player.Level, nearest.Length, zone.ID, reason));
+            Log.Info(RelocateNoneLine(player.Name, player.Level, nearest.Length, zone.ID, reason, now - state.ReleasedAt));
         if (nearest.Length == 0) FallBack(state, player, reason);   // no camp in the zone: none to try next time either
     }
 
