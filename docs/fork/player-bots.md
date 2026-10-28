@@ -47,7 +47,9 @@ Each bot thinks every 250 ms, a thin copy of the `/bot` pilot's think:
   Eldritch, Mentalist).
 - A bot with a heal heals itself below 60% health in a fight. Out of one it heals itself below 85% before it sits, if
   half its power is left after the heal. A caster doesn't start a cast that a hit would interrupt, and uses
-  Quickcast once a monster reaches it. A pet class summons its pet and sends it in. A Theurgist casts its pets at its
+  Quickcast once a monster's hits interrupt it. Its own swing doesn't block its next cast: with a spell to cast, it
+  stops swinging until its own swing's interrupt runs out, and it doesn't swing between casts (an instant spell does
+  not mind). A pet class summons its pet and sends it in. A Theurgist casts its pets at its
   target whenever it can, as a GameBot does, and its damage spell between them.
 - It picks a monster with no aggressive neighbours. After deaths it moves to an easier camp. It avoids what killed it
   for 15 minutes.

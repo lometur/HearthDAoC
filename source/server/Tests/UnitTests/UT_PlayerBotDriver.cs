@@ -1631,7 +1631,8 @@ public sealed class UT_PlayerBotDriver
     [TestCase(true, (byte)50, 1_001L, false, false, false)] [TestCase(true, (byte)50, 1_000L, false, false, true)]
     public void A_bot_starts_no_interruptible_cast_while_hits_interrupt_it(bool hasSpell, byte mana, long blockedUntil,
         bool interrupted, bool interruptible, bool casts) =>
-        Assert.That(PlayerBotDriver.ShouldCast(hasSpell, mana, 1_000, blockedUntil, interrupted, interruptible), Is.EqualTo(casts));
+        Assert.That(PlayerBotDriver.CombatAction(PlayerBotDriver.ShouldCast(hasSpell, mana, 1_000, blockedUntil), interrupted, 0,
+            interruptible, false) == PlayerBotCombatAction.Cast, Is.EqualTo(casts));
 
     // A class with Quickcast, its damage spell blocked only by the hits' interrupt, uses it as a player does, then casts
     // (SpellHandler.cs:578-590 lets a quickcast spell through). Not while it is on (the ability toggles it off,
@@ -1652,8 +1653,38 @@ public sealed class UT_PlayerBotDriver
     public void An_interrupted_caster_with_Quickcast_uses_it_then_casts(bool hasQuickcast, bool quickcastOn, int disabled,
         long nextTry, bool casting, bool hasSpell, byte mana, long blockedUntil, bool interrupted, bool interruptible,
         bool uses) =>
-        Assert.That(PlayerBotDriver.ShouldQuickcast(hasQuickcast, quickcastOn, disabled, nextTry, casting, hasSpell, mana, 1_000,
-            blockedUntil, interrupted, interruptible), Is.EqualTo(uses));
+        Assert.That(PlayerBotDriver.CombatAction(PlayerBotDriver.ShouldCast(hasSpell, mana, 1_000, blockedUntil), interrupted, 0,
+            interruptible, PlayerBotDriver.QuickcastReady(hasQuickcast, quickcastOn, disabled, nextTry, casting, 1_000)) ==
+            PlayerBotCombatAction.Quickcast, Is.EqualTo(uses));
+
+    // #167 F6: the bot's own swing must not block its next cast. A swing interrupts the swinger for 3 s
+    // (StartInterruptTimer, GameLiving.cs:686-693; InterruptRemainingDuration, :736), and a player then gets "must wait"
+    // (SpellHandler.cs:570-590): with a spell it can cast and no monster interrupting it, the bot stops swinging and waits
+    // it out, as a GameBot caster ends its own swings before a spell (BotBrain.cs:3074-3080). A hit from another still
+    // means Quickcast or a swing; an instant or uninterruptible spell goes whatever the interrupt.
+    [TestCase(true, false, 0L, true, false, PlayerBotCombatAction.Cast)]
+    [TestCase(true, false, 2_000L, true, false, PlayerBotCombatAction.WaitToCast)]
+    [TestCase(true, true, 0L, true, true, PlayerBotCombatAction.Quickcast)]
+    [TestCase(true, true, 0L, true, false, PlayerBotCombatAction.Swing)]
+    [TestCase(true, true, 0L, false, false, PlayerBotCombatAction.Cast)]                   // an instant spell
+    [TestCase(true, false, 2_000L, false, false, PlayerBotCombatAction.Cast)]              // an instant spell
+    [TestCase(true, true, 2_000L, true, false, PlayerBotCombatAction.Swing)]               // another's hit decides
+    [TestCase(false, false, 2_000L, true, false, PlayerBotCombatAction.Swing)]             // nothing to cast
+    public void The_bots_own_swing_does_not_block_its_next_cast(bool canCastSpell, bool interruptedByOther, long selfInterrupt,
+        bool interruptible, bool quickcastReady, PlayerBotCombatAction action) =>
+        Assert.That(PlayerBotDriver.CombatAction(canCastSpell, interruptedByOther, selfInterrupt, interruptible, quickcastReady),
+            Is.EqualTo(action));
+
+    // Between casts (the cast choice not due yet, :417) the old think restarted the swing after every cast, and that swing
+    // blocked the next cast: with a spell it can cast the bot waits instead. An instant spell does not mind the swing.
+    [TestCase(true, false, 0L, true, PlayerBotCombatAction.WaitToCast)]
+    [TestCase(true, false, 0L, false, PlayerBotCombatAction.Swing)]                        // an instant spell
+    [TestCase(false, false, 0L, true, PlayerBotCombatAction.Swing)]                        // the watch's block, no power
+    [TestCase(true, true, 0L, true, PlayerBotCombatAction.Swing)]                          // hit: the old rule
+    public void Between_casts_a_bot_with_a_spell_to_cast_does_not_swing(bool canCastSpell, bool interruptedByOther,
+        long selfInterrupt, bool interruptible, PlayerBotCombatAction action) =>
+        Assert.That(PlayerBotDriver.CombatAction(canCastSpell, interruptedByOther, selfInterrupt, interruptible, false,
+            due: false), Is.EqualTo(action));
 
     [Test]
     public void A_cast_is_interruptible_unless_it_is_instant_or_uninterruptible()   // SpellHandler.cs:571

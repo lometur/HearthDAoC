@@ -19,6 +19,9 @@ public enum PlayerBotActivity { Waiting, Dead, Resting, Hunting, Fighting, Casti
 /// <summary>A class's role, as tools/lmroles.py gives it (CLASS_ROLES; levelmatch REVIEW-FIXES 11).</summary>
 public enum PlayerBotRole { Melee, Caster, Healer, Pet, Archer }
 
+/// <summary>What the bot does in reach of its target this think (PlayerBotDriver.CombatAction, #167 F6).</summary>
+public enum PlayerBotCombatAction { Cast, WaitToCast, Quickcast, Swing }
+
 /// <summary>A scripted job (the errands: quest 20206, promotion) that runs before grinding until Finished. Tick returns
 /// true when it used this think (walked, stood, acted), false to let the driver grind this think.</summary>
 public interface IPlayerBotTask
@@ -365,13 +368,20 @@ public static class PlayerBotDriver
         player.TargetObject = target;                         // before AttackRange: MeleeAttackRange reads TargetObject (GP:5320-5335)
         int distance = player.GetDistanceTo(target);
         bool quickcasting = player.effectListComponent.ContainsEffectForEffectType(eEffect.QuickCast);
-        if (now >= state.NextCombatChoiceTick && !player.IsCasting)                    // a cast choice: the pet or the
+        bool due = now >= state.NextCombatChoiceTick;
+        if (due && !player.IsCasting)                                                   // a cast choice: the pet or the
             ChooseCombatSpell(state, player, target, now);                              //   damage spell (#167 F1)
         bool interruptible = state.Spell != null && Interruptible(state.Spell);
-        bool canCast = ShouldCast(state.Spell != null, player.ManaPercent, now, state.SpellBlockedUntil,
-            player.IsBeingInterruptedByOther && !quickcasting, interruptible);   // a quickcast one goes (SpellHandler.cs:581)
-        int stop = canCast ? SpellStopDistance(player.castingComponent.CalculateSpellRange(state.Spell))
-                           : MeleeStopDistance(player.attackComponent.AttackRange);
+        Ability quickcast = player.GetAbility(Abilities.Quickcast);
+        PlayerBotCombatAction action = CombatAction(                                    // #167 F6
+            ShouldCast(state.Spell != null, player.ManaPercent, now, state.SpellBlockedUntil),
+            player.IsBeingInterruptedByOther && !quickcasting,                          // a quickcast one goes (SpellHandler.cs:581)
+            quickcasting ? 0 : Math.Max(0, player.SelfInterruptTime - now), interruptible,
+            QuickcastReady(quickcast != null, quickcasting, quickcast == null ? 0 : player.GetSkillDisabledDuration(quickcast),
+                state.NextQuickcastTick, player.IsCasting, now),
+            due);
+        int stop = action is PlayerBotCombatAction.Swing ? MeleeStopDistance(player.attackComponent.AttackRange)
+                                                         : SpellStopDistance(player.castingComponent.CalculateSpellRange(state.Spell));
         if (distance > stop)
         {
             player.attackComponent.StopAttack();
@@ -409,7 +419,8 @@ public static class PlayerBotDriver
         state.Engaged = true;
         state.FightAdds = Math.Max(state.FightAdds, state.Attackers);
         CountSwing(state, player.attackComponent.attackAction.LastAttackData);
-        if (canCast && !player.IsCasting && now >= state.NextCombatChoiceTick &&
+        if (player.IsCasting) return;
+        if (action is PlayerBotCombatAction.Cast &&
             player.IsWithinRadius(target, player.castingComponent.CalculateSpellRange(state.Spell)))
         {
             player.attackComponent.StopAttack();
@@ -444,10 +455,16 @@ public static class PlayerBotDriver
             state.FightQuickcast |= quickcasting;
             state.Activity = PlayerBotActivity.Casting;
         }
-        else if (!player.IsCasting)
+        else if (action is PlayerBotCombatAction.Quickcast)
+            UseQuickcast(state, player, now, quickcast);                                // then the next think casts
+        else if (action is PlayerBotCombatAction.WaitToCast)
         {
-            if (UseQuickcast(state, player, now, quickcasting, interruptible)) return;  // then the next think casts
-            if (now >= state.NextStyleTick)
+            player.attackComponent.StopAttack();                                        // no swing to block the cast
+            state.Activity = PlayerBotActivity.Fighting;
+        }
+        else                                                                            // Swing, or a cast out of its range
+        {                                                                               //   (one under SpellStopDistance's
+            if (now >= state.NextStyleTick)                                             //   145), as before
             {
                 state.NextStyleTick = now + StyleMilliseconds;
                 QueueUsableStyle(player);                                               // APP:694-710 without the quickbar filter
@@ -458,23 +475,36 @@ public static class PlayerBotDriver
         }
     }
 
-    /// <summary>Whether the bot casts its damage spell this think (APP:670, the cast watch's block) or swings: never an
-    /// interruptible cast while a monster's hits interrupt it (IsBeingInterruptedByOther, GameLiving.cs:739), which a
-    /// player gets "must wait" for (SpellHandler.cs:570-590; DEATHS.md A2). A GameBot under melee stops casting and
-    /// fights (BotBrain.cs:3336-3370). An instant or uninterruptible spell still goes.</summary>
-    public static bool ShouldCast(bool hasSpell, byte manaPercent, long now, long blockedUntil, bool interrupted,
-        bool interruptible) =>
-        hasSpell && manaPercent >= 18 && now >= blockedUntil && (!interrupted || !interruptible);
+    /// <summary>Whether the bot has a spell it may cast (APP:670, the cast watch's block); the interrupts are
+    /// CombatAction's.</summary>
+    public static bool ShouldCast(bool hasSpell, byte manaPercent, long now, long blockedUntil) =>
+        hasSpell && manaPercent >= 18 && now >= blockedUntil;
 
-    /// <summary>Whether a caster with Quickcast uses it this think: its damage spell is blocked only by the hits' interrupt
-    /// (ShouldCast without it would cast), and a player's use would take (QuickCastAbilityHandler.cs:41-84): not on
-    /// already (the ability toggles it off, :51-55), out of its 30-s disable after a quickcast spell (SpellHandler.cs:
-    /// 1430-1434, CastingComponent.cs:487), not casting (:44-48); the retry timer due. A GameBot never quickcasts
-    /// (BotBrain.cs:3959, GameBot.cs:2583-2585); a player does, so a player bot does.</summary>
-    public static bool ShouldQuickcast(bool hasQuickcast, bool quickcastOn, int disabledMilliseconds, long nextTry, bool casting,
-        bool hasSpell, byte manaPercent, long now, long blockedUntil, bool interrupted, bool interruptible) =>
-        hasQuickcast && !quickcastOn && disabledMilliseconds <= 0 && now >= nextTry && !casting && interrupted &&
-        interruptible && ShouldCast(hasSpell, manaPercent, now, blockedUntil, false, interruptible);
+    /// <summary>What the bot does in reach of its target (#167 F6). With no spell it may cast (ShouldCast), it swings. An
+    /// instant or uninterruptible spell goes whatever the interrupts, when the cast choice is due (between casts the bot
+    /// swings). An interruptible one: while a monster's hits interrupt the bot (IsBeingInterruptedByOther,
+    /// GameLiving.cs:739), which a player gets "must wait" for (SpellHandler.cs:570-590; DEATHS.md A2), it quickcasts if
+    /// it can, else swings, as a GameBot under melee fights (BotBrain.cs:3336-3370). Otherwise its own swing's interrupt
+    /// (selfInterruptMilliseconds, GameLiving.cs:686-693) and the time between casts (the choice not due, which the old
+    /// think filled with a swing that blocked the next cast) are waited out with auto-attack off, as a GameBot caster
+    /// ends its own swings before a spell (BotBrain.cs:3074-3080); then it casts.</summary>
+    public static PlayerBotCombatAction CombatAction(bool canCastSpell, bool interruptedByOther, long selfInterruptMilliseconds,
+        bool interruptible, bool quickcastReady, bool due = true)
+    {
+        if (!canCastSpell) return PlayerBotCombatAction.Swing;
+        if (!interruptible) return due ? PlayerBotCombatAction.Cast : PlayerBotCombatAction.Swing;
+        if (interruptedByOther) return quickcastReady ? PlayerBotCombatAction.Quickcast : PlayerBotCombatAction.Swing;
+        return selfInterruptMilliseconds > 0 || !due ? PlayerBotCombatAction.WaitToCast : PlayerBotCombatAction.Cast;
+    }
+
+    /// <summary>Whether a player's use of Quickcast would take (QuickCastAbilityHandler.cs:41-84): the ability, not on
+    /// already (it toggles off, :51-55), out of its 30-s disable after a quickcast spell (SpellHandler.cs:1430-1434,
+    /// CastingComponent.cs:487), not casting (:44-48); the retry timer due. CombatAction uses it when hits interrupt an
+    /// interruptible spell. A GameBot never quickcasts (BotBrain.cs:3959, GameBot.cs:2583-2585); a player does, so a
+    /// player bot does.</summary>
+    public static bool QuickcastReady(bool hasQuickcast, bool quickcastOn, int disabledMilliseconds, long nextTry, bool casting,
+        long now) =>
+        hasQuickcast && !quickcastOn && disabledMilliseconds <= 0 && now >= nextTry && !casting;
 
     /// <summary>The server's own test for the interrupt timer (SpellHandler.cs:571).</summary>
     public static bool Interruptible(Spell spell) => !spell.Uninterruptible && !spell.IsInstantCast;
@@ -1363,21 +1393,16 @@ public static class PlayerBotDriver
     private static bool WaitsForSelfCast(PlayerBotState state, GamePlayer player) =>
         state.SelfCast = state.SelfCast && player.IsCasting;
 
-    // Quickcast as a player uses it: attack mode off, which the ability needs (QuickCastAbilityHandler.cs:65-69), then
-    // the use-skill packet's request (UseSkillHandler.cs:83-84), handled in the Casting phase later in this tick
-    // (CastingComponent.cs:173-186, :485-496). A refused use is not asked for again until QuickcastRetryMilliseconds.
-    private static bool UseQuickcast(PlayerBotState state, GamePlayer player, long now, bool quickcastOn, bool interruptible)
+    // Quickcast as a player uses it (CombatAction's Quickcast): attack mode off, which the ability needs
+    // (QuickCastAbilityHandler.cs:65-69), then the use-skill packet's request (UseSkillHandler.cs:83-84), handled in the
+    // Casting phase later in this tick (CastingComponent.cs:173-186, :485-496). A refused use is not asked for again
+    // until QuickcastRetryMilliseconds.
+    private static void UseQuickcast(PlayerBotState state, GamePlayer player, long now, Ability quickcast)
     {
-        Ability quickcast = player.GetAbility(Abilities.Quickcast);
-        if (!ShouldQuickcast(quickcast != null, quickcastOn, quickcast == null ? 0 : player.GetSkillDisabledDuration(quickcast),
-                state.NextQuickcastTick, player.IsCasting, state.Spell != null, player.ManaPercent, now,
-                state.SpellBlockedUntil, player.IsBeingInterruptedByOther, interruptible))
-            return false;
         state.NextQuickcastTick = now + QuickcastRetryMilliseconds;
         player.attackComponent.StopAttack();
         player.castingComponent.RequestUseAbility(quickcast);
         state.Activity = PlayerBotActivity.Casting;
-        return true;
     }
 
     // A healer's heal on itself (DEATHS.md A6), before a rest as a GameBot's (AWBC:2725); out of a fight (MayRest's
