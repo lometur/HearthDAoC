@@ -82,6 +82,13 @@ Each bot thinks every 250 ms, a thin copy of the `/bot` pilot's think:
 - A monster within 2,000 units that has the bot as its target counts as an attacker before its first hit, so the bot
   stands up and fights it first. Before it sits, a bot within reach of an aggressive monster from its last search
   walks to the nearest spot out of that reach, 1,200 units away at most.
+- Losing to two, it breaks off: below 40% health with 2 or more monsters on it, or right after a kill in a fight
+  that had 2 or more on it with 1 still on it, unless its target is down to 10% or less. Only from monsters it can
+  outrun: none faster than its run (191), or none as fast as its sprint (248) when its endurance holds the sprint long
+  enough to keep the fastest off it for the 25 s a monster chases. It stops its fight, sprints, and runs 1,500-2,500
+  units straight away from them to a spot clear of other aggressive monsters, on again from there while one still
+  chases it. Still chased after 30 s, or with nowhere to run, it turns and fights them out. Afterwards it takes no
+  camp there and avoids those monsters for 15 minutes, and plans a new camp from where it ran to.
 - After a release it first steps out of the reach of every monster round it that would aggro. Wherever it died (at its
   camp or on a walk), it then plans a new camp from where it died, one it can walk to from there, before it walks
   back. It plans once the release's 10-s immunity is over: until then a player can attack no monster, so a plan found
@@ -289,8 +296,12 @@ All start `PLAYER_BOT_`:
   target), `waits=` (the thinks a cast waited for its own swing's interrupt), `ctl=` (a caster's control casts) and
   `kites=` (its steps back). `DEATH` ends with `again=` (no kill since its last release), `sinceRelease=` (the seconds
   since that release, -1 if none since login) and `ill=` (the resurrection illness on when the fatal fight began).
-  `BLOCKED`'s `walk=` is `target`, `roam`, `clear` (the step out after a release), `rest`, `kite` or `turret`.
-  `RELOCATE` after a death (`reason=died`) ends with `sinceRelease=`, the milliseconds since the release;
+  `BLOCKED`'s `walk=` is `target`, `roam`, `clear` (the step out after a release), `rest`, `kite`, `turret` or
+  `breakoff`. `RELOCATE` after a death (`reason=died`) ends with `sinceRelease=`, the milliseconds since the release;
+  after a break-off its `reason=` is `brokeoff`. A break-off drops its fight (`FIGHT result=dropped`);
+- `BREAKOFF`: one per break-off, when it ends: the bot's `hp=`, `end=` (endurance) and `attackers=` when it broke off,
+  `sec=`, the seconds it ran, and `outcome=`: `shook` (none still after it), `fought` (still chased after 30 s, or
+  nowhere to run) or `died`;
 - `REST`: one per rest, when the bot stands: `sec=`, the seconds it sat, and `why=`: `recovered`, `hit`, `incoming` (a
   monster coming at it), `heal`, `pet` or `buff` (a cast on itself), `died`, or `other`;
 - `FLOOR_STEP`: a step onto the nearest floor, with where from and to and why;

@@ -147,17 +147,19 @@ public sealed class UT_PlayerBotDriver
     // a camp that fits; one that has reached no target for 2 minutes has outgrown its ground. The cap's reason wins.
     // A death (#167 F4; anywhere, C1b) owes a relocation at once, before the capped and outgrown clocks. None while the
     // release's immunity lasts (#167 C1): every monster then fails IsAttackable (AbstractServerRules.cs:385-392), and the
-    // death's replan found none (279 of 312 st-deathsB died replans: none checked=0, all 10-19 s after the death).
-    [TestCase(0L, 0L, 1_000_000L, false, false, null)]
-    [TestCase(10_000L, 0L, 129_999L, false, false, null)] [TestCase(10_000L, 0L, 130_000L, false, false, "outgrown")]
-    [TestCase(0L, 100_000L, 129_999L, false, false, null)] [TestCase(0L, 100_000L, 130_000L, false, false, "capped")]
-    [TestCase(10_000L, 100_000L, 130_000L, false, false, "capped")]
-    [TestCase(0L, 0L, 1_000_000L, true, false, "died")] [TestCase(10_000L, 100_000L, 130_000L, true, false, "died")]
-    [TestCase(0L, 0L, 1_000_000L, true, true, null)] [TestCase(10_000L, 100_000L, 130_000L, true, true, null)]
-    [TestCase(0L, 100_000L, 130_000L, false, true, null)]
+    // death's replan found none (279 of 312 st-deathsB died replans: none checked=0, all 10-19 s after the death). A
+    // break-off (#167 C2) owes one too, as brokeoff.
+    [TestCase(0L, 0L, 1_000_000L, null, false, null)]
+    [TestCase(10_000L, 0L, 129_999L, null, false, null)] [TestCase(10_000L, 0L, 130_000L, null, false, "outgrown")]
+    [TestCase(0L, 100_000L, 129_999L, null, false, null)] [TestCase(0L, 100_000L, 130_000L, null, false, "capped")]
+    [TestCase(10_000L, 100_000L, 130_000L, null, false, "capped")]
+    [TestCase(0L, 0L, 1_000_000L, "died", false, "died")] [TestCase(10_000L, 100_000L, 130_000L, "died", false, "died")]
+    [TestCase(0L, 0L, 1_000_000L, "died", true, null)] [TestCase(10_000L, 100_000L, 130_000L, "died", true, null)]
+    [TestCase(0L, 100_000L, 130_000L, null, true, null)]
+    [TestCase(0L, 0L, 1_000_000L, "brokeoff", false, "brokeoff")] [TestCase(10_000L, 100_000L, 130_000L, "brokeoff", false, "brokeoff")]
     public void A_capped_bot_relocates_after_30_s_and_an_outgrown_one_after_2_minutes(long roamingSince, long cappedSince,
-        long now, bool replanAfterDeath, bool immune, string reason) =>
-        Assert.That(PlayerBotDriver.RelocateReason(roamingSince, cappedSince, now, replanAfterDeath, immune), Is.EqualTo(reason));
+        long now, string owed, bool immune, string reason) =>
+        Assert.That(PlayerBotDriver.RelocateReason(roamingSince, cappedSince, now, owed, immune), Is.EqualTo(reason));
 
     // The capped clock: it starts at the first search that passed a monster over for the cap and found nothing, keeps
     // running while that lasts, and stops at a search that found a target or nothing at all to pass over.
@@ -393,6 +395,7 @@ public sealed class UT_PlayerBotDriver
         Assert.That(PlayerBotDriver.RelocationOrigin(PlayerBotDriver.Died, spot, here), Is.EqualTo(spot));
         Assert.That(PlayerBotDriver.RelocationOrigin(PlayerBotDriver.Capped, spot, here), Is.EqualTo(here));
         Assert.That(PlayerBotDriver.RelocationOrigin(PlayerBotDriver.Outgrown, spot, here), Is.EqualTo(here));
+        Assert.That(PlayerBotDriver.RelocationOrigin(PlayerBotDriver.BrokeOff, spot, here), Is.EqualTo(here), "#167 C2");
     }
 
     // The corridor test's origin (a corridor is one zone's, PlayerTravelPath.cs:75-81): where the bot stands in the plan's
@@ -408,6 +411,7 @@ public sealed class UT_PlayerBotDriver
         Assert.That(PlayerBotDriver.CorridorOrigin(PlayerBotDriver.Capped, true, true, spot, here), Is.EqualTo(here));
         Assert.That(PlayerBotDriver.CorridorOrigin(PlayerBotDriver.Died, false, false, spot, here), Is.Null, "no navmesh");
         Assert.That(PlayerBotDriver.CorridorOrigin(PlayerBotDriver.Died, false, true, spot, here), Is.Null);
+        Assert.That(PlayerBotDriver.CorridorOrigin(PlayerBotDriver.BrokeOff, true, true, spot, here), Is.EqualTo(here));
     }
 
     // The fit pass bars a failed camp too, not only the fallback (st-deathsA: after a relocation the bots walked back to
@@ -493,8 +497,8 @@ public sealed class UT_PlayerBotDriver
         PlayerBotDriver.StartLife(login, 5_000);
         Assert.That((login.AfterRelease, login.RecoverUntil, login.ReleasedAt, login.ReplanSince, login.AliveSince),
             Is.EqualTo((true, 5_000L, 0L, 0L, 5_000L)));
-        var released = new PlayerBotState(Player(null)) { AliveSince = 1_000, DeathRecorded = true, ReplanAfterDeath = true,
-            NoXpDeaths = 3 };
+        var released = new PlayerBotState(Player(null)) { AliveSince = 1_000, DeathRecorded = true,
+            ReplanOwed = PlayerBotDriver.Died, NoXpDeaths = 3 };
         PlayerBotDriver.StartLife(released, 9_000);
         Assert.That((released.AfterRelease, released.RecoverUntil, released.ReleasedAt, released.ReplanSince,
             released.AliveSince), Is.EqualTo((true, 39_000L, 9_000L, 9_000L, 9_000L)), "the third death with no XP: 30 s");
@@ -502,6 +506,118 @@ public sealed class UT_PlayerBotDriver
         PlayerBotDriver.StartLife(later, 9_000);
         Assert.That((later.AfterRelease, later.AliveSince), Is.EqualTo((false, 1_000L)), "no new life");
     }
+
+    // --- the break-off when losing to two (#167 C2) ---
+
+    // It breaks off with 2 or more monsters on it, or right after a kill in a fight that had 2 or more on it with 1 still
+    // on (the second-monster case, k12's rule at the kill), below 40% health, its target (at the kill: the one still on
+    // it) above 10%, no control ready for the add (C4), and only from chasers it outruns. One monster in an ordinary
+    // fight, it fights on.
+    [TestCase(2, false, (byte)39, (byte)50, false, true, true)]
+    [TestCase(2, false, (byte)40, (byte)50, false, true, false)]
+    [TestCase(1, false, (byte)20, (byte)50, false, true, false)]
+    [TestCase(2, false, (byte)39, (byte)10, false, true, false)] [TestCase(2, false, (byte)39, (byte)11, false, true, true)]
+    [TestCase(2, false, (byte)39, (byte)50, true, true, false)]
+    [TestCase(2, false, (byte)39, (byte)50, false, false, false)]
+    [TestCase(3, false, (byte)10, (byte)90, false, true, true)]
+    [TestCase(1, true, (byte)39, (byte)100, false, true, true)] [TestCase(1, true, (byte)40, (byte)100, false, true, false)]
+    [TestCase(0, true, (byte)20, (byte)100, false, true, false)]
+    public void A_bot_losing_to_two_breaks_off(int monstersOnBot, bool addFight, byte health, byte targetHealth,
+        bool addControlReady, bool outruns, bool breaksOff) =>
+        Assert.That(PlayerBotDriver.BreaksOff(monstersOnBot, addFight, health, targetHealth, addControlReady, outruns),
+            Is.EqualTo(breaksOff));
+
+    // It outruns a chaser no faster than its run (191, GamePlayer.cs:8250; enable_pve_speed is off in the world DB), or
+    // one under its sprint (1.3 x 191 = 248, MaxSpeedCalculator.cs:25) while the sprint's lead, 57 units a second, holds
+    // it off for the 25 s a monster chases after its last swing (StandardMobState.cs:89, :121): S x 57 >= 25 x (v - 191).
+    [TestCase(191, 0, true)] [TestCase(150, 0, true)] [TestCase(220, 13, true)] [TestCase(220, 12, false)]
+    [TestCase(248, 99, false)] [TestCase(247, 99, true)] [TestCase(200, 4, true)] [TestCase(200, 3, false)]
+    [TestCase(200, int.MaxValue, true)]
+    public void A_bot_outruns_a_chaser_while_its_sprint_lasts(int fastestSpeed, int sprintSeconds, bool outruns) =>
+        Assert.That(PlayerBotDriver.Outruns(fastestSpeed, sprintSeconds), Is.EqualTo(outruns));
+
+    // The sprint's seconds, at the least, from the bot's endurance and its real cost (GamePlayer.cs:2393-2413): each
+    // second's regeneration (no base while moving or in combat, ClassicRestRegeneration.cs:12-15: buffs and items only)
+    // less the sprint's 5 (less Long Wind's), scaled by the fatigue consumption above 1%; the sprint ends at 5 endurance
+    // or less (GamePlayer.cs:2420-2423, SprintECSEffect.cs) and doesn't start at 10 or less (GamePlayer.cs:8633). A cost
+    // of 0 or less never ends it.
+    [TestCase(100, 0, 100, 5, 18)] [TestCase(11, 0, 100, 5, 1)] [TestCase(10, 0, 100, 5, 0)] [TestCase(50, 0, 100, 5, 8)]
+    [TestCase(100, 2, 100, 5, 31)] [TestCase(100, 0, 50, 5, 47)] [TestCase(100, 5, 100, 5, int.MaxValue)]
+    [TestCase(100, 0, 100, 4, 23)]
+    public void A_sprint_lasts_while_the_endurance_pays_for_it(int endurance, int regeneration, int fatigueConsumption,
+        int longWind, int seconds) =>
+        Assert.That(PlayerBotDriver.SprintSeconds(endurance, regeneration, fatigueConsumption, longWind), Is.EqualTo(seconds));
+
+    // Where it runs: ahead of straight away from its chasers (a dot product above 0, so never square to them), out of
+    // every other monster's reach, the farthest from the nearest chaser; none, null.
+    [Test]
+    public void A_break_off_runs_ahead_away_from_the_chasers_and_clear_of_the_adds()
+    {
+        Vector3 here = Vector3.Zero;
+        Vector3[] chasers = [new(300, 0, 0)];
+        Vector3[] candidates = [new(-1_500, 0, 0), new(1_500, 0, 0), new(0, 1_500, 0), new(-1_061, 1_061, 0)];
+        var none = new List<(string, Vector3, int)>();
+        Assert.That(PlayerBotDriver.BreakOffPoint(here, chasers, candidates, none), Is.EqualTo(new Vector3(-1_500, 0, 0)));
+        var add = new List<(string, Vector3, int)> { ("add", new(-1_500, 0, 0), 500) };
+        Assert.That(PlayerBotDriver.BreakOffPoint(here, chasers, candidates, add), Is.EqualTo(new Vector3(-1_061, 1_061, 0)));
+        Assert.That(PlayerBotDriver.BreakOffPoint(here, chasers, [new Vector3(0, 1_500, 0), new Vector3(1_500, 0, 0)], none),
+            Is.Null, "square to the chaser, or toward it");
+        var both = new List<(string, Vector3, int)> { ("a", new(-1_500, 0, 0), 500), ("b", new(-1_061, 1_061, 0), 500) };
+        Assert.That(PlayerBotDriver.BreakOffPoint(here, chasers, candidates, both), Is.Null, "every point ahead in reach");
+        Vector3[] around = [new(-1_500, 0, 0), new(0, -1_500, 0), new(-1_061, -1_061, 0), new(-1_061, 1_061, 0)];
+        Assert.That(PlayerBotDriver.BreakOffPoint(here, [new Vector3(300, 0, 0), new Vector3(0, 300, 0)], around, none),
+            Is.EqualTo(new Vector3(-1_061, -1_061, 0)), "two chasers: straight away from their middle");
+    }
+
+    // The break-off's step: it runs on; at its point with a chaser still after it, it takes the next point; with none
+    // after it, it is done; still chased after 30 s, it fights.
+    [TestCase(false, 2, 3_000L, PlayerBotBreakOff.Run)] [TestCase(true, 1, 8_000L, PlayerBotBreakOff.NextPoint)]
+    [TestCase(false, 0, 8_000L, PlayerBotBreakOff.Done)] [TestCase(true, 0, 8_000L, PlayerBotBreakOff.Done)]
+    [TestCase(false, 1, 29_999L, PlayerBotBreakOff.Run)] [TestCase(false, 1, 30_000L, PlayerBotBreakOff.Fight)]
+    [TestCase(true, 1, 30_000L, PlayerBotBreakOff.Fight)]
+    public void A_break_off_runs_until_no_monster_chases_it_or_30_s(bool arrived, int chasers, long sinceMs,
+        PlayerBotBreakOff step) =>
+        Assert.That(PlayerBotDriver.BreakOffStep(arrived, chasers, sinceMs), Is.EqualTo(step));
+
+    // At its start the bot remembers the camp and the names as after a death (DEATHS.md A3, #167 F4), and at its end it
+    // owes a relocation planned from where it stands: FailedCamps is read by PlanRelocation only, and with the anchor
+    // left at the camp Roam's leash walked it back in. A lever spot bot or a task owes none (OwesReplan).
+    [Test]
+    public void A_break_off_bars_the_camp_and_its_names_and_owes_a_relocation()
+    {
+        var state = new PlayerBotState(Player(null));
+        PlayerBotDriver.BrokeOffFrom(state, 51, new Vector3(1_000, 0, 0), ["forest bear", null, "Forest Bear", "wolf"], 2_000);
+        Assert.That((PlayerBotDriver.IsAvoided(state.AvoidUntil, "forest bear", 2_001),
+            PlayerBotDriver.IsAvoided(state.AvoidUntil, "wolf", 2_001)), Is.EqualTo((true, true)));
+        Assert.That(PlayerBotDriver.FailedCamps(state.FailedCamps, 51, 2_001), Is.EqualTo(new[] { new Vector3(1_000, 0, 0) }));
+        state.NextRelocateTick = 50_000;
+        state.RelocateRejected.Add(null);
+        PlayerBotDriver.AfterBreakOff(state, true, 7_000);
+        Assert.That((state.ReplanOwed, state.ReplanSince, state.NextRelocateTick, state.RelocateRejected.Count),
+            Is.EqualTo((PlayerBotDriver.BrokeOff, 7_000L, 0L, 0)));
+        var held = new PlayerBotState(Player(null));
+        PlayerBotDriver.AfterBreakOff(held, false, 7_000);
+        Assert.That((held.ReplanOwed, held.ReplanSince), Is.EqualTo(((string)null, 0L)));
+    }
+
+    // The second-monster case's mark: a kill in a fight that had 2 or more monsters on the bot (FIGHT adds=), so the
+    // break-off may fire at once with the one still on it; a kill with one, or a fight dropped, sets none.
+    [TestCase(true, 2, true)] [TestCase(true, 1, false)] [TestCase(false, 3, false)]
+    public void A_kill_with_an_add_still_on_marks_the_second_monster_case(bool engaged, int fightAdds, bool marked)
+    {
+        MethodInfo settle = typeof(PlayerBotDriver).GetMethod("SettleTarget", BindingFlags.Static | BindingFlags.NonPublic);
+        PlayerBotState state = (PlayerBotState)RuntimeHelpers.GetUninitializedObject(typeof(PlayerBotState));
+        (state.Target, state.Engaged, state.FightAdds) = ((GameNPC)RuntimeHelpers.GetUninitializedObject(typeof(GameNPC)),
+            engaged, fightAdds);                                                         // health 0: dead
+        settle!.Invoke(null, [state, Player(null)]);
+        Assert.That(state.KilledWithAdds, Is.EqualTo(marked));
+    }
+
+    // PLAYER_BOT_BREAKOFF: the bot's health, endurance and attackers when it broke off, the seconds it ran and how it ended.
+    [Test]
+    public void A_break_off_line_gives_its_start_and_outcome() =>
+        Assert.That(PlayerBotDriverReport.FormatBreakOff("Pbotaaaaz", 34, 38, 72, 2, 26, "shook"),
+            Is.EqualTo("PLAYER_BOT_BREAKOFF bot=Pbotaaaaz level=34 hp=38 end=72 attackers=2 sec=26 outcome=shook"));
 
     // --- monsters coming, and the rest out of their reach (#167 F7) ---
 

@@ -173,6 +173,13 @@ public static class PlayerBotDriverReport
     public static string FormatRest(string bot, int level, long seconds, string why) => string.Create(CultureInfo.InvariantCulture,
         $"PLAYER_BOT_REST bot={bot} level={level} sec={seconds} why={why}");
 
+    /// <summary>PLAYER_BOT_BREAKOFF (#167 C2), when a break-off ends (PlayerBotDriver.EndBreakOff): the bot's health,
+    /// endurance and attackers when it broke off, the seconds it ran, and how it ended (shook: none still after it;
+    /// fought: still chased, or nowhere to run, it turned on them; died).</summary>
+    public static string FormatBreakOff(string bot, int level, int hp, int end, int attackers, long seconds, string outcome) =>
+        string.Create(CultureInfo.InvariantCulture,
+            $"PLAYER_BOT_BREAKOFF bot={bot} level={level} hp={hp} end={end} attackers={attackers} sec={seconds} outcome={outcome}");
+
     /// <summary>The fields PLAYER_BOT_DEATH appends after task= (the ones before stay as they were: legcheck.py reads them).</summary>
     public static string FormatDeathDetail(PlayerBotDeathDetail d) => string.Create(CultureInfo.InvariantCulture,
         $"activity={d.Activity} startHp={d.StartHp} fightSec={d.FightSeconds} targetHp={d.TargetHp} " +

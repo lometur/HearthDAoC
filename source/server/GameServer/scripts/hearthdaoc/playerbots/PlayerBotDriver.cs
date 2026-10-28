@@ -9,6 +9,7 @@ using DOL.AI.Brain;
 using DOL.Events;
 using DOL.GS.Commands;
 using DOL.GS.Keeps;
+using DOL.GS.RealmAbilities;
 using DOL.GS.Styles;
 using DOL.Logging;
 
@@ -21,6 +22,9 @@ public enum PlayerBotRole { Melee, Caster, Healer, Pet, Archer }
 
 /// <summary>The recovery's step after a release (PlayerBotDriver.AfterReleaseStep, #167 F4).</summary>
 public enum PlayerBotRecovery { Fight, StepOut, Replan, Wait, Done }
+
+/// <summary>A break-off's step (PlayerBotDriver.BreakOffStep, #167 C2).</summary>
+public enum PlayerBotBreakOff { Run, NextPoint, Done, Fight }
 
 /// <summary>A caster's step against its target (PlayerBotDriver.CasterAction, #167 F11); Nuke hands the think to
 /// CombatAction.</summary>
@@ -140,8 +144,8 @@ public sealed class PlayerBotState
     public long SitSince;                                        // #167 PLAYER_BOT_REST: when the bot sat down, 0 standing
     public (string Head, PlayerBotDeathDetail Detail, GameObject Target)? PendingDeath;   // a DEATH line awaiting Dying (AwaitsDying)
     public Vector3 DeathSpot;                                    // #167 F4: where it died last; after any death (C1b)
-    public bool ReplanAfterDeath;                                //   it owes a relocation (Died), planned from there, held
-    public long ReplanSince;                                     //   MaxHoldMilliseconds at most from the release; its
+    public string ReplanOwed;                                    //   it owes a relocation (Died, planned from there; C2's
+    public long ReplanSince;                                     //   BrokeOff), held MaxHoldMilliseconds at most; its
     public int NoXpDeaths;                                       //   deaths with no XP between them (the GameBot's streak)
     public long LastDeathTick, GainedAtDeath, RecoverUntil;      //   and the back-off's end; the last release, and the
     public long ReleasedAt;                                      //   recovery after it (AfterReleaseStep): the spot out of
@@ -153,6 +157,13 @@ public sealed class PlayerBotState
     public readonly List<GameNPC> SearchAdds = new();            //   (FindWithin), and the rest spot read from them once
     public bool RestSpotChecked;                                 //   per rest (RestSpot), walked to before the bot sits
     public Vector3? RestGoal;
+    public bool KilledWithAdds;                                  // #167 C2: a kill with 2 or more on the bot, until the
+    public long BreakOffSince, NextBreakOffTick;                 //   next fight; the break-off under way (0: none) and the
+    public Vector3? BreakOffGoal;                                //   next one's earliest, its point, a step there arrived
+    public bool BreakOffArrived;                                 //   or blocked, the monsters still after it, and its
+    public readonly List<GameNPC> BreakOffChasers = new();       //   start's health, endurance and attackers (BREAKOFF)
+    public byte BreakOffHealth, BreakOffEndurance;
+    public int BreakOffAttackers;
 }
 
 // HearthDAoC player bots (#137): a thin copy of the /bot pilot's think (bots/autonomous/AutonomousPlayerPilot.cs:229-374) for a
@@ -191,7 +202,7 @@ public static class PlayerBotDriver
     public const int RelocateCandidates = 5;                 // corridor checks per try
     public const int CappedRelocateMilliseconds = 30_000;    // DEATHS.md A4: nothing in reach fits the cap this long
     public const int MaxDeathSteps = (int)ConColor.YELLOW - (int)ConColor.GREEN;   // a solo GameBot's (AWBC:3756, :3793-3796)
-    public const string Outgrown = "outgrown", Capped = "capped", Died = "died";   // RelocateReason
+    public const string Outgrown = "outgrown", Capped = "capped", Died = "died", BrokeOff = "brokeoff";   // RelocateReason
     public const int MaxHoldMilliseconds = 60_000;           // #167 F4: a hold while no camp is planned ends by then
     public static readonly int[] StepOutRings = [500, 900, 1_300, 1_700, 2_100, 2_500];   // #167 F4: a released bot's
     public const int SpotDirections = 12;                    //   candidate spots, every 30 degrees on each ring
@@ -220,6 +231,20 @@ public static class PlayerBotDriver
     public const int SelfBuffScanMilliseconds = 5_000;       // #167 F8: the self-buffs' scan, out of a fight
     public const int PetLeadMilliseconds = 4_000;            // #167 F10c: the owner's longest wait for its pet to lead
     public const int SpellChoiceMilliseconds = 1_000;        // (inf.) as the sight check's: the spell choice while no cast
+    public const byte BreakOffHealthPercent = 40;            // #167 C2: below this, losing to two, it breaks off (k12),
+    public const byte BreakOffTargetPercent = 10;            //   unless its target is this low or lower
+    public const int RunSpeed = GamePlayer.PLAYER_BASE_SPEED;   //   191 (GamePlayer.cs:8250): enable_pve_speed is off in
+    public const int SprintSpeed = 248;                      //   the world DB; 1.3 x 191 sprinting (MaxSpeedCalculator.cs:25,
+                                                             //   :101, :148)
+    public const int ChaseSeconds = 25;                      //   a monster gives up 25 s after its last swing
+                                                             //   (StandardMobState.cs:89, :121)
+    public const int SprintStopEndurance = 5, SprintStartEndurance = 10;   // GamePlayer.cs:2420-2423, :8633
+    public const int LongWind = 5;                           //   a sprint's endurance a second (GamePlayer.cs:2396)
+    public static readonly int[] BreakOffRings = [1_500, 2_000, 2_500];   // its points (inf.)
+    public const int BreakOffMilliseconds = 30_000;          //   still chased then, it fights (inf.); and after that, no
+                                                             //   break-off for as long
+    public const int ChaseRadius = 6_000;                    //   past this a monster drops it (StandardMobBrain.cs:23, :589)
+    public const string Shook = "shook", Fought = "fought";  //   PLAYER_BOT_BREAKOFF outcome= (and Died)
 
     private static readonly ConcurrentDictionary<GamePlayer, PlayerBotState> _states = new();
     [ThreadStatic] private static List<(GameNPC Npc, Vector3 At, int Score)> _candidates;      // FindWithin's, per timer
@@ -370,6 +395,7 @@ public static class PlayerBotDriver
         TryLoot(state, player, now);                                                     // 11. APP:403-414, before a sit
         if (WaitsForSelfCast(state, player) || StepsOutOfReach(state, player, now))      // 11a. #167 F4, C6: a release, a login
             return;
+        if (BreaksOffNow(state, player, now)) return;                                    //     #167 C2: losing to two
         if (SelfHeal(state, player, now) || SummonPet(state, player, now) || SelfBuff(state, player, now))
             return;                                                                      // 11b. DEATHS.md A6, A5, #167 F8: before a rest
         if (state.RecoverBeforePull && Recovered(player)) state.RecoverBeforePull = false;
@@ -394,7 +420,7 @@ public static class PlayerBotDriver
         if (state.Target == null)                                                        // 15
         {
             RelocateIfOutgrown(state, player, now);
-            if (state.ReplanAfterDeath && !Holding(state.ReplanSince, now)) EndReplan(state, player);   // #167 F4
+            if (state.ReplanOwed != null && !Holding(state.ReplanSince, now)) EndReplan(state, player);   // #167 F4, C2
             if (Recovering(state, player, now) ||                                        //    the back-off, the illness
                 HoldsForRelocation(CanRelocate(state, player), state.CappedSince, state.ReplanSince,
                     state.RoamDestination == state.Anchor, now))
@@ -510,6 +536,7 @@ public static class PlayerBotDriver
             state.FightPetCasts = state.FightWaits = state.FightControls = state.FightKites = 0;
             state.ControlTries = 0;                                                     // #167 F11
             state.NextKiteTick = 0;
+            state.KilledWithAdds = false;                                               // #167 C2: the kill's case over
             state.EngageBuffs = SelfBuffsUp(player.effectListComponent.GetSpellEffects()     // FIGHT buffs= (#167 F8)
                 .Where(effect => effect.SpellHandler?.Spell != null).Select(effect => effect.SpellHandler.Spell.SpellType));
             state.EngagePet = player.ControlledBrain?.Body?.IsAlive == true;
@@ -836,6 +863,7 @@ public static class PlayerBotDriver
             if (PlayerBotDriverReport.Kill(state.Target)) state.Kills++;
         }
         else if (dead) state.RoamingSince = 0;                   // killed by another before this bot got there: not outgrown
+        state.KilledWithAdds = state.Engaged && dead && state.FightAdds >= 2;   // #167 C2: the second-monster case
         state.Target = null;
         state.Engaged = false;
     }
@@ -1038,19 +1066,20 @@ public static class PlayerBotDriver
     /// level-up. A capped bot moves to a camp that fits instead (PlanRelocation; DEATHS.md A4).</summary>
     public static int NextDeathSteps(int deathSteps) => Math.Min(deathSteps + 1, MaxDeathSteps);
 
-    /// <summary>Why the bot moves its leash now, or null: Died after a death (OwesReplan), before it walks back (#167 F4:
-    /// the GameBot replans 2.5-4 s after a solo death, AWBC:3780-3816); Capped when its searches have found monsters in
+    /// <summary>Why the bot moves its leash now, or null: the relocation it owes (owed: Died after a death, OwesReplan,
+    /// before it walks back, #167 F4: the GameBot replans 2.5-4 s after a solo death, AWBC:3780-3816; BrokeOff after a
+    /// break-off, #167 C2, so it doesn't walk back into the camp); Capped when its searches have found monsters in
     /// reach but none under its cap for CappedRelocateMilliseconds (DEATHS.md A4), Outgrown when it has reached no target
     /// for RelocateAfterMilliseconds. None while the bot is immune (#167 C1): the release starts a 10-s immunity
     /// (TIMER_KILLED_BY_MOB, AbstractServerRules.cs:258-262, :280-285; ServerProperties.cs:1273-1274), during which a
     /// player may attack no monster (AbstractServerRules.cs:385-392; GST_Normal calls the base, NormalServerRules.cs:28),
     /// so IsAttackable dropped every monster from the plan and a death's replan found none (279 of 312 in st-deathsB);
     /// its anchor fell back to the bind. immune has no default: a caller that left it out would bring that back.</summary>
-    public static string RelocateReason(long roamingSince, long cappedSince, long now, bool replanAfterDeath, bool immune) =>
+    public static string RelocateReason(long roamingSince, long cappedSince, long now, string owed, bool immune) =>
         immune ? null :
-        replanAfterDeath ? Died :
-        cappedSince != 0 && now - cappedSince >= CappedRelocateMilliseconds ? Capped :
-        roamingSince != 0 && now - roamingSince >= RelocateAfterMilliseconds ? Outgrown : null;
+        owed ??
+        (cappedSince != 0 && now - cappedSince >= CappedRelocateMilliseconds ? Capped :
+         roamingSince != 0 && now - roamingSince >= RelocateAfterMilliseconds ? Outgrown : null);
 
     /// <summary>PLAYER_BOT_RELOCATE for a move: its fields as they were (runs/legcheck.py reads bot= and to), then the
     /// reason (RelocateReason) and the fallback camp's con, - for none (the death cap holds, Cap); after a death, the
@@ -1103,7 +1132,7 @@ public static class PlayerBotDriver
     public static bool OwesReplan(bool onTask, bool canRelocate) => !onTask && canRelocate;
 
     /// <summary>Where a relocation plans from (PlanRelocation's here): after a death (Died) the spot the bot died at, not
-    /// its bind; else where it is.</summary>
+    /// its bind; else where it is (after a break-off, #167 C2, where it ran to).</summary>
     public static Vector3 RelocationOrigin(string reason, Vector3 deathSpot, Vector3 here) =>
         reason == Died ? deathSpot : here;
 
@@ -1122,6 +1151,92 @@ public static class PlayerBotDriver
     public static PlayerBotRecovery AfterReleaseStep(bool attacked, bool stepsOut, bool replanOwed, bool backingOff, bool ill) =>
         attacked ? PlayerBotRecovery.Fight : stepsOut ? PlayerBotRecovery.StepOut : replanOwed ? PlayerBotRecovery.Replan :
         backingOff || ill ? PlayerBotRecovery.Wait : PlayerBotRecovery.Done;
+
+    /// <summary>Whether the bot breaks off and sprints out of reach (#167 C2): losing to two. 2 or more monsters on it, or
+    /// right after a kill in a fight that had 2 or more on it with 1 still on it (addFight: the second-monster case, k12's
+    /// rule at the kill, which would have saved 28 of 45 such deaths for 9 of 114 won follow-ups); below
+    /// BreakOffHealthPercent, its target (at the kill, the one still on it) above BreakOffTargetPercent, no control ready
+    /// for the add (C4's comes first), and only from chasers it outruns (Outruns). One monster in an ordinary fight, it
+    /// fights on.</summary>
+    public static bool BreaksOff(int monstersOnBot, bool addFight, byte health, byte targetHealth, bool addControlReady,
+        bool outruns) =>
+        (monstersOnBot >= 2 || addFight && monstersOnBot >= 1) && health < BreakOffHealthPercent &&
+        targetHealth > BreakOffTargetPercent && !addControlReady && outruns;
+
+    /// <summary>Whether the bot outruns its fastest chaser (#167 C2): one no faster than its run (RunSpeed: the world DB
+    /// sets enable_pve_speed off, MaxSpeedCalculator.cs:52-57, so after the sprint it runs at 191), or one under its
+    /// sprint (SprintSpeed) while the sprint's lead holds it off for the ChaseSeconds a monster chases after its last
+    /// swing: from melee, sprintSeconds of sprint keep a chaser of speed v from a swing for sprintSeconds x 57 / (v - 191)
+    /// seconds.</summary>
+    public static bool Outruns(int fastestSpeed, int sprintSeconds) =>
+        fastestSpeed <= RunSpeed || fastestSpeed < SprintSpeed &&
+        (long)sprintSeconds * (SprintSpeed - RunSpeed) >= (long)ChaseSeconds * (fastestSpeed - RunSpeed);
+
+    /// <summary>The seconds a sprint lasts at the least from this endurance (#167 C2), at its real cost each second
+    /// (GamePlayer.cs:2393-2413): the second's regeneration (moving or in combat, no base: buffs, items and abilities,
+    /// ClassicRestRegeneration.cs:12-15) less longWind (5 less Long Wind's), scaled by the fatigue consumption when above
+    /// 1% (FatigueConsumptionPercentCalculator.cs); the sprint ends at SprintStopEndurance or less (GamePlayer.cs:2420-2423,
+    /// SprintECSEffect.cs) and can't start at SprintStartEndurance or less (GamePlayer.cs:8633). The first tick comes up to
+    /// 1 s in, so one second less than the ticks it pays for; a cost of 0 or less never ends it. The clamp near full
+    /// endurance (GamePlayer.cs:2412-2413) is left out: it costs at most one more tick's 5 once.</summary>
+    public static int SprintSeconds(int endurance, int regeneration, int fatigueConsumption, int longWind)
+    {
+        if (endurance <= SprintStartEndurance) return 0;
+        int net = regeneration - longWind;
+        if (fatigueConsumption > 1) net = (int)Math.Ceiling(net * fatigueConsumption * 0.01);
+        return net >= 0 ? int.MaxValue : (endurance - SprintStopEndurance - 1) / -net;
+    }
+
+    /// <summary>Where a break-off runs to (#167 C2): of the candidates, those ahead of straight away from the chasers (a
+    /// dot product with here less their middle above 0: never square to them; any way with none to run from), out of every
+    /// other monster's reach (InAddReach), the farthest from its nearest chaser; none, null.</summary>
+    public static Vector3? BreakOffPoint<T>(Vector3 here, IReadOnlyList<Vector3> chasers, IEnumerable<Vector3> candidates,
+        IReadOnlyList<(T Npc, Vector3 At, int AggroRange)> adds) where T : class
+    {
+        Vector2 away = Vector2.Zero;
+        for (int i = 0; i < chasers.Count; i++) away += new Vector2(here.X - chasers[i].X, here.Y - chasers[i].Y);
+        bool anyWay = away.LengthSquared() < 1;
+        Vector3? best = null;
+        float bestGap = -1;
+        foreach (Vector3 point in candidates)
+        {
+            if (!anyWay && Vector2.Dot(new Vector2(point.X - here.X, point.Y - here.Y), away) <= 0 || InAddReach(point, adds))
+                continue;
+            float gap = float.MaxValue;
+            for (int i = 0; i < chasers.Count; i++) gap = Math.Min(gap, Vector3.DistanceSquared(point, chasers[i]));
+            if (gap > bestGap) (best, bestGap) = (point, gap);
+        }
+        return best;
+    }
+
+    /// <summary>A break-off's step this think (#167 C2): with no monster still after it, Done; still chased
+    /// BreakOffMilliseconds after it began, Fight (it turns on them); at its point (or blocked) with one still after it,
+    /// NextPoint; else Run.</summary>
+    public static PlayerBotBreakOff BreakOffStep(bool arrived, int chasers, long sinceMs) =>
+        chasers == 0 ? PlayerBotBreakOff.Done : sinceMs >= BreakOffMilliseconds ? PlayerBotBreakOff.Fight :
+        arrived ? PlayerBotBreakOff.NextPoint : PlayerBotBreakOff.Run;
+
+    /// <summary>A break-off's start (#167 C2): the camp it ran from and the names of its target and chasers, remembered as
+    /// after a death (Remember, DEATHS.md A3; RememberFailedCamp, #167 F4), so it neither pulls them nor plans back
+    /// there.</summary>
+    public static void BrokeOffFrom(PlayerBotState state, ushort region, Vector3 at, IEnumerable<string> names, long now)
+    {
+        foreach (string name in names) Remember(state.AvoidUntil, name, now);
+        RememberFailedCamp(state.FailedCamps, region, at, now);
+    }
+
+    /// <summary>A break-off's end (#167 C2): it owes a relocation (BrokeOff) when it would owe one after a death
+    /// (OwesReplan), planned at once from where it stands, the hold from now. FailedCamps alone is read by PlanRelocation
+    /// only, and with its anchor left at the camp Roam's leash walked the bot back in; with no camp planned, EndReplan
+    /// moves the anchor here.</summary>
+    public static void AfterBreakOff(PlayerBotState state, bool owesReplan, long now)
+    {
+        if (!owesReplan) return;
+        state.ReplanOwed = BrokeOff;
+        state.ReplanSince = now;
+        state.NextRelocateTick = 0;
+        state.RelocateRejected.Clear();
+    }
 
     /// <summary>Whether a spot is in the reach of a potential add (the adds rule's ring, Crowding's: its aggro range +
     /// AddMargin) (#167 F4, F7).</summary>
@@ -1699,7 +1814,7 @@ public static class PlayerBotDriver
     // HoldsForRelocation) keeps the bot out of the camp meanwhile.
     private static void RelocateIfOutgrown(PlayerBotState state, GamePlayer player, long now)
     {
-        string reason = RelocateReason(state.RoamingSince, state.CappedSince, now, state.ReplanAfterDeath,
+        string reason = RelocateReason(state.RoamingSince, state.CappedSince, now, state.ReplanOwed,
             player.IsInvulnerableToAttack);                                     // GamePlayer.cs:12284-12287
         if (reason == null || now < state.NextRelocateTick) return;
         bool died = reason == Died;
@@ -1753,7 +1868,7 @@ public static class PlayerBotDriver
             state.FallbackCap = fallback;   // that camp's con, or none: the death cap (Cap)
             state.HuntAvoided = stale;      //   and at a camp of avoided names, those too (FindWithin)
             state.CappedSince = 0;          // the next search starts the clock afresh, on the way there too
-            state.ReplanAfterDeath = false; // planned (#167 F4)
+            state.ReplanOwed = null;        // planned (#167 F4, C2)
             state.ReplanSince = 0;
             return;
         }
@@ -1762,18 +1877,19 @@ public static class PlayerBotDriver
         if (nearest.Length == 0) FallBack(state, player, reason);   // no camp in the zone: none to try next time either
     }
 
-    // A capped bot's FallBackInPlace; after a death (#167 F4), the end of the relocation owed.
+    // A capped bot's FallBackInPlace; after a death (#167 F4) or a break-off (C2), the end of the relocation owed.
     private static void FallBack(PlayerBotState state, GamePlayer player, string reason)
     {
-        if (reason == Died) EndReplan(state, player);
+        if (reason is Died or BrokeOff) EndReplan(state, player);
         else FallBackInPlace(state, reason);
     }
 
     // #167 F4: no camp planned after a death, at once or within MaxHoldMilliseconds: the bot hunts where it is, under its
-    // lowered cap and its avoided names; in its anchor's region the leash moves here, so it doesn't walk back.
+    // lowered cap and its avoided names; in its anchor's region the leash moves here, so it doesn't walk back (after a
+    // break-off, #167 C2, off the camp it ran from).
     private static void EndReplan(PlayerBotState state, GamePlayer player)
     {
-        state.ReplanAfterDeath = false;
+        state.ReplanOwed = null;
         state.ReplanSince = 0;
         if (player.CurrentRegionID != state.AnchorRegion || state.Task != null) return;
         state.Anchor = new(player.X, player.Y, player.Z);
@@ -1807,7 +1923,7 @@ public static class PlayerBotDriver
         {
             state.ReleasedAt = now;
             state.RecoverUntil = now + AutonomousDeathRecoveryPolicy.RetryDelayMilliseconds(state.NoXpDeaths);
-            state.ReplanSince = state.ReplanAfterDeath ? now : 0;
+            state.ReplanSince = state.ReplanOwed != null ? now : 0;
         }
         else state.RecoverUntil = now;
         state.AfterRelease = true;
@@ -1839,7 +1955,7 @@ public static class PlayerBotDriver
             state.ClearSpot = now < state.StepOutBlockedUntil ? null : ClearSpotNear(player, StepOutRings);
         }
         switch (AfterReleaseStep(Threat(state, player, now) != null,                    // #167 F7: coming at it too
-                    state.ClearSpot != null && !player.IsSitting, state.ReplanAfterDeath, now < state.RecoverUntil, Ill(player)))
+                    state.ClearSpot != null && !player.IsSitting, state.ReplanOwed != null, now < state.RecoverUntil, Ill(player)))
         {
             case PlayerBotRecovery.Fight:
                 state.ClearSpot = null;                                                 // it fights back (step 14)
@@ -1922,6 +2038,137 @@ public static class PlayerBotDriver
         return false;
     }
 
+    // #167 C2: losing to two (BreaksOff), the bot stops its fight, bars the camp and the names (BrokeOffFrom), sprints
+    // and runs to the break-off point (BreakOffPoint), then on from there while one still chases it (BreakOffStep), at
+    // most BreakOffMilliseconds; EndBreakOff ends it. Before the self-heal (11b): its cast stops the mover (CastOnSelf).
+    // True while it runs.
+    private static bool BreaksOffNow(PlayerBotState state, GamePlayer player, long now)
+    {
+        if (state.BreakOffSince == 0 && !StartsBreakOff(state, player, now)) return false;
+        KeepChasers(state, player);
+        PlayerBotBreakOff next = BreakOffStep(state.BreakOffArrived, state.BreakOffChasers.Count, now - state.BreakOffSince);
+        if (next is PlayerBotBreakOff.NextPoint)
+        {
+            state.BreakOffGoal = BreakOffGoal(state, player);
+            state.BreakOffArrived = false;
+            if (state.BreakOffGoal == null) next = PlayerBotBreakOff.Fight;             // nowhere further: it turns
+        }
+        if (next is PlayerBotBreakOff.Done or PlayerBotBreakOff.Fight)
+        {
+            EndBreakOff(state, player, now, next is PlayerBotBreakOff.Done ? Shook : Fought);
+            return false;                                                               // Fight: step 14 picks a hitter
+        }
+        state.Activity = PlayerBotActivity.Fighting;
+        Vector3 goal = state.BreakOffGoal.Value;
+        PlayerBotStepResult step = state.Mover.StepToward(goal, 20, now);
+        if (step is PlayerBotStepResult.Blocked) ReportBlocked(state, player, "breakoff", goal, now);
+        if (step is PlayerBotStepResult.Blocked or PlayerBotStepResult.Arrived) state.BreakOffArrived = true;
+        return true;
+    }
+
+    // A break-off's start (BreaksOff) from the monsters hitting the bot (Attacker's, each with the bot as its target),
+    // its target's health (at a kill, the nearest hitter's) and, only once those hold, the speed of every chaser (the
+    // hitters and those within IncomingRadius coming at it) against the sprint its endurance pays for now (SprintSeconds,
+    // Outruns). C4's add control would come first: none yet (addControlReady false). No point to run to: it fights on.
+    // A scan that starts none waits TargetRefreshMilliseconds, as Incoming's.
+    private static bool StartsBreakOff(PlayerBotState state, GamePlayer player, long now)
+    {
+        byte health = player.HealthPercent;
+        if (health >= BreakOffHealthPercent || now < state.NextBreakOffTick) return false;     // no scan above it
+        List<GameNPC> chasers = state.BreakOffChasers;
+        chasers.Clear();
+        GameNPC nearest = null;
+        int nearestDistance = int.MaxValue;
+        foreach (GameLiving living in player.attackComponent.AttackerTracker.Attackers)
+        {
+            if (living is not GameNPC npc || !IsAttacking(player, npc) || chasers.Contains(npc)) continue;
+            chasers.Add(npc);
+            int distance = player.GetDistanceTo(npc);
+            if (distance < nearestDistance) (nearest, nearestDistance) = (npc, distance);
+        }
+        int onBot = chasers.Count;
+        byte targetHealth = state.Target?.IsAlive == true ? state.Target.HealthPercent : nearest?.HealthPercent ?? 0;
+        if (!BreaksOff(onBot, state.KilledWithAdds, health, targetHealth, addControlReady: false, outruns: true))
+        {
+            chasers.Clear();
+            return false;
+        }
+        foreach (GameNPC npc in player.GetNPCsInRadius(IncomingRadius))
+            if (npc.TargetObject == player && IsExperienceTarget(npc) && IsAttackable(player, npc) && !chasers.Contains(npc))
+                chasers.Add(npc);
+        int fastest = 0;
+        foreach (GameNPC npc in chasers) fastest = Math.Max(fastest, npc.MaxSpeed);
+        int sprint = SprintSeconds(player.Endurance, player.GetModified(eProperty.EnduranceRegenerationAmount),
+            player.GetModified(eProperty.FatigueConsumption), LongWindCost(player));
+        if (!Outruns(fastest, sprint) || BreakOffGoal(state, player) is not Vector3 goal)
+        {
+            chasers.Clear();
+            state.NextBreakOffTick = now + TargetRefreshMilliseconds;
+            return false;
+        }
+        (state.BreakOffSince, state.BreakOffGoal, state.BreakOffArrived) = (now, goal, false);
+        (state.BreakOffHealth, state.BreakOffEndurance, state.BreakOffAttackers) = (health, player.EndurancePercent, onBot);
+        state.KilledWithAdds = false;
+        BrokeOffFrom(state, player.CurrentRegionID, new(player.X, player.Y, player.Z),
+            chasers.Select(npc => npc.Name).Append(state.Target?.Name), now);
+        if (state.Engaged && state.Target != null) ReportFight(state, player, now, false);   // FIGHT result=dropped
+        Disengage(state, player);
+        if (player.Endurance > SprintStartEndurance) player.Sprint(true);              // GamePlayer.cs:8625-8652
+        return true;
+    }
+
+    // A sprint's cost a second before the regeneration (GamePlayer.cs:2396-2405): LongWind, less Long Wind's 20-100%.
+    private static int LongWindCost(GamePlayer player) =>
+        player.GetAbility<AtlasOF_LongWindAbility>() is { } longWind
+            ? LongWind - longWind.GetAmountForLevel(player.CalculateSkillLevel(longWind)) * LongWind / 100 : LongWind;
+
+    // The monsters still after a break-off's bot: one goes when it dies or turns from the bot (its aggro state's exit
+    // clears its target 25 s after its last swing, StandardMobState.cs:89, :121) or is past ChaseRadius; one that hits
+    // the bot on the way joins them.
+    private static void KeepChasers(PlayerBotState state, GamePlayer player)
+    {
+        List<GameNPC> chasers = state.BreakOffChasers;
+        for (int i = chasers.Count - 1; i >= 0; i--)
+            if (!IsAttacking(player, chasers[i]) || !player.IsWithinRadius(chasers[i], ChaseRadius)) chasers.RemoveAt(i);
+        foreach (GameLiving living in player.attackComponent.AttackerTracker.Attackers)
+            if (living is GameNPC npc && IsAttacking(player, npc) && !chasers.Contains(npc)) chasers.Add(npc);
+    }
+
+    // The next break-off point (BreakOffPoint) from where the bot is: the ring points (BreakOffRings, SpotDirections
+    // round it) on the navmesh, away from its chasers, out of the reach of every other monster round it that would
+    // aggro (AddReach; not one with the bot as its target: it is on it already); none, null.
+    private static Vector3? BreakOffGoal(PlayerBotState state, GamePlayer player)
+    {
+        List<(GameNPC Npc, Vector3 At, int AggroRange)> adds = _reach ??= new();
+        adds.Clear();
+        foreach (GameNPC npc in player.GetNPCsInRadius((ushort)(BreakOffRings[^1] + AddScanMargin)))
+            if (npc.TargetObject != player && IsExperienceTarget(npc) && AddReach(player, npc) is > 0 and int reach)
+                adds.Add((npc, new(npc.X, npc.Y, npc.Z), reach));
+        Vector3 here = new(player.X, player.Y, player.Z);
+        Vector3? goal = BreakOffPoint(here, state.BreakOffChasers.Select(npc => new Vector3(npc.X, npc.Y, npc.Z)).ToList(),
+            RingPoints(here, BreakOffRings, SpotDirections).Select(p => OnMesh(player, p)).Where(p => p.HasValue)
+                .Select(p => p.Value), adds);
+        adds.Clear();                                                                   // no monster held past the scan
+        return goal;
+    }
+
+    // A break-off's end: its line (PLAYER_BOT_BREAKOFF), and unless the bot died (the death's own recovery then,
+    // HandleDeath) the sprint off and the relocation owed (AfterBreakOff: OwesReplan's rule, as after a death). Fought:
+    // no new break-off for BreakOffMilliseconds, it fights them out.
+    private static void EndBreakOff(PlayerBotState state, GamePlayer player, long now, string outcome)
+    {
+        if (Log.IsInfoEnabled)
+            Log.Info(PlayerBotDriverReport.FormatBreakOff(player.Name, player.Level, state.BreakOffHealth,
+                state.BreakOffEndurance, state.BreakOffAttackers, (now - state.BreakOffSince) / 1000, outcome));
+        (state.BreakOffSince, state.BreakOffGoal, state.BreakOffArrived) = (0, null, false);
+        state.BreakOffChasers.Clear();
+        if (outcome == Died) return;
+        player.Sprint(false);
+        state.Mover.Stop(now);
+        if (outcome == Fought) state.NextBreakOffTick = now + BreakOffMilliseconds;
+        AfterBreakOff(state, OwesReplan(state.Task != null, CanRelocate(state, player)), now);
+    }
+
     // APP:561-583 without SaveIntoDatabase.
     private static void HandleDeath(PlayerBotState state, GamePlayer player, long now)
     {
@@ -1931,6 +2178,8 @@ public static class PlayerBotDriver
         if (!state.DeathRecorded)
         {
             ReportDeath(state, player, now, last);
+            if (state.BreakOffSince != 0) EndBreakOff(state, player, now, Died);       // #167 C2: BREAKOFF outcome=died
+            state.KilledWithAdds = false;
             if (state.Engaged && state.Target != null)
                 Remember(state.AvoidUntil, state.Target.Name, now);                    // DEATHS.md A3: died fighting it
             state.DeathRecorded = true;
@@ -1943,7 +2192,7 @@ public static class PlayerBotDriver
             state.NoXpDeaths = AutonomousDeathRecoveryPolicy.NextNoExperienceDeathStreak(state.NoXpDeaths,   // #167 F4:
                 state.LastDeathTick, now, state.Gained > state.GainedAtDeath);          //   the back-off (AWBC:3778-3786)
             (state.LastDeathTick, state.GainedAtDeath) = (now, state.Gained);
-            state.ReplanAfterDeath = OwesReplan(state.Task != null, CanRelocate(state, player));   // wherever (C1b)
+            state.ReplanOwed = OwesReplan(state.Task != null, CanRelocate(state, player)) ? Died : null;   // wherever (C1b)
             state.NextRelocateTick = 0;                                                 //   and the plan before the walk back
             state.AfterRelease = false;
             state.CappedSince = 0;
