@@ -17,9 +17,10 @@ namespace DOL.GS.Commands
         private long _lastProgressTick;
         private int _replans;
         private Vector3? _doorToOpen;
-        private Vector3? _passed, _link; // HearthDAoC: the corridor corner last reached, and the top of the floor link the walker is on (#166)
+        private Vector3? _passed, _link; // HearthDAoC: the corridor corner last reached, and the far corner of the floor link the walker is on (#166)
         public Vector3? DoorNode => _doorToOpen ?? (_nodes.TryPeek(out var node) && (node.Flags & EDtPolyFlags.AnyDoor) != 0
             ? node.Position : null);
+        public Vector3? LinkEnd => _link is Vector3 end && _nodes.TryPeek(out var head) && head.Position == end ? end : null; // HearthDAoC: the far corner of the floor link the walker is on, until it passes it (#166)
 
         public void Clear()
         {
@@ -72,7 +73,7 @@ namespace DOL.GS.Commands
         }
 
         public static bool TryBuildCorridor(IPathfindingMgr nav, Zone zone, Vector3 start, Vector3 goal,
-            out List<WrappedPathfindingNode> route)
+            out List<WrappedPathfindingNode> route, bool layers = false) // HearthDAoC: layers, player bots (#166)
         {
             route = new();
             if (zone == null || !nav.HasNavmesh(zone)) return false;
@@ -85,7 +86,10 @@ namespace DOL.GS.Commands
             // Bounded continuation of long mesh corridors, never a raw straight-line fallback.
             for (int segment = 0; segment < 8; segment++)
             {
-                PathfindingResult result = nav.GetPathStraight(zone, cursor, finish.Value, nav.DefaultFilters, buffer);
+                // HearthDAoC: with layers, a link to another floor is two corners, the far one flagged LayerLink (#166).
+                PathfindingResult result = layers
+                    ? nav.GetPathStraightLayered(zone, cursor, finish.Value, nav.DefaultFilters, buffer)
+                    : nav.GetPathStraight(zone, cursor, finish.Value, nav.DefaultFilters, buffer);
                 if (result.NodeCount <= 0 || result.NodeCount > buffer.Length ||
                     result.Status is not (PathfindingStatus.PathFound or PathfindingStatus.PartialPathFound or PathfindingStatus.BufferTooSmall))
                     return false;
@@ -104,7 +108,7 @@ namespace DOL.GS.Commands
         }
 
         public bool TryStep(Region region, Zone zone, Vector3 current, Vector3 goal, float distance,
-            long now, IPathfindingMgr nav, out Vector3 position, out string failure)
+            long now, IPathfindingMgr nav, out Vector3 position, out string failure, bool layers = false) // HearthDAoC: layers (#166)
         {
             position = current; failure = string.Empty; _doorToOpen = null;
             if (zone == null || region == null || !nav.HasNavmesh(zone))
@@ -150,7 +154,7 @@ namespace DOL.GS.Commands
                     }
                     leg = seam.Inside; _seamExit = seam.Outside;
                 }
-                if (!TryBuildCorridor(nav, zone, current, leg, out var route))
+                if (!TryBuildCorridor(nav, zone, current, leg, out var route, layers)) // HearthDAoC: layers (#166)
                 {
                     failure = "No complete walkable path was found from here; try an open road or another destination.";
                     return false;
@@ -162,7 +166,16 @@ namespace DOL.GS.Commands
             // by one mesh voxel (observed 13-24 units near Cotswold). Requiring
             // exact equality stalls at the polygon edge. Accept one voxel, then
             // constrain the next movement to the surface; never teleport across it.
+            // HearthDAoC: the far end of a layer link is reached on its own floor, within a corner's 24 units of
+            // height, not under or over it by HasReachedCorner's 64 on the spot: in Jordheim's zone the floors walled
+            // in under ramps lie 70-152 units below the tops of their links, and a player bot (#166) on such a floor
+            // passed the top and stayed. On the link itself (_link), where the bot heads straight for the far corner,
+            // only on the spot: going down to a foot 73 units below, 22.6 units above it the bot still stood over the
+            // ramp it came from, 51 units under that ramp, and Detour's nearest polygon, counting only the height
+            // beyond a climb, started its next move there (st-layers1).
             while (_nodes.TryPeek(out var reached) && HasReachedCorner(current, reached.Position) &&
+                   ((reached.Flags & EDtPolyFlags.LayerLink) == 0 || (_link == reached.Position
+                       ? Vector3.DistanceSquared(current, reached.Position) < 1 : Math.Abs(current.Z - reached.Position.Z) <= 24)) &&
                    MayPassCorner(nav, zone, current, reached.Position)) // HearthDAoC: #166
             {
                 if ((reached.Flags & EDtPolyFlags.AnyDoor) != 0) _doorToOpen = reached.Position;
@@ -184,8 +197,14 @@ namespace DOL.GS.Commands
             // it returns the edge's vertex height, and a player bot (#137) by Cotswold bounced about 66 units a step
             // between two levels and crept at 2 units a second for minutes. The grounded move fails on a polygon edge,
             // where the plain move and the floor fallback below still apply.
-            Vector3? snapped = (nav is LocalPathfindingMgr ? AutonomousNavigationSurface.MoveAlongGround(nav, zone, current, desired) : null)
-                ?? nav.GetMoveAlongSurface(zone, current, desired, nav.DefaultFilters);
+            // HearthDAoC: with layers, the same two moves without the links to another floor: from a ramp they took the floor
+            // walled in under it, the first linked polygon whose footprint held their target, 80 units down (#166).
+            Vector3? Move(Vector3 from, Vector3 to) => layers
+                ? nav.GetMoveAlongSurfaceLayered(zone, from, to, nav.DefaultFilters, true)
+                  ?? nav.GetMoveAlongSurfaceLayered(zone, from, to, nav.DefaultFilters, false)
+                : (nav is LocalPathfindingMgr ? AutonomousNavigationSurface.MoveAlongGround(nav, zone, from, to) : null)
+                  ?? nav.GetMoveAlongSurface(zone, from, to, nav.DefaultFilters);
+            Vector3? snapped = Move(current, desired);
             // HearthDAoC: from a start on a polygon edge Detour can take a polygon that leads nowhere: its moves stop at the
             // start and its ray is blocked. In Snowdonia a player bot (#166) stood for minutes where 117 of 507 starts
             // within 0.06 units of its spot did not move, and the same files offline moved it on; further down, it floated
@@ -195,8 +214,7 @@ namespace DOL.GS.Commands
             if ((snapped is not Vector3 first || Vector3.DistanceSquared(current, first) < 1) && Vector3.DistanceSquared(current, desired) >= 1)
             {
                 from = Advance(nav.GetClosestPoint(zone, current, 2, 2, 64, nav.DefaultFilters) ?? current, desired, 0.5f);
-                Vector3? again = (nav is LocalPathfindingMgr ? AutonomousNavigationSurface.MoveAlongGround(nav, zone, from, desired) : null)
-                    ?? nav.GetMoveAlongSurface(zone, from, desired, nav.DefaultFilters);
+                Vector3? again = Move(from, desired); // HearthDAoC: layers (#166)
                 if (again is Vector3 moved && Vector3.DistanceSquared(from, moved) >= 1) snapped = again;
             }
             // At certain polygon edges Detour's local surface mover returns the
@@ -224,10 +242,12 @@ namespace DOL.GS.Commands
             // from beyond it every step lost the walkable surface for good. A floor link (IsFloorLink) it starts from its
             // foot, where it reached the corner before, and follows to the next corner whatever the moves find, as they may
             // find another floor. Only from the foot: Detour's ray is 2D and cannot tell a link from two floors stacked, so
-            // a walker beside the link on another floor is not taken through a floor (the review of #168).
+            // a walker beside the link on another floor is not taken through a floor (the review of #168). A link to another
+            // floor that the layered corridor gives (its far corner flagged LayerLink) the same way (#166).
             Vector3 corner = _nodes.Peek().Position;
             if (_link != corner)
-                _link = _passed is Vector3 foot && HasReachedCorner(current, foot) && IsFloorLink(nav, zone, foot, corner) ? corner : null;
+                _link = _passed is Vector3 foot && HasReachedCorner(current, foot) &&
+                        (IsFloorLink(nav, zone, foot, corner) || (_nodes.Peek().Flags & EDtPolyFlags.LayerLink) != 0) ? corner : null;
             if (Vector3.DistanceSquared(current, desired) >= 1 &&
                 (_link.HasValue ||
                  snapped.HasValue && NoStepCloser(current, snapped.Value, corner) &&

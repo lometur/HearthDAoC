@@ -61,6 +61,8 @@ public sealed class UT_PlayerBotDriver
             return new(Status, route.Length);
         }
         public override Vector3? GetMoveAlongSurface(Zone zone, Vector3 start, Vector3 end, EDtPolyFlags[] filters) => Blocked ? start : end;
+        public override Vector3? GetMoveAlongSurfaceLayered(Zone zone, Vector3 start, Vector3 end, EDtPolyFlags[] filters, bool grounded) =>
+            GetMoveAlongSurface(zone, start, end, filters);     // a flat floor: the grounded move is the plain one
         public override bool HasLineOfSight(Zone zone, Vector3 start, Vector3 end, EDtPolyFlags[] filters) => !Blocked && !Walled;
     }
 
@@ -671,6 +673,35 @@ public sealed class UT_PlayerBotDriver
             Is.EqualTo(-2));
     }
 
+    // A flat floor at Z 100 that leads on everywhere, whose polygon's bounds reach 128 units down: a box query finds it
+    // from up to 128 below, whatever its height range.
+    private sealed class SunkMesh : PathfindingMgrBase
+    {
+        public override bool IsAvailable => true;
+        public override bool HasNavmesh(Zone zone) => true;
+        public override PathfindingResult GetPathStraight(Zone zone, Vector3 start, Vector3 end,
+            EDtPolyFlags[] filters, Span<WrappedPathfindingNode> destination)
+        {
+            destination[0] = new(start with { Z = 100 }, EDtPolyFlags.Walk);
+            destination[1] = new(end with { Z = 100 }, EDtPolyFlags.Walk);
+            return new(PathfindingStatus.PathFound, 2);
+        }
+        public override Vector3? GetClosestPoint(Zone zone, Vector3 position, float xRange, float yRange, float zRange,
+            EDtPolyFlags[] filters) => position.Z >= 100 - 128 && position.Z <= 100 + zRange ? new(position.X, position.Y, 100) : null;
+    }
+
+    // st-layers3 (#166): a respawn spot in Domnann lay 124 units under the floor. Detour's 64-unit box found that floor,
+    // so the bot counted as within the moves' reach, but every walk from it ended there. Out of the moves' reach, the
+    // bot steps up onto the floor; within it, it doesn't.
+    [Test]
+    public void ABotFarUnderTheFloorStepsUpOntoItThoughDetoursBoxFindsIt()
+    {
+        var (region, zone) = World();
+        typeof(Region).GetField("m_regionData", Hidden)!.SetValue(region, new RegionData { Id = 1 });
+        Assert.That(PlayerBotPathMover.FloorStep(new SunkMesh(), zone, new(5000, 5000, -24)), Is.EqualTo(new Vector3(5000, 5000, 100)));
+        Assert.That(PlayerBotPathMover.FloorStep(new SunkMesh(), zone, new(5000, 5000, 60)), Is.Null, "within the moves' reach");
+    }
+
     private static int PathNodes(PlayerTravelPath path) =>
         ((Queue<WrappedPathfindingNode>)typeof(PlayerTravelPath).GetField("_nodes", BindingFlags.Instance | BindingFlags.NonPublic)!.GetValue(path)!).Count;
 
@@ -1018,7 +1049,7 @@ public sealed class UT_PlayerBotDriver
         Assert.That(PlayerBotPathMover.TryComputeNext(walled, region, zone, new PlayerTravelPath(), Vector3.Zero, new(30, 0, 0), 0, 47.75f, 0,
             out next, out _), Is.True);
         Assert.That((walled.Searches, next), Is.EqualTo((0, new Vector3(30, 0, 0))));
-        // Blocked: false after two replans (PTP:97-105).
+        // Blocked: false after two replans (PTP:130-143).
         var blocked = new Mesh { Blocked = true };
         path = new PlayerTravelPath();
         for (int i = 0; i < 3; i++)
@@ -1026,6 +1057,401 @@ public sealed class UT_PlayerBotDriver
                 out _, out _), Is.True);
         Assert.That(PlayerBotPathMover.TryComputeNext(blocked, region, zone, path, new(100, 100, 0), new(1000, 1000, 0), 0, 47.75f, 45000,
             out _, out _), Is.False);
+    }
+
+    // Floors as in Jordheim by the pocket of st-final4 (#166): a lower floor (Z 0) up to X Seam, walled in there, and a
+    // ramp (Z 60) from X Seam on, which the mesh links to it only across the seam. The plain corridor turns at the seam at
+    // the height of the floor it leaves and hides the climb; the layered one gives a corner on each floor there, the one
+    // on the floor it enters flagged LayerLink. A move keeps to the floor its start stands on and stops at its edge, and a
+    // ray sees only along it. A point stands on the ramp from Split up: half way up the link, or, with a low Split, as
+    // Detour's nearest polygon takes a point over the ramp, though far nearer the floor below (st-layers1). With Ramp over
+    // 64 and Flag Walk alone, a floor link that Detour's seams don't flag (IsFloorLink), as an in-tile link or a jump; with
+    // Run the ramp starts that far beyond the seam, and the link slants across.
+    private sealed class SeamMesh : PathfindingMgrBase
+    {
+        public float Split = 30, Seam = 30, Ramp = 60, Run;
+        public EDtPolyFlags Flag = EDtPolyFlags.Walk | EDtPolyFlags.LayerLink;
+        public override bool HasNavmesh(Zone zone) => true;
+        private float FloorOf(Vector3 p) => p.Z >= Split ? Ramp : 0;
+        private float Edge(float floor) => floor == 0 ? Seam : Seam + Run;
+        private Vector3 On(float floor, Vector3 p) => floor == 0 ? new(Math.Min(p.X, Seam), p.Y, 0) : new(Math.Max(p.X, Seam + Run), p.Y, Ramp);
+        private static PathfindingResult Route(Span<WrappedPathfindingNode> destination, params WrappedPathfindingNode[] route)
+        {
+            route.CopyTo(destination);
+            return new(PathfindingStatus.PathFound, route.Length);
+        }
+        public override PathfindingResult GetPathStraight(Zone zone, Vector3 start, Vector3 end, EDtPolyFlags[] filters,
+            Span<WrappedPathfindingNode> destination) => FloorOf(start) == FloorOf(end)
+            ? Route(destination, new(start, EDtPolyFlags.Walk), new(end, EDtPolyFlags.Walk))
+            : Route(destination, new(start, EDtPolyFlags.Walk), new(new(Edge(FloorOf(start)), start.Y, FloorOf(start)), EDtPolyFlags.Walk), new(end, EDtPolyFlags.Walk));
+        public override PathfindingResult GetPathStraightLayered(Zone zone, Vector3 start, Vector3 end, EDtPolyFlags[] filters,
+            Span<WrappedPathfindingNode> destination) => FloorOf(start) == FloorOf(end)
+            ? GetPathStraight(zone, start, end, filters, destination)
+            : Route(destination, new(start, EDtPolyFlags.Walk), new(new(Edge(FloorOf(start)), start.Y, FloorOf(start)), EDtPolyFlags.Walk),
+                new(new(Edge(FloorOf(end)), start.Y, FloorOf(end)), Flag), new(end, EDtPolyFlags.Walk));
+        public override Vector3? GetMoveAlongSurface(Zone zone, Vector3 start, Vector3 end, EDtPolyFlags[] filters) => On(FloorOf(start), end);
+        public override Vector3? GetMoveAlongSurfaceLayered(Zone zone, Vector3 start, Vector3 end, EDtPolyFlags[] filters, bool grounded) =>
+            GetMoveAlongSurface(zone, start, end, filters);     // on its floor's height already
+        public override Vector3? GetClosestPoint(Zone zone, Vector3 position, float xRange, float yRange, float zRange,
+            EDtPolyFlags[] filters) => new[] { On(0, position), On(Ramp, position) }
+            .Where(q => Math.Abs(q.X - position.X) <= xRange && Math.Abs(q.Z - position.Z) <= zRange)
+            .OrderBy(q => Vector3.Distance(q, position)).Cast<Vector3?>().FirstOrDefault();
+        public override bool HasLineOfSight(Zone zone, Vector3 start, Vector3 end, EDtPolyFlags[] filters) =>
+            Vector3.Distance(On(FloorOf(start), end), end) < 0.01f;
+    }
+
+    // st-final4 (#166): from the pocket the corridor out climbed a seam link by a corner that hid the climb, and the bot
+    // stood at the wall for the rest of the run. With layers (the player bots) the corridor gives the link as two corners:
+    // the walker follows the line from the lower one straight up to the upper one, which counts as reached only there, and
+    // walks on along the ramp. Without layers (/travel) the corridor stays the plain one.
+    [Test]
+    public void APlayerBotClimbsALinkToAnotherFloorByItsTwoCorners()
+    {
+        var (region, zone) = World();
+        Vector3 goal = new(300, 0, 60);
+        foreach (bool layers in new[] { true, false })
+        {
+            var path = new PlayerTravelPath();
+            Vector3 position = Vector3.Zero;
+            for (int tick = 0; tick < 10; tick++)
+                Assert.That(path.TryStep(region, zone, position, goal, 47.75f, tick * 250, new SeamMesh(), out position, out string failure,
+                    layers), Is.True, failure);
+            if (layers)
+                Assert.That((position.X, position.Z), Is.EqualTo((300f, 60f)).Using<(float, float)>((a, b) =>
+                    Math.Abs(a.Item1 - b.Item1) <= 32 && a.Item2 == b.Item2), "up the link and along the ramp");
+            else
+                Assert.That(position, Is.EqualTo(new Vector3(30, 0, 0)), "at the wall");
+        }
+    }
+
+    // st-layers1 (#166): in Jordheim the walker passed a layer link's upper corner from 26 units across and went straight
+    // for the foot, 73 units down. 22.6 units above it, within a corner's 24, it counted the foot as reached, but it stood
+    // over the ramp only, 51 units under it, and Detour's nearest polygon counts only the height beyond a climb for a
+    // polygon the point lies over: its next move started on the ramp, and it walked on along it, over its corridor on the
+    // floor below, and stalled. On the link's line the corner counts as reached only there.
+    [Test]
+    public void APlayerBotGoesDownALinkToItsFoot()
+    {
+        var (region, zone) = World();
+        var path = new PlayerTravelPath();
+        var mesh = new SeamMesh { Split = 10, Seam = 330 };
+        Vector3 position = new(600, 0, 60), goal = new(30, 0, 0);
+        for (int tick = 0; tick < 30; tick++)
+            Assert.That(path.TryStep(region, zone, position, goal, 47.75f, tick * 250, mesh, out position, out string failure, true),
+                Is.True, failure);
+        Assert.That((position.X, position.Z), Is.EqualTo((30f, 0f)).Using<(float, float)>((a, b) =>
+            Math.Abs(a.Item1 - b.Item1) <= 32 && a.Item2 == b.Item2), "down the link and along the floor");
+    }
+
+    // On a link's climb the bot goes on up to its far corner, though its goal lies in sight within 300 units: in Jordheim
+    // a direct step from short of that corner left it queued, and each corridor step after went back to it, for 15 seconds
+    // (the review of #166).
+    [Test]
+    public void APlayerBotClimbsALinkToItsTopBeforeItStepsStraightAtItsGoal()
+    {
+        var (region, zone) = World();
+        var mesh = new SeamMesh();
+        var path = new PlayerTravelPath();
+        Vector3 position = Vector3.Zero, goal = new(200, 0, 60);
+        var climb = new List<Vector3>();
+        for (int tick = 0; tick < 10 && !PlayerBotPathMover.Arrived(position, goal, 20); tick++)
+        {
+            Assert.That(PlayerBotPathMover.TryComputeNext(mesh, region, zone, path, position, goal, 20, 47.75f, tick * 250,
+                out position, out string failure), Is.True, failure);
+            if (position.X == 30) climb.Add(position);
+        }
+        Assert.That(climb, Is.EqualTo(new Vector3[] { new(30, 0, 0), new(30, 0, 47.75f), new(30, 0, 60) }), "to the seam, then up it");
+        Assert.That(PlayerBotPathMover.Arrived(position, goal, 20), Is.True);
+    }
+
+    // Near its goal too, the climb goes on to the link's top in whole steps: they head for the top, not the goal, and cut
+    // to the goal's distance they crept 2-8 units a step (the third review of #166). Only the first, taken before the
+    // corridor knows the link, is cut.
+    [Test]
+    public void APlayerBotClimbsALinkNearItsGoalWithoutCreeping()
+    {
+        var (region, zone) = World();
+        var mesh = new SeamMesh();
+        var path = new PlayerTravelPath();
+        Vector3 position = Vector3.Zero, goal = new(50, 0, 60);
+        var climb = new List<Vector3>();
+        for (int tick = 0; tick < 10 && !PlayerBotPathMover.Arrived(position, goal, 20); tick++)
+        {
+            Assert.That(PlayerBotPathMover.TryComputeNext(mesh, region, zone, path, position, goal, 20, 47.75f, tick * 250,
+                out position, out string failure), Is.True, failure);
+            if (position.X == 30) climb.Add(position);
+        }
+        Assert.That(climb, Is.EqualTo(new Vector3[] { new(30, 0, 0), new(30, 0, 44.25f), new(30, 0, 60) })
+            .Using<Vector3>((a, b) => Vector3.Distance(a, b) < 0.01f), "to the seam, up it, onto its top");
+    }
+
+    // From the link's top the step is cut to the goal's distance again: whole, it took bots up to 58 units inside their
+    // stop radius (the fourth review of #166).
+    [Test]
+    public void APlayerBotOffALinksTopStopsAtItsStopDistance()
+    {
+        var (region, zone) = World();
+        var mesh = new SeamMesh();
+        var path = new PlayerTravelPath();
+        Vector3 position = Vector3.Zero, goal = new(100, 0, 60);
+        for (int tick = 0; tick < 10 && !PlayerBotPathMover.Arrived(position, goal, 50); tick++)
+            Assert.That(PlayerBotPathMover.TryComputeNext(mesh, region, zone, path, position, goal, 50, 47.75f, tick * 250,
+                out position, out string failure), Is.True, failure);
+        Assert.That((position.Z, Vector3.Distance(position, goal)), Is.EqualTo((60f, 49f))
+            .Using<(float, float)>((a, b) => a.Item1 == b.Item1 && Math.Abs(a.Item2 - b.Item2) < 0.01f), "on the ramp, one unit inside the stop radius");
+    }
+
+    // A link that Detour's seams don't flag, 150 units up over 41 across: the corridor passes its top within a corner's
+    // reach (PTP:177), 12.25 units short of it here, and the step goes on for the goal, cut to its distance. Whole, it took
+    // the bot 23.9 units inside its stop radius (the fifth review of #166).
+    [Test]
+    public void APlayerBotPastAnUnflaggedLinksTopStopsAtItsStopDistance()
+    {
+        var (region, zone) = World();
+        var mesh = new SeamMesh { Ramp = 150, Run = 41, Split = 75, Flag = EDtPolyFlags.Walk };
+        var path = new PlayerTravelPath();
+        Vector3 position = Vector3.Zero, goal = new(141, 0, 150);
+        var steps = new List<Vector3>();
+        for (int tick = 0; tick < 10 && !PlayerBotPathMover.Arrived(position, goal, 50); tick++)
+        {
+            Assert.That(PlayerBotPathMover.TryComputeNext(mesh, region, zone, path, position, goal, 50, 47.75f, tick * 250,
+                out position, out string failure), Is.True, failure);
+            steps.Add(position);
+        }
+        Assert.That(steps, Has.Some.Matches<Vector3>(p => Vector3.Distance(p, new(67.77f, 0, 138.18f)) < 0.1f), "12.25 units short of the top");
+        Assert.That((position.Z, Vector3.Distance(position, goal)), Is.EqualTo((150f, 49f))
+            .Using<(float, float)>((a, b) => a.Item1 == b.Item1 && Math.Abs(a.Item2 - b.Item2) < 1), "on the ramp, about one unit inside the stop radius");
+    }
+
+    // A ramp (Z 60) over a floor walled in under it (Z 0, from X 200 to 300) that the mesh links to it only at tile seams,
+    // as in Jordheim (#166). Detour's plain surface move is 2D: from the ramp, toward a point over that floor, it enters
+    // the floor, the first linked polygon whose footprint holds the point; the layered one keeps to the ramp. The corridor
+    // runs straight along the ramp, which is open to the goal.
+    private sealed class PocketMesh : PathfindingMgrBase
+    {
+        public override bool HasNavmesh(Zone zone) => true;
+        private static bool OverFloor(Vector3 p) => p.X >= 200 && p.X <= 300;
+        private static Vector3 Floor(Vector3 p) => new(Math.Clamp(p.X, 200, 300), p.Y, 0);
+        public override PathfindingResult GetPathStraight(Zone zone, Vector3 start, Vector3 end, EDtPolyFlags[] filters,
+            Span<WrappedPathfindingNode> destination)
+        {
+            destination[0] = new(start, EDtPolyFlags.Walk);
+            destination[1] = new(end, EDtPolyFlags.Walk);
+            return new(PathfindingStatus.PathFound, 2);
+        }
+        public override Vector3? GetMoveAlongSurface(Zone zone, Vector3 start, Vector3 end, EDtPolyFlags[] filters) =>
+            start.Z < 30 || OverFloor(end) ? Floor(end) : new(end.X, end.Y, 60);
+        public override Vector3? GetMoveAlongSurfaceLayered(Zone zone, Vector3 start, Vector3 end, EDtPolyFlags[] filters, bool grounded) =>
+            start.Z < 30 ? Floor(end) : new(end.X, end.Y, 60);
+        public override Vector3? GetClosestPoint(Zone zone, Vector3 position, float xRange, float yRange, float zRange,
+            EDtPolyFlags[] filters) => position.Z < 30 && OverFloor(position) ? Floor(position) : new(position.X, position.Y, 60);
+        public override bool HasLineOfSight(Zone zone, Vector3 start, Vector3 end, EDtPolyFlags[] filters) => true;
+    }
+
+    // st-final4 (#166): player bots walking a Jordheim ramp stepped down onto the floor walled in under it and stood there.
+    // From afar by the corridor, and within 300 units by the direct step: both keep to the ramp.
+    [TestCase(0f, 700f)] [TestCase(100f, 400f)]
+    public void APlayerBotKeepsToTheRampOverAFloorWalledInUnderIt(float from, float to)
+    {
+        var (region, zone) = World();
+        var path = new PlayerTravelPath();
+        Vector3 position = new(from, 0, 60), goal = new(to, 0, 60);
+        for (int tick = 0; tick < 20 && !PlayerBotPathMover.Arrived(position, goal, 20); tick++)
+        {
+            Assert.That(PlayerBotPathMover.TryComputeNext(new PocketMesh(), region, zone, path, position, goal, 20, 47.75f, tick * 250,
+                out position, out string failure), Is.True, failure);
+            Assert.That(position.Z, Is.EqualTo(60), $"on the ramp at X {position.X}");
+        }
+        Assert.That(PlayerBotPathMover.Arrived(position, goal, 20), Is.True);
+    }
+
+    // A hill (floor Z 100 from X 100 to 200, Z 0 elsewhere) between the bot and its target, in sight across it (the ray
+    // is 2D). In Jordheim the line from the top of a ramp to a target at its foot ran 25-40 units under the ramp, over a
+    // floor walled in below it, and the next direct step stood on that floor (#166). Where the line runs more than 24
+    // units under the floor the bot follows, it takes the corridor; under a lower hill the direct step stays.
+    private sealed class HillMesh : PathfindingMgrBase
+    {
+        public float Height;
+        public int Searches;
+        public bool NoWay;
+        public float Link = float.MaxValue;     // a link to another floor across the hill's line here: the layered moves stop at it
+        public float Edge = float.MaxValue;     // from here on the line runs along a polygon's border edge: no grounded move ends there
+        public override bool HasNavmesh(Zone zone) => true;
+        private Vector3 On(Vector3 p) => new(p.X, p.Y, p.X >= 100 && p.X <= 200 ? Height : 0);
+        public override PathfindingResult GetPathStraight(Zone zone, Vector3 start, Vector3 end, EDtPolyFlags[] filters,
+            Span<WrappedPathfindingNode> destination)
+        {
+            Searches++;
+            if (NoWay) return new(PathfindingStatus.NoPathFound, 0);
+            destination[0] = new(start, EDtPolyFlags.Walk);
+            destination[1] = new(end, EDtPolyFlags.Walk);
+            return new(PathfindingStatus.PathFound, 2);
+        }
+        public override Vector3? GetMoveAlongSurface(Zone zone, Vector3 start, Vector3 end, EDtPolyFlags[] filters) => end;
+        public override Vector3? GetMoveAlongSurfaceLayered(Zone zone, Vector3 start, Vector3 end, EDtPolyFlags[] filters, bool grounded)
+        {
+            Vector3 to = start.X < Link && end.X > Link ? new(Link, end.Y, end.Z) : end;
+            return !grounded ? to : to.X >= Edge ? null : On(to);
+        }
+        public override Vector3? GetClosestPoint(Zone zone, Vector3 position, float xRange, float yRange, float zRange,
+            EDtPolyFlags[] filters) => On(position);
+        public override bool HasLineOfSight(Zone zone, Vector3 start, Vector3 end, EDtPolyFlags[] filters) => true;
+    }
+
+    // Past where the bot stops (200 units short), the hill does not count.
+    [TestCase(100f, 0, 1)] [TestCase(20f, 0, 0)] [TestCase(100f, 200, 0)]
+    public void TheDirectStepTakesTheCorridorWhereTheLineRunsUnderTheFloor(float hill, int stop, int searches)
+    {
+        var (region, zone) = World();
+        var mesh = new HillMesh { Height = hill };
+        Assert.That(PlayerBotPathMover.TryComputeNext(mesh, region, zone, new PlayerTravelPath(), Vector3.Zero, new(280, 0, 0), stop, 47.75f, 0,
+            out _, out string failure), Is.True, failure);
+        Assert.That(mesh.Searches, Is.EqualTo(searches));
+    }
+
+    // A link to another floor on the line, 100 units on, which the 2D ray sees through: where the floor walk meets it before
+    // the bot stops, it takes the corridor. In Jordheim the line and the corridor took turns by such links, the direct
+    // steps leaving the corridor's next corner behind the bot, back and forth for about 15 seconds, until the churn watch
+    // planned the walk again (the review of #166).
+    [TestCase(0, 1)] [TestCase(200, 0)]
+    public void TheDirectStepTakesTheCorridorWhereTheLineLeavesTheFloor(int stop, int searches)
+    {
+        var (region, zone) = World();
+        var mesh = new HillMesh { Link = 100 };
+        Assert.That(PlayerBotPathMover.TryComputeNext(mesh, region, zone, new PlayerTravelPath(), Vector3.Zero, new(280, 0, 0), stop, 47.75f, 0,
+            out _, out string failure), Is.True, failure);
+        Assert.That(mesh.Searches, Is.EqualTo(searches));
+    }
+
+    // From 50 units on, the line runs along a polygon's border edge, where no grounded move ends though nothing blocks the
+    // way: the bot steps straight on. Taken as a wall, it stalled bots under targets raised over the floor by such an edge
+    // (the third review of #166). A link on the edge, where the plain move stops too, still takes the corridor, also 0.7
+    // units before the last point the bot walks to (stopping 100 short, at X 181): taken as the edge, it put bots by a
+    // Jordheim link's foot onto the floor walled in there, and back and forth (the fourth review).
+    [TestCase(float.MaxValue, 0, 0)] [TestCase(100f, 0, 1)] [TestCase(180.3f, 100, 1)]
+    public void TheDirectStepGoesOnAlongABorderEdgeButNotOverALink(float link, int stop, int searches)
+    {
+        var (region, zone) = World();
+        var mesh = new HillMesh { Edge = 50, Link = link };
+        Assert.That(PlayerBotPathMover.TryComputeNext(mesh, region, zone, new PlayerTravelPath(), Vector3.Zero, new(280, 0, 0), stop, 47.75f, 0,
+            out _, out string failure), Is.True, failure);
+        Assert.That(mesh.Searches, Is.EqualTo(searches));
+    }
+
+    // A ledge (floor Z Height) up to X 100 and a floor at Z 0 beyond it, joined there, as at a Gripklosa seam whose floors
+    // part (#166). The moves take the floor under their end, the 2D ray sees across, and the closest point is the floor
+    // under the point within the box's height. With NoWay no corridor is found; with Cliff the corridor's box (over 64
+    // units high) finds the ledge's edge for any point, as Detour's nearest polygon to a goal below a ledge can be the
+    // ledge: the corridor ends at the edge, though the moves still reach the floor beyond. With Hill a hill as high as the
+    // ledge stands on that floor from X 200 to 260.
+    private sealed class DropMesh : PathfindingMgrBase
+    {
+        public float Height = 100;
+        public int Searches;
+        public bool NoWay, Cliff, Hill;
+        public override bool HasNavmesh(Zone zone) => true;
+        private Vector3 On(Vector3 p) => new(p.X, p.Y, p.X < 100 || Hill && p.X >= 200 && p.X <= 260 ? Height : 0);
+        public override PathfindingResult GetPathStraight(Zone zone, Vector3 start, Vector3 end, EDtPolyFlags[] filters,
+            Span<WrappedPathfindingNode> destination)
+        {
+            Searches++;
+            if (NoWay) return new(PathfindingStatus.NoPathFound, 0);
+            destination[0] = new(start, EDtPolyFlags.Walk);
+            destination[1] = new(end, EDtPolyFlags.Walk);
+            return new(PathfindingStatus.PathFound, 2);
+        }
+        public override Vector3? GetMoveAlongSurface(Zone zone, Vector3 start, Vector3 end, EDtPolyFlags[] filters) => On(end);
+        public override Vector3? GetMoveAlongSurfaceLayered(Zone zone, Vector3 start, Vector3 end, EDtPolyFlags[] filters, bool grounded) =>
+            On(end);
+        public override Vector3? GetClosestPoint(Zone zone, Vector3 position, float xRange, float yRange, float zRange,
+            EDtPolyFlags[] filters) => Cliff && zRange > 64 ? new(Math.Min(position.X, 99), position.Y, Height)
+            : Math.Abs(On(position).Z - position.Z) <= zRange ? On(position) : null;
+        public override bool HasLineOfSight(Zone zone, Vector3 start, Vector3 end, EDtPolyFlags[] filters) => true;
+    }
+
+    // From the ledge, the line to a goal on the floor beyond runs more than 24 units over that floor: the corridor takes the
+    // bot down. In Gripklosa the direct step floated it off a ledge 94 units up, and from the air the next corridor step
+    // took it back up onto the ledge, Detour's nearest polygon, back and forth for good (the fourth review of #166). Not
+    // off a ledge 20 units up, and not to a goal raised 40 units over the floor, but at no more than that height either.
+    // A goal raised beyond Detour's 64-unit box, whose floor it does not find, is walked at straight, as before.
+    [TestCase(100f, 0f, 1)] [TestCase(20f, 0f, 0)] [TestCase(60f, 40f, 0)] [TestCase(100f, 40f, 1)] [TestCase(100f, 80f, 0)]
+    public void TheDirectStepTakesTheCorridorOffALedge(float ledge, float raised, int searches)
+    {
+        var (region, zone) = World();
+        var mesh = new DropMesh { Height = ledge };
+        Assert.That(PlayerBotPathMover.TryComputeNext(mesh, region, zone, new PlayerTravelPath(), new(60, 0, ledge), new(280, 0, raised), 0,
+            47.75f, 0, out _, out string failure), Is.True, failure);
+        Assert.That(mesh.Searches, Is.EqualTo(searches));
+    }
+
+    // Where no corridor leads down off the ledge (NoWay), or the corridor ends where the bot stands on its edge (Cliff),
+    // the bot still takes the line over the drop, as before the fourth review of #166: without it, in the offline
+    // sweeps, 38 walks to goals that the line reached ended, 37 of them at once, most in Tir na Nog and Jordheim. Under
+    // the floor it doesn't (WithNoCorridorRoundTheHillTheWalkEnds), nor over a drop and then under the floor.
+    [TestCase(false)] [TestCase(true)]
+    public void WithNoCorridorDownOffALedgeTheBotTakesTheLine(bool cliff)
+    {
+        var (region, zone) = World();
+        var mesh = new DropMesh { NoWay = !cliff, Cliff = cliff };
+        Vector3 from = new(cliff ? 99 : 60, 0, 100), goal = new(cliff ? 150 : 280, 0, cliff ? 20 : 0);
+        Assert.That(PlayerBotPathMover.TryComputeNext(mesh, region, zone, new PlayerTravelPath(), from, goal, 0, 47.75f, 0,
+            out Vector3 next, out string failure), Is.True, failure);
+        Assert.That((mesh.Searches, next.X), Is.EqualTo((1, PlayerTravelPath.Advance(from, goal, 47.75f).X))
+            .Using<(int, float)>((a, b) => a.Item1 == b.Item1 && Math.Abs(a.Item2 - b.Item2) < 0.01f), "a step along the line");
+    }
+
+    // Over the drop and then under a hill beyond it, the walk ends at once, as before the fourth review of #166: taken over
+    // the drop, the line floated the bot off the ledge and the walk ended in the air before the hill (the fifth review).
+    [Test]
+    public void WithNoCorridorOverADropAndUnderAHillTheWalkEnds()
+    {
+        var (region, zone) = World();
+        var mesh = new DropMesh { NoWay = true, Hill = true };
+        Assert.That(PlayerBotPathMover.TryComputeNext(mesh, region, zone, new PlayerTravelPath(), new(60, 0, 100), new(290, 0, 0), 0, 47.75f, 0,
+            out _, out string failure), Is.False);
+        Assert.That((mesh.Searches, failure), Is.EqualTo((1, "No complete walkable path was found from here; try an open road or another destination.")));
+    }
+
+    // With no corridor round the hill, as to a goal on a mesh island the 2D ray sees, the walk ends: the line would take the
+    // bot through the hill (the review of #166: taken anyway, it sank bots through floors in Jordheim).
+    [Test]
+    public void WithNoCorridorRoundTheHillTheWalkEnds()
+    {
+        var (region, zone) = World();
+        var mesh = new HillMesh { Height = 100, NoWay = true };
+        Assert.That(PlayerBotPathMover.TryComputeNext(mesh, region, zone, new PlayerTravelPath(), Vector3.Zero, new(280, 0, 0), 0, 47.75f, 0,
+            out _, out string failure), Is.False);
+        Assert.That((mesh.Searches, failure), Is.EqualTo((1, "No complete walkable path was found from here; try an open road or another destination.")));
+    }
+
+    // A shelf at z 0, everywhere, the only floor: the closest-point query finds it under or over any point.
+    private sealed class ShelfMesh : PathfindingMgrBase
+    {
+        public override bool HasNavmesh(Zone zone) => true;
+        public override PathfindingResult GetPathStraight(Zone zone, Vector3 start, Vector3 end, EDtPolyFlags[] filters,
+            Span<WrappedPathfindingNode> destination)
+        {
+            destination[0] = new(start, EDtPolyFlags.Walk);
+            destination[1] = new(end, EDtPolyFlags.Walk);
+            return new(PathfindingStatus.PathFound, 2);
+        }
+        public override Vector3? GetMoveAlongSurface(Zone zone, Vector3 start, Vector3 end, EDtPolyFlags[] filters) => new(end.X, end.Y, 0);
+        public override Vector3? GetMoveAlongSurfaceLayered(Zone zone, Vector3 start, Vector3 end, EDtPolyFlags[] filters, bool grounded) =>
+            new(end.X, end.Y, 0);
+        public override Vector3? GetClosestPoint(Zone zone, Vector3 position, float xRange, float yRange, float zRange,
+            EDtPolyFlags[] filters) => new(position.X, position.Y, 0);
+        public override bool HasLineOfSight(Zone zone, Vector3 start, Vector3 end, EDtPolyFlags[] filters) => true;
+    }
+
+    // A roam goal 300 units straight under the bot: the corridor takes the shelf under it for the goal and ends where the
+    // bot stands, so the walk ends at once, not after a 3-second stall (st-layers2, #166).
+    [Test]
+    public void AWalkToAGoalUnderTheFloorItsCorridorEndsOnEndsAtOnce()
+    {
+        var (region, zone) = World();
+        Assert.That(PlayerBotPathMover.TryComputeNext(new ShelfMesh(), region, zone, new PlayerTravelPath(), Vector3.Zero, new(0, 0, -300), 0,
+            47.75f, 0, out _, out string failure), Is.False);
+        Assert.That(failure, Is.EqualTo(PlayerBotPathMover.OffTheCorridor));
     }
 
     // The walkable mesh is the strip y >= 0.4. From a point off it, the surface move only snaps back onto it (0.4 units),

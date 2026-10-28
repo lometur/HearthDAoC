@@ -16,11 +16,12 @@ ENV DOTNET_CLI_TELEMETRY_OPTOUT=1 DOTNET_NOLOGO=1
 # Server (the build only needs some serverconfig.xml; never the example file, which listens on all interfaces with UPnP on)
 RUN cp deploy/serverconfig.build.xml source/server/CoreServer/config/serverconfig.xml \
  && dotnet build source/server/DOLLinux.sln -c Release
-# Native pathfinding from the server's own Detour copy; it must export all 14 functions the server imports
+# Native pathfinding from the server's own Detour copy; it must export all 16 functions the server imports (the last
+# two are the player bots' layer-aware queries, #166)
 RUN cmake -S source/server/Pathing/Detour -B /tmp/detour -DCMAKE_BUILD_TYPE=Release -DSOVERSION=1 -DLIB_VERSION=1.0.0 \
  && cmake --build /tmp/detour -j"$(nproc)" \
  && install -D -m 755 /tmp/detour/libDetour.so.1.0.0 source/server/Release/lib/Detour.so \
- && test "$(nm -D --defined-only source/server/Release/lib/Detour.so | grep -cE ' T (LoadNavMesh|FreeNavMesh|CreateNavMeshQuery|FreeNavMeshQuery|PathStraight|MoveAlongSurface|MoveAlongSurfaceGrounded|FindRandomPointAroundCircle|FindClosestPoint|FindClosestPointInBox|HasLineOfSight|UpdateFlags|GetPolyAt|GetPolysInBox)$')" = 14
+ && test "$(nm -D --defined-only source/server/Release/lib/Detour.so | grep -cE ' T (LoadNavMesh|FreeNavMesh|CreateNavMeshQuery|FreeNavMeshQuery|PathStraight|MoveAlongSurface|MoveAlongSurfaceGrounded|FindRandomPointAroundCircle|FindClosestPoint|FindClosestPointInBox|HasLineOfSight|UpdateFlags|GetPolyAt|GetPolysInBox|PathStraightLayered|MoveAlongSurfaceLayered)$')" = 16
 # Upstream release config files the source tree lacks (verified against the pinned manifest). The release's
 # server data files (the lock's server_files) are not baked in: init_world.py downloads them into /data.
 RUN for f in logconfig.xml invalidnames.txt MailConfig.xml; do \

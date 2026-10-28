@@ -96,8 +96,8 @@ Read these with their caveats:
 
 ## Walking
 
-A bot walks with upstream's `PlayerTravelPath` corridor cursor (`PlayerBotPathMover`). Thirteen marked edits there reach
-only player bots: `/travel` isn't registered, and `/grind` uses only `TryBuildCorridor`. If `/travel` is ever
+A bot walks with upstream's `PlayerTravelPath` corridor cursor (`PlayerBotPathMover`). Twenty-one marked edits there
+reach only player bots: `/travel` isn't registered, and `/grind` uses only `TryBuildCorridor`. If `/travel` is ever
 registered, test it in game. The mover:
 - starts each step from the exact spot it last put the bot on. The game stores positions in whole units, and by
   Olorustos the rounded spot lay off the navmesh, so the quest bot stood there for 14 minutes.
@@ -129,44 +129,75 @@ registered, test it in game. The mover:
   floor beside the link: the bot stood on its edge for minutes. A link starts only from its foot, where the bot reached
   the corner before: Detour's line of sight is 2D and cannot tell a link from two floors stacked, so a bot on another
   floor than its corridor is not taken through a floor.
+- keeps to its own floor where the mesh joins two floors at a tile seam (#166). When tiles join at load, Detour links a
+  seam edge to any edge across the seam within two climbs (57.6 units) at either end. In Jordheim eight small floors
+  walled in under the city's ramps are linked that way to the ramps 70-133 units above them, and to nothing else.
+  Detour's surface moves are 2D: from a ramp they stepped down onto the first linked polygon under their target, the
+  floor below, and the corridor back out hid the climb in one corner, so bots stood there for minutes (one for nearly 3,
+  to the end of a run). The player bots now use two queries added to the server's Detour library, which treat a seam
+  link whose floors lie more than a climb (28.8 units) apart at both ends of its portal as a change of floor: the
+  surface moves don't take it, and the corridor gives it as two corners at one spot, one on each floor. A floor is the
+  polygon's detail surface, not its vertices' height, which on steep ground lies tens of units off it, and the corridor
+  puts each of its corners on a floor (a corner 47 units over a walled-in floor took a bot onto that floor): its
+  polygon's, or, where the floors on the two sides of the corner part, the floor before it, which the bot reaches it on.
+  At such seams in Gripklosa one tile's floor drops 170 units where the other's doesn't, and the corner sank into the
+  slope; left at the vertices' height, corners lay 47-65 units off every floor, and a bot went back and forth under one;
+  and on the floor after it, a corner on a ledge 81 units over the slope that led up to it took bots onto a piece of the
+  ledge with no way on. An off-mesh jump's landing keeps its own floor: a jump straight up or down lands on the
+  take-off's spot, and the floor before it, the take-off's, dropped the landing from the corridor (12 such jumps in
+  three zones). The bot goes straight from where it reached the first corner (up to 32 units across) to the
+  second, through the ramp if need be, as on a floor link, and steps straight at its goal only once it stands on the
+  second. That corner counts as reached only within 24 units of its height and, once the bot is on the climb, only at
+  the corner itself: on the way down, 22.6 units above the foot, a bot took it as reached and walked back onto the ramp
+  it came from. Within 300 units of its goal the bot takes the corridor instead of the straight line when the line runs
+  more than 24 units under the floor, or as far over it beyond the goal's own height over its floor, or meets a wall or
+  a link to another floor, before the bot would stop: the line of sight is 2D and sees through such a link, and there
+  direct and corridor steps took turns, back and forth for about 15 seconds, until the churn watch planned the walk
+  again. Off a ledge in Gripklosa the line floated bots over the drop, and the next corridor step took them back up onto
+  the ledge, for good. With no corridor the walk ends: the line would take the bot through the floor. A walk whose
+  corridor ends where the bot stands, its goal off that floor (a roam goal on a floor straight under the bot, with no
+  way down), ends at once: 6 such walks stood 3 seconds each and ended stalled. Where the line runs over a drop only,
+  though, the bot takes it in both cases, as before: offline, 38 walks the line took to their goals ended without it,
+  37 of them at once, most in Tir na Nog and Jordheim. Such links are rare (in the nine zones replayed, 0-158 of
+  1,186-202,142 seam links), and NPCs and GameBots keep Detour's own queries.
 - within 300 units of its goal, walks straight at it only with a clear line of sight, or within a corner's reach (32
   units across), where the corridor has dropped its last corner; otherwise it follows the corridor (a bot crept along
   a wall 267 units from its target).
 - when a walk fails or stalls, steps onto the nearest floor within 300 units that leads on, as a GameBot does, with one
   search every 5 seconds at most: bots stood off the mesh, 79-88 units under the floor or 84 above it, where every step
-  lost the walkable surface, and one stood 161 units over the floor in Snowdonia, where every step stood still.
+  lost the walkable surface, and one stood 161 units over the floor in Snowdonia, where every step stood still. A bot
+  also steps onto the floor straight above or below it when that floor lies beyond the surface moves' reach (64 units),
+  even where Detour's 64-unit box finds it, because the floor's polygon reaches down there: in Domnann a bot respawned
+  124 units under the floor, and every walk from the spot ended.
 
 `UT_PlayerBotWalkReplay` replays each of these walks on the installed navmesh but the replan's: offline, a fresh
 corridor from those stalls walks on, and the corridor that stalled can't be rebuilt there. A fake-mesh test covers it.
 
 **The trade-off:** on the corridor line a bot on steep ground can sink into the slope or float above it for a step or
-two (about 44 units at one Snowdonia spot), and on a floor link it floats up or down the link (167 units in Tir na
-Nog). GameBots do the same, but a player bot should look like a player: worth a look in game near a steep hill and in
-Tir na Nog. A floor step is a visible jump: 14 in one run, of 50-198 units.
+two (about 44 units at one Snowdonia spot), and on a floor link it floats up or down the link (167 units in Tir na Nog,
+70-133 out of Jordheim's walled-in floors, through the ramp above them). GameBots do the same, but a player bot should
+look like a player: worth a look in game near a steep hill and in Tir na Nog. A floor step is a visible jump: 14 in
+one run, of 50-198 units. Off a ledge within 300 units of its goal a bot now drops to the floor below in a step or
+two, where it floated down the straight line before, and it keeps to the floor where the line runs high over lower
+ground: offline, 25 of 41,297 walks took 12-66 more steps, and the walks by Jordheim's links 3.6% more in all.
 
 Known gaps:
-- **Stalls are rare, but for one spot.** In two 15-minute runs of 390 hunting bots, 2 and 16 walks stalled (14 after
-  #168, 2,421 before these fixes, counting each blocked line's `count=`). 15 of the 16 were one bot at one spot in
-  Jordheim (next gap). Most other blocked walks were walks to a target with no path (the gap after).
-- **A ledge in Jordheim (32225, 26622).** The corridor crosses a ridge there, by a corner 35 units above the lower
-  floor; under its line the floor rises 67 units within 11. The surface moves toward that corner slide sideways along
-  the ridge's foot into a pocket 17 units off the line, where no move reaches the corner and Detour's ray toward it is
-  blocked, so the corridor-line step isn't taken either. Each fresh corridor from the pocket leads back out to a corner
-  61 units away (about 100 for some goals), then toward the ridge again, and the moves slide the bot back into the
-  pocket. It reproduces offline on the installed navmesh: from the pocket, all 20 goals a roaming bot had there end in
-  it. Not new: runs before the replan logged bots stuck in this pocket too, for up to about 6 minutes at about 16
-  blocked walks a minute, before they walked out. With two replans a walk takes about twice as long (7 blocked walks a
-  minute in the last run, where the bot stayed nearly 3 minutes, to the run's end), so a bot likely stays there longer
-  now; not measured.
+- **Stalls are rare.** In 15-minute runs of 390 hunting bots, 16 walks stalled with #169 (2,421 before #168's fixes,
+  counting each blocked line's `count=`), 15 of them one bot on a floor under a Jordheim ramp, and 1-7 in each of four
+  runs with the layer-aware queries, none in Jordheim. In the last run 44 walks of 13 bots ended blocked: 31 were walks
+  to a target with no path (next gap), which `main`'s code finds no path to either, and 9 lost the walkable surface and
+  stepped back onto a floor, 4 of them one bot by Tir na Nog's stacked floors, as in every run.
 - **Unreachable targets come back.** A bot skips a target it found no path to for 30 seconds, then may pick it again:
-  in that run one bot tried the same monster 51 times between its fights. A GameBot's target and camp choice is part of
+  in one run a bot tried the same monster 51 times between its fights. A GameBot's target and camp choice is part of
   the parity work (#167).
 - A Tir na Nog bot stalled at one spot (21263, 35215) in most runs, though the same step replayed offline walks on
   (same navmesh, same Detour library). It is likely the polygon-edge case above: the log rounds the spot, and starts a
-  few hundredths of a unit apart can differ there. In the last run none stalled there; one churned there once.
+  few hundredths of a unit apart can differ there. In the last four runs none stalled there; one stalled once beside
+  the foot of the jump link by (24081, 33710), where a fresh corridor from the spot walks on (the stall line's replay).
 - Within 300 units of its goal, in the open, a bot takes the plain surface move, which keeps the height of the straight
   line to the goal. Grounded steps there would also need arrival judged by the floor, for targets that hover or swim
-  above it.
+  above it: on the Isle of Glass a bot floated up toward a corpse light 173 units over the floor, lost the floor about
+  100 units up, and its walks ended there (`main` does the same).
 
 ## Log lines
 
@@ -188,6 +219,8 @@ The bot CPU meter (`/botcpu`) charges them to its own kind, `playerbot`, and the
 
 `Tests/UnitTests/UT_HeadlessClient.cs`, `UT_PlayerBotPlan.cs`, `UT_PlayerBotDriver.cs`, `UT_PlayerBotErrands.cs`,
 `UT_PlayerBotWake.cs`, `UT_PlayerBotSpots.cs` and `UT_PlayerBotKit.cs` run in CI. `UT_PlayerBotWalkReplay.cs` runs only
-when asked for. It needs `OFFLINE_DAOC_NAV_ROOT`: a folder holding `navmesh/zone008.nav`, `zone012.nav`,
-`zone126.nav`, `zone152.nav`, `zone209.nav` and `zone250.nav` (each from `tools/linux/odaoc_fetch.py --lock deploy/upstream.lock
-extract runtime/server/navmesh/zone008.nav FOLDER/navmesh/zone008.nav`, and so on) and the Detour library under `lib/`.
+when asked for. It needs `OFFLINE_DAOC_NAV_ROOT`: a folder holding `navmesh/zone008.nav`, `zone012.nav`, `zone014.nav`,
+`zone120.nav`, `zone126.nav`, `zone152.nav`, `zone181.nav`, `zone209.nav` and `zone250.nav` (each from
+`tools/linux/odaoc_fetch.py --lock deploy/upstream.lock extract runtime/server/navmesh/zone008.nav
+FOLDER/navmesh/zone008.nav`, and so on) and under `lib/` the Detour library built from `source/server/Pathing/Detour`,
+as `deploy/Dockerfile` builds it: without the layer-aware queries the Jordheim and jump-link replays fail.

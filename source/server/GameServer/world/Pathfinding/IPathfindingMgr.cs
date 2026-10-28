@@ -11,6 +11,10 @@ namespace DOL.GS
         bool UpdateDoorFlags(GameDoorBase door);
         PathfindingResult GetPathStraight(Zone zone, Vector3 start, Vector3 end, EDtPolyFlags[] filters, Span<WrappedPathfindingNode> destination);
         Vector3? GetMoveAlongSurface(Zone zone, Vector3 start, Vector3 end, EDtPolyFlags[] filters);
+        // HearthDAoC: the player bots' layer-aware queries (#166), where a tile-seam link more than walkableClimb up or down
+        // is a change of floor (LocalPathfindingMgr.Layers.cs); PathfindingMgrBase gives the plain ones.
+        PathfindingResult GetPathStraightLayered(Zone zone, Vector3 start, Vector3 end, EDtPolyFlags[] filters, Span<WrappedPathfindingNode> destination);
+        Vector3? GetMoveAlongSurfaceLayered(Zone zone, Vector3 start, Vector3 end, EDtPolyFlags[] filters, bool grounded);
         Vector3? GetRandomPoint(Zone zone, Vector3 position, float radius, EDtPolyFlags[] filters);
         Vector3? GetClosestPoint(Zone zone, Vector3 position, EDtPolyFlags[] filters);
         Vector3? GetClosestPoint(Zone zone, Vector3 position, float xRange, float yRange, float zRange, EDtPolyFlags[] filters);
@@ -101,6 +105,7 @@ namespace DOL.GS
 
         // Run-time flags (not stored in the navmesh, only used for custom pathfinding logic)
         BlockingDoor = 0x20, // Door that blocks movement when closed.
+        LayerLink = 0x40,    // HearthDAoC: the far end of a tile-seam link to another floor, from GetPathStraightLayered (player bots, #166).
         AnyDoor = Door | BlockingDoor
     }
 
