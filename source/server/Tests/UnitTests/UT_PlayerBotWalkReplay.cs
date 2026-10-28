@@ -12,12 +12,12 @@ namespace DOL.UnitTests;
 
 // HearthDAoC: player-bot walks that stalled, replayed on the installed navmesh. Read-only; never starts the server.
 // Set OFFLINE_DAOC_NAV_ROOT to a folder with navmesh/zone008.nav, zone012.nav, zone014.nav, zone120.nav, zone126.nav,
-// zone152.nav, zone209.nav, zone250.nav and lib/Detour
+// zone152.nav, zone181.nav, zone209.nav, zone250.nav and lib/Detour
 // (tools/linux/odaoc_fetch.py --lock deploy/upstream.lock extract runtime/server/navmesh/zone008.nav
 // FOLDER/navmesh/zone008.nav, and the same for the others). One test per zone: loading a zone's navmesh twice in one
 // process crashes the test host. lib/Detour must be built from this tree (source/server/Pathing/Detour, as
 // deploy/Dockerfile builds it): the player bots' layer-aware queries (#166) are not in upstream's release library.
-[TestFixture, NonParallelizable, Explicit("Needs OFFLINE_DAOC_NAV_ROOT: a folder with navmesh/zone008.nav, zone012.nav, zone014.nav, zone120.nav, zone126.nav, zone152.nav, zone209.nav, zone250.nav and lib/Detour")]
+[TestFixture, NonParallelizable, Explicit("Needs OFFLINE_DAOC_NAV_ROOT: a folder with navmesh/zone008.nav, zone012.nav, zone014.nav, zone120.nav, zone126.nav, zone152.nav, zone181.nav, zone209.nav, zone250.nav and lib/Detour")]
 public class UT_PlayerBotWalkReplay
 {
     // The quest bot stood 513 units short of Olorustos for 14 minutes (lv-r1-stall, 2026-10-25 04:46): its whole-unit
@@ -244,6 +244,25 @@ public class UT_PlayerBotWalkReplay
             Assert.That(UT_PlayerBotDriver.Walk(nav, region, zone, middle, upstairs, keepExact: true), Is.InRange(1, 200));
             Vector3 below = new(24063.2f, 33648, 6494.4f);
             Assert.That(UT_PlayerBotDriver.Walk(nav, region, zone, below, upstairs, keepExact: true), Is.InRange(1, 200));
+        });
+
+    // st-layers3: Pbothaaeq's respawn spot in Domnann lay 124 units under the floor, and its corridor from there led
+    // nowhere. Its walks ended blocked 22 times in two minutes, to a target straight above it among them. Detour's 64-unit
+    // box found the floor, so the bot counted as within the surface moves' reach. It steps up onto the floor and walks on.
+    [Test]
+    public void TheBotStepsUpOntoTheFloorFarAboveItsRespawnSpot() =>
+        // Domnann (region 181, zone 181): OffsetX 48, OffsetY 48, Width 8, Height 8.
+        OnZone(181, "Domnann", 48, 48, (nav, region, zone) =>
+        {
+            Vector3 spot = new(446669, 401530, 4620), target = new(446668, 401531, 4743), far = new(443010, 404859, 4522);
+            Assert.That(PlayerBotPathMover.TryComputeNext(nav, region, zone, new(), spot, target, 20, 47.75f, 0, out _, out string failure),
+                Is.False, "from the spot");
+            Assert.That(failure, Does.StartWith("No complete walkable path"));
+            Vector3? floor = PlayerBotPathMover.FloorStep(nav, zone, spot);
+            Assert.That(floor, Is.EqualTo(new Vector3(446669, 401530, 4744.6f)).Using<Vector3>((a, b) => Vector3.Distance(a, b) < 1));
+            Assert.That(PlayerBotPathMover.FloorStep(nav, zone, floor!.Value), Is.Null, "on floor with a way out: no step");
+            Assert.That(UT_PlayerBotDriver.Walk(nav, region, zone, floor.Value, target, keepExact: true), Is.InRange(0, 200));
+            Assert.That(UT_PlayerBotDriver.Walk(nav, region, zone, floor.Value, far, keepExact: true, ticks: 400), Is.InRange(1, 400));
         });
 
     private static void OnZone(ushort id, string name, int offsetX, int offsetY, Action<IPathfindingMgr, Region, Zone> walk)

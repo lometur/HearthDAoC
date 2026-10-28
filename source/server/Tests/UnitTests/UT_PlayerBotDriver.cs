@@ -673,6 +673,35 @@ public sealed class UT_PlayerBotDriver
             Is.EqualTo(-2));
     }
 
+    // A flat floor at Z 100 that leads on everywhere, whose polygon's bounds reach 128 units down: a box query finds it
+    // from up to 128 below, whatever its height range.
+    private sealed class SunkMesh : PathfindingMgrBase
+    {
+        public override bool IsAvailable => true;
+        public override bool HasNavmesh(Zone zone) => true;
+        public override PathfindingResult GetPathStraight(Zone zone, Vector3 start, Vector3 end,
+            EDtPolyFlags[] filters, Span<WrappedPathfindingNode> destination)
+        {
+            destination[0] = new(start with { Z = 100 }, EDtPolyFlags.Walk);
+            destination[1] = new(end with { Z = 100 }, EDtPolyFlags.Walk);
+            return new(PathfindingStatus.PathFound, 2);
+        }
+        public override Vector3? GetClosestPoint(Zone zone, Vector3 position, float xRange, float yRange, float zRange,
+            EDtPolyFlags[] filters) => position.Z >= 100 - 128 && position.Z <= 100 + zRange ? new(position.X, position.Y, 100) : null;
+    }
+
+    // st-layers3 (#166): a respawn spot in Domnann lay 124 units under the floor. Detour's 64-unit box found that floor,
+    // so the bot counted as within the moves' reach, but every walk from it ended there. Out of the moves' reach, the
+    // bot steps up onto the floor; within it, it doesn't.
+    [Test]
+    public void ABotFarUnderTheFloorStepsUpOntoItThoughDetoursBoxFindsIt()
+    {
+        var (region, zone) = World();
+        typeof(Region).GetField("m_regionData", Hidden)!.SetValue(region, new RegionData { Id = 1 });
+        Assert.That(PlayerBotPathMover.FloorStep(new SunkMesh(), zone, new(5000, 5000, -24)), Is.EqualTo(new Vector3(5000, 5000, 100)));
+        Assert.That(PlayerBotPathMover.FloorStep(new SunkMesh(), zone, new(5000, 5000, 60)), Is.Null, "within the moves' reach");
+    }
+
     private static int PathNodes(PlayerTravelPath path) =>
         ((Queue<WrappedPathfindingNode>)typeof(PlayerTravelPath).GetField("_nodes", BindingFlags.Instance | BindingFlags.NonPublic)!.GetValue(path)!).Count;
 

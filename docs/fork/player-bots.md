@@ -157,7 +157,10 @@ registered, test it in game. The mover:
   a wall 267 units from its target).
 - when a walk fails or stalls, steps onto the nearest floor within 300 units that leads on, as a GameBot does, with one
   search every 5 seconds at most: bots stood off the mesh, 79-88 units under the floor or 84 above it, where every step
-  lost the walkable surface, and one stood 161 units over the floor in Snowdonia, where every step stood still.
+  lost the walkable surface, and one stood 161 units over the floor in Snowdonia, where every step stood still. A bot
+  also steps onto the floor straight above it when that floor lies beyond the surface moves' reach (64 units), even
+  where Detour's 64-unit box finds it, because the floor's polygon reaches down there: in Domnann a bot respawned 124
+  units under the floor, and every walk from the spot ended.
 
 `UT_PlayerBotWalkReplay` replays each of these walks on the installed navmesh but the replan's: offline, a fresh
 corridor from those stalls walks on, and the corridor that stalled can't be rebuilt there. A fake-mesh test covers it.

@@ -89,11 +89,13 @@ public sealed class PlayerBotPathMover
     /// trouble), or with no floor near. In st-fix2 (#166) six bots stood for the rest of the run where every step lost
     /// the walkable surface; in Tir na Nog one stood 84 units above the floor, which lay 51 units away. The nearest
     /// floor search counts a floor up to 128 units overhead as underfoot, but the surface moves reach only 64: in st-fix3
-    /// bots stood 79-88 units under the floor for the rest of the run. Out of the moves' reach, it steps onto that floor.</summary>
+    /// bots stood 79-88 units under the floor for the rest of the run. Out of the moves' reach, it steps onto that floor,
+    /// also where Detour's 64-unit box finds it, as a polygon's bounds reach down to the bot: a respawn spot in Domnann lay
+    /// 124 units under the floor, and every walk from it ended there (st-layers3, #166).</summary>
     public static Vector3? FloorStep(IPathfindingMgr nav, Zone zone, Vector3 here)
     {
         if (AutonomousNavigationSurface.TryNearestWalkableFloor(nav, zone, here, FloorStepRange, out Vector3 floor)) return floor;
-        return !nav.GetClosestPoint(zone, here, 32, 32, 64, nav.DefaultFilters).HasValue &&
+        return (nav.GetClosestPoint(zone, here, 32, 32, 64, nav.DefaultFilters) is not Vector3 near || Math.Abs(near.Z - here.Z) > 64) &&
                AutonomousNavigationSurface.TryFloor(nav, zone, here, out floor) ? floor : null;
     }
 
