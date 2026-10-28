@@ -166,10 +166,13 @@ namespace DOL.GS.Commands
             // exact equality stalls at the polygon edge. Accept one voxel, then
             // constrain the next movement to the surface; never teleport across it.
             // HearthDAoC: the far end of a layer link is reached on its own floor, within a corner's 24 units of height, not
-            // under or over it by HasReachedCorner's 64 on the spot: in Jordheim the floor under a ramp lies 45-115 units
-            // below the top of its link, and a player bot (#166) standing on that floor passed the top and stayed there.
+            // under or over it by HasReachedCorner's 64 on the spot: in Jordheim the floor under a ramp lies 70-152 units
+            // below the top of its link, and a player bot (#166) standing on that floor passed the top and stayed there. On the
+            // link's line (_link), only there: 22.6 units above the foot of a 49-unit link, the next move started on the
+            // ramp the bot came from, which Detour's nearest polygon takes within a climb of both floors (st-layers1).
             while (_nodes.TryPeek(out var reached) && HasReachedCorner(current, reached.Position) &&
-                   ((reached.Flags & EDtPolyFlags.LayerLink) == 0 || Math.Abs(current.Z - reached.Position.Z) <= 24) &&
+                   ((reached.Flags & EDtPolyFlags.LayerLink) == 0 || (_link == reached.Position
+                       ? Vector3.DistanceSquared(current, reached.Position) < 1 : Math.Abs(current.Z - reached.Position.Z) <= 24)) &&
                    MayPassCorner(nav, zone, current, reached.Position)) // HearthDAoC: #166
             {
                 if ((reached.Flags & EDtPolyFlags.AnyDoor) != 0) _doorToOpen = reached.Position;

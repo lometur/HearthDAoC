@@ -130,17 +130,21 @@ registered, test it in game. The mover:
   the corner before: Detour's line of sight is 2D and cannot tell a link from two floors stacked, so a bot on another
   floor than its corridor is not taken through a floor.
 - keeps to its own floor where the mesh joins two floors at a tile seam (#166). When tiles join at load, Detour links
-  a seam edge to any edge across the seam within two climbs (57.6 units) at either end. In Jordheim three small floors
-  walled in under the ramps are linked that way to the ramps 45-115 units above them, and to nothing else. Detour's
-  surface moves are 2D: from a ramp they stepped down onto the first linked polygon under their target, the floor
-  below, and the corridor back out hid the climb in one corner, so bots stood there for minutes (one for nearly 3, to
-  the end of a run). The player bots now use two queries added to the server's Detour library, which treat a seam link
-  more than a climb (28.8 units) apart at both ends of its portal as a change of floor: the surface moves don't take
-  it, and the corridor gives it as two corners, one on each floor. The bot climbs between them on the line, as on a
-  floor link, and the upper corner counts as reached only on its own floor. Within 300 units of its goal it takes the
-  corridor instead of the straight line when the line runs more than 24 units under the floor it would walk on. Such
-  links are rare (in the eight zones replayed, 0-103 of up to 200,000 seam links), and NPCs and GameBots keep Detour's
-  own queries.
+  a seam edge to any edge across the seam within two climbs (57.6 units) at either end. In Jordheim eight small floors
+  walled in under the city's ramps are linked that way to the ramps 70-133 units above them, and to nothing else.
+  Detour's surface moves are 2D: from a ramp they stepped down onto the first linked polygon under their target, the
+  floor below, and the corridor back out hid the climb in one corner, so bots stood there for minutes (one for nearly
+  3, to the end of a run). The player bots now use two queries added to the server's Detour library, which treat a
+  seam link whose floors lie more than a climb (28.8 units) apart at both ends of its portal as a change of floor: the
+  surface moves don't take it, and the corridor gives it as two corners at one spot, one on each floor. A floor is the
+  polygon's detail surface, not its vertices' height, which on steep ground lies tens of units off it, and the corridor
+  puts each of its corners on its floor (a corner 47 units over a walled-in floor took a bot onto that floor). The bot
+  climbs between the two corners on the line, as on a floor link. The second counts as reached only within 24 units
+  of its height and, once the bot is on the climb, only at the corner itself: half way up, a bot took it as reached
+  and walked back onto the ramp it came from. Within 300 units of its goal the bot takes the corridor instead of the
+  straight line when the line runs more than 24 units under the floor before the bot would stop, and the line still
+  where there is no corridor. Such links are rare (in the eight zones replayed, 0-126 of 1,186-202,142 seam links), and
+  NPCs and GameBots keep Detour's own queries.
 - within 300 units of its goal, walks straight at it only with a clear line of sight, or within a corner's reach (32
   units across), where the corridor has dropped its last corner; otherwise it follows the corridor (a bot crept along
   a wall 267 units from its target).
@@ -153,14 +157,16 @@ corridor from those stalls walks on, and the corridor that stalled can't be rebu
 
 **The trade-off:** on the corridor line a bot on steep ground can sink into the slope or float above it for a step or
 two (about 44 units at one Snowdonia spot), and on a floor link it floats up or down the link (167 units in Tir na Nog,
-45-75 out of Jordheim's walled-in floors, through the ramp above them). GameBots do the same, but a player bot should
+70-133 out of Jordheim's walled-in floors, through the ramp above them). GameBots do the same, but a player bot should
 look like a player: worth a look in game near a steep hill and in Tir na Nog. A floor step is a visible jump: 14 in one
 run, of 50-198 units.
 
 Known gaps:
-- **Stalls are rare, but for one spot.** In two 15-minute runs of 390 hunting bots, 2 and 16 walks stalled (14 after
-  #168, 2,421 before these fixes, counting each blocked line's `count=`). 15 of the 16 were one bot at one spot in
-  Jordheim (next gap). Most other blocked walks were walks to a target with no path (the gap after).
+- **Stalls are rare.** In three 15-minute runs of 390 hunting bots, 2, 16 and 2 walks stalled (14 after #168, 2,421
+  before these fixes, counting each blocked line's `count=`). 15 of the 16 were one bot on a floor under a Jordheim
+  ramp; in the last run, with the layer-aware queries, that bot roamed Jordheim for the whole run with one replan and
+  no stall. Most other blocked walks were walks to a target with no path (next gap): 70 of 82 in the last run, all
+  to targets earlier runs had found no path to either, and each gives the same result from either corridor query.
 - **Unreachable targets come back.** A bot skips a target it found no path to for 30 seconds, then may pick it again:
   in that run one bot tried the same monster 51 times between its fights. A GameBot's target and camp choice is part of
   the parity work (#167).
@@ -191,6 +197,8 @@ The bot CPU meter (`/botcpu`) charges them to its own kind, `playerbot`, and the
 
 `Tests/UnitTests/UT_HeadlessClient.cs`, `UT_PlayerBotPlan.cs`, `UT_PlayerBotDriver.cs`, `UT_PlayerBotErrands.cs`,
 `UT_PlayerBotWake.cs`, `UT_PlayerBotSpots.cs` and `UT_PlayerBotKit.cs` run in CI. `UT_PlayerBotWalkReplay.cs` runs only
-when asked for. It needs `OFFLINE_DAOC_NAV_ROOT`: a folder holding `navmesh/zone008.nav`, `zone012.nav`,
-`zone126.nav`, `zone152.nav`, `zone209.nav` and `zone250.nav` (each from `tools/linux/odaoc_fetch.py --lock deploy/upstream.lock
-extract runtime/server/navmesh/zone008.nav FOLDER/navmesh/zone008.nav`, and so on) and the Detour library under `lib/`.
+when asked for. It needs `OFFLINE_DAOC_NAV_ROOT`: a folder holding `navmesh/zone008.nav`, `zone012.nav`, `zone014.nav`,
+`zone120.nav`, `zone126.nav`, `zone152.nav`, `zone209.nav` and `zone250.nav` (each from `tools/linux/odaoc_fetch.py
+--lock deploy/upstream.lock extract runtime/server/navmesh/zone008.nav FOLDER/navmesh/zone008.nav`, and so on) and under
+`lib/` the Detour library built from `source/server/Pathing/Detour`, as `deploy/Dockerfile` builds it: without the
+layer-aware queries the Jordheim and jump-link replays fail.

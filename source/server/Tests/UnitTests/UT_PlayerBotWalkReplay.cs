@@ -103,9 +103,9 @@ public class UT_PlayerBotWalkReplay
 
     // st-final4 (and six runs before it): in Jordheim a roaming bot's corridor crossed a ridge by a corner 35 units up. Its moves
     // toward the corner slid along the ridge's foot into a pocket, and every fresh corridor from there led out and back into it.
-    // The pocket is one of three small floors walled in under the ramps there, which the mesh links only to the ramps 45-115
+    // The pocket is one of eight small floors walled in under the city's ramps, which the mesh links only to the ramps 70-133
     // units above them, at tile seams: the surface moves fell through the ramps onto them, and the corridors out hid the
-    // climb in one corner. With the layer-aware queries (#166) the bot gets out of each of them and walks over them.
+    // climb in one corner. With the layer-aware queries (#166) the bot gets out of them and walks over them.
     [Test]
     public void TheBotGetsOutOfAndKeepsOffTheFloorsUnderJordheimsRamps() =>
         // Jordheim (region 101, zone 120): OffsetX 1, OffsetY 1, Width 8, Height 8.
@@ -119,7 +119,7 @@ public class UT_PlayerBotWalkReplay
                 Assert.That(UT_PlayerBotDriver.Walk(nav, region, zone, firstStall, goal, keepExact: true, ticks: 400, blockEnds: true),
                     Is.InRange(1, 400), $"from the first stall to {goal}");
             }
-            // Out of the other two and the pocket floor's south end, toward goals bots had there: blocked after 29-40 steps
+            // Out of two others and the pocket floor's south end, toward goals bots had there: blocked after 29-40 steps
             // before.
             foreach ((Vector3 from, Vector3 goal) in new[] {
                 (new Vector3(32169, 26518, 8766), new Vector3(32145, 26460, 8823)),                             // st-fix6
@@ -135,12 +135,23 @@ public class UT_PlayerBotWalkReplay
                 (new Vector3(31026.96f, 26935.20f, 8804.27f), new Vector3(30992.94f, 26782.56f, 8917.07f)) })
                 Assert.That(UT_PlayerBotDriver.Walk(nav, region, zone, from, goal, keepExact: true, ticks: 400, blockEnds: true),
                     Is.InRange(1, 20), $"from {from} to {goal}");
+            // Without a stall (st-layers1 and the review): half way down a 49-unit link the bot passed its foot and took the
+            // ramp it came from (38 steps, with a replan); a corner on the ramp at its vertices' height, 47 units over a floor
+            // walled in under it and 50 under the ramp's own, took it onto that floor (28); and the top of the link out of a
+            // fourth walled-in floor lay 72 units under the floor it leads onto (lost the walkable surface).
+            foreach ((Vector3 from, Vector3 goal, int most) in new[] {
+                (new Vector3(31976.0f, 27124.0f, 8829.8f), new Vector3(32364, 27658, 8766), 34),
+                (new Vector3(30957.2f, 26791.2f, 8933.5f), new Vector3(31336.3f, 26464.8f, 8913.1f), 20),
+                (new Vector3(34860, 32405.5f, 8353), new Vector3(34900, 32470, 8480), 10) })
+                Assert.That(UT_PlayerBotDriver.Walk(nav, region, zone, from, goal, keepExact: true, ticks: 400, blockEnds: true),
+                    Is.InRange(1, most), $"from {from} to {goal}");
+            Assert.That(LayeredQueriesRan(), Is.True, "lib/Detour has the layer-aware queries");
         });
 
-    // #166: where no tile seam joins two floors, the layer-aware corridor is the plain one. A first version took an off-mesh
-    // connection's link (Detour gives it edge 0xff) for a seam's: on corridors back across a two-way jump link between
-    // two tiles it read past the polygon's vertices and put corners as far off as (0, 0, z), in zones 8, 12, 14 and 250.
-    // Here the Pennine Mountains' 15 such links, both ways.
+    // #166: where no tile seam joins two floors, the layer-aware corridor has the plain one's corners, each on its polygon's
+    // floor. A first version took an off-mesh connection's link (Detour gives it edge 0xff) for a seam's: on corridors back
+    // across a two-way jump link between two tiles it read past the polygon's vertices and put corners as far off as
+    // (0, 0, z), in zones 8, 12, 14 and 250. Here the Pennine Mountains' 15 such links, both ways.
     [Test]
     public void TheLayeredCorridorOverAJumpLinkIsThePlainOne() =>
         // Pennine Mountains (region 1, zone 14): OffsetX 69, OffsetY 43, Width 8, Height 8.
@@ -155,9 +166,16 @@ public class UT_PlayerBotWalkReplay
                     PathfindingResult l = nav.GetPathStraightLayered(zone, a, b, nav.DefaultFilters, layered);
                     Assert.That(p.NodeCount, Is.GreaterThan(1), $"{a} -> {b}");
                     Assert.That(l.Status, Is.EqualTo(p.Status), $"{a} -> {b}");
-                    Assert.That(layered[..l.NodeCount], Is.EqualTo(plain[..p.NodeCount]), $"{a} -> {b}");
+                    Assert.That(Array.ConvertAll(layered[..l.NodeCount], n => (n.Position.X, n.Position.Y, n.Flags)),
+                        Is.EqualTo(Array.ConvertAll(plain[..p.NodeCount], n => (n.Position.X, n.Position.Y, n.Flags))), $"{a} -> {b}");
                 }
+            Assert.That(LayeredQueriesRan(), Is.True, "lib/Detour has the layer-aware queries");
         });
+
+    // Whether the layer-aware queries ran on lib/Detour, not on the plain ones it falls back to without them (one warning,
+    // which the test host does not show): with those, the comparison above compares the plain corridor with itself.
+    private static bool LayeredQueriesRan() =>
+        (int)typeof(LocalPathfindingMgr).GetField("_noLayers", BindingFlags.Static | BindingFlags.NonPublic)!.GetValue(null)! == 0;
 
     // The two ends of the cross-tile two-way off-mesh connections in zone014.nav.
     private static readonly (Vector3, Vector3)[] PennineJumps =

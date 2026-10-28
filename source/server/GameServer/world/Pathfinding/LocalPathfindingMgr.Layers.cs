@@ -7,7 +7,7 @@ namespace DOL.GS
 {
     // HearthDAoC: the player bots' layer-aware queries (#166), PathStraightLayered and MoveAlongSurfaceLayered in
     // Pathing/Detour/Source/DetourInterface.cpp. In Jordheim small floors walled in under a ramp are linked, at tile seams,
-    // only to the ramp 45-115 units above them: player bots fell through the ramp onto them and stood there for good.
+    // only to the ramp 70-152 units above them: player bots fell through the ramp onto them and stood there for good.
     // These queries treat such a link as a change of floor; only PlayerTravelPath with layers (player bots) calls them.
     // A lib/Detour built before them lacks the two exports: then the plain queries, with one log line.
     public sealed partial class LocalPathfindingMgr
@@ -25,9 +25,9 @@ namespace DOL.GS
         private static partial EDtStatus MoveAlongSurfaceLayered(IntPtr query, ReadOnlySpan<float> start, ReadOnlySpan<float> end,
             ReadOnlySpan<float> polyPickExt, ReadOnlySpan<EDtPolyFlags> filter, int grounded, Span<float> outputVector);
 
-        /// <summary>GetPathStraight, with each layer link of the corridor (a tile-seam link more than walkableClimb up or
-        /// down at both ends) as two corners at one spot, the second, on the floor it enters, flagged
-        /// <see cref="EDtPolyFlags.LayerLink"/>.</summary>
+        /// <summary>GetPathStraight, with each layer link of the corridor (a tile-seam link whose floors lie more than
+        /// walkableClimb apart at both ends) as two corners at one spot, the second, on the floor it enters, flagged
+        /// <see cref="EDtPolyFlags.LayerLink"/>, and each corner on its polygon's floor.</summary>
         public override PathfindingResult GetPathStraightLayered(Zone zone, Vector3 start, Vector3 end, EDtPolyFlags[] filters,
             Span<WrappedPathfindingNode> destination)
         {

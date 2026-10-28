@@ -410,7 +410,7 @@ DLLEXPORT dtStatus GetPolysInBox(dtNavMeshQuery *query, float center[], float po
 
 // HearthDAoC: queries for the player bots (#166) that keep a walker on its own floor. When tiles join at load, Detour
 // links a seam edge to any edge across the seam within 2 x walkableClimb at either end of their overlap (overlapSlabs,
-// DetourNavMesh.cpp:56-61), so in Jordheim small floors walled in under a ramp are linked only to the ramp 45-115 units
+// DetourNavMesh.cpp:56-61), so in Jordheim small floors walled in under a ramp are linked only to the ramp 70-152 units
 // above them (within a tile Recast links nothing over walkableClimb). The surface move is 2D
 // and enters the first linked polygon whose footprint holds its target, the floor first: player bots dropped 80 units
 // through the ramp onto such a floor, and their corridor out went back up the same seam, where the straight path's
@@ -419,23 +419,13 @@ DLLEXPORT dtStatus GetPolysInBox(dtNavMeshQuery *query, float center[], float po
 // NPCs and GameBots keep the queries above.
 constexpr unsigned short LAYER_LINK = 0x40; // run-time point flag (EDtPolyFlags.LayerLink): the upper or lower end of a layer link
 
-// The height of a polygon's edge nearest to pt (2D), from its vertices, as Detour's portals take it.
-static float EdgeHeightAt(const dtMeshTile* tile, const dtPoly* poly, const float* pt)
+// The height of a polygon's floor at pt (2D): its detail surface there, or at the nearest point of its detail edges when
+// pt lies outside it. Not its vertices': on steep ground the polygon lies tens of units off the floor, so a slope that
+// runs on across a tile seam in Snowdonia and in Gripklosa looked like two floors 38-58 units apart.
+static float FloorHeightAt(const dtNavMeshQuery* query, dtPolyRef ref, const float* pt)
 {
-	float best = FLT_MAX, height = pt[1];
-	for (int i = 0, j = poly->vertCount - 1; i < poly->vertCount; j = i++)
-	{
-		const float* vj = &tile->verts[poly->verts[j] * 3];
-		const float* vi = &tile->verts[poly->verts[i] * 3];
-		float t;
-		const float d = dtDistancePtSegSqr2D(pt, vj, vi, t);
-		if (d < best)
-		{
-			best = d;
-			height = vj[1] + (vi[1] - vj[1]) * t;
-		}
-	}
-	return height;
+	float closest[3];
+	return dtStatusSucceed(query->closestPointOnPoly(ref, pt, closest, nullptr)) ? closest[1] : pt[1];
 }
 
 // A link's portal on its polygon's edge vj-vi, clamped as dtNavMeshQuery::getPortalPoints clamps it (a private member,
@@ -457,31 +447,33 @@ static bool PassFilter(const dtQueryFilter& filter, const dtPoly* poly)
 	return (poly->flags & filter.getIncludeFlags()) != 0 && (poly->flags & filter.getExcludeFlags()) == 0;
 }
 
-// Whether the polygon across a portal lies more than walkableClimb above or below it at x, a point of the portal.
-static bool IsLayerGap(const dtMeshTile* tile, const float* x, const dtMeshTile* neiTile, const dtPoly* neiPoly)
+// Whether the floors of two polygons lie more than walkableClimb apart at x, a point of the portal between them.
+static bool IsLayerGap(const dtNavMeshQuery* query, dtPolyRef ref, dtPolyRef neiRef, const float* x, float climb)
 {
-	return dtAbs(EdgeHeightAt(neiTile, neiPoly, x) - x[1]) > tile->header->walkableClimb;
+	return dtAbs(FloorHeightAt(query, neiRef, x) - FloorHeightAt(query, ref, x)) > climb;
 }
 
-// Whether a link of a polygon is a layer link: a tile-seam link between two ground polygons across which the other
-// polygon lies more than walkableClimb above or below at both ends of the portal (a, b: the portal on the polygon's
-// edge). The same test for the move and the straight path, so that a link one walls off the other never takes. Not a
-// link inside a tile (side 0xff), nor an off-mesh connection's (edge 0xff, or to or from its polygon). In Jordheim the
-// floors walled in under a ramp are 45-115 units below it at both ends of their links.
-static bool IsLayerLink(const dtMeshTile* tile, const dtPoly* poly, const dtLink* link, const dtMeshTile* neiTile,
-	const dtPoly* neiPoly, float* a, float* b)
+// Whether a link of a polygon (ref) is a layer link: a tile-seam link between two ground polygons whose floors lie more
+// than walkableClimb apart at both ends of the portal (a, b: the portal on the polygon's edge). The same test for the
+// move and the straight path, so that a link one walls off the other never takes. Not a link inside a tile (side
+// 0xff), nor an off-mesh connection's (edge 0xff, or to or from its polygon). In Jordheim the floors walled in under a
+// ramp are 70-152 units below it at both ends of their links.
+static bool IsLayerLink(const dtNavMeshQuery* query, const dtMeshTile* tile, const dtPoly* poly, dtPolyRef ref,
+	const dtLink* link, const dtPoly* neiPoly, float* a, float* b)
 {
 	if (link->side == 0xff || link->edge >= poly->vertCount ||
 		poly->getType() != DT_POLYTYPE_GROUND || neiPoly->getType() != DT_POLYTYPE_GROUND)
 		return false;
 	LinkPortal(link, &tile->verts[poly->verts[link->edge] * 3],
 		&tile->verts[poly->verts[(link->edge + 1) % poly->vertCount] * 3], a, b);
-	return IsLayerGap(tile, a, neiTile, neiPoly) && IsLayerGap(tile, b, neiTile, neiPoly);
+	const float climb = tile->header->walkableClimb;
+	return IsLayerGap(query, ref, link->ref, a, climb) && IsLayerGap(query, ref, link->ref, b, climb);
 }
 
 // MoveAlongSurface (grounded = 0) or MoveAlongSurfaceGrounded (grounded = 1), with dtNavMeshQuery::moveAlongSurface
-// (DetourNavMeshQuery.cpp:2044-2232) copied here so that a layer link is a wall: the move slides along it as along any
-// wall. Every other link, and the rest of the search, is Detour's.
+// (DetourNavMeshQuery.cpp:2044-2232) copied here so that a layer link is a wall: the move slides along its portal as
+// along any wall, also where other links share its edge (there Detour's own move would count the edge as neither wall
+// nor way through). Every other link, and the rest of the search, is Detour's.
 DLLEXPORT dtStatus MoveAlongSurfaceLayered(dtNavMeshQuery* query, float start[], float end[], float polyPickExt[], dtPolyFlags queryFilter[], int grounded, float* outputVector)
 {
 	dtQueryFilter filter;
@@ -550,10 +542,22 @@ DLLEXPORT dtStatus MoveAlongSurfaceLayered(dtNavMeshQuery* query, float start[],
 					const dtMeshTile* neiTile = 0;
 					const dtPoly* neiPoly = 0;
 					nav->getTileAndPolyByRefUnsafe(link->ref, &neiTile, &neiPoly);
-					float a[3], b[3];
-					if (PassFilter(filter, neiPoly) && nneis < MAX_NEIS &&
-						!IsLayerLink(curTile, curPoly, link, neiTile, neiPoly, a, b))
-						neis[nneis++] = link->ref;
+					float a[3], b[3], t;
+					if (!PassFilter(filter, neiPoly))
+						continue;
+					if (!IsLayerLink(query, curTile, curPoly, curNode->id, link, neiPoly, a, b))
+					{
+						if (nneis < MAX_NEIS)
+							neis[nneis++] = link->ref;
+						continue;
+					}
+					const float distSqr = dtDistancePtSegSqr2D(end, a, b, t);
+					if (distSqr < bestDist)
+					{
+						dtVlerp(bestPos, a, b, t);
+						bestDist = distSqr;
+						bestNode = curNode;
+					}
 				}
 			}
 			else if (curPoly->neis[j])
@@ -654,12 +658,13 @@ DLLEXPORT dtStatus PathStraightLayered(dtNavMeshQuery* query, float start[], flo
 				if (tile->links[k].ref == polys[i + 1])
 					link = &tile->links[k];
 			float left[3], right[3], t;
-			if (!link || !IsLayerLink(tile, poly, link, neiTile, neiPoly, left, right))
+			if (!link || !IsLayerLink(query, tile, poly, polys[i], link, neiPoly, left, right))
 				continue; // the same floor on both sides
 			dtDistancePtSegSqr2D(from, left, right, t);
 			dtVlerp(to, left, right, t);
 			dtVcopy(top, to);
-			top[1] = EdgeHeightAt(neiTile, neiPoly, to);
+			to[1] = FloorHeightAt(query, polys[i], to);
+			top[1] = FloorHeightAt(query, polys[i + 1], to);
 		}
 		// The part polys[first..i], from 'from' to 'to', with PathStraight's flags.
 		float points[MAX_POLY * 3];
@@ -670,7 +675,22 @@ DLLEXPORT dtStatus PathStraightLayered(dtNavMeshQuery* query, float start[], flo
 		status = query->findStraightPath(from, to, polys + first, count, points, straightFlags, refs, &n, MAX_POLY, pathOptions);
 		if (dtStatusFailed(status) || n <= 0)
 			return dtStatusFailed(status) ? status : DT_FAILURE;
-		for (int k = 0; k < n + (last ? 0 : 1) && *pointCount < MAX_POLY; ++k)
+		// findStraightPath clamps its ends to the polygons' edges, at the vertices' height: the crossing keeps its floor's,
+		// and a part after a layer link starts at the link's top, given already (not again 72 units off it, in Jordheim).
+		if (!last && (straightFlags[n - 1] & DT_STRAIGHTPATH_END))
+			points[(n - 1) * 3 + 1] = to[1];
+		// Every corner on its polygon's floor, not at its vertices' height, which on steep ground lies tens of units off
+		// it: in Jordheim a corner 47 units over a floor walled in under a ramp and 50 under the ramp took the walker that
+		// reached it onto that floor, the nearer (the review). Not the walker's start, its goal, nor an off-mesh link's.
+		for (int k = first > 0 ? 1 : 0; k < n; ++k)
+		{
+			const dtMeshTile* cornerTile = 0;
+			const dtPoly* cornerPoly = 0;
+			if (refs[k] && !(straightFlags[k] & (DT_STRAIGHTPATH_START | DT_STRAIGHTPATH_END | DT_STRAIGHTPATH_OFFMESH_CONNECTION)) &&
+				dtStatusSucceed(nav->getTileAndPolyByRef(refs[k], &cornerTile, &cornerPoly)) && cornerPoly->getType() == DT_POLYTYPE_GROUND)
+				points[k * 3 + 1] = FloorHeightAt(query, refs[k], &points[k * 3]);
+		}
+		for (int k = first > 0 ? 1 : 0; k < n + (last ? 0 : 1) && *pointCount < MAX_POLY; ++k)
 		{
 			const float* point = k < n ? &points[k * 3] : top;
 			if (*pointCount > 0 && dtVequal(&pointBuffer[(*pointCount - 1) * 3], point))

@@ -118,46 +118,61 @@ public sealed class PlayerBotPathMover
         // Nor when the line to the goal runs under the floor (#166): in Jordheim the line from the top of a ramp to a goal
         // at its foot ran 25-40 units under the ramp, over a floor walled in below it, and the next step stood on that
         // floor. The corridor's grounded steps take the ramp.
-        if (!nav.HasNavmesh(zone) || remaining <= DirectStepRange &&
-            (PlayerTravelPath.HasReachedCorner(current, goal) || nav.HasLineOfSight(zone, current, goal, nav.DefaultFilters) &&
-             !RunsUnderFloor(nav, zone, current, goal, step)))
+        bool open = remaining <= DirectStepRange &&
+            (PlayerTravelPath.HasReachedCorner(current, goal) || nav.HasLineOfSight(zone, current, goal, nav.DefaultFilters));
+        if (!nav.HasNavmesh(zone) || open && (PlayerTravelPath.HasReachedCorner(current, goal) ||
+                                              !RunsUnderFloor(nav, zone, current, goal, remaining + 1, stepLength)))
         {
-            Vector3 desired = PlayerTravelPath.Advance(current, goal, step);                     // PTP:30-35
-            // The plain move keeps the height of the straight line to the goal inside a polygon, so the last 300 units
-            // follow it, not the floor. The grounded move would fix that, but arrival is judged against the goal's own
-            // height: a target hovering or swimming 80+ units above the floor would then stall the bot under it (review
-            // of 2026-10-21). Kept as is: it needs both, grounded steps and a floor-based arrival (not done).
-            // Not down a link to another floor (GetMoveAlongSurfaceLayered, as the corridor's moves, #166).
-            next = nav.GetMoveAlongSurfaceLayered(zone, current, desired, nav.DefaultFilters, false) ?? desired; // as APP:516-520
-            // As the corridor's step (#166): no step closer, and the mesh is open to the goal, so the step takes the line,
-            // where the surface moves still find the mesh.
-            if (PlayerTravelPath.NoStepCloser(current, next, goal) &&
-                nav.GetClosestPoint(zone, desired, 32, 32, 64, nav.DefaultFilters).HasValue) next = desired;
+            next = DirectStep(nav, zone, current, goal, step);
             return true;
         }
-        // With layers (#166): in Jordheim the mesh links small floors walled in under a ramp only to the ramp 45-115 units
+        // With layers (#166): in Jordheim the mesh links small floors walled in under a ramp only to the ramp 70-152 units
         // above them. Bots fell through the ramp onto them, and their way out back up the link hid its height in one
         // corner: they stood there for good. With layers the moves do not take such a link, and the corridor shows it as
         // two corners, one on each floor, that the bot follows straight up or down, as a GameBot walks its path.
-        return path.TryStep(region, zone, current, goal, step, now, nav, out next, out failure, layers: true); // PTP:73-167
+        if (path.TryStep(region, zone, current, goal, step, now, nav, out next, out failure, layers: true)) return true; // PTP:73-167
+        // Round a sag with no corridor to take, as to a goal on a mesh island the 2D ray sees: the line, as before (the
+        // review of #166: a caster bot 173 units from its target, which it reached in one step, was blocked there).
+        if (!open) return false;
+        failure = string.Empty;
+        next = DirectStep(nav, zone, current, goal, step);
+        return true;
+    }
+
+    // The step straight at the goal, within DirectStepRange in the open.
+    private static Vector3 DirectStep(IPathfindingMgr nav, Zone zone, Vector3 current, Vector3 goal, float step)
+    {
+        Vector3 desired = PlayerTravelPath.Advance(current, goal, step);                         // PTP:30-35
+        // The plain move keeps the height of the straight line to the goal inside a polygon, so the last 300 units
+        // follow it, not the floor. The grounded move would fix that, but arrival is judged against the goal's own
+        // height: a target hovering or swimming 80+ units above the floor would then stall the bot under it (review
+        // of 2026-10-21). Kept as is: it needs both, grounded steps and a floor-based arrival (not done).
+        // Not down a link to another floor (GetMoveAlongSurfaceLayered, as the corridor's moves, #166).
+        Vector3 next = nav.GetMoveAlongSurfaceLayered(zone, current, desired, nav.DefaultFilters, false) ?? desired; // as APP:516-520
+        // As the corridor's step (#166): no step closer, and the mesh is open to the goal, so the step takes the line,
+        // where the surface moves still find the mesh.
+        return PlayerTravelPath.NoStepCloser(current, next, goal) &&
+               nav.GetClosestPoint(zone, desired, 32, 32, 64, nav.DefaultFilters).HasValue ? desired : next;
     }
 
     /// <summary>Whether the straight line to the goal runs more than <see cref="FloorSag"/> under the floor the bot walks
-    /// on, somewhere on the way: the floor is followed one step at a time (grounded, on its own floor), as the bot would
-    /// walk under the line. The whole line, not the next step: judged a step at a time, the corridor and the line took
-    /// turns, one step back to a corner and one forward to the goal, until the walk was blocked (from st-final4's pocket
-    /// to (31746, 27019), #166).</summary>
-    private static bool RunsUnderFloor(IPathfindingMgr nav, Zone zone, Vector3 current, Vector3 goal, float step)
+    /// on, somewhere on the part it walks (<paramref name="walked"/>, to its stop distance): the floor is followed a step's
+    /// length at a time (grounded, on its own floor), as the bot would walk under the line. That whole part, not the next
+    /// step: judged a step at a time, the corridor and the line took turns, one step back to a corner and one forward to
+    /// the goal, until the walk was blocked (from st-final4's pocket to (31746, 27019), #166). Not past it: a caster
+    /// stopping 145 units short was sent to a corridor that had no complete way, by a sag beyond its stop (the review).
+    /// </summary>
+    private static bool RunsUnderFloor(IPathfindingMgr nav, Zone zone, Vector3 current, Vector3 goal, float walked, float spacing)
     {
-        float length = Vector3.Distance(current, goal);
+        float length = Vector3.Distance(current, goal), end = Math.Min(walked, length);
         Vector3 on = current;
-        for (float along = Math.Min(step, length); ; along = Math.Min(along + step, length))
+        for (float along = Math.Min(spacing, end); ; along = Math.Min(along + spacing, end))
         {
             Vector3 line = Vector3.Lerp(current, goal, along / length);
             if (nav.GetMoveAlongSurfaceLayered(zone, on, line, nav.DefaultFilters, true) is not Vector3 floor ||
                 Vector2.Distance(new(floor.X, floor.Y), new(line.X, line.Y)) > 1) return false;    // a wall: the step's own concern
             if (line.Z < floor.Z - FloorSag) return true;
-            if (along >= length) return false;
+            if (along >= end) return false;
             on = floor;
         }
     }
@@ -249,7 +264,7 @@ public sealed class PlayerBotPathMover
 
     /// <summary>For the logs, at a block: what the navmesh says here. The floor under the bot, the straight path's first
     /// corners toward the goal, and one step toward the first corner (the surface move, the floor under it and the line
-    /// of sight to it, as PlayerTravelPath.TryStep checks them, PTP:143-160).</summary>
+    /// of sight to it, as PlayerTravelPath.TryStep checks them with layers, PTP:143-160).</summary>
     public string Probe(Vector3 goal)
     {
         Zone zone = _player.CurrentZone;
@@ -259,13 +274,13 @@ public sealed class PlayerBotPathMover
         static string P(Vector3? v) => v is Vector3 p ? $"({p.X:0},{p.Y:0},{p.Z:0})" : "none";
         Vector3? floor = nav.GetClosestPoint(zone, here, 16, 16, 64, nav.DefaultFilters);
         WrappedPathfindingNode[] nodes = new WrappedPathfindingNode[512];   // as TryBuildCorridor (PTP:52); 8 gave BufferTooSmall/52
-        PathfindingResult result = nav.GetPathStraight(zone, here, goal, nav.DefaultFilters, nodes);
+        PathfindingResult result = nav.GetPathStraightLayered(zone, here, goal, nav.DefaultFilters, nodes);
         int count = Math.Min(result.NodeCount, nodes.Length);
         string corners = string.Join("->", nodes.Take(Math.Min(count, 4)).Select(n => P(n.Position) + (n.Flags == EDtPolyFlags.Walk ? "" : $"[{n.Flags}]")));
         Vector3? corner = nodes.Take(count).Select(n => (Vector3?)n.Position).FirstOrDefault(c => Vector3.Distance(c.Value, here) > 16);
         if (corner == null) return $"floor={P(floor)} path={result.Status}/{result.NodeCount} corners={corners}";
         Vector3 desired = PlayerTravelPath.Advance(here, corner.Value, 47);
-        Vector3? surface = nav.GetMoveAlongSurface(zone, here, desired, nav.DefaultFilters);
+        Vector3? surface = nav.GetMoveAlongSurfaceLayered(zone, here, desired, nav.DefaultFilters, false);
         Vector3? under = nav.GetClosestPoint(zone, desired, 16, 16, 64, nav.DefaultFilters);
         bool los = under.HasValue && nav.HasLineOfSight(zone, here, under.Value, nav.DefaultFilters);
         return $"floor={P(floor)} path={result.Status}/{result.NodeCount} corners={corners} step={P(desired)} " +
@@ -286,8 +301,8 @@ public sealed class PlayerBotPathMover
         if (nodes == null || !nodes.TryPeek(out WrappedPathfindingNode node)) return "queries: corner=none " + Replay(zone, current, goal);
         Vector3 desired = PlayerTravelPath.Advance(current, node.Position, step);
         return $"queries: corner={P(node.Position)}[{node.Flags}] desired={P(desired)} " +
-               $"ground={P(AutonomousNavigationSurface.MoveAlongGround(nav, zone, current, desired))} " +
-               $"surface={P(nav.GetMoveAlongSurface(zone, current, desired, nav.DefaultFilters))} " +
+               $"ground={P(nav.GetMoveAlongSurfaceLayered(zone, current, desired, nav.DefaultFilters, true))} " +
+               $"surface={P(nav.GetMoveAlongSurfaceLayered(zone, current, desired, nav.DefaultFilters, false))} " +
                $"los={nav.HasLineOfSight(zone, current, desired, nav.DefaultFilters)} " +
                $"box={P(nav.GetClosestPoint(zone, desired, 32, 32, 64, nav.DefaultFilters))} " +
                $"underfoot={P(nav.GetClosestPoint(zone, current, 2, 2, 64, nav.DefaultFilters))} " + Replay(zone, current, goal);
