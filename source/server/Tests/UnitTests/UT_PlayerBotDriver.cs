@@ -1328,13 +1328,20 @@ public sealed class UT_PlayerBotDriver
     private static (string, Vector3, int) At(string name, float x, int score) => (name, new Vector3(x, 0, 0), score);
     private static (string, Vector3, int) Add(string name, float x, int aggroRange = 500) => (name, new Vector3(x, 0, 0), aggroRange);
 
+    // The pick with no walk in (#167 C5): a bot within its stop of every candidate stands where it is, on a spot no add
+    // reaches, so CrowdingAlong counts the adds round each target only, as Crowding did.
+    private static readonly Vector3 Aside = new(0, 100_000, 0);
+    private static string Pick(IReadOnlyList<(string, Vector3, int)> candidates, IReadOnlyList<(string, Vector3, int)> adds,
+        bool uncrowdedOnly) =>
+        PlayerBotDriver.PickUncrowded(candidates, adds, uncrowdedOnly, Aside, int.MaxValue);
+
     [Test]
     public void A_crowded_candidate_gives_way_to_one_with_no_add_near_it()
     {
         var candidates = new List<(string, Vector3, int)> { At("crowded", 0, 100), At("clear", 5_000, 900) };
         var adds = new List<(string, Vector3, int)> { Add("wolf", 600) };                // 500 + 200 reaches 0
-        Assert.That(PlayerBotDriver.PickUncrowded(candidates, adds, uncrowdedOnly: false), Is.EqualTo("clear"));
-        Assert.That(PlayerBotDriver.PickUncrowded(candidates, [], uncrowdedOnly: false), Is.EqualTo("crowded"),
+        Assert.That(Pick(candidates, adds, uncrowdedOnly: false), Is.EqualTo("clear"));
+        Assert.That(Pick(candidates, [], uncrowdedOnly: false), Is.EqualTo("crowded"),
             "with no adds, the best score as before");
     }
 
@@ -1355,7 +1362,7 @@ public sealed class UT_PlayerBotDriver
     {
         var candidates = new List<(string, Vector3, int)> { At("two", 0, 100), At("one", 10_000, 900), At("one, nearer", 20_000, 800) };
         var adds = new List<(string, Vector3, int)> { Add("a", 100), Add("b", 200), Add("c", 10_100), Add("d", 20_100) };
-        Assert.That(PlayerBotDriver.PickUncrowded(candidates, adds, uncrowdedOnly: false), Is.EqualTo("one, nearer"));
+        Assert.That(Pick(candidates, adds, uncrowdedOnly: false), Is.EqualTo("one, nearer"));
     }
 
     // The 2,600-unit ring takes only an uncrowded target; with none, the 5,000-unit ring decides.
@@ -1364,10 +1371,57 @@ public sealed class UT_PlayerBotDriver
     {
         var crowded = new List<(string, Vector3, int)> { At("crowded", 0, 100) };
         var adds = new List<(string, Vector3, int)> { Add("wolf", 100) };
-        Assert.That(PlayerBotDriver.PickUncrowded(crowded, adds, uncrowdedOnly: true), Is.Null);
+        Assert.That(Pick(crowded, adds, uncrowdedOnly: true), Is.Null);
         crowded.Add(At("clear", 5_000, 900));
-        Assert.That(PlayerBotDriver.PickUncrowded(crowded, adds, uncrowdedOnly: true), Is.EqualTo("clear"));
-        Assert.That(PlayerBotDriver.PickUncrowded(new List<(string, Vector3, int)>(), adds, uncrowdedOnly: false), Is.Null);
+        Assert.That(Pick(crowded, adds, uncrowdedOnly: true), Is.EqualTo("clear"));
+        Assert.That(Pick(new List<(string, Vector3, int)>(), adds, uncrowdedOnly: false), Is.Null);
+    }
+
+    // --- the pick checks the walk in and the stand spot (#167 C5) ---
+
+    // Where the bot stands to fight its target: its stop short of the target toward the bot (a caster's 1,420 for a
+    // 1,500-unit spell), or where it is when it is that near already.
+    [Test]
+    public void The_stand_point_is_the_stop_short_of_the_target_or_where_the_bot_is()
+    {
+        Assert.That(Vector3.Distance(PlayerBotDriver.StandPoint(Vector3.Zero, new(3_000, 0, 0), 1_420), new(1_580, 0, 0)),
+            Is.LessThan(0.01f));
+        Assert.That(PlayerBotDriver.StandPoint(Vector3.Zero, new(1_000, 0, 0), 1_420), Is.EqualTo(Vector3.Zero));
+    }
+
+    // An add counts once when its reach (aggro + 200) covers the target or the walk from the bot, at (0,0), to its stand
+    // point: st-deathsB's 82 defence fights begun 2 s or more after a recovered rest were jumped on the way in (59% with
+    // adds, 17 fatal), and 16 pulls had an add's ring over the stand spot but not over the target, which is all Crowding
+    // looks at. The first row's add is 1,552 units from the target: Crowding gives 0.
+    [TestCase(3_000f, 2_920f, 1_500f, 400f, 1)] [TestCase(3_000f, 2_920f, 1_500f, 701f, 0)]
+    [TestCase(3_000f, 1_580f, 900f, -650f, 1)]                                       // a caster's stand spot
+    [TestCase(1_000f, 920f, 950f, 300f, 1)]                                          // the target and the walk: once
+    public void An_add_counts_once_when_its_reach_covers_the_target_or_the_walk_to_the_stand_point(float targetX,
+        float standX, float addX, float addY, int crowd) =>
+        Assert.That(PlayerBotDriver.CrowdingAlong("target", new Vector3(targetX, 0, 0), Vector3.Zero, new Vector3(standX, 0, 0),
+            new List<(string, Vector3, int)> { ("add", new(addX, addY, 0), 500) }), Is.EqualTo(crowd));
+
+    [Test]
+    public void A_candidate_is_not_its_own_add_on_the_walk_in_either()
+    {
+        var adds = new List<(string, Vector3, int)> { ("target", new(3_000, 0, 0), 500), ("wolf", new(1_500, 400, 0), 500) };
+        Assert.That(PlayerBotDriver.CrowdingAlong("target", new Vector3(3_000, 0, 0), Vector3.Zero, new Vector3(2_920, 0, 0),
+            adds), Is.EqualTo(1));
+    }
+
+    // The pick counts the adds along the walk in from where the bot stands to its stand point at its stop: a target
+    // behind an add gives way to one with a clear walk, and the near ring takes it no more; from beside it, the walk in
+    // is clear and its better score wins.
+    [Test]
+    public void A_target_behind_an_add_gives_way_to_one_with_a_clear_walk_in()
+    {
+        var candidates = new List<(string, Vector3, int)> { ("behind", new(3_000, 0, 0), 100), ("clear", new(0, 3_000, 0), 900) };
+        var adds = new List<(string, Vector3, int)> { ("wolf", new(1_500, 400, 0), 500) };
+        Assert.That(PlayerBotDriver.PickUncrowded(candidates, adds, false, Vector3.Zero, 80), Is.EqualTo("clear"));
+        Assert.That(PlayerBotDriver.PickUncrowded(candidates.Take(1).ToList(), adds, true, Vector3.Zero, 80), Is.Null,
+            "the near ring");
+        Assert.That(PlayerBotDriver.PickUncrowded(candidates, adds, false, new Vector3(3_000, 1_000, 0), 80),
+            Is.EqualTo("behind"));
     }
 
     // Every bot engaged with a monster reports its death; bots on one start row share monsters (runs 2-3).

@@ -93,8 +93,9 @@ Each bot thinks every 250 ms, a thin copy of the `/bot` pilot's think:
   ablative, damage shield, damage add, stat buffs and regeneration buffs, and one chant that costs no power each pulse
   (so no resist chant: the Paladin's cost power each pulse). It uses the buffs' real power, concentration and recast;
   the server's own checks decide the rest.
-- It picks a monster with no aggressive neighbours. After deaths it moves to an easier camp. It avoids what killed it
-  for 15 minutes.
+- It picks a monster with no aggressive neighbours, none within reach of the target, of its walk in, or of the spot
+  it would fight from (its spell's range for a caster, else melee). After deaths it moves to an easier camp. It avoids
+  what killed it for 15 minutes.
 - A monster within 2,000 units that has the bot as its target counts as an attacker before its first hit, so the bot
   stands up and fights it first. Before it sits, a bot within reach of an aggressive monster from its last search
   walks to the nearest spot out of that reach, 1,200 units away at most.

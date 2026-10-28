@@ -973,8 +973,9 @@ public static class PlayerBotDriver
     }
 
     // The candidates within the con cap go through the adds rule (PickUncrowded): the 2,600-unit ring takes only one with
-    // no potential add near it, the 5,000-unit ring the least crowded. The scan reaches AddScanMargin past the ring for
-    // the adds by a candidate at its edge. One over the cap is passed over, never taken (DEATHS.md A4: the old rollback
+    // no potential add near it or on the walk in to where the bot would stand at its stop (#167 C5: CrowdingAlong, from
+    // the adds this scan finds, no new one), the 5,000-unit ring the least crowded. The scan reaches AddScanMargin past
+    // the ring for the adds by a candidate at its edge; those along a walk in lie within it. One over the cap is passed over, never taken (DEATHS.md A4: the old rollback
     // reset the death steps to fit it), and the capped clock runs while the wider ring finds nothing else. An avoided
     // name is passed over too, unless the bot was sent to a camp of them (HuntAvoided).
     private static GameNPC FindWithin(PlayerBotState state, GamePlayer player, ushort radius, long now)
@@ -1006,7 +1007,8 @@ public static class PlayerBotDriver
                 if (con > cap && (safestOver == null || con < safestOver)) safestOver = con;
             }
         }
-        GameNPC best = PickUncrowded(candidates, adds, uncrowdedOnly: radius < SearchRadius);
+        GameNPC best = PickUncrowded(candidates, adds, uncrowdedOnly: radius < SearchRadius,   // #167 C5: the walk in
+            new Vector3(player.X, player.Y, player.Z), PullStop(state, player));                 //   too
         state.SearchAdds.Clear();                                                       // #167 F7: the rest spot's, read
         foreach ((GameNPC add, _, _) in adds) state.SearchAdds.Add(add);                //   live (WalksToRestSpot)
         candidates.Clear();                                                             // no other monster held past the
@@ -1026,6 +1028,18 @@ public static class PlayerBotDriver
         IsPotentialAdd(brain.AggroLevel, brain.AggroRange, player.IsObjectGreyCon(npc),
             npc.IsAttacking && npc.TargetObject is GameLiving other && other != player)
             ? brain.AggroRange : 0;
+
+    // #167 C5: the stop a pull takes (Engage's CombatStopDistance at its first think, no hit on the bot yet): the spell's
+    // with a damage spell ready to cast now (Nuke's choice, no add looked for), else melee's.
+    private static int PullStop(PlayerBotState state, GamePlayer player)
+    {
+        KnowSpells(state, player);
+        (Spell nuke, _) = ChooseNuke(state.Nukes, spell => player.GetSkillDisabledDuration(spell) <= 0 &&
+            HasPowerFor(player.MaxMana, player.Mana, spell.Power), false);
+        return CombatStopDistance(ShouldCast(nuke != null, player.ManaPercent, 0, 0), false, nuke != null && Interruptible(nuke),
+            false, player.attackComponent.AttackRange, nuke == null ? 0 : player.castingComponent.CalculateSpellRange(nuke),
+            casterHold: false);
+    }
 
     // Self-defence: the nearest monster that is hitting the bot (its AttackerTracker, as BotGroupSupport.UnderAttack
     // reads it), whatever its con and wherever the leash is. The pilot's filter alone left the bot roaming or resting
@@ -1783,11 +1797,49 @@ public static class PlayerBotDriver
         return crowd;
     }
 
+    /// <summary>Where the bot stands to fight its target (#167 C5): stop units short of the target toward the bot (Engage
+    /// stops there, CombatStopDistance), or where it is when it is that near already.</summary>
+    public static Vector3 StandPoint(Vector3 bot, Vector3 target, int stop)
+    {
+        float distance = Vector3.Distance(bot, target);
+        return distance <= stop ? bot : target + (bot - target) * (stop / distance);
+    }
+
+    /// <summary>Crowding over the bot's whole pull (#167 C5): each potential add once when its reach (aggro range +
+    /// AddMargin) covers the candidate at `at`, or the walk in from the bot (from) to its stand point (stand,
+    /// StandPoint). In st-deathsB 82 defence fights began 2 s or more after a rest that ended recovered: the bot was
+    /// jumped on its way in (59% with adds, 17 fatal); and 16 pulls had an add's ring over the stand spot but not over the
+    /// target, all Crowding looks at. The candidate itself is no add.</summary>
+    public static int CrowdingAlong<T>(T candidate, Vector3 at, Vector3 from, Vector3 stand,
+        IReadOnlyList<(T Npc, Vector3 At, int AggroRange)> adds) where T : class
+    {
+        int crowd = 0;
+        for (int i = 0; i < adds.Count; i++)                                            // no enumerator per candidate
+        {
+            (T npc, Vector3 position, int aggroRange) = adds[i];
+            float reach = aggroRange + AddMargin;
+            if (!ReferenceEquals(npc, candidate) && (Vector3.DistanceSquared(position, at) <= reach * reach ||
+                    SegmentDistanceSquared(position, from, stand) <= reach * reach))
+                crowd++;
+        }
+        return crowd;
+    }
+
+    // The squared distance from a point to the segment a-b (a point when they meet), in 3D as InAddReach's.
+    private static float SegmentDistanceSquared(Vector3 point, Vector3 a, Vector3 b)
+    {
+        Vector3 ab = b - a;
+        float length = ab.LengthSquared();
+        float t = length < 1e-6f ? 0 : Math.Clamp(Vector3.Dot(point - a, ab) / length, 0, 1);
+        return Vector3.DistanceSquared(point, a + ab * t);
+    }
+
     /// <summary>The adds rule over a ring's candidates within the con cap: the best score (TargetScore) among those with no
-    /// potential add near them; with none such, the least crowded, then the best score; null with uncrowdedOnly, so the
+    /// potential add near them or on the walk in from where the bot stands (from) to its stand point at its stop
+    /// (CrowdingAlong, #167 C5); with none such, the least crowded, then the best score; null with uncrowdedOnly, so the
     /// wider ring decides. The first of equals wins, as before.</summary>
     public static T PickUncrowded<T>(IReadOnlyList<(T Npc, Vector3 At, int Score)> candidates,
-        IReadOnlyList<(T Npc, Vector3 At, int AggroRange)> adds, bool uncrowdedOnly) where T : class
+        IReadOnlyList<(T Npc, Vector3 At, int AggroRange)> adds, bool uncrowdedOnly, Vector3 from, int stop) where T : class
     {
         T best = null;
         int bestCrowd = int.MaxValue, bestScore = int.MaxValue;
@@ -1795,7 +1847,7 @@ public static class PlayerBotDriver
         {
             (T npc, Vector3 at, int score) = candidates[i];
             if (bestCrowd == 0 && score >= bestScore) continue;                         // nothing beats a clear better one
-            int crowd = Crowding(npc, at, adds);
+            int crowd = CrowdingAlong(npc, at, from, StandPoint(from, at, stop), adds);
             if (uncrowdedOnly && crowd > 0) continue;
             if (crowd < bestCrowd || crowd == bestCrowd && score < bestScore) (best, bestCrowd, bestScore) = (npc, crowd, score);
         }
