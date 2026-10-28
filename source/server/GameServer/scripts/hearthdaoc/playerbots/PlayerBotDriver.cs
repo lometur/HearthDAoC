@@ -113,6 +113,8 @@ public sealed class PlayerBotState
     public long NextCombatPetTick;                               // #167 F1: a Theurgist's next pet at its target, and the
     public byte NoCombatPetLevel;                                //   level at which it found no such summon
     public long NextSelfBuffTick;                                // #167 F8: the next self-buff scan
+    public List<(Spell Spell, SpellLine Line)> Nukes;            // #167 F9: its damage spells (DamageSpells) at NukesLevel,
+    public int NukesLevel = -1;                                  //   built once per level and after a training
     public long NextQuickcastTick;                               // Quickcast's next try (UseQuickcast)
     public bool EngagePet;                                       // PLAYER_BOT_FIGHT pet=, heals= and qc=: a living pet at
     public int FightHeals;                                       //   the fight's first think, its heals on itself since,
@@ -712,7 +714,7 @@ public static class PlayerBotDriver
         state.NextLosTick = 0;
         state.SpellBlockedUntil = 0;                                                       // a new target clears the watch
         state.CastTarget = null;
-        (state.Spell, state.SpellLine) = found == null ? (null, null) : FindDamageSpell(player);
+        (state.Spell, state.SpellLine) = found == null ? (null, null) : Nuke(state, player, found);
     }
 
     // The candidates within the con cap go through the adds rule (PickUncrowded): the 2,600-unit ring takes only one with
@@ -1145,16 +1147,39 @@ public static class PlayerBotDriver
                 yield return (spell, line);
     }
 
-    // APP:667-692 without the quickbar, the Animist policy, the range filter (checked at cast time) and the mana check.
-    internal static (Spell, SpellLine) FindDamageSpell(GamePlayer player)
+    /// <summary>The damage spells a bot casts (#167 F9): APP:667-692's filter without the quickbar, the Animist policy and
+    /// the range filter (checked at cast time), less the ranks a GameBot never casts (BotBrain.IsOutclassedDamageSpell,
+    /// BotBrain.cs:3413): a lower rank of a kind it knows higher (Fungal Pin once it has Fungal Thistle), or one under half
+    /// the level of its best.</summary>
+    public static List<(Spell Spell, SpellLine Line)> DamageSpells(IEnumerable<(Spell Spell, SpellLine Line)> usable, int level)
+    {
+        List<(Spell Spell, SpellLine Line)> all = usable.ToList(), nukes = new();
+        List<Spell> known = all.ConvertAll(pair => pair.Spell);
+        foreach ((Spell spell, SpellLine line) in all)
+            if (spell.IsHarmful && spell.Damage > 0 && spell.Range > 0 && !spell.NeedInstrument && spell.Level <= level &&
+                !BotBrain.IsOutclassedDamageSpell(spell, known, level))
+                nukes.Add((spell, line));
+        return nukes;
+    }
+
+    /// <summary>The nuke for this cast (#167 F9), chosen at each cast choice: the bolt when it is ready (a 20-s recast:
+    /// a Shaman's Fungal Thistle, a Wizard's Flame Streak), else the best ready single-target spell (Better), else an area
+    /// one, but never one while an add stands in its radius (it would pull it). Ready: off its recast and paid for. None
+    /// ready: none, and the bot swings until one is (the old choice kept the best spell, and its cast failed on the
+    /// recast).</summary>
+    public static (Spell, SpellLine) ChooseNuke(IEnumerable<(Spell Spell, SpellLine Line)> spells, Func<Spell, bool> ready,
+        bool addInRadius)
     {
         Spell best = null;
         SpellLine bestLine = null;
-        foreach ((Spell spell, SpellLine line) in UsableSpells(player))
+        int bestRank = int.MaxValue;
+        foreach ((Spell spell, SpellLine line) in spells)
         {
-            if (!spell.IsHarmful || spell.Damage <= 0 || spell.Range <= 0 || spell.NeedInstrument || spell.Level > player.Level)
-                continue;
-            if (best == null || Better(spell, best)) { best = spell; bestLine = line; }
+            bool area = spell.Radius > 0;
+            if (area && addInRadius || !ready(spell)) continue;
+            int rank = spell.SpellType is eSpellType.Bolt ? 0 : area ? 2 : 1;
+            if (best == null || rank < bestRank || rank == bestRank && Better(spell, best))
+                (best, bestLine, bestRank) = (spell, line, rank);
         }
         return (best, bestLine);
     }
@@ -1172,8 +1197,29 @@ public static class PlayerBotDriver
     private static bool IsDamageOverTime(Spell spell) =>
         spell.SpellType is eSpellType.DamageOverTime or eSpellType.DamageOverTimeNoVariance;
 
+    // PLAYER_BOT_TRAIN's spell=: the nuke it opens a fight with, everything ready and no add.
     public static string BestDamageSpellName(GamePlayer player) =>
-        FindDamageSpell(player).Item1 is Spell s ? FormattableString.Invariant($"{s.Name.Replace(' ', '_')}:{s.Level}") : "-";
+        ChooseNuke(DamageSpells(UsableSpells(player), player.Level), _ => true, false).Item1 is Spell s
+            ? FormattableString.Invariant($"{s.Name.Replace(' ', '_')}:{s.Level}") : "-";
+
+    // #167 F9: the nuke at a cast choice, from the damage spells cached per level. An add in an area spell's radius is
+    // looked for only when an area spell would be chosen: any other monster (IsExperienceTarget) within it of the target,
+    // but one already on the bot.
+    private static (Spell, SpellLine) Nuke(PlayerBotState state, GamePlayer player, GameLiving target)
+    {
+        if (state.NukesLevel != player.Level)
+        {
+            state.Nukes = DamageSpells(UsableSpells(player), player.Level);
+            state.NukesLevel = player.Level;
+        }
+        bool Ready(Spell spell) => player.GetSkillDisabledDuration(spell) <= 0 && HasPowerFor(player.MaxMana, player.Mana, spell.Power);
+        (Spell spell, SpellLine line) = ChooseNuke(state.Nukes, Ready, false);
+        if (spell == null || spell.Radius <= 0 || target == null) return (spell, line);
+        foreach (GameNPC npc in target.GetNPCsInRadius((ushort)spell.Radius))
+            if (npc != target && npc.IsAlive && IsExperienceTarget(npc) && !(npc.IsAttacking && npc.TargetObject == player))
+                return ChooseNuke(state.Nukes, Ready, true);
+        return (spell, line);
+    }
 
     // APP:694-710 without the quickbar filter.
     private static void QueueUsableStyle(GamePlayer player)
@@ -1515,13 +1561,13 @@ public static class PlayerBotDriver
     }
 
     // #167 F1: at each cast choice a Theurgist casts a pet at its target before its damage spell, whenever it can, as a
-    // GameBot does (AutonomousPetSupport.cs:636-650); after a pet, its damage spell again. The server's own cap applies
-    // (SummonTheurgistPet.cs:67-71; 0, none, in 1.65).
+    // GameBot does (AutonomousPetSupport.cs:636-650). The server's own cap applies (SummonTheurgistPet.cs:67-71; 0, none,
+    // in 1.65). Otherwise the nuke ready now (#167 F9).
     private static void ChooseCombatSpell(PlayerBotState state, GamePlayer player, GameLiving target, long now)
     {
         (Spell pet, SpellLine petLine) = CombatPet(state, player, target, now);
         if (pet != null) (state.Spell, state.SpellLine) = (pet, petLine);
-        else if (state.Spell != null && !CountsInCastWatch(state.Spell)) (state.Spell, state.SpellLine) = FindDamageSpell(player);
+        else (state.Spell, state.SpellLine) = Nuke(state, player, target);              // #167 F9: chosen per cast
     }
 
     private static (Spell, SpellLine) CombatPet(PlayerBotState state, GamePlayer player, GameLiving target, long now)
@@ -1605,7 +1651,8 @@ public static class PlayerBotDriver
             {
                 if (PlayerBotKit.TrainTo(player, state.Kit, out string line) > 0) state.Retrains++;
                 if (Log.IsInfoEnabled) Log.Info(line);
-                if (state.Target != null) (state.Spell, state.SpellLine) = FindDamageSpell(player);   // a new spell
+                state.NukesLevel = -1;                                               // new spells (#167 F9)
+                if (state.Target != null) (state.Spell, state.SpellLine) = Nuke(state, player, state.Target);
             }
         }
         long gained = player.Experience - state.LastExperience;

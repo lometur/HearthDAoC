@@ -1719,6 +1719,62 @@ public sealed class UT_PlayerBotDriver
         Assert.That(PlayerBotDriver.BestDamageSpellName(Caster(40, [(storm, null)], [(fire, [])])), Is.EqualTo("-"));
     }
 
+    // --- the nuke per cast (#167 F9) ---
+
+    // World-DB spells (Spell, LineXSpell): a Shaman's Subterranean bolts and its direct damage, a Wizard's Pyromancy.
+    private static Spell Nuke(int id, string name, string type, int level, double damage, int range, int radius = 0) =>
+        new(new DbSpell { SpellID = id, Name = name, Type = type, Target = "Enemy", Damage = damage, Range = range,
+            Radius = radius, CastTime = 3.0 }, level);
+
+    private static readonly Spell FungalPin = Nuke(3461, "Fungal Pin", "Bolt", 1, 7, 1875),
+        FungalThistle = Nuke(3466, "Fungal Thistle", "Bolt", 20, 114, 1875),
+        FungalOoze = Nuke(3490, "Fungal Ooze", "DirectDamage", 20, 73, 1500),
+        FlameStreak = Nuke(374, "Flame Streak", "Bolt", 19, 133, 1875),
+        LesserConflagration = Nuke(357, "Lesser Conflagration", "DirectDamage", 23, 108, 1500),
+        ConcussiveBlast = Nuke(366, "Concussive Blast", "DirectDamage", 24, 87, 1500, radius: 350);
+
+    private static readonly SpellLine Subterranean = new("Subterranean Spec", "Subterranean", Specs.Subterranean, true),
+        Pyromancy = new("Pyromancy", "Pyromancy", Specs.Fire_Magic, true);
+
+    private static string NukeName(IEnumerable<Spell> spells, Func<Spell, bool> ready, bool addInRadius = false) =>
+        PlayerBotDriver.ChooseNuke(spells.Select(spell => (spell, Subterranean)), ready, addInRadius).Item1?.Name ?? "-";
+
+    [Test]
+    public void A_bot_casts_its_bolt_when_it_is_ready_else_its_best_ready_nuke()
+    {
+        // Fungal Thistle and Fungal Ooze share no timer, each a 20-s recast: the Ooze while the Thistle waits (the old
+        // choice kept the Thistle, the better spell, and the cast failed)
+        Spell[] shaman = [FungalThistle, FungalOoze];
+        Assert.That(NukeName(shaman, spell => spell != FungalThistle), Is.EqualTo("Fungal Ooze"));
+        Assert.That(NukeName(shaman, _ => true), Is.EqualTo("Fungal Thistle"));
+        Assert.That(NukeName(shaman, _ => false), Is.EqualTo("-"));                  // none ready: it swings
+        // a ready bolt before a higher, single-target spell (Better's choice): the Wizard's Flame Streak at 19
+        Spell[] wizard = [LesserConflagration, FlameStreak];
+        Assert.That(NukeName(wizard, _ => true), Is.EqualTo("Flame Streak"));
+        Assert.That(NukeName(wizard, spell => spell != FlameStreak), Is.EqualTo("Lesser Conflagration"));
+    }
+
+    [Test]
+    public void An_area_nuke_comes_after_the_single_target_ones_and_never_with_an_add_in_its_radius()
+    {
+        Spell[] wizard = [ConcussiveBlast, LesserConflagration];                       // Pyromancy at 24
+        Assert.That(NukeName(wizard, _ => true), Is.EqualTo("Lesser Conflagration"));   // not the higher area one
+        Assert.That(NukeName(wizard, spell => spell == ConcussiveBlast), Is.EqualTo("Concussive Blast"));
+        Assert.That(NukeName(wizard, spell => spell == ConcussiveBlast, addInRadius: true), Is.EqualTo("-"));
+        Assert.That(NukeName(wizard, _ => true, addInRadius: true), Is.EqualTo("Lesser Conflagration"));
+    }
+
+    [Test]
+    public void A_bots_damage_spells_leave_out_the_ranks_a_gamebot_outgrew()        // BotBrain.cs:3413
+    {
+        List<(Spell, SpellLine)> usable = [(FungalPin, Subterranean), (FungalThistle, Subterranean),
+            (FungalOoze, Subterranean), (Damage("DirectDamage", 30, 90), Subterranean)];
+        Assert.That(PlayerBotDriver.DamageSpells(usable, 20).Select(pair => pair.Spell.Name),
+            Is.EqualTo(new[] { "Fungal Thistle", "Fungal Ooze" }));                    // Pin: the Thistle outranks it; 30: above
+        Assert.That(PlayerBotDriver.DamageSpells(usable, 19).Select(pair => pair.Spell.Name),
+            Is.EqualTo(new[] { "Fungal Pin" }));
+    }
+
     // --- the healer's self-heal (DEATHS.md A6) ---
 
     private static readonly SpellLine Mending = new("Rejuvenation", "Rejuvenation", Specs.Rejuvenation, true);

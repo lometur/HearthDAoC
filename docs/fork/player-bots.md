@@ -51,6 +51,9 @@ Each bot thinks every 250 ms, a thin copy of the `/bot` pilot's think:
   stops swinging until its own swing's interrupt runs out, and it doesn't swing between casts (an instant spell does
   not mind). A pet class summons its pet and sends it in. A Theurgist casts its pets at its
   target whenever it can, as a GameBot does, and its damage spell between them.
+- Each cast it picks the damage spell ready now: its bolt when off its recast, else its best single-target spell,
+  else an area one, never an area one while another monster stands in its radius. It drops the low ranks a GameBot
+  drops. With none ready (a Shaman's two 20-s spells both on recast), it swings until one is.
 - Out of a fight it keeps its class's own self-buffs up, one cast every 5 s at most: armour factor, absorb,
   bladeturn, ablative, damage shield, damage add, stat buffs and regeneration buffs, and one chant that costs no power
   each pulse. It uses the buffs' real power, concentration and recast; the server's own checks decide the rest.
