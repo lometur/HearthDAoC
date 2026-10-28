@@ -2474,20 +2474,21 @@ public sealed class UT_PlayerBotDriver
     // living pet at the fight's first think in reach (DEATHS.md A5), and its heals on itself in the fight (A6); then qc=,
     // whether a cast in the fight went with Quickcast on; then (#167) buffs=, its self-buffs up at that first think (F8),
     // petCasts=, a Theurgist's pets cast at the target (F1), and waits=, the thinks a cast due waited for its own swing's
-    // interrupt (WaitToCast, F6).
+    // interrupt (WaitToCast, F6); then a caster's control casts, ctl=, and its steps back, kites= (F11).
     [Test]
     public void FightFormat()
     {
         Assert.That(PlayerBotDriverReport.FormatFight(new PlayerBotFight("Pbotaaaac", 40, "widow claw", 40, ConColor.YELLOW, false,
-                true, 100, 38, 100, 12, 21, 1, 9, 2, 4, 0, 0, Pet: true, Heals: 2, Quickcast: true, Buffs: 3, PetCasts: 2, Waits: 5)),
+                true, 100, 38, 100, 12, 21, 1, 9, 2, 4, 0, 0, Pet: true, Heals: 2, Quickcast: true, Buffs: 3, PetCasts: 2, Waits: 5,
+                Controls: 2, Kites: 1)),
             Is.EqualTo("PLAYER_BOT_FIGHT bot=Pbotaaaac level=40 target=\"widow claw\" targetLevel=40 con=YELLOW from=pull result=kill " +
                        "startHp=100 endHp=38 startMana=100 endMana=12 sec=21 adds=1 swings=9 notVisible=2 casts=4 lifeKills=0 rests=0 " +
-                       "pet=alive heals=2 qc=1 buffs=3 petCasts=2 waits=5"));
+                       "pet=alive heals=2 qc=1 buffs=3 petCasts=2 waits=5 ctl=2 kites=1"));
         Assert.That(PlayerBotDriverReport.FormatFight(new PlayerBotFight("Pbothaaab", 43, "empyrean guardian", 36, ConColor.BLUE, true,
                 false, 64, 51, 100, 100, 7, 2, 3, 0, 0, 3, 1)),
             Is.EqualTo("PLAYER_BOT_FIGHT bot=Pbothaaab level=43 target=\"empyrean guardian\" targetLevel=36 con=BLUE from=defence " +
                        "result=dropped startHp=64 endHp=51 startMana=100 endMana=100 sec=7 adds=2 swings=3 notVisible=0 casts=0 " +
-                       "lifeKills=3 rests=1 pet=none heals=0 qc=0 buffs=0 petCasts=0 waits=0"));
+                       "lifeKills=3 rests=1 pet=none heals=0 qc=0 buffs=0 petCasts=0 waits=0 ctl=0 kites=0"));
     }
 
     // #167: one PLAYER_BOT_REST line per rest when the bot stands: the seconds it sat and why it stood (recovered, hit,
@@ -2517,21 +2518,32 @@ public sealed class UT_PlayerBotDriver
     }
 
     // The fields PLAYER_BOT_DEATH appends after task= (its earlier fields stay as they were: runs/legcheck.py reads them),
-    // the last the names the bot avoided when it died (DEATHS.md A3), before this death's.
+    // then the names the bot avoided when it died (DEATHS.md A3), before this death's; then (#167 F4) again=, no kill
+    // since its last release, sinceRelease=, the seconds since it (-1: none this login), and ill=, the resurrection
+    // illness on at the fatal fight's start.
     [Test]
     public void DeathDetailFormat()
     {
         Assert.That(PlayerBotDriverReport.FormatDeathDetail(new PlayerBotDeathDetail(PlayerBotActivity.Fighting, 62, 14, 71, false,
-                2, 3, 0, 40, 100, 6, 1, "widow claw", 40, true, 748, Avoided: 2)),
+                2, 3, 0, 40, 100, 6, 1, "widow claw", 40, true, 748, Avoided: 2, Again: true, SinceRelease: 42, Ill: true)),
             Is.EqualTo("activity=Fighting startHp=62 fightSec=14 targetHp=71 from=pull adds=2 lifeKills=3 rests=0 sinceKillSec=40 " +
                        "mana=100 swings=6 notVisible=1 killer=\"widow claw\" killerLevel=40 killerIsTarget=True fromBind=748 " +
-                       "avoided=2"));
+                       "avoided=2 again=True sinceRelease=42 ill=True"));
         // Out of a fight, no target, no kill this life, no killer named by the Dying event, the bind in another region.
         Assert.That(PlayerBotDriverReport.FormatDeathDetail(new PlayerBotDeathDetail(PlayerBotActivity.Hunting, -1, -1, -1, true,
                 -1, 0, 2, -1, 37, -1, -1, null, 0, false, -1)),
             Is.EqualTo("activity=Hunting startHp=-1 fightSec=-1 targetHp=-1 from=defence adds=-1 lifeKills=0 rests=2 sinceKillSec=-1 " +
-                       "mana=37 swings=-1 notVisible=-1 killer=\"\" killerLevel=0 killerIsTarget=False fromBind=-1 avoided=0"));
+                       "mana=37 swings=-1 notVisible=-1 killer=\"\" killerLevel=0 killerIsTarget=False fromBind=-1 avoided=0 " +
+                       "again=False sinceRelease=-1 ill=False"));
     }
+
+    // DEATH again= and sinceRelease= (#167 F4): a death with no kill since the bot's last release; none before the first
+    // release of the login.
+    [TestCase(0L, 0, 9_000L, false, -1L)] [TestCase(5_000L, 0, 47_500L, true, 42L)] [TestCase(5_000L, 2, 47_500L, false, 42L)]
+    public void A_death_with_no_kill_since_the_last_release_is_a_death_again(long releasedAt, int lifeKills, long now, bool again,
+        long sinceRelease) =>
+        Assert.That((PlayerBotDriver.DiedAgain(releasedAt, lifeKills), PlayerBotDriver.SecondsSinceRelease(releasedAt, now)),
+            Is.EqualTo((again, sinceRelease)));
 
     private sealed class TestKiller : GameObject
     {
@@ -2555,11 +2567,11 @@ public sealed class UT_PlayerBotDriver
         const string head = "PLAYER_BOT_DEATH bot=Pbotaaaac task=False";
         Assert.That(PlayerBotDriver.DeathLine(head, detail, target, target), Is.EqualTo(head + " activity=Fighting startHp=62 fightSec=14 " +
             "targetHp=71 from=pull adds=2 lifeKills=3 rests=0 sinceKillSec=40 mana=100 swings=6 notVisible=1 killer=\"widow claw\" " +
-            "killerLevel=40 killerIsTarget=True fromBind=748 avoided=0"));
+            "killerLevel=40 killerIsTarget=True fromBind=748 avoided=0 again=False sinceRelease=-1 ill=False"));
         Assert.That(PlayerBotDriver.DeathLine(head, detail, add, target),
-            Does.EndWith(" killer=\"a wolf\" killerLevel=38 killerIsTarget=False fromBind=748 avoided=0"));
+            Does.EndWith(" killer=\"a wolf\" killerLevel=38 killerIsTarget=False fromBind=748 avoided=0 again=False sinceRelease=-1 ill=False"));
         Assert.That(PlayerBotDriver.DeathLine(head, detail, null, null),
-            Does.EndWith(" killer=\"\" killerLevel=0 killerIsTarget=False fromBind=748 avoided=0"),
+            Does.EndWith(" killer=\"\" killerLevel=0 killerIsTarget=False fromBind=748 avoided=0 again=False sinceRelease=-1 ill=False"),
             "no killer and no target: not the target");
     }
 

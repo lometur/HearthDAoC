@@ -18,21 +18,23 @@ public readonly record struct PlayerBotDriverWindow(
 /// the most attackers on a think, the swings seen and those the view gate refused, the casts, and this life's kills and
 /// sits before it; then whether it had a living pet at that first think and its heals on itself since (DEATHS.md A5,
 /// A6), and whether a cast in it went with Quickcast on; then (#167) its self-buffs up at that first think (F8), a
-/// Theurgist's pets cast at the target (F1), and the thinks a cast due waited for its own swing's interrupt (F6).</summary>
+/// Theurgist's pets cast at the target (F1), and the thinks a cast due waited for its own swing's interrupt (F6); a
+/// caster's control casts and steps back (F11).</summary>
 public readonly record struct PlayerBotFight(
     string Bot, int Level, string Target, int TargetLevel, ConColor Con, bool FromDefence, bool Killed,
     byte StartHp, byte EndHp, byte StartMana, byte EndMana, long Seconds, int Adds, int Swings, int NotVisible, int Casts,
     int LifeKills, int Rests, bool Pet = false, int Heals = 0, bool Quickcast = false, int Buffs = 0, int PetCasts = 0,
-    int Waits = 0);
+    int Waits = 0, int Controls = 0, int Kites = 0);
 
 /// <summary>What a PLAYER_BOT_DEATH line adds after its first fields (levelmatch/DEATHS.md 2); -1 for none: the fight's
 /// fields (startHp, fightSec, adds, swings, notVisible) out of a fight, targetHp with no target, sinceKillSec with no kill
 /// this life, fromBind with the bind in another region. Avoided: the names the bot avoided as it died, before this
-/// death's (DEATHS.md A3).</summary>
+/// death's (DEATHS.md A3). Again (#167 F4): no kill since its last release (DiedAgain); SinceRelease: the seconds since
+/// it, -1 with none this login; Ill: the resurrection illness on at the fatal fight's start (false out of a fight).</summary>
 public readonly record struct PlayerBotDeathDetail(
     PlayerBotActivity Activity, int StartHp, long FightSeconds, int TargetHp, bool FromDefence, int Adds, int LifeKills,
     int Rests, long SinceKillSeconds, byte Mana, int Swings, int NotVisible, string Killer, int KillerLevel,
-    bool KillerIsTarget, int FromBind, int Avoided = 0);
+    bool KillerIsTarget, int FromBind, int Avoided = 0, bool Again = false, long SinceRelease = -1, bool Ill = false);
 
 // HearthDAoC player bots (#137): one PLAYER_BOT_DRIVER line a minute, then the lever's PLAYER_BOT_WAKE line, from a thread-pool
 // timer off the game loop, and every TallyEveryWindows windows a PLAYER_BOT_TALLY line per bot (the level-matched run).
@@ -165,7 +167,7 @@ public static class PlayerBotDriverReport
         $"from={(f.FromDefence ? "defence" : "pull")} result={(f.Killed ? "kill" : "dropped")} startHp={f.StartHp} endHp={f.EndHp} " +
         $"startMana={f.StartMana} endMana={f.EndMana} sec={f.Seconds} adds={f.Adds} swings={f.Swings} notVisible={f.NotVisible} " +
         $"casts={f.Casts} lifeKills={f.LifeKills} rests={f.Rests} pet={(f.Pet ? "alive" : "none")} heals={f.Heals} " +
-        $"qc={(f.Quickcast ? 1 : 0)} buffs={f.Buffs} petCasts={f.PetCasts} waits={f.Waits}");
+        $"qc={(f.Quickcast ? 1 : 0)} buffs={f.Buffs} petCasts={f.PetCasts} waits={f.Waits} ctl={f.Controls} kites={f.Kites}");
 
     /// <summary>PLAYER_BOT_REST (#167), when a rest ends: the seconds the bot sat and why it stood (PlayerBotDriver.EndRest).</summary>
     public static string FormatRest(string bot, int level, long seconds, string why) => string.Create(CultureInfo.InvariantCulture,
@@ -176,7 +178,8 @@ public static class PlayerBotDriverReport
         $"activity={d.Activity} startHp={d.StartHp} fightSec={d.FightSeconds} targetHp={d.TargetHp} " +
         $"from={(d.FromDefence ? "defence" : "pull")} adds={d.Adds} lifeKills={d.LifeKills} rests={d.Rests} " +
         $"sinceKillSec={d.SinceKillSeconds} mana={d.Mana} swings={d.Swings} notVisible={d.NotVisible} killer=\"{d.Killer}\" " +
-        $"killerLevel={d.KillerLevel} killerIsTarget={d.KillerIsTarget} fromBind={d.FromBind} avoided={d.Avoided}");
+        $"killerLevel={d.KillerLevel} killerIsTarget={d.KillerIsTarget} fromBind={d.FromBind} avoided={d.Avoided} " +
+        $"again={d.Again} sinceRelease={d.SinceRelease} ill={d.Ill}");
 
     public static string Format(PlayerBotDriverWindow w)
     {

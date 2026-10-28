@@ -280,9 +280,12 @@ All start `PLAYER_BOT_`:
 - `FIGHT`, `DEATH`, `RELOCATE`, `IDLE`, `BLOCKED`: one per event. A stalled walk's `BLOCKED` line ends with `stall:`,
   the bot's last step and state, and `queries:`, the stalled step's own navmesh queries and a fresh corridor's step.
   `FIGHT` ends with `buffs=` (its self-buffs up when the fight began), `petCasts=` (a Theurgist's pets cast at the
-  target) and `waits=` (the thinks a cast waited for its own swing's interrupt);
-- `REST`: one per rest, when the bot stands: `sec=`, the seconds it sat, and `why=`: `recovered`, `hit`, `heal`, `pet`
-  or `buff` (a cast on itself), `died`, or `other`;
+  target), `waits=` (the thinks a cast waited for its own swing's interrupt), `ctl=` (a caster's control casts) and
+  `kites=` (its steps back). `DEATH` ends with `again=` (no kill since its last release), `sinceRelease=` (the seconds
+  since that release, -1 if none since login) and `ill=` (the resurrection illness on when the fatal fight began).
+  `BLOCKED`'s `walk=` is `target`, `roam`, `clear` (the step out after a release), `rest`, `kite` or `turret`;
+- `REST`: one per rest, when the bot stands: `sec=`, the seconds it sat, and `why=`: `recovered`, `hit`, `incoming` (a
+  monster coming at it), `heal`, `pet` or `buff` (a cast on itself), `died`, or `other`;
 - `FLOOR_STEP`: a step onto the nearest floor, with where from and to and why;
 - `REPLAN`: a stalled walk planned again, with where, the goal, the count in that walk and the stall's first step;
 - `ERRAND`: the quest bot's steps;

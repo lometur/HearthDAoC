@@ -130,6 +130,7 @@ public sealed class PlayerBotState
     public long NextKiteTick;
     public long NextAnimistStandTick;                            // #167 F10b: after a blocked walk to its stand
     public int FightControls, FightKites;                        // #167 FIGHT ctl= and kites=
+    public bool EngageIll;                                       // #167 DEATH ill=: the illness at the fight's start
     public long PetOrderTick;                                    // #167 F10c: when its pet was sent at the target
     public long NextQuickcastTick;                               // Quickcast's next try (UseQuickcast)
     public bool EngagePet;                                       // PLAYER_BOT_FIGHT pet=, heals= and qc=: a living pet at
@@ -490,6 +491,7 @@ public static class PlayerBotDriver
             state.EngageBuffs = SelfBuffsUp(player.effectListComponent.GetSpellEffects()     // FIGHT buffs= (#167 F8)
                 .Where(effect => effect.SpellHandler?.Spell != null).Select(effect => effect.SpellHandler.Spell.SpellType));
             state.EngagePet = player.ControlledBrain?.Body?.IsAlive == true;
+            state.EngageIll = Ill(player);                                              // DEATH ill= (#167 F4)
             state.FightQuickcast = false;
             if (player.ControlledBrain != null)                                         // its pet too: the pet window's
                 player.CommandNpcAttack();                                              //   attack (PetWindowHandler.cs:79-82)
@@ -1362,6 +1364,13 @@ public static class PlayerBotDriver
             state.Killer = dying.Killer;
     }
 
+    /// <summary>DEATH again= (#167 F4): a death with no kill since the bot's last release (releasedAt, 0 with none this
+    /// login), the measure of the loop F4 ends.</summary>
+    public static bool DiedAgain(long releasedAt, int lifeKills) => releasedAt != 0 && lifeKills == 0;
+
+    /// <summary>DEATH sinceRelease= (#167 F4): the seconds since the last release, -1 with none this login.</summary>
+    public static long SecondsSinceRelease(long releasedAt, long now) => releasedAt == 0 ? -1 : (now - releasedAt) / 1000;
+
     /// <summary>The DEATH line waits a think for its killer: the bot was killed in this tick's timer phase (a bolt or an
     /// arrow lands from a timer, BoltSpellHandler.cs:153-165, AttackAction.cs:364-365), so the reaper's Dying event that
     /// names the killer comes later in the tick (GameLiving.cs:1987-1988, GameLoop.cs:149-159).</summary>
@@ -1896,7 +1905,8 @@ public static class PlayerBotDriver
             inFight ? state.FightAdds : -1, state.LifeKills, state.LifeRests,
             state.LastKillTick > state.AliveSince ? (now - state.LastKillTick) / 1000 : -1, PowerPercent(player.MaxMana, player.ManaPercent),
             inFight ? state.Swings : -1, inFight ? state.NotVisible : -1, null, 0, false, fromBind,   // the killer: DeathLine
-            AvoidedCount(state.AvoidUntil, now));                                          // this death's come after
+            AvoidedCount(state.AvoidUntil, now), DiedAgain(state.ReleasedAt, state.LifeKills),     // this death's come after
+            SecondsSinceRelease(state.ReleasedAt, now), inFight && state.EngageIll);       // #167 F4
         string head = $"PLAYER_BOT_DEATH bot={player.Name} level={player.Level} at=({player.X},{player.Y},{player.Z}) " +
                       $"zone={player.CurrentZone?.ID} {fight} attackers={state.Attackers} deathSteps={state.DeathSafetySteps} " +
                       $"aliveSec={(now - state.AliveSince) / 1000} task={state.Task != null}";
@@ -1915,7 +1925,8 @@ public static class PlayerBotDriver
             ConLevels.GetConColor(player.GetConLevel(target)), state.FromDefence, killed, state.EngageHealth, player.HealthPercent,
             state.EngageMana, PowerPercent(player.MaxMana, player.ManaPercent), (now - state.EngagedSince) / 1000, state.FightAdds,
             state.Swings, state.NotVisible, state.FightCasts, state.LifeKills, state.LifeRests, state.EngagePet,
-            state.FightHeals, state.FightQuickcast, state.EngageBuffs, state.FightPetCasts, state.FightWaits)));
+            state.FightHeals, state.FightQuickcast, state.EngageBuffs, state.FightPetCasts, state.FightWaits,
+            state.FightControls, state.FightKites)));
     }
 
     // APP:585-624, changed: every 10 s, no inventory count, no saves; after 15 minutes with no progress, back to the
