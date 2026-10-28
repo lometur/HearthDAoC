@@ -2009,16 +2009,19 @@ public sealed class UT_PlayerBotDriver
 
     // --- the pet leads (#167 F10c) ---
 
+    // An owner that anything is hitting never holds (the GameBot's LetMainPetLead needs an owner out of combat,
+    // AutonomousPetSupport.cs:913): an add on it while the pet has not drawn the target left it idle for up to 4 s.
     [Test]
     public void The_owner_holds_its_nuke_until_the_target_is_on_its_pet_or_4_s_pass()
     {
-        // petAlive, targetOnPet, targetOnBot, sinceOrderMs
-        Assert.That(PlayerBotDriver.PetLeads(true, false, false, 0, 4_000), Is.True);       // the pet just sent in
-        Assert.That(PlayerBotDriver.PetLeads(true, false, false, 3_999, 4_000), Is.True);
-        Assert.That(PlayerBotDriver.PetLeads(true, false, false, 4_000, 4_000), Is.False);  // 4 s: the owner nukes
-        Assert.That(PlayerBotDriver.PetLeads(true, true, false, 500, 4_000), Is.False);     // on the pet: nuke
-        Assert.That(PlayerBotDriver.PetLeads(false, false, false, 500, 4_000), Is.False);   // no pet to lead
-        Assert.That(PlayerBotDriver.PetLeads(true, false, true, 500, 4_000), Is.False);     // hitting the owner: no wait
+        // petAlive, targetOnPet, targetOnBot, beingHit, sinceOrderMs
+        Assert.That(PlayerBotDriver.PetLeads(true, false, false, false, 0, 4_000), Is.True);       // the pet just sent in
+        Assert.That(PlayerBotDriver.PetLeads(true, false, false, false, 3_999, 4_000), Is.True);
+        Assert.That(PlayerBotDriver.PetLeads(true, false, false, false, 4_000, 4_000), Is.False);  // 4 s: the owner nukes
+        Assert.That(PlayerBotDriver.PetLeads(true, true, false, false, 500, 4_000), Is.False);     // on the pet: nuke
+        Assert.That(PlayerBotDriver.PetLeads(false, false, false, false, 500, 4_000), Is.False);   // no pet to lead
+        Assert.That(PlayerBotDriver.PetLeads(true, false, true, false, 500, 4_000), Is.False);     // the target on the owner
+        Assert.That(PlayerBotDriver.PetLeads(true, false, false, true, 500, 4_000), Is.False);     // an add hitting it
     }
 
     // --- the class's own self-buffs (#167 F8) ---

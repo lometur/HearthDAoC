@@ -446,7 +446,8 @@ public static class PlayerBotDriver
         if (player.IsCasting) return;
         GameNPC pet = player.ControlledBrain?.Body;
         if (action is not PlayerBotCombatAction.Swing && PetLeads(pet?.IsAlive == true, pet != null && target.TargetObject == pet,
-                target.TargetObject == player, now - state.PetOrderTick, PetLeadMilliseconds))
+                target.TargetObject == player, Attacker(state, player, now, anyHitter: true) != null, now - state.PetOrderTick,
+                PetLeadMilliseconds))
         {
             player.attackComponent.StopAttack();                                        // the pet leads (#167 F10c)
             state.Activity = PlayerBotActivity.Fighting;
@@ -635,9 +636,11 @@ public static class PlayerBotDriver
 
     /// <summary>The pet leads (#167 F10c, our own rule): after sending its pet in, the owner holds its nukes until the
     /// target is on the pet or maxWaitMs pass, so the pet takes the monster and the owner is not hit. The GameBot holds
-    /// one pulse only (AutonomousPetSupport.cs:888-921) and never while the target is on it (:913): nor does the bot.</summary>
-    public static bool PetLeads(bool petAlive, bool targetOnPet, bool targetOnBot, long sinceOrderMs, long maxWaitMs) =>
-        petAlive && !targetOnPet && !targetOnBot && sinceOrderMs < maxWaitMs;
+    /// one pulse only (AutonomousPetSupport.cs:888-921) and never while it is in combat (:913): nor does the bot while
+    /// the target is on it or anything is hitting it (an add), which it fights.</summary>
+    public static bool PetLeads(bool petAlive, bool targetOnPet, bool targetOnBot, bool beingHit, long sinceOrderMs,
+        long maxWaitMs) =>
+        petAlive && !targetOnPet && !targetOnBot && !beingHit && sinceOrderMs < maxWaitMs;
 
     /// <summary>Whether a cast counts in the cast watch (WatchCast): a damage spell. A summon's pet hurts the target only
     /// once it reaches it, so three summons in a row would read as fruitless and block the bot's spells (#167 F1).</summary>
