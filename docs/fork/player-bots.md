@@ -138,20 +138,22 @@ registered, test it in game. The mover:
   seam link whose floors lie more than a climb (28.8 units) apart at both ends of its portal as a change of floor: the
   surface moves don't take it, and the corridor gives it as two corners at one spot, one on each floor. A floor is the
   polygon's detail surface, not its vertices' height, which on steep ground lies tens of units off it, and the
-  corridor puts each of its corners on its floor (a corner 47 units over a walled-in floor took a bot onto that
-  floor). Where the floors on the two sides of a corner part, the corner keeps the vertices' height, as Detour gives
-  it: in Gripklosa one tile's floor drops 170 units in the middle of a seam where the other's doesn't, and the corner
-  sank into the slope. The bot goes straight from where it reached the first corner (up to 32 units across) to the
-  second, through the ramp if need be, as on a floor link, and steps straight at its goal only once it stands on the
-  second. That corner counts as reached only within 24 units of its height and, once the bot is on the climb, only at
-  the corner itself: on the way down, 22.6 units above the foot, a bot took it as reached and walked back onto the
-  ramp it came from. Within 300 units of its goal the bot takes the corridor instead of the straight line when the
-  line runs more than 24 units under the floor, or meets a wall or a link to another floor, before the bot would stop:
-  the line of sight is 2D and sees through such a link, and there direct and corridor steps took turns, back and forth
-  for up to 45 seconds. With no corridor the walk ends: the line would take the bot through the floor. A walk whose
-  corridor ends where the bot stands, its goal off that floor (a roam goal on a floor straight under the bot, with no
-  way down), ends at once: 6 such walks stood 3 seconds each and ended stalled. Such links are rare (in the eight
-  zones replayed, 0-126 of 1,186-202,142 seam links), and NPCs and GameBots keep Detour's own queries.
+  corridor puts each of its corners on a floor (a corner 47 units over a walled-in floor took a bot onto that floor):
+  its polygon's, or, where the floors on the two sides of the corner part and Detour's vertices lie on the floor
+  before it, that one. In Gripklosa one tile's floor drops 170 units in the middle of a seam where the other's
+  doesn't, and the corner sank into the slope; left at the vertices' height, corners at two other such seams lay 47-65
+  units off every floor, and a bot went back and forth under one. The bot goes straight from where it reached the
+  first corner (up to 32 units across) to the second, through the ramp if need be, as on a floor link, and steps
+  straight at its goal only once it stands on the second. That corner counts as reached only within 24 units of its
+  height and, once the bot is on the climb, only at the corner itself: on the way down, 22.6 units above the foot, a
+  bot took it as reached and walked back onto the ramp it came from. Within 300 units of its goal the bot takes the
+  corridor instead of the straight line when the line runs more than 24 units under the floor, or meets a wall or a
+  link to another floor, before the bot would stop: the line of sight is 2D and sees through such a link, and there
+  direct and corridor steps took turns, back and forth for about 15 seconds, until the churn watch planned the walk
+  again. With no corridor the walk ends: the line would take the bot through the floor. A walk whose corridor ends
+  where the bot stands, its goal off that floor (a roam goal on a floor straight under the bot, with no way down),
+  ends at once: 6 such walks stood 3 seconds each and ended stalled. Such links are rare (in the eight zones replayed,
+  0-126 of 1,186-202,142 seam links), and NPCs and GameBots keep Detour's own queries.
 - within 300 units of its goal, walks straight at it only with a clear line of sight, or within a corner's reach (32
   units across), where the corridor has dropped its last corner; otherwise it follows the corridor (a bot crept along
   a wall 267 units from its target).

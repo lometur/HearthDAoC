@@ -97,6 +97,21 @@ public class UT_PlayerBotWalkReplay
         {
             Vector3 stall = new(282187.1f, 280977.1f, 4229.36f), target = new(282046, 281204, 4239);
             Assert.That(UT_PlayerBotDriver.Walk(nav, region, zone, stall, target, keepExact: true), Is.InRange(1, 40));
+
+            // The layered corridor (#166) where the floors on the two sides of a seam part: at one seam a tile's floor drops
+            // 170 units in the middle of it, and the corner there stays on the slope the bot walks down, not at the drop's
+            // foot. At another, a corner at the vertices' height lay 68 units over the floor, and the bot went back and
+            // forth under it for 52 steps.
+            var corners = new WrappedPathfindingNode[64];
+            PathfindingResult down = nav.GetPathStraightLayered(zone, new(302508.3f, 275732.9f, 11465.6f), new(302170.2f, 275883.3f, 11711.7f),
+                nav.DefaultFilters, corners);
+            int k = Array.FindIndex(corners, 0, down.NodeCount,
+                n => Vector2.Distance(new(n.Position.X, n.Position.Y), new(302489.6f, 275741.2f)) < 1);
+            Assert.That(k, Is.InRange(1, down.NodeCount - 2), "the corner at the drop");
+            Assert.That(corners[k].Position.Z, Is.InRange(corners[k + 1].Position.Z, corners[k - 1].Position.Z), "on the slope");
+            Vector3 under = new(283424.9f, 289390.7f, 8300.9f), beyond = new(283031.2f, 289587.8f, 8373.9f);
+            Assert.That(UT_PlayerBotDriver.Walk(nav, region, zone, under, beyond, keepExact: true, blockEnds: true), Is.InRange(1, 20));
+            Assert.That(LayeredQueriesRan(), Is.True, "lib/Detour has the layer-aware queries");
         });
 
     // st-replan: in Vendo Caverns Pbotmaaab's corridor turned round a wall by two corners 13 and 20 units from it. Both
@@ -152,7 +167,7 @@ public class UT_PlayerBotWalkReplay
             // floor (28); the top of the link out of a floor walled in under another part of the city lay 72 units under
             // the floor it leads onto, and the bot stalled 56 units under that floor, where its replan found no path; and
             // a direct step from the top of a link left that corner queued, and each corridor step after went back to it
-            // (72 steps). By two other links the direct steps, the line of sight seeing through the link, and the corridor
+            // (73 steps). By two other links the direct steps, the line of sight seeing through the link, and the corridor
             // took turns, back and forth to the end (400 steps), the corridor's next corner left behind the bot.
             foreach ((Vector3 from, Vector3 goal, int most) in new[] {
                 (new Vector3(31976.0f, 27124.0f, 8829.8f), new Vector3(32364, 27658, 8766), 34),

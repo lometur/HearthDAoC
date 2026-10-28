@@ -1160,6 +1160,26 @@ public sealed class UT_PlayerBotDriver
         Assert.That(PlayerBotPathMover.Arrived(position, goal, 20), Is.True);
     }
 
+    // Near its goal too, the climb goes on to the link's top in whole steps: they head for the top, not the goal, and cut
+    // to the goal's distance they crept 2-8 units a step (the third review of #166).
+    [Test]
+    public void APlayerBotClimbsALinkNearItsGoalInWholeSteps()
+    {
+        var (region, zone) = World();
+        var mesh = new SeamMesh();
+        var path = new PlayerTravelPath();
+        Vector3 position = Vector3.Zero, goal = new(50, 0, 60);
+        var climb = new List<Vector3>();
+        for (int tick = 0; tick < 10 && !PlayerBotPathMover.Arrived(position, goal, 20); tick++)
+        {
+            Assert.That(PlayerBotPathMover.TryComputeNext(mesh, region, zone, path, position, goal, 20, 47.75f, tick * 250,
+                out position, out string failure), Is.True, failure);
+            if (position.X == 30) climb.Add(position);
+        }
+        Assert.That(climb, Has.Count.EqualTo(3), "to the seam, up it, onto its top");
+        Assert.That(climb[^1], Is.EqualTo(new Vector3(30, 0, 60)));
+    }
+
     // A ramp (Z 60) over a floor walled in under it (Z 0, from X 200 to 300) that the mesh links to it only at tile seams,
     // as in Jordheim (#166). Detour's plain surface move is 2D: from the ramp, toward a point over that floor, it enters
     // the floor, the first linked polygon whose footprint holds the point; the layered one keeps to the ramp. The corridor
@@ -1211,7 +1231,8 @@ public sealed class UT_PlayerBotDriver
         public float Height;
         public int Searches;
         public bool NoWay;
-        public float Link = float.MaxValue;     // a link to another floor across the hill's line here: the floor walk stops at it
+        public float Link = float.MaxValue;     // a link to another floor across the hill's line here: the layered moves stop at it
+        public float Edge = float.MaxValue;     // from here on the line runs along a polygon's border edge: no grounded move ends there
         public override bool HasNavmesh(Zone zone) => true;
         private Vector3 On(Vector3 p) => new(p.X, p.Y, p.X >= 100 && p.X <= 200 ? Height : 0);
         public override PathfindingResult GetPathStraight(Zone zone, Vector3 start, Vector3 end, EDtPolyFlags[] filters,
@@ -1224,8 +1245,11 @@ public sealed class UT_PlayerBotDriver
             return new(PathfindingStatus.PathFound, 2);
         }
         public override Vector3? GetMoveAlongSurface(Zone zone, Vector3 start, Vector3 end, EDtPolyFlags[] filters) => end;
-        public override Vector3? GetMoveAlongSurfaceLayered(Zone zone, Vector3 start, Vector3 end, EDtPolyFlags[] filters, bool grounded) =>
-            grounded ? On(start.X < Link && end.X > Link ? new(Link, end.Y, end.Z) : end) : end;
+        public override Vector3? GetMoveAlongSurfaceLayered(Zone zone, Vector3 start, Vector3 end, EDtPolyFlags[] filters, bool grounded)
+        {
+            Vector3 to = start.X < Link && end.X > Link ? new(Link, end.Y, end.Z) : end;
+            return !grounded ? to : to.X >= Edge ? null : On(to);
+        }
         public override Vector3? GetClosestPoint(Zone zone, Vector3 position, float xRange, float yRange, float zRange,
             EDtPolyFlags[] filters) => On(position);
         public override bool HasLineOfSight(Zone zone, Vector3 start, Vector3 end, EDtPolyFlags[] filters) => true;
@@ -1244,13 +1268,27 @@ public sealed class UT_PlayerBotDriver
 
     // A link to another floor on the line, 100 units on, which the 2D ray sees through: where the floor walk meets it before
     // the bot stops, it takes the corridor. In Jordheim the line and the corridor took turns by such links, the direct
-    // steps leaving the corridor's next corner behind the bot, back and forth for up to 45 seconds (the review of #166).
+    // steps leaving the corridor's next corner behind the bot, back and forth for about 15 seconds, until the churn watch
+    // planned the walk again (the review of #166).
     [TestCase(0, 1)] [TestCase(200, 0)]
     public void TheDirectStepTakesTheCorridorWhereTheLineLeavesTheFloor(int stop, int searches)
     {
         var (region, zone) = World();
         var mesh = new HillMesh { Link = 100 };
         Assert.That(PlayerBotPathMover.TryComputeNext(mesh, region, zone, new PlayerTravelPath(), Vector3.Zero, new(280, 0, 0), stop, 47.75f, 0,
+            out _, out string failure), Is.True, failure);
+        Assert.That(mesh.Searches, Is.EqualTo(searches));
+    }
+
+    // From 50 units on, the line runs along a polygon's border edge, where no grounded move ends though nothing blocks the
+    // way: the bot steps straight on. Taken as a wall, it stalled bots under targets raised over the floor by such an edge
+    // (the third review of #166). A link on the edge, where the plain move stops too, still takes the corridor.
+    [TestCase(float.MaxValue, 0)] [TestCase(100f, 1)]
+    public void TheDirectStepGoesOnAlongABorderEdgeButNotOverALink(float link, int searches)
+    {
+        var (region, zone) = World();
+        var mesh = new HillMesh { Edge = 50, Link = link };
+        Assert.That(PlayerBotPathMover.TryComputeNext(mesh, region, zone, new PlayerTravelPath(), Vector3.Zero, new(280, 0, 0), 0, 47.75f, 0,
             out _, out string failure), Is.True, failure);
         Assert.That(mesh.Searches, Is.EqualTo(searches));
     }
