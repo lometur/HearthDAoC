@@ -453,6 +453,227 @@ public sealed class UT_PlayerBotDriver
             Floor(start, 32, 32, 64) is float f && Vector2.Distance(new(On(f, end).X, On(f, end).Y), new(end.X, end.Y)) < 0.01f;
     }
 
+    // A ledge (Z 40 from Y 100 on) that the lower floor (Z 0) reaches only by the ramp at X 200 or more. A corridor
+    // planned from the start (X < 10) runs over the ledge's edge at X 150, which no step crosses; one planned from
+    // anywhere else goes by the ramp.
+    private sealed class LedgeMesh : PathfindingMgrBase
+    {
+        public override bool HasNavmesh(Zone zone) => true;
+        private static float Floor(float y) => y >= 100 ? 40 : 0;
+        private static bool Crosses(Vector3 a, Vector3 b) => (a.Y < 100) != (b.Y < 100) && Math.Min(a.X, b.X) < 195;
+        public override PathfindingResult GetPathStraight(Zone zone, Vector3 start, Vector3 end,
+            EDtPolyFlags[] filters, Span<WrappedPathfindingNode> destination)
+        {
+            float x = start.X < 10 ? 150 : 200;
+            Vector3[] route = { start, new(x, 90, 0), new(x, 110, 40), end };
+            for (int i = 0; i < route.Length; i++) destination[i] = new(route[i], EDtPolyFlags.Walk);
+            return new(PathfindingStatus.PathFound, route.Length);
+        }
+        public override Vector3? GetMoveAlongSurface(Zone zone, Vector3 start, Vector3 end, EDtPolyFlags[] filters) =>
+            Crosses(start, end) ? new(end.X, 99, 0) : new(end.X, end.Y, Floor(end.Y));
+        public override Vector3? GetClosestPoint(Zone zone, Vector3 position, float xRange, float yRange, float zRange,
+            EDtPolyFlags[] filters) => Math.Abs(position.Z - Floor(position.Y)) <= zRange ? new(position.X, position.Y, Floor(position.Y)) : null;
+        public override bool HasLineOfSight(Zone zone, Vector3 start, Vector3 end, EDtPolyFlags[] filters) => !Crosses(start, end);
+    }
+
+    // Corners overhead at both ends of a lane, which no step climbs: a corridor planned from the lane's west half runs
+    // to X 100 and up, one planned from its east half to X 0 and up.
+    private sealed class OverheadMesh : PathfindingMgrBase
+    {
+        public override bool HasNavmesh(Zone zone) => true;
+        public override PathfindingResult GetPathStraight(Zone zone, Vector3 start, Vector3 end,
+            EDtPolyFlags[] filters, Span<WrappedPathfindingNode> destination)
+        {
+            float x = start.X < 50 ? 100 : 0;
+            Vector3[] route = { start, new(x, 0, 0), new(x, 0, 200), end };
+            for (int i = 0; i < route.Length; i++) destination[i] = new(route[i], EDtPolyFlags.Walk);
+            return new(PathfindingStatus.PathFound, route.Length);
+        }
+        public override Vector3? GetMoveAlongSurface(Zone zone, Vector3 start, Vector3 end, EDtPolyFlags[] filters) =>
+            new(end.X, end.Y, 0);
+        public override Vector3? GetClosestPoint(Zone zone, Vector3 position, float xRange, float yRange, float zRange,
+            EDtPolyFlags[] filters) => Math.Abs(position.Z) <= zRange ? new(position.X, position.Y, 0) : null;
+        public override bool HasLineOfSight(Zone zone, Vector3 start, Vector3 end, EDtPolyFlags[] filters) => end.Z == 0;
+    }
+
+    // st-fix6 (#166): most stalls left had one shape, the corridor's next corner on another level than the bot (a ramp
+    // above it), while a fresh corridor from the same spot walked 48-57 units on. After 3 seconds the walk ended blocked
+    // and the bot gave up its goal. A second without a step plans the corridor again from where the bot stands, at most
+    // twice a walk, and it walks on to the same goal.
+    [Test]
+    public void AStalledWalkPlansAgainFromHereAndKeepsItsGoal()
+    {
+        var (region, zone) = World();
+        Assert.That(Walk(new LedgeMesh(), region, zone, Vector3.Zero, new(150, 150, 40), keepExact: true, blockEnds: true),
+            Is.InRange(1, 200));
+
+        // The rule itself: a plan again at ReplanSteps, blocked at StallSteps.
+        Vector3 goal = new(150, 150, 40);
+        var path = new PlayerTravelPath();
+        var stall = new PlayerBotStallWatch();
+        long now = 0;
+        bool Rebuilt() => path.TryStep(region, zone, Vector3.Zero, goal, 1, now, new LedgeMesh(), out _, out _) && PathNodes(path) > 0;
+        bool StillRun(Vector3 toward)
+        {
+            bool any = false;
+            for (int step = 1; step <= PlayerBotPathMover.ReplanSteps; step++)
+            {
+                stall.Toward(toward, now += 250);
+                stall.Still(path, out bool replanned);
+                any |= replanned;
+            }
+            return any;
+        }
+        bool Run()
+        {
+            Assert.That(Rebuilt(), Is.True, "a corridor to plan again");
+            return StillRun(goal);
+        }
+        Assert.That(Rebuilt(), Is.True);
+        for (int step = 1; step < PlayerBotPathMover.StallSteps; step++)
+        {
+            stall.Toward(goal, now += 250);
+            Assert.That(stall.Still(path, out bool replanned), Is.False, $"step {step}");
+            Assert.That(replanned, Is.EqualTo(step == PlayerBotPathMover.ReplanSteps), $"replanned (step {step})");
+            Assert.That(PathNodes(path) == 0, Is.EqualTo(step >= PlayerBotPathMover.ReplanSteps), $"planned again (step {step})");
+        }
+        stall.Toward(goal, now += 250);
+        Assert.That(stall.Still(path, out _), Is.True, "blocked");
+
+        // ReplansPerWalk (2) a walk: after a step that moved, the walk plans again once more, then not.
+        stall.Reset();
+        Assert.That(StillRun(goal), Is.True, "first");
+        stall.Moved();
+        Assert.That(Run(), Is.True, "second");
+        stall.Moved();
+        Assert.That(Run(), Is.False, "third");
+        Assert.That(PathNodes(path), Is.GreaterThan(0), "the corridor kept");
+
+        // A new walk counts afresh: a goal that jumps more than 64 units, a pause of more than a second in the steps, or
+        // a walk that ended (Reset: arrived or blocked). A goal that drifts on with the steps is the same walk.
+        foreach ((string what, Action start) in new (string, Action)[]
+                 {
+                     ("a goal 65 units on", () => goal += new Vector3(65, 0, 0)),
+                     ("a pause", () => now += PlayerBotChurnWatch.PauseMilliseconds + 1),
+                     ("an ended walk", () => stall.Reset()),
+                 })
+        {
+            stall.Moved();
+            Assert.That(Run(), Is.False, $"spent before {what}");
+            stall.Moved();
+            start();
+            Assert.That(Run(), Is.True, what);
+            stall.Moved();
+            Assert.That(Run(), Is.True, $"{what}: its second");
+        }
+        stall.Moved();
+        foreach (int drift in new[] { 60, 60, 60 }) { goal += new Vector3(drift, 0, 0); stall.Toward(goal, now += 250); }
+        Assert.That(Run(), Is.False, "a drifting goal");
+
+        // A target that runs 65 units a step while the bot stands still: the still steps count on, and the walk ends
+        // blocked as any other.
+        stall.Reset();
+        for (int step = 1; step < PlayerBotPathMover.StallSteps; step++)
+        {
+            stall.Toward(goal += new Vector3(65, 0, 0), now += 250);
+            Assert.That(stall.Still(path, out _), Is.False, $"a running target (step {step})");
+        }
+        stall.Toward(goal += new Vector3(65, 0, 0), now += 250);
+        Assert.That(stall.Still(path, out _), Is.True, "a running target: blocked");
+    }
+
+    // A floor at Z 0 whose surface moves stop at the start within MoveBand of the polygon edge at X 0, and whose ray is
+    // blocked from within RayBand of it; both from over the floor too.
+    private sealed class PolygonEdgeMesh : PathfindingMgrBase
+    {
+        public float MoveBand, RayBand;
+        public override bool HasNavmesh(Zone zone) => true;
+        public override PathfindingResult GetPathStraight(Zone zone, Vector3 start, Vector3 end,
+            EDtPolyFlags[] filters, Span<WrappedPathfindingNode> destination)
+        {
+            destination[0] = new(start, EDtPolyFlags.Walk);
+            destination[1] = new(end, EDtPolyFlags.Walk);
+            return new(PathfindingStatus.PathFound, 2);
+        }
+        public override Vector3? GetMoveAlongSurface(Zone zone, Vector3 start, Vector3 end, EDtPolyFlags[] filters) =>
+            Math.Abs(start.X) < MoveBand || start.Z > 1 ? start : new(end.X, end.Y, 0);
+        public override Vector3? GetClosestPoint(Zone zone, Vector3 position, float xRange, float yRange, float zRange,
+            EDtPolyFlags[] filters) => Math.Abs(position.Z) <= zRange ? new(position.X, position.Y, 0) : null;
+        public override bool HasLineOfSight(Zone zone, Vector3 start, Vector3 end, EDtPolyFlags[] filters) =>
+            Math.Abs(start.X) >= RayBand && start.Z <= 1;
+    }
+
+    // st-final2 (#166): a bot stood for minutes on a polygon edge in Snowdonia, where Detour took a polygon that led
+    // nowhere: its moves stopped at the start and its ray was blocked (117 of 507 starts within 0.06 units of the spot).
+    // Further down it floated over the floor after a corridor-line step, and no move started there either. The moves
+    // and the ray are taken again from the floor under the walker, half a unit on toward the step.
+    [Test]
+    public void AWalkerOnAPolygonEdgeOrOverTheFloorStepsOn()
+    {
+        var (region, zone) = World();
+        // The moves stop only on the edge, but the ray is blocked half a unit on too: the move taken again walks it on.
+        var moves = new PolygonEdgeMesh { MoveBand = 0.01f, RayBand = 0.6f };
+        foreach (Vector3 start in new[] { Vector3.Zero, new Vector3(0, 0, 19) })
+            Assert.That(Walk(moves, region, zone, start, new(1000, 0, 0), keepExact: true, blockEnds: true),
+                Is.InRange(1, 200), $"the move again, from {start}");
+        // The moves stop half a unit on too, the ray only on the edge: the floor fallback, its ray from the floor, does.
+        var ray = new PolygonEdgeMesh { MoveBand = 0.6f, RayBand = 0.01f };
+        Assert.That(Walk(ray, region, zone, Vector3.Zero, new(1000, 0, 0), keepExact: true, blockEnds: true),
+            Is.InRange(1, 200), "the ray from the floor");
+    }
+
+    // A wall along Y 10 from X -5 east, with the corridor round its west end: a corner 11.7 units from the start (by the
+    // wall's end), then one 104 units off behind the wall. No step or line of sight crosses the wall.
+    private sealed class WallEndMesh : PathfindingMgrBase
+    {
+        private static readonly Vector3 End = new(-6, 10, 0), Beyond = new(100, 30, 0);
+        public override bool HasNavmesh(Zone zone) => true;
+        private static bool Crosses(Vector3 a, Vector3 b)
+        {
+            if ((a.Y < 10) == (b.Y < 10)) return false;
+            float x = a.X + (10 - a.Y) / (b.Y - a.Y) * (b.X - a.X);
+            return x >= -5;
+        }
+        public override PathfindingResult GetPathStraight(Zone zone, Vector3 start, Vector3 end,
+            EDtPolyFlags[] filters, Span<WrappedPathfindingNode> destination)
+        {
+            Vector3[] route = start.Y < 10 ? new[] { start, End, Beyond, end } : new[] { start, Beyond, end };
+            for (int i = 0; i < route.Length; i++) destination[i] = new(route[i], EDtPolyFlags.Walk);
+            return new(PathfindingStatus.PathFound, route.Length);
+        }
+        public override Vector3? GetMoveAlongSurface(Zone zone, Vector3 start, Vector3 end, EDtPolyFlags[] filters) =>
+            Crosses(start, end) ? start : new(end.X, end.Y, 0);
+        public override Vector3? GetClosestPoint(Zone zone, Vector3 position, float xRange, float yRange, float zRange,
+            EDtPolyFlags[] filters) => Math.Abs(position.Z) <= zRange ? new(position.X, position.Y, 0) : null;
+        public override bool HasLineOfSight(Zone zone, Vector3 start, Vector3 end, EDtPolyFlags[] filters) => !Crosses(start, end);
+    }
+
+    // st-replan (#166): in Vendo Caverns a bot's corridor turned round a wall by two corners 13 and 20 units from it.
+    // Both counted as reached (within 32 units), so it walked at the next corner, 100 units off behind the wall, and
+    // every fresh corridor did the same, for minutes. A corner within reach is passed only with the next one in sight,
+    // or on it, as the NPC pathfinder passes its nodes.
+    [Test]
+    public void AWalkerGoesRoundAWallEndNearItsStart()
+    {
+        var (region, zone) = World();
+        Assert.That(Walk(new WallEndMesh(), region, zone, Vector3.Zero, new(400, 60, 0), keepExact: true, blockEnds: true),
+            Is.InRange(1, 200));
+    }
+
+    // The review of the stall replan (#166): planned again at each stall, a bot whose fresh corridors each led to
+    // another stall walked to and fro between them for good, never blocked. With two plans again a walk, its third
+    // stall blocks.
+    [Test]
+    public void AWalkThatStallsAgainAfterItsPlanAgainEndsBlocked()
+    {
+        var (region, zone) = World();
+        Assert.That(Walk(new OverheadMesh(), region, zone, Vector3.Zero, new(1000, 0, 0), keepExact: true, blockEnds: true),
+            Is.EqualTo(-2));
+    }
+
+    private static int PathNodes(PlayerTravelPath path) =>
+        ((Queue<WrappedPathfindingNode>)typeof(PlayerTravelPath).GetField("_nodes", BindingFlags.Instance | BindingFlags.NonPublic)!.GetValue(path)!).Count;
+
     // st-fix4 (#166): in Tir na Nog the mesh joins two stacked floors 167 units apart over 41, with no floor between. Half
     // way up, the surface moves found a middle floor beside the link and the bot stood on its edge for minutes, its next
     // corner 87 units overhead. A walker on a link of its own corridor goes along it to the corner, as a GameBot does,
@@ -828,27 +1049,33 @@ public sealed class UT_PlayerBotDriver
     }
 
     // StepToward's position and stall rule: GamePlayer keeps whole units (X, Y, Z are ints), so the bot stands where the
-    // mover put it, rounded; 12 steps without a unit of progress drop the corridor. Returns the tick the bot arrived, or -1.
+    // mover put it, rounded; a second without a unit of progress plans the corridor again (twice a walk), and 12 steps drop it. Returns
+    // the tick the bot arrived, -1 if it never did, or with blockEnds -2 where the mover's walk would end blocked.
     internal static int Walk(IPathfindingMgr nav, Region region, Zone zone, Vector3 from, Vector3 goal, bool keepExact,
-        int ticks = 200)
+        int ticks = 200, bool blockEnds = false)
     {
         var path = new PlayerTravelPath();
         Vector3 player = from;
         Vector3? exact = null;
-        int still = 0;
+        var stall = new PlayerBotStallWatch();
         for (int tick = 0; tick < ticks; tick++)
         {
             if (keepExact ? PlayerBotPathMover.Arrived(player, goal, 20) : Vector3.Distance(player, goal) <= 20) return tick;
+            stall.Toward(goal, tick * 250L);
             Vector3 current = keepExact ? PlayerBotPathMover.StepStart(player, exact) : player;
             Assert.That(PlayerBotPathMover.TryComputeNext(nav, region, zone, path, current, goal, 20, 47.75f, tick * 250L,
                 out Vector3 next, out string failure), Is.True, failure);
             exact = next;
             if (Vector3.DistanceSquared(next, current) < 1)
             {
-                if (++still >= PlayerBotPathMover.StallSteps) { still = 0; path.Clear(); }
+                if (stall.Still(path, out _))
+                {
+                    if (blockEnds) return -2;                                   // the mover's walk ends blocked here
+                    stall.Reset(); path.Clear();
+                }
                 continue;
             }
-            still = 0;
+            stall.Moved();
             player = new(MathF.Round(next.X), MathF.Round(next.Y), MathF.Round(next.Z));
         }
         return -1;

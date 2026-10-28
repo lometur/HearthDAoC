@@ -96,13 +96,29 @@ Read these with their caveats:
 
 ## Walking
 
-A bot walks with upstream's `PlayerTravelPath` corridor cursor (`PlayerBotPathMover`). Nine marked edits there reach
+A bot walks with upstream's `PlayerTravelPath` corridor cursor (`PlayerBotPathMover`). Thirteen marked edits there reach
 only player bots: `/travel` isn't registered, and `/grind` uses only `TryBuildCorridor`. If `/travel` is ever
 registered, test it in game. The mover:
 - starts each step from the exact spot it last put the bot on. The game stores positions in whole units, and by
   Olorustos the rounded spot lay off the navmesh, so the quest bot stood there for 14 minutes.
   `UT_PlayerBotWalkReplay` replays that walk on the installed navmesh.
 - judges arrival as the driver judges range: the whole-unit distance cut to an int.
+- plans the corridor again from where the bot stands after a second without a step, keeping the goal; after 3 seconds
+  the walk ends blocked. The stalls left after #168 mostly had the corridor's next corner on another level than the bot
+  (a ramp above it), while a fresh corridor from the same spot walked on. It does this at most twice a walk, as the
+  corridor's own progress check gives up after two: a bot whose fresh corridors each led to another stall would walk
+  to and fro for good. Once a goal was too few: bots stalled again where a fresh corridor walked on. A walk ends when
+  it arrives or is blocked, or when its steps pause for more than a second; a goal that jumps more than 64 units gets
+  two replans of its own, but the still steps count on, so a bot whose target runs on still ends blocked.
+- passes a corner within reach (32 units across) only with the next corner in sight, or standing on it, as the NPC
+  pathfinder passes its nodes. In Vendo Caverns a corridor turned round a wall by two corners 13 and 20 units from the
+  bot; both counted as reached, so it walked at the next corner, 100 units off behind the wall, and every fresh
+  corridor did the same.
+- takes a step again from the floor under it, half a unit on toward the step, when its surface moves stop where they
+  start. From a spot on a polygon edge Detour can take a polygon that leads nowhere: in Snowdonia a bot stood for
+  minutes where 117 of 507 starts within 0.06 units of its spot didn't move, though its logged spot walked on offline.
+  Further down the same walk it floated 19 units over the floor after a corridor-line step, and no move started there
+  either.
 - follows the corridor line, as a GameBot walks its path, when a step brings it no closer to the next corner, where the
   mesh is open and the surface moves still find it (#166). Detour's corners take the coarse polygons' height, which
   on steep ground lies far off the floor: bots stood for the rest of a run beside a corner 70 units below them, or
@@ -116,11 +132,12 @@ registered, test it in game. The mover:
 - within 300 units of its goal, walks straight at it only with a clear line of sight, or within a corner's reach (32
   units across), where the corridor has dropped its last corner; otherwise it follows the corridor (a bot crept along
   a wall 267 units from its target).
-- when a walk fails, steps onto the nearest floor within 300 units that leads on, as a GameBot does, with one search
-  every 5 seconds at most: bots stood off the mesh, 79-88 units under the floor or 84 above it, where every step lost
-  the walkable surface.
+- when a walk fails or stalls, steps onto the nearest floor within 300 units that leads on, as a GameBot does, with one
+  search every 5 seconds at most: bots stood off the mesh, 79-88 units under the floor or 84 above it, where every step
+  lost the walkable surface, and one stood 161 units over the floor in Snowdonia, where every step stood still.
 
-`UT_PlayerBotWalkReplay` replays each of these walks on the installed navmesh.
+`UT_PlayerBotWalkReplay` replays each of these walks on the installed navmesh but the replan's: offline, a fresh
+corridor from those stalls walks on, and the corridor that stalled can't be rebuilt there. A fake-mesh test covers it.
 
 **The trade-off:** on the corridor line a bot on steep ground can sink into the slope or float above it for a step or
 two (about 44 units at one Snowdonia spot), and on a floor link it floats up or down the link (167 units in Tir na
@@ -128,14 +145,25 @@ Nog). GameBots do the same, but a player bot should look like a player: worth a 
 Tir na Nog. A floor step is a visible jump: 14 in one run, of 50-198 units.
 
 Known gaps:
-- **Brief stalls remain.** In a 15-minute run of 390 hunting bots, 20 bots logged 32 blocked walks (306 from 86 bots
-  before these fixes). No bot was blocked 3 or more times at one spot, and none was stuck as the run ended (16 before).
-  Most of the 14 stalls had one shape: the corridor's next corner lay on another level than the bot (a ramp above
-  it), while a fresh corridor from the same spot walks on. After 3 seconds the stall clears the corridor and the bot
-  takes a new goal. Planning again once before calling it a stall would keep the goal (not done).
-- In an earlier run a Tir na Nog bot stalled at one spot (21263, 35215), as it did before these fixes, but the same
-  step replayed offline walks on (same navmesh, same Detour library). Each stall line now gives the stalled step's own
-  queries (`queries:`), to find what differs live.
+- **Stalls are rare, but for one spot.** In two 15-minute runs of 390 hunting bots, 2 and 16 walks stalled (14 after
+  #168, 2,421 before these fixes, counting each blocked line's `count=`). 15 of the 16 were one bot at one spot in
+  Jordheim (next gap). Most other blocked walks were walks to a target with no path (the gap after).
+- **A ledge in Jordheim (32225, 26622).** The corridor crosses a ridge there, by a corner 35 units above the lower
+  floor; under its line the floor rises 67 units within 11. The surface moves toward that corner slide sideways along
+  the ridge's foot into a pocket 17 units off the line, where no move reaches the corner and Detour's ray toward it is
+  blocked, so the corridor-line step isn't taken either. Each fresh corridor from the pocket leads back out to a corner
+  61 units away (about 100 for some goals), then toward the ridge again, and the moves slide the bot back into the
+  pocket. It reproduces offline on the installed navmesh: from the pocket, all 20 goals a roaming bot had there end in
+  it. Not new: runs before the replan logged bots stuck in this pocket too, for up to about 6 minutes at about 16
+  blocked walks a minute, before they walked out. With two replans a walk takes about twice as long (7 blocked walks a
+  minute in the last run, where the bot stayed nearly 3 minutes, to the run's end), so a bot likely stays there longer
+  now; not measured.
+- **Unreachable targets come back.** A bot skips a target it found no path to for 30 seconds, then may pick it again:
+  in that run one bot tried the same monster 51 times between its fights. A GameBot's target and camp choice is part of
+  the parity work (#167).
+- A Tir na Nog bot stalled at one spot (21263, 35215) in most runs, though the same step replayed offline walks on
+  (same navmesh, same Detour library). It is likely the polygon-edge case above: the log rounds the spot, and starts a
+  few hundredths of a unit apart can differ there. In the last run none stalled there; one churned there once.
 - Within 300 units of its goal, in the open, a bot takes the plain surface move, which keeps the height of the straight
   line to the goal. Grounded steps there would also need arrival judged by the floor, for targets that hover or swim
   above it.
@@ -150,6 +178,7 @@ All start `PLAYER_BOT_`:
 - `FIGHT`, `DEATH`, `RELOCATE`, `IDLE`, `BLOCKED`: one per event. A stalled walk's `BLOCKED` line ends with `stall:`,
   the bot's last step and state, and `queries:`, the stalled step's own navmesh queries and a fresh corridor's step;
 - `FLOOR_STEP`: a step onto the nearest floor, with where from and to and why;
+- `REPLAN`: a stalled walk planned again, with where, the goal, the count in that walk and the stall's first step;
 - `ERRAND`: the quest bot's steps;
 - `SPOT`, `KIT`, `RETRAIN`: start spots and level-matched bots; `TALLY`, every few minutes, a line per bot.
 
@@ -160,5 +189,5 @@ The bot CPU meter (`/botcpu`) charges them to its own kind, `playerbot`, and the
 `Tests/UnitTests/UT_HeadlessClient.cs`, `UT_PlayerBotPlan.cs`, `UT_PlayerBotDriver.cs`, `UT_PlayerBotErrands.cs`,
 `UT_PlayerBotWake.cs`, `UT_PlayerBotSpots.cs` and `UT_PlayerBotKit.cs` run in CI. `UT_PlayerBotWalkReplay.cs` runs only
 when asked for. It needs `OFFLINE_DAOC_NAV_ROOT`: a folder holding `navmesh/zone008.nav`, `zone012.nav`,
-`zone152.nav`, `zone209.nav` and `zone250.nav` (each from `tools/linux/odaoc_fetch.py --lock deploy/upstream.lock
+`zone126.nav`, `zone152.nav`, `zone209.nav` and `zone250.nav` (each from `tools/linux/odaoc_fetch.py --lock deploy/upstream.lock
 extract runtime/server/navmesh/zone008.nav FOLDER/navmesh/zone008.nav`, and so on) and the Detour library under `lib/`.

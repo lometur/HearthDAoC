@@ -60,6 +60,17 @@ namespace DOL.GS.Commands
             Vector2.DistanceSquared(new(foot.X, foot.Y), new(corner.X, corner.Y)) <= 64 * 64 &&
             nav.GetClosestPoint(zone, corner, 2, 2, 24, nav.DefaultFilters) is Vector3 floor && Math.Abs(floor.Z - corner.Z) <= 24;
 
+        // HearthDAoC: a corner within reach is passed only with the next corner in sight, or with the walker on it (within
+        // 2 units across), as the NPC pathfinder passes its nodes (Pathfinder.ManagePathProgress). In Vendo Caverns a
+        // player bot (#166) passed two corners 13 and 20 units off round a wall, walked at the next one 100 units off
+        // behind the wall, and stood there for minutes: every fresh corridor did the same.
+        private bool MayPassCorner(IPathfindingMgr nav, Zone zone, Vector3 current, Vector3 corner)
+        {
+            if (Vector2.DistanceSquared(new(current.X, current.Y), new(corner.X, corner.Y)) <= 2 * 2) return true;
+            using var next = _nodes.GetEnumerator();
+            return !(next.MoveNext() && next.MoveNext()) || nav.HasLineOfSight(zone, current, next.Current.Position, nav.DefaultFilters);
+        }
+
         public static bool TryBuildCorridor(IPathfindingMgr nav, Zone zone, Vector3 start, Vector3 goal,
             out List<WrappedPathfindingNode> route)
         {
@@ -151,7 +162,8 @@ namespace DOL.GS.Commands
             // by one mesh voxel (observed 13-24 units near Cotswold). Requiring
             // exact equality stalls at the polygon edge. Accept one voxel, then
             // constrain the next movement to the surface; never teleport across it.
-            while (_nodes.TryPeek(out var reached) && HasReachedCorner(current, reached.Position))
+            while (_nodes.TryPeek(out var reached) && HasReachedCorner(current, reached.Position) &&
+                   MayPassCorner(nav, zone, current, reached.Position)) // HearthDAoC: #166
             {
                 if ((reached.Flags & EDtPolyFlags.AnyDoor) != 0) _doorToOpen = reached.Position;
                 _passed = reached.Position; // HearthDAoC: #166
@@ -174,6 +186,19 @@ namespace DOL.GS.Commands
             // where the plain move and the floor fallback below still apply.
             Vector3? snapped = (nav is LocalPathfindingMgr ? AutonomousNavigationSurface.MoveAlongGround(nav, zone, current, desired) : null)
                 ?? nav.GetMoveAlongSurface(zone, current, desired, nav.DefaultFilters);
+            // HearthDAoC: from a start on a polygon edge Detour can take a polygon that leads nowhere: its moves stop at the
+            // start and its ray is blocked. In Snowdonia a player bot (#166) stood for minutes where 117 of 507 starts
+            // within 0.06 units of its spot did not move, and the same files offline moved it on; further down, it floated
+            // 19 units over the floor after a corridor-line step and no move started. The moves, and the line of sight the
+            // steps below check, are taken again from the floor under the walker, half a unit on toward the step.
+            Vector3 from = current;
+            if ((snapped is not Vector3 first || Vector3.DistanceSquared(current, first) < 1) && Vector3.DistanceSquared(current, desired) >= 1)
+            {
+                from = Advance(nav.GetClosestPoint(zone, current, 2, 2, 64, nav.DefaultFilters) ?? current, desired, 0.5f);
+                Vector3? again = (nav is LocalPathfindingMgr ? AutonomousNavigationSurface.MoveAlongGround(nav, zone, from, desired) : null)
+                    ?? nav.GetMoveAlongSurface(zone, from, desired, nav.DefaultFilters);
+                if (again is Vector3 moved && Vector3.DistanceSquared(from, moved) >= 1) snapped = again;
+            }
             // At certain polygon edges Detour's local surface mover returns the
             // origin even though its corridor and raycast agree the next step is
             // open (Cotswold stable approach). A normal-speed step is allowed only
@@ -189,7 +214,7 @@ namespace DOL.GS.Commands
                     Vector2.DistanceSquared(new(floor.Value.X, floor.Value.Y), new(desired.X, desired.Y)) <= 4 &&
                     Math.Abs(floor.Value.Z - desired.Z) <= 24 &&
                     Vector3.Distance(current, floor.Value) <= distance + 2 &&
-                    nav.HasLineOfSight(zone, current, floor.Value, nav.DefaultFilters)) snapped = floor;
+                    nav.HasLineOfSight(zone, from, floor.Value, nav.DefaultFilters)) snapped = floor; // HearthDAoC: from (#166)
             }
             // HearthDAoC: no step closer to the corner, yet the mesh is open along the corridor: the step follows it, as a
             // GameBot walks its path. Detour's straight-path corners take the polygons' height, which on steep ground lies
@@ -206,7 +231,7 @@ namespace DOL.GS.Commands
             if (Vector3.DistanceSquared(current, desired) >= 1 &&
                 (_link.HasValue ||
                  snapped.HasValue && NoStepCloser(current, snapped.Value, corner) &&
-                 nav.HasLineOfSight(zone, current, desired, nav.DefaultFilters) &&
+                 nav.HasLineOfSight(zone, from, desired, nav.DefaultFilters) &&
                  nav.GetClosestPoint(zone, desired, 32, 32, 64, nav.DefaultFilters).HasValue)) snapped = desired;
             if (!snapped.HasValue)
             {
