@@ -659,8 +659,9 @@ public static class PlayerBotDriver
     public static bool ChoosesSpell(bool due, bool casting, long now, long nextChoice) => due && !casting && now >= nextChoice;
 
     // #167 F8: the self-buffs a bot keeps up, in this order: armour factor, absorb, bladeturn, ablative, damage shield,
-    // damage add, base then spec stat buffs, the regeneration buffs (spells/RegenBuff.cs); then the Paladin's resist
-    // chants, as chants only.
+    // damage add, base then spec stat buffs, the regeneration buffs (spells/RegenBuff.cs). No resist buff: the only
+    // resist chants a class casts, the Paladin's (Soul Ward, Elemental Ward, Soul Shield, Elemental Shield), cost power
+    // each pulse, which NextSelfBuff never runs.
     private static readonly eSpellType[] SelfBuffOrder =
     [
         eSpellType.BaseArmorFactorBuff, eSpellType.SpecArmorFactorBuff, eSpellType.PaladinArmorFactorBuff,
@@ -668,12 +669,10 @@ public static class PlayerBotDriver
         eSpellType.DamageAdd, eSpellType.StrengthBuff, eSpellType.DexterityBuff, eSpellType.ConstitutionBuff,
         eSpellType.QuicknessBuff, eSpellType.AcuityBuff, eSpellType.StrengthConstitutionBuff,
         eSpellType.DexterityQuicknessBuff, eSpellType.HealthRegenBuff, eSpellType.PowerRegenBuff,
-        eSpellType.EnduranceRegenBuff, eSpellType.BodySpiritEnergyBuff, eSpellType.HeatColdMatterBuff,
+        eSpellType.EnduranceRegenBuff,
     ];
     /// <summary>The kinds of SelfBuffOrder up, each once: PLAYER_BOT_FIGHT buffs= at the fight's first think (#167 F8).</summary>
     public static int SelfBuffsUp(IEnumerable<eSpellType> active) => active.Where(kind => Array.IndexOf(SelfBuffOrder, kind) >= 0).Distinct().Count();
-
-    private static readonly int FirstChantOnly = Array.IndexOf(SelfBuffOrder, eSpellType.BodySpiritEnergyBuff);
 
     /// <summary>The next self-buff to cast (#167 F8): of the kinds in SelfBuffOrder not active on the bot, the first, its
     /// best rank the bot can cast now: at or below its level, on itself (a Self, Realm or Group target), no song (an
@@ -693,7 +692,7 @@ public static class PlayerBotDriver
             int kind = Array.IndexOf(SelfBuffOrder, spell.SpellType);
             if (kind < 0 || kind > bestKind || active.Contains(spell.SpellType) || spell.Level > level ||
                 spell.Target is not (eSpellTarget.SELF or eSpellTarget.REALM or eSpellTarget.GROUP) || spell.NeedInstrument ||
-                (spell.IsPulsing ? chantUp || spell.PulsePower != 0 : kind >= FirstChantOnly) ||
+                spell.IsPulsing && (chantUp || spell.PulsePower != 0) ||
                 spell.Concentration > concentrationLeft || !HasPowerFor(maxMana, mana, spell.Power) || !ready(spell))
                 continue;
             if (best == null || kind < bestKind || spell.Level > best.Level || spell.Level == best.Level && spell.ID > best.ID)

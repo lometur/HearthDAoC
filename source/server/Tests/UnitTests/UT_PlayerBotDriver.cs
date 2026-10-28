@@ -2073,8 +2073,7 @@ public sealed class UT_PlayerBotDriver
 
     // A Paladin runs one chant at a time (a new pulse effect ends the others, EffectListComponent.cs:362-371): the first by
     // the buffs' order while none is up, never one that costs power each pulse (it would drain the power its rest
-    // waits for). Songs need an instrument; buffs on a pet, kinds not kept (haste) and resist buffs other than the
-    // Paladin's chants are left alone.
+    // waits for). Songs need an instrument; buffs on a pet, kinds not kept (haste) and resist buffs are left alone.
     [Test]
     public void A_bot_runs_one_chant_that_costs_no_power_each_pulse()
     {
@@ -2095,6 +2094,28 @@ public sealed class UT_PlayerBotDriver
                 Buff(2003, "Haste", "CombatSpeedBuff", "Self", 10, 5),
                 Buff(2004, "Ward of the Spirit", "BodySpiritEnergyBuff", "Self", 10, 5),     // a resist buff, no chant
             ], 30), Is.EqualTo("-"));
+    }
+
+    // The resist chants are no self-buff the bot keeps: the world's only ones of those kinds a class casts are the
+    // Paladin's (Chants), and each costs power every pulse (v0.37b Spell and LineXSpell rows), so a bot at any level never
+    // ran one; not even one that pulsed for free would be kept, and FIGHT buffs= does not count them.
+    [Test]
+    public void A_bot_keeps_no_resist_chant()
+    {
+        (Spell, SpellLine)[] paladin =
+        [
+            Buff(1093, "Soul Ward", "BodySpiritEnergyBuff", "Group", 25, 0, pulse: 1, pulsePower: 8),
+            Buff(1091, "Elemental Ward", "HeatColdMatterBuff", "Group", 27, 0, pulse: 1, pulsePower: 9),
+            Buff(1094, "Soul Shield", "BodySpiritEnergyBuff", "Group", 44, 0, pulse: 1, pulsePower: 15),
+            Buff(1092, "Elemental Shield", "HeatColdMatterBuff", "Group", 46, 0, pulse: 1, pulsePower: 16),
+        ];
+        Assert.That(SelfBuffName(paladin, 50), Is.EqualTo("-"));
+        Assert.That(SelfBuffName(
+            [
+                Buff(1093, "Soul Ward", "BodySpiritEnergyBuff", "Group", 25, 0, pulse: 1),
+                Buff(1091, "Elemental Ward", "HeatColdMatterBuff", "Group", 27, 0, pulse: 1),
+            ], 50), Is.EqualTo("-"), "a resist chant that pulsed for free");
+        Assert.That(PlayerBotDriver.SelfBuffsUp([eSpellType.BodySpiritEnergyBuff, eSpellType.HeatColdMatterBuff]), Is.Zero);
     }
 
     // A Necromancer in shade form cannot swing (AttackComponent.cs:511-516): its servant fights.
