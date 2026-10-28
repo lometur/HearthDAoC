@@ -59,18 +59,20 @@ Each bot thinks every 250 ms, a thin copy of the `/bot` pilot's think:
   holds its spells until the monster turns on the pet, 4 s at most, and never while the bot is being hit. A Theurgist
   casts a pet at its target at each cast choice while it can cast one, as a GameBot does, and its damage spell only
   when it can't (the target out of the pet's range or view, or a pet just refused).
-- A caster (Wizard, Sorcerer, Runemaster, Eldritch, Mentalist) nukes a monster coming at it while there is time for
-  a nuke and a control spell after it. Then it stuns, roots or mezzes it, in that order of choice, if the cast ends
-  before the monster reaches it. In melee it uses Quickcast for the control spell. A rooted or mezzed monster near it
-  would break free at the next nuke, so it first steps back to range, on a spot clear of other aggressive monsters,
-  within its spell's range; so it does from a stunned one while hits interrupt it. In melee with no clear spot it
-  steps back 400 units straight away anyway. While its target is held it keeps its spell's range, even with hits
-  blocking its spells or too little power, and it never swings at a rooted or mezzed monster (its hit, or a miss,
-  would free it): it waits instead. Not while another monster that isn't held hits it, and not for 5 s after a
-  blocked step back: then it fights as before. Only single-target spells the bot has, that the monster isn't immune
-  to by the server's own rules: a monster stunned or mezzed in the last minute takes the next one for half the time,
-  then a quarter, and none under 1 s. A mez on its target only as the last escape, the monster about to reach it, and
-  only on a monster above 75% health.
+- A caster (Wizard, Sorcerer, Runemaster, Eldritch, Mentalist) nukes a monster coming at it while there is time for a
+  nuke and a control spell after it. Then it stuns, roots or mezzes it, in that order of choice, if the cast ends
+  before the monster reaches it. In melee it uses Quickcast for the control spell. It skips the control while its
+  nukes kill the monster before it arrives, at the rate the fight's nukes have taken its health so far (one nuke more
+  with Quickcast ready, which then goes to that nuke), if it has 60% health or more and no other monster on it. A
+  rooted or mezzed monster near it would break free at the next nuke, so it first steps back to range, on a spot clear
+  of other aggressive monsters, within its spell's range; so it does from a stunned one while hits interrupt it. In
+  melee with no clear spot it steps back 400 units straight away anyway. While its target is held it keeps its spell's
+  range, even with hits blocking its spells or too little power, and it never swings at a rooted or mezzed monster
+  (its hit, or a miss, would free it): it waits instead. Not while another monster that isn't held hits it, and not
+  for 5 s after a blocked step back: then it fights as before. Only single-target spells the bot has, that the monster
+  isn't immune to by the server's own rules: a monster stunned or mezzed in the last minute takes the next one for
+  half the time, then a quarter, and none under 1 s. A mez on its target only as the last escape, the monster about to
+  reach it, and only on a monster above 75% health.
 - Any bot with a control spell (casters, healers, pet classes) also controls an add: the nearest other monster coming
   at it or hitting it that isn't held. A mez first, then a root, then a stun; no mez from a pet class (its pet would
   hit the add and free it), and no root on an add already in melee (it still hits from there). It casts while the

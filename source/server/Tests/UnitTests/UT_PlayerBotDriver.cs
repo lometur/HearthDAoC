@@ -2208,7 +2208,7 @@ public sealed class UT_PlayerBotDriver
         bool held, bool holdBreaksOnHit, int controlCastMs, bool interrupted, bool quickcastReady, bool quickcastOn,
         PlayerBotCasterAction expected) =>
         Assert.That(PlayerBotDriver.CasterAction(closing, contactMs, held, holdBreaksOnHit, controlCastMs, 3_000, interrupted,
-            quickcastReady, quickcastOn), Is.EqualTo(expected));
+            quickcastReady, quickcastOn, killsFirst: false), Is.EqualTo(expected));
 
     // #167 C3, the caster melee trap: after a quickcast root in melee, Quickcast is down and the rooted monster's hits
     // kept interrupting the bot (AttackComponent.cs:1298), so Engage stopped it in melee (HoldsSpellRange false), the held
@@ -2220,7 +2220,7 @@ public sealed class UT_PlayerBotDriver
     public void A_caster_in_melee_with_a_held_monster_steps_back_and_holds_its_spell_range()
     {
         long contact = PlayerBotDriver.TimeToContact(80, 200);
-        Assert.That(PlayerBotDriver.CasterAction(true, contact, true, true, 0, 3_000, true, false, false),
+        Assert.That(PlayerBotDriver.CasterAction(true, contact, true, true, 0, 3_000, true, false, false, false),
             Is.EqualTo(PlayerBotCasterAction.StepBack), "rooted in melee, hit, no Quickcast ready: it nuked");
         Assert.That(PlayerBotDriver.CombatStopDistance(true, true, true, false, 200, 1_500, casterHold: true), Is.EqualTo(1_420));
         Assert.That(PlayerBotDriver.CombatStopDistance(true, true, true, false, 200, 1_500, casterHold: false),
@@ -2297,6 +2297,43 @@ public sealed class UT_PlayerBotDriver
         var none = new List<(string, Vector3, int)>();
         Assert.That(PlayerBotDriver.KiteTarget(new Vector3(100, 0, 0), Vector3.Zero, 1_370, none, inMelee: true),
             Is.EqualTo((new Vector3(1_370, 0, 0), true)));
+    }
+
+    // --- no control when the nukes kill first (#167 C11) ---
+
+    // The nukes the target still needs, from what the fight's casts took off it so far: ceil(health / ((start - health)
+    // / casts)); nothing measured (no cast, or no health off it yet), int.MaxValue.
+    [TestCase(100, 65, 1, 2)] [TestCase(100, 70, 1, 3)] [TestCase(100, 30, 2, 1)] [TestCase(100, 0, 3, 0)]
+    [TestCase(100, 100, 1, int.MaxValue)] [TestCase(100, 100, 0, int.MaxValue)]
+    public void The_nukes_a_target_still_needs_come_from_what_the_fights_casts_took(int startHealth, int health, int nukesCast,
+        int needed) =>
+        Assert.That(PlayerBotDriver.NukesNeeded(startHealth, health, nukesCast), Is.EqualTo(needed));
+
+    // Whether those nukes land before the monster reaches the bot: one per nuke's cast and 250 ms, and one more with
+    // Quickcast ready (the killing nuke through the hits).
+    [TestCase(2, 6_100L, 3_000, true, true)] [TestCase(2, 6_100L, 3_000, false, false)]
+    [TestCase(1, 3_300L, 3_000, false, true)] [TestCase(1, 0L, 3_000, true, true)]
+    [TestCase(int.MaxValue, 60_000L, 3_000, true, false)]
+    public void The_nukes_kill_first_while_they_land_before_contact(int needed, long contactMs, int nukeCastMs,
+        bool quickcastReady, bool killsFirst) =>
+        Assert.That(PlayerBotDriver.KillsFirst(needed, contactMs, nukeCastMs, quickcastReady), Is.EqualTo(killsFirst));
+
+    // A GREEN pull with 3 nukes took 9.5 s in st-deathsA and 16.8 s in st-deathsB: the control went whenever contact was
+    // under a nuke, the control and 1 s (6.5 s), every pull from 1,420 units. Now the nuke while the nukes kill first;
+    // in melee, hit, with Quickcast ready, the nuke too (CombatAction quickcasts it).
+    [Test]
+    public void A_caster_nukes_instead_of_controlling_when_the_nukes_kill_first()
+    {
+        Assert.That(PlayerBotDriver.CasterAction(true, 6_000, false, false, 2_500, 3_000, false, true, false, killsFirst: true),
+            Is.EqualTo(PlayerBotCasterAction.Nuke));
+        Assert.That(PlayerBotDriver.CasterAction(true, 6_000, false, false, 2_500, 3_000, false, true, false, killsFirst: false),
+            Is.EqualTo(PlayerBotCasterAction.Control));
+        Assert.That(PlayerBotDriver.CasterAction(true, 0, false, false, 2_500, 3_000, true, true, false, killsFirst: true),
+            Is.EqualTo(PlayerBotCasterAction.Nuke));
+        Assert.That(PlayerBotDriver.CombatAction(true, true, 0, true, true, due: true, heldBreaksOnHit: false),
+            Is.EqualTo(PlayerBotCombatAction.Quickcast), "the killing nuke quickcast");
+        Assert.That(PlayerBotDriver.CasterAction(true, 1_000, true, true, 2_500, 3_000, false, false, false, killsFirst: true),
+            Is.EqualTo(PlayerBotCasterAction.StepBack), "a held one: as before");
     }
 
     // --- the add's control (#167 C4) ---
@@ -2376,7 +2413,7 @@ public sealed class UT_PlayerBotDriver
     [Test]
     public void Quickcast_goes_to_the_add_first()
     {
-        Assert.That(PlayerBotDriver.CasterAction(true, 6_000, false, false, 2_500, 3_000, true, true, false),
+        Assert.That(PlayerBotDriver.CasterAction(true, 6_000, false, false, 2_500, 3_000, true, true, false, false),
             Is.EqualTo(PlayerBotCasterAction.QcControl), "the target's, after the add step");
         Assert.That(PlayerBotDriver.AddAction(true, 0, PlayerBotDriver.TargetFirst(true, false, true, 6_000, 0), 2_500, true,
             true, false), Is.EqualTo(PlayerBotAddAction.QcControl), "the add's first");

@@ -144,6 +144,7 @@ public sealed class PlayerBotState
     public long NextAddScanTick, NextAddTick;                    //   scan, the add step's next try after no sight, the add
     public GameNPC ControlledAdd;                                //   it controls and the casts at it that held nothing;
     public int AddControlTries, FightAddControls;                //   FIGHT addCtl=
+    public byte EngageTargetHealth;                              // #167 C11: the target's health at the first think (NukesNeeded)
     public bool EngageIll;                                       // #167 DEATH ill=: the illness at the fight's start
     public long PetOrderTick;                                    // #167 F10c: when its pet was sent at the target
     public long NextQuickcastTick;                               // Quickcast's next try (UseQuickcast)
@@ -227,6 +228,7 @@ public static class PlayerBotDriver
     public const int KiteFallbackDistance = 400;              // #167 C3: in melee with no clear point, this far (inf.)
     public const int KiteArriveDistance = 20;                 //   the step back ends this near its point
     public static readonly int[] KiteTurns = [0, 30, -30, 60, -60, 90, -90];   // degrees off straight away from the target
+    public const byte KillFirstHealthPercent = 60;            // #167 C11: the nukes before the control from this health
     public const int AnimistStandMargin = 150;                // #167 F10b: by its turret; the turret's reach less this
     public const int IncomingRadius = 2_000;                  // #167 F7: a monster this near with the bot as its target
     public static readonly int[] RestSpotRings = [300, 600, 900, 1_200];   // #167 F7: the rest spot's candidates (inf.)
@@ -563,6 +565,7 @@ public static class PlayerBotDriver
             state.FightPetCasts = state.FightWaits = state.FightControls = state.FightKites = state.FightCtlBroken = 0;
             state.TargetHeldBreaks = false;                                             // #167 C3
             state.FightAddControls = 0;                                                 // #167 C4
+            state.EngageTargetHealth = target.HealthPercent;                            // #167 C11
             state.ControlTries = 0;                                                     // #167 F11
             state.NextKiteTick = 0;
             state.KilledWithAdds = false;                                               // #167 C2: the kill's case over
@@ -1446,14 +1449,17 @@ public static class PlayerBotDriver
     /// at it (closing) with a control ready (controlCastMs, 0 for none): it nukes while there is time for a nuke and the
     /// control after it; then it controls while the cast ends before contact (Quickcast first when hits interrupt it); in
     /// melee it quickcasts the control (the GameBot's rule: a caster under melee controls, BotBrain.cs:3874-3901), or casts
-    /// it before the first hit, or with Quickcast on. Else Nuke: CombatAction's cast, wait, quickcast or swing.</summary>
+    /// it before the first hit, or with Quickcast on. #167 C11: not while the nukes kill it first (killsFirst, KillsFirst;
+    /// no default): the control cost a GREEN pull of 3 nukes 9.5 s in st-deathsA and 16.8 s in st-deathsB. Else Nuke:
+    /// CombatAction's cast, wait, quickcast or swing.</summary>
     public static PlayerBotCasterAction CasterAction(bool closing, long contactMs, bool held, bool holdBreaksOnHit,
-        int controlCastMs, int nukeCastMs, bool interrupted, bool quickcastReady, bool quickcastOn)
+        int controlCastMs, int nukeCastMs, bool interrupted, bool quickcastReady, bool quickcastOn, bool killsFirst)
     {
         if (held)
             return (holdBreaksOnHit || interrupted) && contactMs < nukeCastMs + ControlMarginMilliseconds
                 ? PlayerBotCasterAction.StepBack : PlayerBotCasterAction.Nuke;
-        if (!closing || controlCastMs <= 0 || contactMs > nukeCastMs + controlCastMs + 2L * ControlMarginMilliseconds)
+        if (killsFirst || !closing || controlCastMs <= 0 ||
+            contactMs > nukeCastMs + controlCastMs + 2L * ControlMarginMilliseconds)
             return PlayerBotCasterAction.Nuke;
         if (contactMs > controlCastMs + ControlMarginMilliseconds)
             return quickcastOn || !interrupted ? PlayerBotCasterAction.Control
@@ -1461,6 +1467,22 @@ public static class PlayerBotDriver
         return quickcastOn ? PlayerBotCasterAction.Control : quickcastReady ? PlayerBotCasterAction.QcControl
             : !interrupted ? PlayerBotCasterAction.Control : PlayerBotCasterAction.Nuke;
     }
+
+    /// <summary>The nukes the target still needs (#167 C11), from what the fight's casts took off it so far (its health
+    /// at the fight's first think, startHealth, less now, over nukesCast): ceil(health / ((startHealth - health) /
+    /// nukesCast)); nothing measured (no cast, or no health off it yet), int.MaxValue.</summary>
+    public static int NukesNeeded(int startHealth, int health, int nukesCast)
+    {
+        int taken = startHealth - health;
+        if (taken <= 0 || nukesCast <= 0) return int.MaxValue;
+        return (int)Math.Min(int.MaxValue, ((long)health * nukesCast + taken - 1) / taken);
+    }
+
+    /// <summary>Whether the nukes kill the target before it reaches the bot (#167 C11): the nukes it needs land by
+    /// contact, one per nuke's cast and 250 ms (Engage's next cast choice, Math.Max(900, cast + 250)), and one more with
+    /// Quickcast ready (the killing nuke through the hits, CombatAction's Quickcast).</summary>
+    public static bool KillsFirst(int needed, long contactMs, int nukeCastMs, bool quickcastReady) =>
+        needed <= contactMs / Math.Max(1, nukeCastMs + 250) + (quickcastReady ? 1 : 0);
 
     /// <summary>Where a caster steps back to (#167 F11): range units from its target, straight away from it (along +X when
     /// on top of it), else turned by KiteTurns, the first out of every potential add's reach (InAddReach) so the step
@@ -2540,7 +2562,9 @@ public static class PlayerBotDriver
     // contact is at the monster's base speed (a rooted one's speed is 0). The step back while the bot keeps its hold
     // (casterHold, CasterHolds: no other monster hitting it, whose case is the add's control or a break-off; the stop is
     // then the spell's), to a point within that stop (KitePoint); none, or one blocked a moment ago (KitePauseMilliseconds),
-    // and CombatAction's old rule (#167 C3). held and breaksOnHit: Engage's Hold of the target. True when it acted.
+    // and CombatAction's old rule (#167 C3). No control while the nukes kill it first (#167 C11: KillsFirst, from what
+    // the fight's casts took off it, NukesNeeded), the bot at KillFirstHealthPercent or more and one monster at most on
+    // it. held and breaksOnHit: Engage's Hold of the target. True when it acted.
     private static bool CasterStep(PlayerBotState state, GamePlayer player, GameLiving target, int distance, int stop,
         bool held, bool breaksOnHit, bool casterHold, long now, bool due, bool interrupted, bool quickcastReady,
         bool quickcasting, Ability quickcast)
@@ -2551,6 +2575,7 @@ public static class PlayerBotDriver
         else if (state.Controls.Count == 0) return false;
         bool closing = npc.TargetObject == player;
         long contact = TimeToContact(distance, npc.MaxSpeedBase);
+        int nukeCast = state.Spell?.CastTime ?? 3_000;                  // (inf.) 3 s: the casters' nukes cast in 2.5-3 s
         (Spell control, SpellLine line) = default((Spell, SpellLine));
         if (!held && closing && due && now >= state.NextControlTick && state.ControlTries < MaxControlTries)
             (control, line) = ChooseControl(state.Controls, spell => player.GetSkillDisabledDuration(spell) <= 0 &&
@@ -2558,10 +2583,12 @@ public static class PlayerBotDriver
                     player.IsWithinRadius(npc, player.castingComponent.CalculateSpellRange(spell)),
                 spell => Takes(npc, spell) && (spell.SpellType is not eSpellType.Mesmerize || MezWanted(contact, spell.CastTime)),
                 forAdd: false, petClass: false);
-        PlayerBotCasterAction step = CasterAction(closing, contact, held,
-            breaksOnHit, control?.CastTime ?? 0, state.Spell?.CastTime ?? 3_000, interrupted, quickcastReady, quickcasting);
-        switch (step)                                                                   // (inf.) 3 s: the casters' nukes
-        {                                                                               //   cast in 2.5-3 s
+        bool killsFirst = KillsFirst(NukesNeeded(state.EngageTargetHealth, npc.HealthPercent, state.FightCasts), contact,
+            nukeCast, quickcastReady) && player.HealthPercent >= KillFirstHealthPercent && state.Attackers <= 1;   // #167 C11
+        PlayerBotCasterAction step = CasterAction(closing, contact, held, breaksOnHit, control?.CastTime ?? 0, nukeCast,
+            interrupted, quickcastReady, quickcasting, killsFirst);
+        switch (step)
+        {
             case PlayerBotCasterAction.StepBack:
                 if (!casterHold || now < state.NextKiteTick) return false;
                 if (KitePoint(state, player, npc, stop, distance <= ContactDistance) is not Vector3 goal)
