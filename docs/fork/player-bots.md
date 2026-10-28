@@ -68,6 +68,11 @@ Each bot thinks every 250 ms, a thin copy of the `/bot` pilot's think:
   the server's own checks decide the rest.
 - It picks a monster with no aggressive neighbours. After deaths it moves to an easier camp. It avoids what killed it
   for 15 minutes.
+- After a release it first steps out of the reach of every monster round it that would aggro. If it died at its camp,
+  it then plans a new camp from where it died, never one it died at in the last 15 minutes, before it walks back. From
+  its third death with no XP in between it waits 30-120 s out there, as a GameBot does, and it waits out the
+  resurrection illness there too. It pulls nothing until then, but fights back. No hold for a camp lasts over 60 s:
+  then it hunts where it is.
 - It walks on the navmesh. A bot made at a level from a spots line also trains on each level-up.
 - In a run of 3 bots or fewer, `hdbot-alb-01` also does quest 20206 (Immediate Resolution) and its class promotion.
 
@@ -81,7 +86,6 @@ Playing:
 - **Deaths:** on v0.37b-hearth.9 (`st-layers5`: 15 minutes, 390 level-matched bots) they died 9.5 times per bot-hour,
   against about 1 for the PvE GameBots: melee 5.1, casters 21.2, healers 9.4, pet classes 10.8, archers 8.2. The
   buffs, casting and pet rules above are the first step. Still open:
-  - After a death a bot goes back to the camp it died at.
   - It doesn't see monsters coming at it, or rest out of their reach.
   - Casters don't root, stun or step back.
   - Walks don't look ahead for monsters on the route.
@@ -103,7 +107,6 @@ Going live, without the test-world side effects:
   - GameBots lose nothing.
   - At level 45 a player bot breaks even at about 0.2-0.7 deaths per hour, so live it must die about as rarely as
     the GameBots.
-- **Resurrection illness:** from level 6, a released bot doesn't wait out the illness before its next fight.
 - **Bind and prayer:**
   - A spots bot is bound at its spot.
   - Live, a bot needs to bind at a bind stone near its camp, and to pray at its grave when it's safe.

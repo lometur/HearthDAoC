@@ -145,13 +145,15 @@ public sealed class UT_PlayerBotDriver
 
     // DEATHS.md A4: a bot whose searches find monsters in reach but none under its cap takes none and, 30 s on, moves to
     // a camp that fits; one that has reached no target for 2 minutes has outgrown its ground. The cap's reason wins.
-    [TestCase(0L, 0L, 1_000_000L, null)]
-    [TestCase(10_000L, 0L, 129_999L, null)] [TestCase(10_000L, 0L, 130_000L, "outgrown")]
-    [TestCase(0L, 100_000L, 129_999L, null)] [TestCase(0L, 100_000L, 130_000L, "capped")]
-    [TestCase(10_000L, 100_000L, 130_000L, "capped")]
+    // A death at its camp (#167 F4) owes a relocation at once, before the capped and outgrown clocks.
+    [TestCase(0L, 0L, 1_000_000L, false, null)]
+    [TestCase(10_000L, 0L, 129_999L, false, null)] [TestCase(10_000L, 0L, 130_000L, false, "outgrown")]
+    [TestCase(0L, 100_000L, 129_999L, false, null)] [TestCase(0L, 100_000L, 130_000L, false, "capped")]
+    [TestCase(10_000L, 100_000L, 130_000L, false, "capped")]
+    [TestCase(0L, 0L, 1_000_000L, true, "died")] [TestCase(10_000L, 100_000L, 130_000L, true, "died")]
     public void A_capped_bot_relocates_after_30_s_and_an_outgrown_one_after_2_minutes(long roamingSince, long cappedSince,
-        long now, string reason) =>
-        Assert.That(PlayerBotDriver.RelocateReason(roamingSince, cappedSince, now), Is.EqualTo(reason));
+        long now, bool diedAtCamp, string reason) =>
+        Assert.That(PlayerBotDriver.RelocateReason(roamingSince, cappedSince, now, diedAtCamp), Is.EqualTo(reason));
 
     // The capped clock: it starts at the first search that passed a monster over for the cap and found nothing, keeps
     // running while that lasts, and stops at a search that found a target or nothing at all to pass over.
@@ -235,19 +237,22 @@ public sealed class UT_PlayerBotDriver
 
     // Where the bot died, its failed camp, is remembered for a GameBot's failure memory, 15 minutes, every one (its
     // _recentFailedSoloCamps, AWBC:3246, :3803-3804), not forgotten at the next relocation; one whose time is up goes
-    // at the next death.
+    // at the next death. Each is its region's (#167 F4): kept across a region change, and only its own region's count.
     [Test]
     public void Failed_camps_are_remembered_for_15_minutes()
     {
-        var failed = new List<(Vector3 At, long Until)>();
-        PlayerBotDriver.RememberFailedCamp(failed, new Vector3(1, 0, 0), 1_000);
-        PlayerBotDriver.RememberFailedCamp(failed, new Vector3(2, 0, 0), 600_000);
-        Assert.That(PlayerBotDriver.FailedCamps(failed, 900_999),
+        var failed = new List<(ushort Region, Vector3 At, long Until)>();
+        PlayerBotDriver.RememberFailedCamp(failed, 51, new Vector3(1, 0, 0), 1_000);
+        PlayerBotDriver.RememberFailedCamp(failed, 51, new Vector3(2, 0, 0), 600_000);
+        PlayerBotDriver.RememberFailedCamp(failed, 100, new Vector3(5, 0, 0), 600_000);
+        Assert.That(PlayerBotDriver.FailedCamps(failed, 51, 900_999),
             Is.EqualTo(new[] { new Vector3(1, 0, 0), new Vector3(2, 0, 0) }));
-        Assert.That(PlayerBotDriver.FailedCamps(failed, 901_000), Is.EqualTo(new[] { new Vector3(2, 0, 0) }));
-        PlayerBotDriver.RememberFailedCamp(failed, new Vector3(3, 0, 0), 901_000);
-        Assert.That(failed.Select(f => f.At), Is.EqualTo(new[] { new Vector3(2, 0, 0), new Vector3(3, 0, 0) }),
-            "the expired camp went");
+        Assert.That(PlayerBotDriver.FailedCamps(failed, 51, 901_000), Is.EqualTo(new[] { new Vector3(2, 0, 0) }));
+        Assert.That(PlayerBotDriver.FailedCamps(failed, 100, 901_000), Is.EqualTo(new[] { new Vector3(5, 0, 0) }),
+            "another region's camp, kept");
+        PlayerBotDriver.RememberFailedCamp(failed, 51, new Vector3(3, 0, 0), 901_000);
+        Assert.That(failed.Select(f => f.At), Is.EqualTo(new[] { new Vector3(2, 0, 0), new Vector3(5, 0, 0),
+            new Vector3(3, 0, 0) }), "the expired camp went");
     }
 
     // A capped bot that cannot move its leash (a lever spot bot, out of its anchor region or off the mesh, or no camp
@@ -261,12 +266,19 @@ public sealed class UT_PlayerBotDriver
         Assert.That(PlayerBotDriver.FallbackInPlace(reason, safest), Is.EqualTo(cap));
 
     // A capped bot stands while it waits to move its leash, unless it walks to its anchor; one that cannot move it now
-    // (FallbackInPlace) roams as before.
-    [TestCase(true, 5_000L, false, true)] [TestCase(true, 0L, false, false)] [TestCase(true, 5_000L, true, false)]
-    [TestCase(false, 5_000L, false, false)]
-    public void A_capped_bot_holds_only_while_it_can_relocate(bool canRelocate, long cappedSince, bool walkingToAnchor,
-        bool holds) =>
-        Assert.That(PlayerBotDriver.HoldsForRelocation(canRelocate, cappedSince, walkingToAnchor), Is.EqualTo(holds));
+    // (FallbackInPlace) roams as before. So does one owed a relocation after a death at its camp (#167 F4), from its
+    // release. Neither holds past 60 s: with no camp planned by then it hunts where it is, under its cap (FallbackInPlace
+    // has no cap for a death's relocation, so nothing else would end that hold).
+    [TestCase(true, 5_000L, 0L, false, 5_000L, true)] [TestCase(true, 0L, 0L, false, 5_000L, false)]
+    [TestCase(true, 5_000L, 0L, true, 5_000L, false)] [TestCase(false, 5_000L, 0L, false, 5_000L, false)]
+    [TestCase(true, 5_000L, 0L, false, 64_999L, true)] [TestCase(true, 5_000L, 0L, false, 65_000L, false)]
+    [TestCase(true, 0L, 10_000L, false, 69_999L, true)] [TestCase(true, 0L, 10_000L, false, 70_000L, false)]
+    [TestCase(true, 0L, 10_000L, true, 20_000L, false)] [TestCase(false, 0L, 10_000L, false, 20_000L, false)]
+    [TestCase(true, 5_000L, 10_000L, false, 69_999L, true)]
+    public void A_capped_bot_holds_only_while_it_can_relocate(bool canRelocate, long cappedSince, long replanSince,
+        bool walkingToAnchor, long now, bool holds) =>
+        Assert.That(PlayerBotDriver.HoldsForRelocation(canRelocate, cappedSince, replanSince, walkingToAnchor, now),
+            Is.EqualTo(holds));
 
     // PLAYER_BOT_RELOCATE's fields stay as they were (runs/legcheck.py reads bot= and to or none); its reason and, for a
     // move, the fallback camp's con (none: the death cap) come last.
@@ -334,6 +346,79 @@ public sealed class UT_PlayerBotDriver
             new HashSet<string>(), 5), Is.EqualTo((new[] { "s1", "s2" }, (ConColor?)ConColor.BLUE, true)),
             "a stale camp when no fresh one is left");
     }
+
+    // --- the recovery from a death (#167 F4) ---
+
+    // A death within its anchor's leash and roam (LeashRadius + RoamRadius, the reach FindWithin hunts in) is a death at
+    // its camp: it owes a relocation before it walks back.
+    [TestCase(5_000f, true)] [TestCase(5_400f, true)] [TestCase(5_401f, false)] [TestCase(5_500f, false)]
+    public void A_death_within_its_hunting_reach_is_a_death_at_its_camp(float distance, bool atCamp) =>
+        Assert.That(PlayerBotDriver.DiedAtCamp(new Vector3(distance, 0, 0), Vector3.Zero), Is.EqualTo(atCamp));
+
+    // The fit pass bars a failed camp too, not only the fallback (st-deathsA: after a relocation the bots walked back to
+    // the camp they died at, the nearest that fitted): with the camp it died at and one 3,000 units on that both fit, the
+    // other one.
+    [Test]
+    public void A_relocation_after_a_death_takes_another_camp_that_fits_not_the_one_it_died_at()
+    {
+        var monsters = new[]
+        {
+            Monster("a1", 0, ConColor.GREEN), Monster("a2", 100, ConColor.GREEN), Monster("a3", 200, ConColor.GREEN),
+            Monster("b1", 3_000, ConColor.GREEN), Monster("b2", 3_100, ConColor.GREEN), Monster("b3", 3_200, ConColor.GREEN),
+        };
+        Vector3[] failed = [new(50, 0, 0)];
+        Assert.That(PlayerBotDriver.PlanRelocation(monsters, Vector3.Zero, ConColor.GREEN, ConColor.YELLOW, failed,
+            new HashSet<string>(), 5), Is.EqualTo((new[] { "b1", "b2", "b3" }, (ConColor?)null, false)));
+        Assert.That(PlayerBotDriver.PlanRelocation(monsters[..3], Vector3.Zero, ConColor.GREEN, ConColor.YELLOW, failed,
+            new HashSet<string>(), 5), Is.EqualTo((new[] { "a1", "a2", "a3" }, (ConColor?)ConColor.GREEN, false)),
+            "the failed camp when it is the only one, as the fallback takes it");
+    }
+
+    // The adds rule's ring, round the bot itself: a monster that would aggro (IsPotentialAdd) reaches its aggro range +
+    // AddMargin; with an aggro range of 500, a spot 300 units off is in its reach and one 800 off is not.
+    [TestCase(300f, true)] [TestCase(700f, true)] [TestCase(701f, false)] [TestCase(800f, false)]
+    public void A_spot_within_an_adds_aggro_range_and_200_is_in_its_reach(float x, bool inReach) =>
+        Assert.That(PlayerBotDriver.InAddReach(Vector3.Zero, new List<(string, Vector3, int)> { ("add", new(x, 0, 0), 500) }),
+            Is.EqualTo(inReach));
+
+    // The clear spots nearest first, and the spot a bot in reach steps to: the nearest out of every reach; none, here.
+    [Test]
+    public void A_bot_in_an_adds_reach_steps_to_the_nearest_clear_spot()
+    {
+        var adds = new List<(string, Vector3, int)> { ("a", new(0, 0, 0), 500), ("b", new(1_200, 0, 0), 500) };
+        Vector3 here = new(100, 0, 0);
+        Vector3[] candidates = [new(600, 0, 0), new(100, -1_500, 0), new(-900, 0, 0), new(100, 900, 0)];
+        Assert.That(PlayerBotDriver.ClearSpots(here, candidates, adds),
+            Is.EqualTo(new[] { new Vector3(100, 900, 0), new Vector3(-900, 0, 0), new Vector3(100, -1_500, 0) }),
+            "(600,0) is in both reaches");
+        Assert.That(PlayerBotDriver.RestSpot(here, candidates, adds), Is.EqualTo(new Vector3(100, 900, 0)));
+        Assert.That(PlayerBotDriver.RestSpot(here, [new Vector3(600, 0, 0)], adds), Is.EqualTo(here));
+    }
+
+    // The candidates: directions points on each ring round the bot, at its height, the first along +X.
+    [Test]
+    public void The_candidate_spots_lie_on_rings_round_the_bot()
+    {
+        Vector3[] points = PlayerBotDriver.RingPoints(new Vector3(1_000, 2_000, 30), [500, 900], 4).ToArray();
+        Vector3[] expected = [new(1_500, 2_000, 30), new(1_000, 2_500, 30), new(500, 2_000, 30), new(1_000, 1_500, 30),
+            new(1_900, 2_000, 30), new(1_000, 2_900, 30), new(100, 2_000, 30), new(1_000, 1_100, 30)];
+        Assert.That(points.Length, Is.EqualTo(expected.Length));
+        for (int i = 0; i < expected.Length; i++)
+            Assert.That(Vector3.Distance(points[i], expected[i]), Is.LessThan(0.01f), $"point {i}: {points[i]}");
+    }
+
+    // After a release: it fights back what hits it; else it steps out of reach, then plans the relocation it owes (a
+    // death at its camp), then waits out its back-off (the GameBot's, from the third death with no XP:
+    // AutonomousDeathRecoveryPolicy) and the resurrection illness; then the recovery is over.
+    [TestCase(true, true, true, true, true, PlayerBotRecovery.Fight)]
+    [TestCase(false, true, true, true, true, PlayerBotRecovery.StepOut)]
+    [TestCase(false, false, true, true, true, PlayerBotRecovery.Replan)]
+    [TestCase(false, false, false, true, false, PlayerBotRecovery.Wait)]
+    [TestCase(false, false, false, false, true, PlayerBotRecovery.Wait)]
+    [TestCase(false, false, false, false, false, PlayerBotRecovery.Done)]
+    public void After_a_release_a_bot_steps_out_of_reach_then_replans_then_backs_off(bool attacked, bool stepsOut,
+        bool replanOwed, bool backingOff, bool ill, PlayerBotRecovery step) =>
+        Assert.That(PlayerBotDriver.AfterReleaseStep(attacked, stepsOut, replanOwed, backingOff, ill), Is.EqualTo(step));
 
     // Runs r1-r1h (2026-10-21): on the switchback stairs by Master Lorik the two corners at their foot (Z 1795) counted as
     // reached from the stairs 37 units above, so the bot made for the next corner, under the stairs, along the stair

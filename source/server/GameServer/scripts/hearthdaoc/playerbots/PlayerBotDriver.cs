@@ -19,6 +19,9 @@ public enum PlayerBotActivity { Waiting, Dead, Resting, Hunting, Fighting, Casti
 /// <summary>A class's role, as tools/lmroles.py gives it (CLASS_ROLES; levelmatch REVIEW-FIXES 11).</summary>
 public enum PlayerBotRole { Melee, Caster, Healer, Pet, Archer }
 
+/// <summary>The recovery's step after a release (PlayerBotDriver.AfterReleaseStep, #167 F4).</summary>
+public enum PlayerBotRecovery { Fight, StepOut, Replan, Wait, Done }
+
 /// <summary>What the bot does in reach of its target this think (PlayerBotDriver.CombatAction, #167 F6).</summary>
 public enum PlayerBotCombatAction { Cast, WaitToCast, Quickcast, Swing }
 
@@ -73,7 +76,7 @@ public sealed class PlayerBotState
     public ConColor? SafestPassedOver;                           //   for the cap and found none (CappedClock), and the
     public ConColor? FallbackCap;                                //   safest con it passed over; a GameBot's fallback camp's
     public bool HuntAvoided;                                     //   con, its names hunted at a stale one, and its failed
-    public readonly List<(Vector3 At, long Until)> FailedCamps = new();   // camps for 15 minutes (PlanRelocation)
+    public readonly List<(ushort Region, Vector3 At, long Until)> FailedCamps = new();   // camps, 15 minutes (PlanRelocation)
     public readonly Dictionary<string, long> AvoidUntil = new(StringComparer.OrdinalIgnoreCase);   // DEATHS.md A3: the
     public bool KillerAvoided;                                   //   names of deaths' killers and targets (IsAvoided)
     public long AliveSince;                                      // PLAYER_BOT_DEATH: the last release or login
@@ -124,6 +127,15 @@ public sealed class PlayerBotState
     public int EngageBuffs, FightPetCasts, FightWaits;           // #167 FIGHT buffs=, petCasts= and waits=
     public long SitSince;                                        // #167 PLAYER_BOT_REST: when the bot sat down, 0 standing
     public (string Head, PlayerBotDeathDetail Detail, GameObject Target)? PendingDeath;   // a DEATH line awaiting Dying (AwaitsDying)
+    public Vector3 DeathSpot;                                    // #167 F4: where it died last; at its camp (DiedAtCamp)
+    public bool ReplanAfterDeath;                                //   it owes a relocation (Died), planned from there, held
+    public long ReplanSince;                                     //   MaxHoldMilliseconds at most from the release; its
+    public int NoXpDeaths;                                       //   deaths with no XP between them (the GameBot's streak)
+    public long LastDeathTick, GainedAtDeath, RecoverUntil;      //   and the back-off's end; the last release, and the
+    public long ReleasedAt;                                      //   recovery after it (AfterReleaseStep): the spot out of
+    public bool AfterRelease;                                    //   every monster's reach it steps to, the ring test's
+    public Vector3? ClearSpot;                                   //   next scan and a blocked step's pause
+    public long NextReachTick, StepOutBlockedUntil;
 }
 
 // HearthDAoC player bots (#137): a thin copy of the /bot pilot's think (bots/autonomous/AutonomousPlayerPilot.cs:229-374) for a
@@ -162,7 +174,11 @@ public static class PlayerBotDriver
     public const int RelocateCandidates = 5;                 // corridor checks per try
     public const int CappedRelocateMilliseconds = 30_000;    // DEATHS.md A4: nothing in reach fits the cap this long
     public const int MaxDeathSteps = (int)ConColor.YELLOW - (int)ConColor.GREEN;   // a solo GameBot's (AWBC:3756, :3793-3796)
-    public const string Outgrown = "outgrown", Capped = "capped";                  // RelocateReason
+    public const string Outgrown = "outgrown", Capped = "capped", Died = "died";   // RelocateReason
+    public const int MaxHoldMilliseconds = 60_000;           // #167 F4: a hold while no camp is planned ends by then
+    public static readonly int[] StepOutRings = [500, 900, 1_300, 1_700, 2_100, 2_500];   // #167 F4: a released bot's
+    public const int SpotDirections = 12;                    //   candidate spots, every 30 degrees on each ring
+    public const int StepOutPauseMilliseconds = 10_000;      // (inf.) after a blocked step out, it stands this long
     public static readonly long StuckMilliseconds = (long)AutonomousStuckWatchdog.StuckThreshold.TotalMilliseconds; // 15 min
     public const int MaxFruitlessCasts = 3;                  // the cast watch (levelmatch/DESIGN.md 2.7)
     public const int SpellBlockMilliseconds = 10_000;        // (inf.) a few swings, then the spell again
@@ -182,6 +198,7 @@ public static class PlayerBotDriver
     private static readonly ConcurrentDictionary<GamePlayer, PlayerBotState> _states = new();
     [ThreadStatic] private static List<(GameNPC Npc, Vector3 At, int Score)> _candidates;      // FindWithin's, per timer
     [ThreadStatic] private static List<(GameNPC Npc, Vector3 At, int AggroRange)> _adds;       //   thread (TimerService)
+    [ThreadStatic] private static List<(GameNPC Npc, Vector3 At, int AggroRange)> _reach;      // ClearSpotNear's
 
     public static IEnumerable<PlayerBotState> States => _states.Values;
     public static bool IsDriven(GamePlayer player) => player != null && _states.ContainsKey(player);
@@ -291,8 +308,7 @@ public static class PlayerBotDriver
             state.RoamingSince = 0;
             state.CappedSince = 0;
             state.FallbackCap = null;
-            state.HuntAvoided = false;
-            state.FailedCamps.Clear();
+            state.HuntAvoided = false;                       //    its failed camps stay (#167 F4): each has its region
         }
         ObserveXp(state, player);                            // 5
         if (state.PendingDeath is { } held)                                              //    last think's DEATH line, its
@@ -303,6 +319,7 @@ public static class PlayerBotDriver
         if (!player.IsAlive) { HandleDeath(state, player, now); return; }               // 6
         if (state.DeathRecorded || state.AliveSince == 0)                                //    a new life
         {
+            if (state.DeathRecorded) StartRecovery(state, now);                          //    after a release (#167 F4)
             state.AliveSince = now;
             state.LifeKills = state.LifeRests = 0;
             state.Killer = null;
@@ -343,8 +360,9 @@ public static class PlayerBotDriver
             }
         }
         TryLoot(state, player, now);                                                     // 11. APP:403-414, before a sit
-        if (WaitsForSelfCast(state, player) || SelfHeal(state, player, now) || SummonPet(state, player, now) ||
-            SelfBuff(state, player, now))
+        if (WaitsForSelfCast(state, player) || StepsOutOfReach(state, player, now))      // 11a. #167 F4: after a release
+            return;
+        if (SelfHeal(state, player, now) || SummonPet(state, player, now) || SelfBuff(state, player, now))
             return;                                                                      // 11b. DEATHS.md A6, A5, #167 F8: before a rest
         if (state.RecoverBeforePull && Recovered(player)) state.RecoverBeforePull = false;
         bool mayRest = MayRest(Attacker(state, player, now, anyHitter: true) != null, state.Engaged && state.Target?.IsAlive == true);
@@ -363,11 +381,14 @@ public static class PlayerBotDriver
         if (state.Target == null)                                                        // 15
         {
             RelocateIfOutgrown(state, player, now);
-            if (HoldsForRelocation(CanRelocate(state, player), state.CappedSince, state.RoamDestination == state.Anchor))
+            if (state.ReplanAfterDeath && !Holding(state.ReplanSince, now)) EndReplan(state, player);   // #167 F4
+            if (Recovering(state, player, now) ||                                        //    the back-off, the illness
+                HoldsForRelocation(CanRelocate(state, player), state.CappedSince, state.ReplanSince,
+                    state.RoamDestination == state.Anchor, now))
             {
-                state.Mover.Stop(now);                                                   //    capped: no walk into the camp
-                state.Activity = PlayerBotActivity.Roaming;                              //    it cannot hunt (no target)
-            }
+                state.Mover.Stop(now);                                                   //    capped, or owed a relocation:
+                state.Activity = PlayerBotActivity.Roaming;                              //    no walk into the camp; it
+            }                                                                            //    cannot hunt (no target)
             else Roam(state, player, now);
             ReportIdle(state, player, now);
             return;
@@ -766,9 +787,12 @@ public static class PlayerBotDriver
         bool searchDue = now >= state.NextTargetRefreshTick;
         if (state.Target != null && (fighting || !searchDue)) return;  // keep a target while fighting it
         if (searchDue) state.NextTargetRefreshTick = now + TargetRefreshMilliseconds;
-        // Self-defence every think; the rings only every 2 s, so an idle bot doesn't scan 5,000 units 4 times a second
+        // Self-defence every think; the rings only every 2 s, so an idle bot doesn't scan 5,000 units 4 times a second;
+        // none during the recovery after a release (#167 F4): it pulls nothing until that is over
         GameNPC found = Attacker(state, player, now) ??                                    // self-defence first
-            (searchDue ? FindWithin(state, player, ImmediateSearchRadius, now) ?? FindWithin(state, player, SearchRadius, now) : null); // AWBC:3148
+            (searchDue && !state.AfterRelease                                              // AWBC:3148
+                ? FindWithin(state, player, ImmediateSearchRadius, now) ?? FindWithin(state, player, SearchRadius, now)
+                : null);
         if (found == state.Target) return;
         state.Target = found;
         state.FromDefence = found != null && IsAttacking(player, found);                  // FIGHT and DEATH from=
@@ -909,10 +933,12 @@ public static class PlayerBotDriver
     /// level-up. A capped bot moves to a camp that fits instead (PlanRelocation; DEATHS.md A4).</summary>
     public static int NextDeathSteps(int deathSteps) => Math.Min(deathSteps + 1, MaxDeathSteps);
 
-    /// <summary>Why the bot moves its leash now, or null: Capped when its searches have found monsters in reach but none
-    /// under its cap for CappedRelocateMilliseconds (DEATHS.md A4), Outgrown when it has reached no target for
-    /// RelocateAfterMilliseconds.</summary>
-    public static string RelocateReason(long roamingSince, long cappedSince, long now) =>
+    /// <summary>Why the bot moves its leash now, or null: Died after a death at its camp, before it walks back (#167 F4:
+    /// the GameBot replans 2.5-4 s after a solo death, AWBC:3780-3816); Capped when its searches have found monsters in
+    /// reach but none under its cap for CappedRelocateMilliseconds (DEATHS.md A4), Outgrown when it has reached no target
+    /// for RelocateAfterMilliseconds.</summary>
+    public static string RelocateReason(long roamingSince, long cappedSince, long now, bool diedAtCamp) =>
+        diedAtCamp ? Died :
         cappedSince != 0 && now - cappedSince >= CappedRelocateMilliseconds ? Capped :
         roamingSince != 0 && now - roamingSince >= RelocateAfterMilliseconds ? Outgrown : null;
 
@@ -941,10 +967,64 @@ public static class PlayerBotDriver
 
     /// <summary>A capped bot that can relocate stands where it is until it does, unless it walks to its anchor (a
     /// relocation's spot, or back to the leash): no roam into a camp it cannot hunt, as a GameBot holds still after a
-    /// death until it plans its next camp (HoldSoloDeathRecovery, AWBC:2998-3012). One that cannot roams as before
-    /// (FallbackInPlace): held, it stood there for good.</summary>
-    public static bool HoldsForRelocation(bool canRelocate, long cappedSince, bool walkingToAnchor) =>
-        canRelocate && cappedSince != 0 && !walkingToAnchor;
+    /// death until it plans its next camp (HoldSoloDeathRecovery, AWBC:2998-3012). So does one owed a relocation after a
+    /// death at its camp, from its release (replanSince, #167 F4). One that cannot roams as before (FallbackInPlace):
+    /// held, it stood there for good. No hold lasts MaxHoldMilliseconds: FallbackInPlace has no cap for a death's
+    /// relocation, nor for a capped bot that passed over only names it avoids, so with no camp planned by then the bot
+    /// hunts where it is, under its cap and its avoided names.</summary>
+    public static bool HoldsForRelocation(bool canRelocate, long cappedSince, long replanSince, bool walkingToAnchor, long now) =>
+        canRelocate && !walkingToAnchor && (Holding(cappedSince, now) || Holding(replanSince, now));
+
+    /// <summary>A hold begun at since (0: none) and not yet MaxHoldMilliseconds old.</summary>
+    public static bool Holding(long since, long now) => since != 0 && now - since < MaxHoldMilliseconds;
+
+    /// <summary>A death at the bot's camp (#167 F4): within its anchor's leash and roam, where FindWithin hunts.</summary>
+    public static bool DiedAtCamp(Vector3 death, Vector3 anchor) =>
+        Vector3.Distance(death, anchor) <= LeashRadius + RoamRadius;
+
+    /// <summary>The recovery after a release (#167 F4), this think's step: it fights back what hits it (attacked); else
+    /// it steps out of the reach of any monster that would aggro (stepsOut: in reach, with a clear spot to go to); then
+    /// it plans the relocation owed after a death at its camp (replanOwed); then it waits out its back-off (the GameBot's
+    /// no-XP death streak, AutonomousDeathRecoveryPolicy) and the resurrection illness out there; then it is done. The
+    /// release restores health, power and endurance (GamePlayer.cs:1723-1725): no rest to full.</summary>
+    public static PlayerBotRecovery AfterReleaseStep(bool attacked, bool stepsOut, bool replanOwed, bool backingOff, bool ill) =>
+        attacked ? PlayerBotRecovery.Fight : stepsOut ? PlayerBotRecovery.StepOut : replanOwed ? PlayerBotRecovery.Replan :
+        backingOff || ill ? PlayerBotRecovery.Wait : PlayerBotRecovery.Done;
+
+    /// <summary>Whether a spot is in the reach of a potential add (the adds rule's ring, Crowding's: its aggro range +
+    /// AddMargin) (#167 F4, F7).</summary>
+    public static bool InAddReach<T>(Vector3 at, IReadOnlyList<(T Npc, Vector3 At, int AggroRange)> adds) where T : class
+    {
+        for (int i = 0; i < adds.Count; i++)
+        {
+            float reach = adds[i].AggroRange + AddMargin;
+            if (Vector3.DistanceSquared(adds[i].At, at) <= reach * reach) return true;
+        }
+        return false;
+    }
+
+    /// <summary>The candidates out of every potential add's reach (InAddReach), nearest to here first.</summary>
+    public static List<Vector3> ClearSpots<T>(Vector3 here, IEnumerable<Vector3> candidates,
+        IReadOnlyList<(T Npc, Vector3 At, int AggroRange)> adds) where T : class =>
+        candidates.Where(spot => !InAddReach(spot, adds)).OrderBy(spot => Vector3.DistanceSquared(spot, here)).ToList();
+
+    /// <summary>The spot a bot in a potential add's reach steps to (#167 F4, F7): the nearest clear candidate; with none,
+    /// here.</summary>
+    public static Vector3 RestSpot<T>(Vector3 here, IEnumerable<Vector3> candidates,
+        IReadOnlyList<(T Npc, Vector3 At, int AggroRange)> adds) where T : class =>
+        ClearSpots(here, candidates, adds) is [Vector3 first, ..] ? first : here;
+
+    /// <summary>The candidate spots round here: directions points on each ring, at here's height, the first along +X; the
+    /// caller puts each on the navmesh.</summary>
+    public static IEnumerable<Vector3> RingPoints(Vector3 here, int[] rings, int directions)
+    {
+        foreach (int ring in rings)
+            for (int i = 0; i < directions; i++)
+            {
+                double angle = 2 * Math.PI * i / directions;
+                yield return new(here.X + (float)(Math.Cos(angle) * ring), here.Y + (float)(Math.Sin(angle) * ring), here.Z);
+            }
+    }
 
     /// <summary>The cap a capped bot takes where it is when it cannot move its leash (a lever spot bot, one out of its
     /// anchor region or off the mesh, or no camp in its zone): the safest con it passed over, as a GameBot takes the
@@ -958,7 +1038,9 @@ public static class PlayerBotDriver
     /// within RoamRadius of it, itself too; it fits the cap when the monster is at or under the cap and so is the
     /// camp's median con, as a GameBot's camp fits by its levels' median (AWBC:3312-3330, :3386; unlike a GameBot's
     /// camp, one monster name, those over the natural cap count too). A name the bot avoids (DEATHS.md A3) counts as
-    /// over the cap, and such a monster is no spot: a camp full of them fits no cap. With none that fits, the GameBot's
+    /// over the cap, and such a monster is no spot: a camp full of them fits no cap. Nor is one the bot died at in the
+    /// last 15 minutes (within RoamRadius of a failedCamps spot; #167 F4: the fit pass bars it too, so the bot no longer
+    /// goes back to the nearest camp that fits, the one it died at). With none that fits, the GameBot's
     /// fallback (SelectSafestAvailableAfterDeath, AutonomousBotDecisionEngine.cs:293-313; AWBC:3422-3437): of the camps
     /// with a median at or under the natural cap, the fresh ones while there are any (most of the camp not avoided, as
     /// PreferFreshTargets, AutonomousDeathRecoveryPolicy.cs:26-38; else Stale, and the bot hunts their names there as a
@@ -981,10 +1063,12 @@ public static class PlayerBotDriver
             .Where(i => monsters[i].Huntable && monsters[i].Con > ConColor.GREY && !rejected.Contains(monsters[i].Npc))
             .OrderBy(i => Vector3.DistanceSquared(monsters[i].At, here))
             .ToArray();
+        bool Failed(int i) => failedCamps != null && failedCamps.Any(f =>
+            Vector3.DistanceSquared(monsters[i].At, f) <= RoamRadius * RoamRadius);
         List<T> fit = new();
         foreach (int i in order)
         {
-            if (monsters[i].Con <= cap && !monsters[i].Avoided && CampCon(monsters, grid, i).Fresh <= cap)
+            if (monsters[i].Con <= cap && !monsters[i].Avoided && !Failed(i) && CampCon(monsters, grid, i).Fresh <= cap)
                 fit.Add(monsters[i].Npc);
             if (fit.Count == count) break;
         }
@@ -994,8 +1078,7 @@ public static class PlayerBotDriver
         {
             (ConColor median, ConColor fresh) = CampCon(monsters, grid, i);
             if (median <= natural)
-                safe.Add((i, median, fresh <= natural, failedCamps != null && failedCamps.Any(f =>
-                    Vector3.DistanceSquared(monsters[i].At, f) <= RoamRadius * RoamRadius)));
+                safe.Add((i, median, fresh <= natural, Failed(i)));
         }
         if (safe.Count == 0) return (Array.Empty<T>(), null, false);
         bool stale = !safe.Any(c => c.Fresh);
@@ -1057,16 +1140,17 @@ public static class PlayerBotDriver
 
     /// <summary>Remembers where the bot died, its failed camp, for FailureMemoryMilliseconds, every one: a GameBot keeps
     /// its failed camps out of its plans that long (_recentFailedSoloCamps, AWBC:3246, :3803-3804), past the next camp
-    /// it picks. Those whose time is up go.</summary>
-    public static void RememberFailedCamp(List<(Vector3 At, long Until)> failed, Vector3 at, long now)
+    /// it picks. Those whose time is up go. Each is its region's, and a region change keeps them (#167 F4).</summary>
+    public static void RememberFailedCamp(List<(ushort Region, Vector3 At, long Until)> failed, ushort region, Vector3 at,
+        long now)
     {
         failed.RemoveAll(camp => camp.Until <= now);
-        failed.Add((at, now + AutonomousDeathRecoveryPolicy.FailureMemoryMilliseconds));
+        failed.Add((region, at, now + AutonomousDeathRecoveryPolicy.FailureMemoryMilliseconds));
     }
 
-    /// <summary>The failed camps the bot still avoids (PlanRelocation).</summary>
-    public static Vector3[] FailedCamps(IReadOnlyList<(Vector3 At, long Until)> failed, long now) =>
-        failed.Where(camp => now < camp.Until).Select(camp => camp.At).ToArray();
+    /// <summary>The failed camps in a region the bot still avoids (PlanRelocation).</summary>
+    public static Vector3[] FailedCamps(IReadOnlyList<(ushort Region, Vector3 At, long Until)> failed, ushort region, long now) =>
+        failed.Where(camp => camp.Region == region && now < camp.Until).Select(camp => camp.At).ToArray();
 
     // The GameBot's recovery thresholds (AutonomousRestPolicy.NeedsRecovery, AutonomousBotDecisionEngine.cs:384-394: 70%
     // health, 45% power, 35% endurance; the pilot's 50/22/20 at APP:186-187 left the bots pulling at half health,
@@ -1354,26 +1438,32 @@ public static class PlayerBotDriver
     // can walk to (a GameBot leaves an outgrown camp for one at its level, AWBC:3244-3300). A capped one moves after 30 s
     // (DEATHS.md A4): both to the nearest camp that fits the death cap, else to the safest one, as a GameBot falls back
     // after a death (PlanRelocation). A capped bot that cannot move takes the safest con in reach (FallbackInPlace).
+    // After a death at its camp (#167 F4) it plans before it walks back, from where it died, in its anchor's region and
+    // the zone it died in (the bind may lie elsewhere), the failed camps barred; with no camp it hunts where it is.
     private static void RelocateIfOutgrown(PlayerBotState state, GamePlayer player, long now)
     {
-        string reason = RelocateReason(state.RoamingSince, state.CappedSince, now);
+        string reason = RelocateReason(state.RoamingSince, state.CappedSince, now, state.ReplanAfterDeath);
         if (reason == null || now < state.NextRelocateTick) return;
-        if (!CanRelocate(state, player) || player.CurrentZone is not Zone zone)   // the lever test keeps its bots on
-        {                                                                          //   their spots
-            FallBackInPlace(state, reason);
+        bool died = reason == Died;
+        if (!CanRelocate(state, player) ||                                         // the lever test keeps its bots on
+            (died ? WorldMgr.GetRegion(state.AnchorRegion)?.GetZone((int)state.DeathSpot.X, (int)state.DeathSpot.Y)
+                : player.CurrentZone) is not Zone zone)                            //   their spots
+        {
+            FallBack(state, player, reason);
             return;
         }
-        state.NextRelocateTick = now + (reason == Capped ? CappedRelocateMilliseconds : RelocateAfterMilliseconds);
-        Vector3 here = new(player.X, player.Y, player.Z);
+        state.NextRelocateTick = now + (reason == Outgrown ? RelocateAfterMilliseconds : CappedRelocateMilliseconds);
+        Vector3 here = new(player.X, player.Y, player.Z), from = died ? state.DeathSpot : here;
         IPathfindingMgr nav = PathfindingProvider.Instance;
-        if (nav.HasNavmesh(zone) && nav.GetClosestPoint(zone, here, 64, 64, 128, nav.DefaultFilters) == null)
+        if (nav.HasNavmesh(player.CurrentZone) && nav.GetClosestPoint(player.CurrentZone, here, 64, 64, 128, nav.DefaultFilters) == null)
         {
-            FallBackInPlace(state, reason);   // off the mesh here, every corridor fails (PlayerTravelPath.cs:48-50): blame
+            FallBack(state, player, reason);  // off the mesh here, every corridor fails (PlayerTravelPath.cs:48-50): blame
             return;                           //   no monster for it
         }
+        bool corridors = nav.HasNavmesh(zone) && player.CurrentZone == zone;      // a corridor is one zone's (PTP:75-81)
         ConColor natural = MaximumTargetCon(1, 0);
         List<(GameNPC Npc, Vector3 At, ConColor Con, bool Huntable, bool Avoided)> monsters = new();
-        foreach (GameNPC npc in WorldMgr.GetNPCsFromRegion(player.CurrentRegionID))
+        foreach (GameNPC npc in WorldMgr.GetNPCsFromRegion(state.AnchorRegion))   // CanRelocate: the bot's region too
         {
             if (npc.CurrentZone != zone || !IsExperienceTarget(npc) || !IsAttackable(player, npc)) continue;
             ConColor con = ConLevels.GetConColor(player.GetConLevel(npc));
@@ -1382,13 +1472,13 @@ public static class PlayerBotDriver
                     con <= natural && AutonomousPlayerPilot.IsEligibleExperienceTarget(con, npc.EffectiveLevel, player.Level, 1),
                     IsAvoided(state.AvoidUntil, npc.Name, now)));
         }
-        (GameNPC[] nearest, ConColor? fallback, bool stale) = PlanRelocation(monsters, here,
-            MaximumTargetCon(1, state.DeathSafetySteps), natural, FailedCamps(state.FailedCamps, now), state.RelocateRejected,
-            RelocateCandidates);
+        (GameNPC[] nearest, ConColor? fallback, bool stale) = PlanRelocation(monsters, from,
+            MaximumTargetCon(1, state.DeathSafetySteps), natural, FailedCamps(state.FailedCamps, state.AnchorRegion, now),
+            state.RelocateRejected, RelocateCandidates);
         foreach (GameNPC npc in nearest)
         {
             Vector3 spot = new(npc.X, npc.Y, npc.Z);
-            if (nav.HasNavmesh(zone) && !PlayerTravelPath.TryBuildCorridor(nav, zone, here, spot, out _))
+            if (corridors && !PlayerTravelPath.TryBuildCorridor(nav, zone, here, spot, out _))
             {
                 state.RelocateRejected.Add(npc);
                 continue;
@@ -1402,11 +1492,31 @@ public static class PlayerBotDriver
             state.FallbackCap = fallback;   // that camp's con, or none: the death cap (Cap)
             state.HuntAvoided = stale;      //   and at a camp of avoided names, those too (FindWithin)
             state.CappedSince = 0;          // the next search starts the clock afresh, on the way there too
+            state.ReplanAfterDeath = false; // planned (#167 F4)
+            state.ReplanSince = 0;
             return;
         }
         if (Log.IsInfoEnabled)
             Log.Info(RelocateNoneLine(player.Name, player.Level, nearest.Length, zone.ID, reason));
-        if (nearest.Length == 0) FallBackInPlace(state, reason);   // no camp in the zone: none to try next time either
+        if (nearest.Length == 0) FallBack(state, player, reason);   // no camp in the zone: none to try next time either
+    }
+
+    // A capped bot's FallBackInPlace; after a death (#167 F4), the end of the relocation owed.
+    private static void FallBack(PlayerBotState state, GamePlayer player, string reason)
+    {
+        if (reason == Died) EndReplan(state, player);
+        else FallBackInPlace(state, reason);
+    }
+
+    // #167 F4: no camp planned after a death, at once or within MaxHoldMilliseconds: the bot hunts where it is, under its
+    // lowered cap and its avoided names; in its anchor's region the leash moves here, so it doesn't walk back.
+    private static void EndReplan(PlayerBotState state, GamePlayer player)
+    {
+        state.ReplanAfterDeath = false;
+        state.ReplanSince = 0;
+        if (player.CurrentRegionID != state.AnchorRegion || state.Task != null) return;
+        state.Anchor = new(player.X, player.Y, player.Z);
+        state.RoamDestination = null;
     }
 
     // FallbackInPlace's cap where the bot is; its next search finds the monster it passed over, and the hold ends.
@@ -1427,6 +1537,99 @@ public static class PlayerBotDriver
         return new(centre.X + (float)(Math.Cos(angle) * 700), centre.Y + (float)(Math.Sin(angle) * 700), centre.Z);
     }
 
+    // #167 F4: a release starts the recovery (AfterReleaseStep): the back-off from now (the GameBot's, from its replan
+    // after the release, AWBC:3778-3786), and the hold for the relocation owed.
+    private static void StartRecovery(PlayerBotState state, long now)
+    {
+        state.ReleasedAt = now;
+        state.AfterRelease = true;
+        state.RecoverUntil = now + AutonomousDeathRecoveryPolicy.RetryDelayMilliseconds(state.NoXpDeaths);
+        state.ReplanSince = state.ReplanAfterDeath ? now : 0;
+        state.ClearSpot = null;
+        state.NextReachTick = state.StepOutBlockedUntil = 0;
+    }
+
+    // #167 F4: the back-off or the resurrection illness: no pull, out of reach (step 15 holds the bot).
+    private static bool Recovering(PlayerBotState state, GamePlayer player, long now) =>
+        state.AfterRelease && (now < state.RecoverUntil || Ill(player));
+
+    // The resurrection illness (OnRevive's spell 2435 for a PvE or PvP death, 8181 for RvR, GamePlayer.cs:1823-1858;
+    // EffectHelper.cs:242-245). A PvE death gives it only from pve_exp_loss_level (m_deathtype, GamePlayer.cs:6018-6035).
+    private static bool Ill(GamePlayer player) =>
+        player.effectListComponent.ContainsEffectForEffectType(eEffect.ResurrectionIllness) ||
+        player.effectListComponent.ContainsEffectForEffectType(eEffect.RvrResurrectionIllness);
+
+    // #167 F4: the recovery's step out of reach (AfterReleaseStep), after a release: its own ring test every 2 s, over the
+    // monsters round it that would aggro (AddReach), and a walk to the nearest clear spot on the navmesh, unless it sits
+    // (a rest after it fought back). A blocked walk stands it for StepOutPauseMilliseconds. Its other steps run in Think:
+    // the relocation owed and the holds at step 15, no search at step 14 while the recovery lasts; when it is over, the
+    // idle clock starts afresh. True while it walks.
+    private static bool StepsOutOfReach(PlayerBotState state, GamePlayer player, long now)
+    {
+        if (!state.AfterRelease) return false;
+        if (now >= state.NextReachTick)
+        {
+            state.NextReachTick = now + TargetRefreshMilliseconds;
+            state.ClearSpot = now < state.StepOutBlockedUntil ? null : ClearSpotNear(player, StepOutRings);
+        }
+        switch (AfterReleaseStep(Attacker(state, player, now, anyHitter: true) != null,
+                    state.ClearSpot != null && !player.IsSitting, state.ReplanAfterDeath, now < state.RecoverUntil, Ill(player)))
+        {
+            case PlayerBotRecovery.Fight:
+                state.ClearSpot = null;                                                 // it fights back (step 14)
+                return false;
+            case PlayerBotRecovery.StepOut:
+                state.Activity = PlayerBotActivity.Roaming;
+                PlayerBotStepResult step = state.Mover.StepToward(state.ClearSpot.Value, 20, now);
+                if (step is PlayerBotStepResult.Blocked)
+                {
+                    ReportBlocked(state, player, "clear", state.ClearSpot.Value, now);
+                    state.StepOutBlockedUntil = now + StepOutPauseMilliseconds;
+                }
+                if (step is PlayerBotStepResult.Blocked or PlayerBotStepResult.Arrived) state.ClearSpot = null;
+                return true;
+            case PlayerBotRecovery.Done:
+                state.AfterRelease = false;
+                state.RoamingSince = 0;
+                return false;
+            default:
+                return false;                                                           // Replan, Wait: step 15
+        }
+    }
+
+    // The spot out of every potential add's reach nearest the bot (RestSpot), on the navmesh, or null when it stands
+    // clear or finds none: the monsters within the rings' reach (AddScanMargin past the outer one) that would aggro.
+    private static Vector3? ClearSpotNear(GamePlayer player, int[] rings)
+    {
+        Vector3 here = new(player.X, player.Y, player.Z);
+        List<(GameNPC Npc, Vector3 At, int AggroRange)> adds = _reach ??= new();
+        adds.Clear();
+        foreach (GameNPC npc in player.GetNPCsInRadius((ushort)(rings[^1] + AddScanMargin)))
+            if (IsExperienceTarget(npc) && AddReach(player, npc) is > 0 and int reach)
+                adds.Add((npc, new(npc.X, npc.Y, npc.Z), reach));
+        Vector3? found = InAddReach(here, adds)
+            ? OnMeshClear(player, ClearSpots(here, RingPoints(here, rings, SpotDirections), adds), adds) : null;
+        adds.Clear();                                                                   // no monster held past the scan
+        return found;
+    }
+
+    // The first of the clear spots (nearest first) that has a navmesh point near it still clear; with no navmesh, the
+    // first.
+    private static Vector3? OnMeshClear(GamePlayer player, List<Vector3> clear,
+        List<(GameNPC Npc, Vector3 At, int AggroRange)> adds)
+    {
+        IPathfindingMgr nav = PathfindingProvider.Instance;
+        Zone zone = player.CurrentZone;
+        bool mesh = zone != null && nav.HasNavmesh(zone);
+        foreach (Vector3 spot in clear)
+        {
+            if (!mesh) return spot;
+            if (nav.GetClosestPoint(zone, spot, 64, 64, 256, nav.DefaultFilters) is Vector3 on && !InAddReach(on, adds))
+                return on;
+        }
+        return null;
+    }
+
     // APP:561-583 without SaveIntoDatabase.
     private static void HandleDeath(PlayerBotState state, GamePlayer player, long now)
     {
@@ -1443,7 +1646,14 @@ public static class PlayerBotDriver
             state.DeathSafetySteps = NextDeathSteps(state.DeathSafetySteps);
             state.FallbackCap = null;                                                   // a GameBot's fallback is its camp's
             state.HuntAvoided = false;                                                  //   only, and it fails here (AWBC:3801,
-            RememberFailedCamp(state.FailedCamps, new(player.X, player.Y, player.Z), now);   //   :3803-3804)
+            state.DeathSpot = new(player.X, player.Y, player.Z);                        //   :3803-3804)
+            RememberFailedCamp(state.FailedCamps, player.CurrentRegionID, state.DeathSpot, now);
+            state.NoXpDeaths = AutonomousDeathRecoveryPolicy.NextNoExperienceDeathStreak(state.NoXpDeaths,   // #167 F4:
+                state.LastDeathTick, now, state.Gained > state.GainedAtDeath);          //   the back-off (AWBC:3778-3786)
+            (state.LastDeathTick, state.GainedAtDeath) = (now, state.Gained);
+            state.ReplanAfterDeath = state.Task == null && CanRelocate(state, player) && DiedAtCamp(state.DeathSpot, state.Anchor);
+            state.NextRelocateTick = 0;                                                 //   and the plan before the walk back
+            state.AfterRelease = false;
             state.CappedSince = 0;
             state.Target = null;
             state.Engaged = false;
