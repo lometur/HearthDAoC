@@ -112,6 +112,7 @@ public sealed class PlayerBotState
     public byte NoSelfHealLevel;                                 //   or no heal (#167 F2: looked for from 85% too)
     public long NextCombatPetTick;                               // #167 F1: a Theurgist's next pet at its target, and the
     public byte NoCombatPetLevel;                                //   level at which it found no such summon
+    public long NextSelfBuffTick;                                // #167 F8: the next self-buff scan
     public long NextQuickcastTick;                               // Quickcast's next try (UseQuickcast)
     public bool EngagePet;                                       // PLAYER_BOT_FIGHT pet=, heals= and qc=: a living pet at
     public int FightHeals;                                       //   the fight's first think, its heals on itself since,
@@ -168,6 +169,7 @@ public static class PlayerBotDriver
     public const int QuickcastRetryMilliseconds = 2_000;     // (inf.) as the heal's
     public const byte CasterPowerStop = 70;                  // #167 F3: a caster stops resting power here (rest-work:
     public const byte RestEnduranceStop = 60;                //   its 95th-percentile fight cost + 18%); all, endurance
+    public const int SelfBuffScanMilliseconds = 5_000;       // #167 F8: the self-buffs' scan, out of a fight
 
     private static readonly ConcurrentDictionary<GamePlayer, PlayerBotState> _states = new();
     [ThreadStatic] private static List<(GameNPC Npc, Vector3 At, int Score)> _candidates;      // FindWithin's, per timer
@@ -298,6 +300,7 @@ public static class PlayerBotDriver
             state.Killer = null;
             state.KillerAvoided = false;
             state.RecoverBeforePull = false;                                             //    the release restores it all
+            state.NextSelfBuffTick = 0;                                                  //    and ends its buffs: scan now
         }
         state.DeathRecorded = false;
         state.ReleaseRequested = false;
@@ -330,8 +333,9 @@ public static class PlayerBotDriver
             }
         }
         TryLoot(state, player, now);                                                     // 11. APP:403-414, before a sit
-        if (WaitsForSelfCast(state, player) || SelfHeal(state, player, now) || SummonPet(state, player, now))
-            return;                                                                      // 11b. DEATHS.md A6, A5: before a rest
+        if (WaitsForSelfCast(state, player) || SelfHeal(state, player, now) || SummonPet(state, player, now) ||
+            SelfBuff(state, player, now))
+            return;                                                                      // 11b. DEATHS.md A6, A5, #167 F8: before a rest
         if (state.RecoverBeforePull && Recovered(player)) state.RecoverBeforePull = false;
         if (MayRest(Attacker(state, player, now, anyHitter: true) != null, state.Engaged && state.Target?.IsAlive == true) &&
             WantsRest(player, state.RecoverBeforePull))                                  // 12. APP:290-296, DEATHS.md A1
@@ -594,6 +598,47 @@ public static class PlayerBotDriver
     /// <summary>Whether a cast counts in the cast watch (WatchCast): a damage spell. A summon's pet hurts the target only
     /// once it reaches it, so three summons in a row would read as fruitless and block the bot's spells (#167 F1).</summary>
     public static bool CountsInCastWatch(Spell spell) => spell.SpellType is not eSpellType.SummonTheurgistPet;
+
+    // #167 F8: the self-buffs a bot keeps up, in this order: armour factor, absorb, bladeturn, ablative, damage shield,
+    // damage add, base then spec stat buffs, the regeneration buffs (spells/RegenBuff.cs); then the Paladin's resist
+    // chants, as chants only.
+    private static readonly eSpellType[] SelfBuffOrder =
+    [
+        eSpellType.BaseArmorFactorBuff, eSpellType.SpecArmorFactorBuff, eSpellType.PaladinArmorFactorBuff,
+        eSpellType.ArmorAbsorptionBuff, eSpellType.Bladeturn, eSpellType.AblativeArmor, eSpellType.DamageShield,
+        eSpellType.DamageAdd, eSpellType.StrengthBuff, eSpellType.DexterityBuff, eSpellType.ConstitutionBuff,
+        eSpellType.QuicknessBuff, eSpellType.AcuityBuff, eSpellType.StrengthConstitutionBuff,
+        eSpellType.DexterityQuicknessBuff, eSpellType.HealthRegenBuff, eSpellType.PowerRegenBuff,
+        eSpellType.EnduranceRegenBuff, eSpellType.BodySpiritEnergyBuff, eSpellType.HeatColdMatterBuff,
+    ];
+    private static readonly int FirstChantOnly = Array.IndexOf(SelfBuffOrder, eSpellType.BodySpiritEnergyBuff);
+
+    /// <summary>The next self-buff to cast (#167 F8): of the kinds in SelfBuffOrder not active on the bot, the first, its
+    /// best rank the bot can cast now: at or below its level, on itself (a Self, Realm or Group target), no song (an
+    /// instrument), the concentration it takes left, the power it costs (HasPowerFor), ready (recast). A chant (a
+    /// pulsing spell) only while none is up, as a new pulse effect ends the others (EffectListComponent.cs:362-371),
+    /// and never one that costs power each pulse: it would drain the power the bot's rest waits for. No cap of the
+    /// bot's own: the server's checks decide (its 20-effect limit counts concentration effects only, SpellHandler.cs:34,
+    /// :818; a player has no GameBot exemption there).</summary>
+    public static (Spell, SpellLine) NextSelfBuff(IEnumerable<(Spell Spell, SpellLine Line)> spells, IReadOnlySet<eSpellType> active,
+        bool chantUp, int level, int concentrationLeft, int maxMana, int mana, Func<Spell, bool> ready)
+    {
+        Spell best = null;
+        SpellLine bestLine = null;
+        int bestKind = int.MaxValue;
+        foreach ((Spell spell, SpellLine line) in spells)
+        {
+            int kind = Array.IndexOf(SelfBuffOrder, spell.SpellType);
+            if (kind < 0 || kind > bestKind || active.Contains(spell.SpellType) || spell.Level > level ||
+                spell.Target is not (eSpellTarget.SELF or eSpellTarget.REALM or eSpellTarget.GROUP) || spell.NeedInstrument ||
+                (spell.IsPulsing ? chantUp || spell.PulsePower != 0 : kind >= FirstChantOnly) ||
+                spell.Concentration > concentrationLeft || !HasPowerFor(maxMana, mana, spell.Power) || !ready(spell))
+                continue;
+            if (best == null || kind < bestKind || spell.Level > best.Level || spell.Level == best.Level && spell.ID > best.ID)
+                (best, bestLine, bestKind) = (spell, line, kind);
+        }
+        return (best, bestLine);
+    }
 
     /// <summary>A Necromancer in shade form cannot swing (AttackComponent.cs:511-516): its servant fights for it.</summary>
     public static bool CanSwing(GameNPC pet) => pet is not NecromancerPet;
@@ -1449,6 +1494,24 @@ public static class PlayerBotDriver
             player.SetGroundTarget(player.X, player.Y, player.Z);
         }
         return CastOnSelf(state, player, now, summon, line);
+    }
+
+    // #167 F8: the class's own self-buffs (NextSelfBuff), one cast at a time, scanned every SelfBuffScanMilliseconds out of
+    // a fight (MayRest's view), before a rest as a player buffs and then sits. A release ends them all: the new life
+    // scans at once (Think).
+    private static bool SelfBuff(PlayerBotState state, GamePlayer player, long now)
+    {
+        if (now < state.NextSelfBuffTick || player.IsCasting ||
+            !MayRest(Attacker(state, player, now, anyHitter: true) != null, state.Engaged && state.Target?.IsAlive == true))
+            return false;
+        state.NextSelfBuffTick = now + SelfBuffScanMilliseconds;
+        HashSet<eSpellType> active = new();
+        foreach (ECSGameSpellEffect effect in player.effectListComponent.GetSpellEffects())   // a chant's pulse effect too
+            if (effect.SpellHandler?.Spell is Spell spell) active.Add(spell.SpellType);
+        (Spell buff, SpellLine line) = NextSelfBuff(UsableSpells(player), active,
+            player.effectListComponent.GetPulseEffects().Count > 0, player.Level, player.Concentration, player.MaxMana,
+            player.Mana, spell => player.GetSkillDisabledDuration(spell) <= 0);
+        return buff != null && CastOnSelf(state, player, now, buff, line);
     }
 
     // #167 F1: at each cast choice a Theurgist casts a pet at its target before its damage spell, whenever it can, as a

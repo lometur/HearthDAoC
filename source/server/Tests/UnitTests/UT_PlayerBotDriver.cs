@@ -1893,6 +1893,82 @@ public sealed class UT_PlayerBotDriver
         Assert.That(PlayerBotDriver.CountsInCastWatch(Damage("Bolt", 20, 90)), Is.True);
     }
 
+    // --- the class's own self-buffs (#167 F8) ---
+
+    // As the world's rows (Spell, LineXSpell): power, concentration, pulse and pulse power as there.
+    private static (Spell, SpellLine) Buff(int id, string name, string type, string target, int level, int power,
+        int concentration = 0, int pulse = 0, int pulsePower = 0, int instrument = 0) =>
+        (new(new DbSpell { SpellID = id, Name = name, Type = type, Target = target, Power = power, Concentration = concentration,
+            Pulse = pulse, PulsePower = pulsePower, Frequency = pulse == 0 ? 0 : 50, InstrumentRequirement = instrument,
+            CastTime = pulse == 0 ? 3.0 : 0, Duration = concentration > 0 ? 0 : pulse == 0 ? 1200 : 6 }, level), Mending);
+
+    private static readonly (Spell, SpellLine) DiamondShield = Buff(9, "Diamond Shield", "BaseArmorFactorBuff", "Self", 40, 25),
+        BufferOfStone = Buff(22, "Buffer of Stone", "ArmorAbsorptionBuff", "Self", 41, 26);
+
+    private static string SelfBuffName(IEnumerable<(Spell, SpellLine)> spells, int level, IReadOnlySet<eSpellType> active = null,
+        bool chantUp = false, int concentration = 20, int mana = 300, Func<Spell, bool> ready = null) =>
+        PlayerBotDriver.NextSelfBuff(spells, active ?? new HashSet<eSpellType>(), chantUp, level, concentration, 300, mana,
+            ready ?? (_ => true)) is (Spell s, SpellLine) ? s.Name : "-";
+
+    // A Wizard's Path of Earth: its armour factor first, then its absorb (Buffer of Stone is level 41), then none once
+    // both are up; a level-40 Wizard has no absorb yet.
+    [Test]
+    public void A_bot_keeps_its_armour_factor_then_its_absorb_up()
+    {
+        (Spell, SpellLine)[] earth = [BufferOfStone, DiamondShield];
+        var af = new HashSet<eSpellType> { eSpellType.BaseArmorFactorBuff };
+        Assert.That(SelfBuffName(earth, 41), Is.EqualTo("Diamond Shield"));
+        Assert.That(SelfBuffName(earth, 41, af), Is.EqualTo("Buffer of Stone"));
+        Assert.That(SelfBuffName(earth, 41, new HashSet<eSpellType> { eSpellType.BaseArmorFactorBuff, eSpellType.ArmorAbsorptionBuff }),
+            Is.EqualTo("-"));
+        Assert.That(SelfBuffName(earth, 40, af), Is.EqualTo("-"), "Buffer of Stone comes at 41");
+        Assert.That(SelfBuffName(earth, 41, mana: 24), Is.EqualTo("-"), "neither for 24 of 300 power: 25, 26 needed");
+        Assert.That(SelfBuffName(earth, 41, ready: spell => spell.ID != 9), Is.EqualTo("Buffer of Stone"), "AF not ready");
+    }
+
+    // A Cleric's concentration buffs (Enhancement) need the concentration they take; with too little, the best rank that
+    // fits, or a buff that takes none (Hammer of Faith). No cap of our own: the server's 20-effect limit counts
+    // concentration effects only (SpellHandler.cs:34, :818).
+    [Test]
+    public void A_concentration_buff_needs_the_concentration_left()
+    {
+        (Spell, SpellLine)[] cleric =
+        [
+            Buff(1465, "Aura of Guarding", "BaseArmorFactorBuff", "Realm", 22, 0, concentration: 8),
+            Buff(1466, "Greater Aura of Guarding", "BaseArmorFactorBuff", "Realm", 31, 0, concentration: 11),
+            Buff(1651, "Hammer of Faith", "DamageAdd", "Self", 1, 2),
+        ];
+        Assert.That(SelfBuffName(cleric, 35, concentration: 11), Is.EqualTo("Greater Aura of Guarding"));
+        Assert.That(SelfBuffName(cleric, 35, concentration: 9), Is.EqualTo("Aura of Guarding"));
+        Assert.That(SelfBuffName(cleric, 35, concentration: 0), Is.EqualTo("Hammer of Faith"));
+    }
+
+    // A Paladin runs one chant at a time (a new pulse effect ends the others, EffectListComponent.cs:362-371): the first by
+    // the buffs' order while none is up, never one that costs power each pulse (it would drain the power its rest
+    // waits for). Songs need an instrument; buffs on a pet, kinds not kept (haste) and resist buffs other than the
+    // Paladin's chants are left alone.
+    [Test]
+    public void A_bot_runs_one_chant_that_costs_no_power_each_pulse()
+    {
+        (Spell, SpellLine)[] chants =
+        [
+            Buff(1093, "Soul Ward", "BodySpiritEnergyBuff", "Group", 25, 0, pulse: 1, pulsePower: 8),
+            Buff(1026, "Greater Battle Fury", "DamageAdd", "Group", 28, 0, pulse: 1),
+            Buff(1036, "Crusader's Shelter", "SpecArmorFactorBuff", "Group", 29, 0, pulse: 1),
+        ];
+        Assert.That(SelfBuffName(chants, 30), Is.EqualTo("Crusader's Shelter"));
+        Assert.That(SelfBuffName(chants, 28), Is.EqualTo("Greater Battle Fury"));
+        Assert.That(SelfBuffName(chants, 30, chantUp: true), Is.EqualTo("-"));
+        Assert.That(SelfBuffName(chants, 27), Is.EqualTo("-"), "Soul Ward costs power each pulse");
+        Assert.That(SelfBuffName(
+            [
+                Buff(2001, "Song of Rest", "HealthRegenBuff", "Group", 10, 0, pulse: 1, instrument: 1),
+                Buff(2002, "Spirit Shield", "BaseArmorFactorBuff", "Pet", 10, 5),
+                Buff(2003, "Haste", "CombatSpeedBuff", "Self", 10, 5),
+                Buff(2004, "Ward of the Spirit", "BodySpiritEnergyBuff", "Self", 10, 5),     // a resist buff, no chant
+            ], 30), Is.EqualTo("-"));
+    }
+
     // A Necromancer in shade form cannot swing (AttackComponent.cs:511-516): its servant fights.
     [Test]
     public void A_shade_does_not_swing()
