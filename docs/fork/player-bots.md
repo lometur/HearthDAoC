@@ -68,7 +68,9 @@ Each bot thinks every 250 ms, a thin copy of the `/bot` pilot's think:
   blocking its spells or too little power, and it never swings at a rooted or mezzed monster (its hit, or a miss,
   would free it): it waits instead. Not while another monster that isn't held hits it, and not for 5 s after a
   blocked step back: then it fights as before. Only single-target spells the bot has, that the monster isn't immune
-  to; a mez only on a monster above 75% health.
+  to by the server's own rules: a monster stunned or mezzed in the last minute takes the next one for half the time,
+  then a quarter, and none under 1 s. A mez on its target only as the last escape, the monster about to reach it, and
+  only on a monster above 75% health.
 - An Animist pulls from beside its turret, so the monster comes into the turret's reach. When the turret can't reach
   the spot it pulls from, it releases the turret and plants a new one near the target, if the summon is ready and it
   has the power. Its bombers count as damage spells only when their payload does damage, so it no longer casts the

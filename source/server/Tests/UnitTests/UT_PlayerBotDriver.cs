@@ -2115,21 +2115,54 @@ public sealed class UT_PlayerBotDriver
 
     // The stun first (damage doesn't break it, GameLiving.cs:1784-1803), then the root, then the mez (the server resists
     // a mez on a monster under 75% health, CCSpellHandler.cs:173-177); the highest level of each; only one the target
-    // can take (its immunities) and that is ready.
+    // can take now (allowed, #167 C8: the server's own tests) and that is ready.
     [Test]
     public void A_caster_controls_with_a_stun_then_a_root_then_a_mez_the_highest_ready()
     {
         (Spell, SpellLine)[] sorcerer = [(LesserCrippling, BodyLine), (Cripple, BodyLine), (MinorMesmerization, BodyLine),
             (LesserMesmerization, BodyLine)];
-        Assert.That(PlayerBotDriver.ChooseControl(sorcerer, _ => true, true, true, true).Item1, Is.SameAs(Cripple));
-        Assert.That(PlayerBotDriver.ChooseControl(sorcerer, s => s != Cripple, true, true, true).Item1, Is.SameAs(LesserCrippling));
-        Assert.That(PlayerBotDriver.ChooseControl(sorcerer, _ => true, true, false, true).Item1, Is.SameAs(LesserMesmerization),
-            "a target that can't be rooted");
-        Assert.That(PlayerBotDriver.ChooseControl(sorcerer, _ => true, true, false, false).Item1, Is.Null);
+        Assert.That(PlayerBotDriver.ChooseControl(sorcerer, _ => true, _ => true).Item1, Is.SameAs(Cripple));
+        Assert.That(PlayerBotDriver.ChooseControl(sorcerer, s => s != Cripple, _ => true).Item1, Is.SameAs(LesserCrippling));
+        Assert.That(PlayerBotDriver.ChooseControl(sorcerer, _ => true, s => s.SpellType != eSpellType.SpeedDecrease).Item1,
+            Is.SameAs(LesserMesmerization), "a target that can't be rooted");
+        Assert.That(PlayerBotDriver.ChooseControl(sorcerer, _ => true, s => s.SpellType == eSpellType.Stun).Item1, Is.Null);
         (Spell, SpellLine)[] both = [(Cripple, BodyLine), (PrismaticFlare, SunLine)];
-        Assert.That(PlayerBotDriver.ChooseControl(both, _ => true, true, true, true).Item1, Is.SameAs(PrismaticFlare));
-        Assert.That(PlayerBotDriver.ChooseControl(both, _ => true, false, true, true).Item1, Is.SameAs(Cripple), "stun-immune");
+        Assert.That(PlayerBotDriver.ChooseControl(both, _ => true, _ => true).Item1, Is.SameAs(PrismaticFlare));
+        Assert.That(PlayerBotDriver.ChooseControl(both, _ => true, s => s.SpellType != eSpellType.Stun).Item1, Is.SameAs(Cripple),
+            "stun-immune");
     }
+
+    // #167 C8: the server's own immunity test. An NPC's stun or mez starts a 60-s NpcImmunityEffect that halves each next
+    // hold and refuses one under 1 s (ECSImmunityEffect.cs:38-51; CCSpellHandler.cs:168-169, :282-283), which the old
+    // StunOk and MezOk read as full immunity: Eldritch and Mentalist cast 0.90 and 0.92 controls per kill, the root classes 1.30-1.81.
+    // World-DB stuns (Way of the Sun): an 8-s Prismatic Sheen holds 4 s the second time and 2 s the third, a 5-s
+    // Prismatic Flash 2.5 s the second time; an 8-s one is refused the sixth time (800 ms).
+    [Test]
+    public void A_stun_or_mez_goes_while_the_servers_diminishing_immunity_still_allows_a_second_of_it()
+    {
+        Spell sheen = Control(4124, "Prismatic Sheen", "Stun", 36, 0), flash = Control(4122, "Prismatic Flash", "Stun", 15, 0);
+        NpcStunImmunityEffect Immunity(Spell spell) =>
+            new(new ECSGameEffectInitParams(null, 60_000, 1, new DOL.GS.Spells.StunSpellHandler(null, spell, SunLine)));
+        NpcStunImmunityEffect afterSheen = Immunity(sheen), afterFlash = Immunity(flash);
+        Assert.That((afterSheen.CalculateNewEffectDuration(8_000), afterFlash.CalculateNewEffectDuration(5_000)),
+            Is.EqualTo((4_000L, 2_500L)), "the second time");
+        Assert.That(PlayerBotDriver.DiminishedAllows(null, 8_000), Is.True, "none on it");
+        Assert.That(PlayerBotDriver.DiminishedAllows(afterSheen, 8_000), Is.True, "the old rule: immune");
+        afterSheen.OnApplyNewEffect();
+        Assert.That(afterSheen.CalculateNewEffectDuration(8_000), Is.EqualTo(2_000L), "the third time");
+        afterSheen.OnApplyNewEffect();
+        afterSheen.OnApplyNewEffect();
+        Assert.That(PlayerBotDriver.DiminishedAllows(afterSheen, 8_000), Is.True, "1 s, the fifth time");
+        afterSheen.OnApplyNewEffect();
+        Assert.That(PlayerBotDriver.DiminishedAllows(afterSheen, 8_000), Is.False, "800 ms, the sixth time");
+        Assert.That(PlayerBotDriver.DiminishedAllows(Immunity(flash), 1_500), Is.False, "750 ms the second time");
+    }
+
+    // #167 C8: a mez goes on the target only as the escape, the monster in reach before the mez and its margin end (it
+    // breaks on the next nuke's damage, GameLiving.cs:1784-1803); an add takes it whenever (C4).
+    [TestCase(0L, 3_000, true)] [TestCase(3_500L, 3_000, true)] [TestCase(3_501L, 3_000, false)] [TestCase(5_000L, 3_000, false)]
+    public void A_mez_on_the_target_is_only_the_escape(long contactMs, int mezCastMs, bool wanted) =>
+        Assert.That(PlayerBotDriver.MezWanted(contactMs, mezCastMs), Is.EqualTo(wanted));
 
     // The time a monster needs to reach the bot: to ContactDistance (250) at its own speed, none at a speed of 0.
     [TestCase(1_250, 200, 5_000L)] [TestCase(250, 200, 0L)] [TestCase(100, 200, 0L)] [TestCase(1_000, 0, long.MaxValue)]

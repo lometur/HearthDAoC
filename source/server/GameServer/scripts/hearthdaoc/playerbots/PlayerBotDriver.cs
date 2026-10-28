@@ -1328,23 +1328,38 @@ public static class PlayerBotDriver
         spell.Target is eSpellTarget.ENEMY && spell.Radius <= 0 && spell.Range > 0;
 
     /// <summary>The control to cast (#167 F11): a stun first (damage doesn't break it, GameLiving.cs:1784-1803; the GameBot
-    /// keeps stuns on its own target too, BotBrain.cs:3887-3890), then a root, then a mez (any damage breaks both); of a
-    /// kind the target can take now (stunOk, rootOk, mezOk: its immunities, and a mez on a monster under 75% health is
-    /// resisted, CCSpellHandler.cs:173-177), the highest level ready.</summary>
+    /// keeps stuns on its own target too, BotBrain.cs:3887-3890), then a root, then a mez (any damage breaks both); one
+    /// the target can take now (allowed, #167 C8: the server's own tests, Takes; and on the target a mez only as the
+    /// escape, MezWanted), the highest level ready.</summary>
     public static (Spell, SpellLine) ChooseControl(IEnumerable<(Spell Spell, SpellLine Line)> controls, Func<Spell, bool> ready,
-        bool stunOk, bool rootOk, bool mezOk)
+        Func<Spell, bool> allowed)
     {
         (Spell Spell, SpellLine Line) best = default;
         int bestRank = int.MaxValue;
         foreach ((Spell spell, SpellLine line) in controls)
         {
             int rank = spell.SpellType switch { eSpellType.Stun => 0, eSpellType.Mesmerize => 2, _ => 1 };
-            if (!(rank == 0 ? stunOk : rank == 1 ? rootOk : mezOk) || !ready(spell)) continue;
+            if (!allowed(spell) || !ready(spell)) continue;
             if (best.Spell == null || rank < bestRank || rank == bestRank && spell.Level > best.Spell.Level)
                 (best, bestRank) = ((spell, line), rank);
         }
         return best;
     }
+
+    /// <summary>Whether an NPC's diminishing immunity (#167 C8; none: null) lets a stun or a mez of this duration (ms) on
+    /// it: the server's own test (NpcImmunityEffect.CanApplyNewEffect, ECSImmunityEffect.cs:38-44; CCSpellHandler.cs:168-169,
+    /// :282-283). The first hold starts it for 60 s (CrowdControlECSEffect.cs:92-93, :131-132; ECSImmunityEffect.cs:35),
+    /// and the n-th holds the duration over 2(n - 1) (ECSImmunityEffect.cs:46-51): an 8-s Prismatic Sheen holds 4 s the
+    /// second time and 2 s the third; under 1 s it is refused. The old StunOk and MezOk read any such effect as immune, so the Eldritch and the Mentalist cast 0.90
+    /// and 0.92 controls per kill in st-deathsB against the root classes' 1.30-1.81. The server's duration also scales
+    /// with its hit chance (CCSpellHandler.cs:58-92): the spell's is near it.</summary>
+    public static bool DiminishedAllows(NpcImmunityEffect immunity, int duration) =>
+        immunity == null || immunity.CanApplyNewEffect(duration);
+
+    /// <summary>Whether a mez on the target goes now (#167 C8): only as the escape, the monster reaching the bot before the
+    /// mez's cast and its margin end; mezzed sooner, the bot's next nuke broke it (GameLiving.cs:1784-1803) for the cost
+    /// of a nuke. An add takes one whenever (#167 C4).</summary>
+    public static bool MezWanted(long contactMs, int mezCastMs) => contactMs <= mezCastMs + ControlMarginMilliseconds;
 
     /// <summary>The milliseconds a monster needs to come within ContactDistance of the bot at its own speed (its base
     /// speed: a rooted one's is 0); none at a speed of 0.</summary>
@@ -2440,8 +2455,8 @@ public static class PlayerBotDriver
     }
 
     // #167 F11: a caster's control and step back against a monster (CasterAction), between its casts; Nuke leaves the
-    // think to CombatAction. A control the target can take (its immunities: SpeedDecreaseSpellHandler.cs:25-33,
-    // CCSpellHandler.cs:155-177, :276-285), in range, ready and paid for, at a cast choice; MaxControlTries casts that held
+    // think to CombatAction. A control the target can take now (Takes, #167 C8: the server's own tests) and a mez only as
+    // the escape (MezWanted), in range, ready and paid for, at a cast choice; MaxControlTries casts that held
     // nothing and it stops trying on this target until one holds. Control casts do no damage: no cast watch. The time to
     // contact is at the monster's base speed (a rooted one's speed is 0). The step back while the bot keeps its hold
     // (casterHold, CasterHolds: no other monster hitting it, whose case is the add's control or a break-off; the stop is
@@ -2456,13 +2471,14 @@ public static class PlayerBotDriver
         if (held) state.ControlTries = 0;
         else if (state.Controls.Count == 0) return false;
         bool closing = npc.TargetObject == player;
+        long contact = TimeToContact(distance, npc.MaxSpeedBase);
         (Spell control, SpellLine line) = default((Spell, SpellLine));
         if (!held && closing && due && now >= state.NextControlTick && state.ControlTries < MaxControlTries)
             (control, line) = ChooseControl(state.Controls, spell => player.GetSkillDisabledDuration(spell) <= 0 &&
                     HasPowerFor(player.MaxMana, player.Mana, spell.Power) &&
                     player.IsWithinRadius(npc, player.castingComponent.CalculateSpellRange(spell)),
-                StunOk(npc), RootOk(npc), MezOk(npc));
-        PlayerBotCasterAction step = CasterAction(closing, TimeToContact(distance, npc.MaxSpeedBase), held,
+                spell => Takes(npc, spell) && (spell.SpellType is not eSpellType.Mesmerize || MezWanted(contact, spell.CastTime)));
+        PlayerBotCasterAction step = CasterAction(closing, contact, held,
             breaksOnHit, control?.CastTime ?? 0, state.Spell?.CastTime ?? 3_000, interrupted, quickcastReady, quickcasting);
         switch (step)                                                                   // (inf.) 3 s: the casters' nukes
         {                                                                               //   cast in 2.5-3 s
@@ -2556,22 +2572,25 @@ public static class PlayerBotDriver
         EffectListService.GetEffectOnTarget(target, eEffect.MovementSpeedDebuff) is ECSGameSpellEffect effect &&
         effect.SpellHandler?.Spell is Spell spell && spell.SpellType is eSpellType.SpeedDecrease && spell.Value >= 99;
 
-    // The server's immunities to each kind (SpeedDecreaseSpellHandler.cs:25-33; CCSpellHandler.cs:155-177 for a mez, with
-    // its resist under 75% health; :276-285 for a stun), an NPC's diminishing ones counted as immune (inf.).
-    private static bool StunOk(GameLiving target) =>
-        !target.HasAbility(Abilities.CCImmunity) && !target.HasAbility(Abilities.StunImmunity) &&
-        !target.effectListComponent.ContainsEffectForEffectType(eEffect.StunImmunity) &&
-        !target.effectListComponent.ContainsEffectForEffectType(eEffect.NPCStunImmunity);
-
-    private static bool RootOk(GameLiving target) =>
-        !target.HasAbility(Abilities.CCImmunity) && !target.HasAbility(Abilities.RootImmunity) &&
-        !target.effectListComponent.ContainsEffectForEffectType(eEffect.SnareImmunity) &&
-        !target.effectListComponent.ContainsEffectForEffectType(eEffect.SpeedOfSound);
-
-    private static bool MezOk(GameLiving target) =>
-        !target.HasAbility(Abilities.CCImmunity) && !target.HasAbility(Abilities.MezzImmunity) &&
-        !target.effectListComponent.ContainsEffectForEffectType(eEffect.MezImmunity) &&
-        !target.effectListComponent.ContainsEffectForEffectType(eEffect.NPCMezImmunity) && target.HealthPercent >= 75;
+    // #167 C8: whether the target takes this control now, by the server's own tests of its kind: the immunities
+    // (AbstractCCSpellHandler.ApplyEffectOnTarget's CCImmunity, CCSpellHandler.cs:17-21; a stun's, :276-283; a mez's,
+    // :160-169, and its resist under 75% health, :173-177; a root's, SpeedDecreaseSpellHandler.cs:25-33), and an NPC's
+    // diminishing immunity only when it would refuse this hold (DiminishedAllows; the old StunOk and MezOk read it as
+    // immune).
+    private static bool Takes(GameLiving target, Spell spell) => spell.SpellType switch
+    {
+        eSpellType.Stun => !target.HasAbility(Abilities.CCImmunity) && !target.HasAbility(Abilities.StunImmunity) &&
+            !target.effectListComponent.ContainsEffectForEffectType(eEffect.StunImmunity) &&
+            DiminishedAllows(EffectListService.GetEffectOnTarget(target, eEffect.NPCStunImmunity) as NpcImmunityEffect,
+                spell.Duration),
+        eSpellType.Mesmerize => !target.HasAbility(Abilities.CCImmunity) && !target.HasAbility(Abilities.MezzImmunity) &&
+            !target.effectListComponent.ContainsEffectForEffectType(eEffect.MezImmunity) &&
+            DiminishedAllows(EffectListService.GetEffectOnTarget(target, eEffect.NPCMezImmunity) as NpcImmunityEffect,
+                spell.Duration) && target.HealthPercent >= 75,
+        _ => !target.HasAbility(Abilities.CCImmunity) && !target.HasAbility(Abilities.RootImmunity) &&
+            !target.effectListComponent.ContainsEffectForEffectType(eEffect.SnareImmunity) &&
+            !target.effectListComponent.ContainsEffectForEffectType(eEffect.SpeedOfSound),
+    };
 
     // A healer's heal on itself (DEATHS.md A6), before a rest as a GameBot's (AWBC:2725): below 60% health whatever its
     // power; out of a fight (MayRest's view) from 85% with power to spare, then it sits for power (#167 F2). The gate
