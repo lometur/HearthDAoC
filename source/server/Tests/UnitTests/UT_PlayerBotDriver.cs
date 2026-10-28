@@ -1492,6 +1492,37 @@ public sealed class UT_PlayerBotDriver
             Is.EqualTo("behind"));
     }
 
+    // FIGHT crowd= (#167, the next leg's): the pick's crowding as the pick read it (CrowdingAlong): 0 for a clear one, the
+    // least when every one is crowded, -1 when the ring took none.
+    [Test]
+    public void The_pick_gives_the_crowding_it_read()
+    {
+        var candidates = new List<(string, Vector3, int)> { ("behind", new(3_000, 0, 0), 100), ("near", new(0, 3_000, 0), 900) };
+        var adds = new List<(string, Vector3, int)>
+            { ("wolf", new(1_500, 400, 0), 500), ("boar", new(3_200, 0, 0), 500), ("bear", new(0, 3_300, 0), 500) };
+        Assert.That((PlayerBotDriver.PickUncrowded(candidates, adds, false, Vector3.Zero, 80, out int crowd), crowd),
+            Is.EqualTo(("near", 1)));
+        Assert.That((PlayerBotDriver.PickUncrowded(candidates, adds, true, Vector3.Zero, 80, out crowd), crowd),
+            Is.EqualTo(((string)null, -1)), "the near ring took none");
+        Assert.That((PlayerBotDriver.PickUncrowded(candidates, [], false, Vector3.Zero, 80, out crowd), crowd),
+            Is.EqualTo(("behind", 0)));
+    }
+
+    // FIGHT and DEATH addAt= and addHp= (#167, the next leg's): the first think in a fight a second monster, any but the
+    // target, is on the bot's attacker list or comes at it (the add scan's): the whole seconds into the fight and the
+    // bot's health then, kept after; -1 until then.
+    [Test]
+    public void The_first_add_is_the_first_monster_but_the_target_on_the_bot()
+    {
+        (int, int) none = (-1, -1);
+        Assert.That(PlayerBotDriver.FirstAdd(none, "target", ["target"], [], 4_500, 80), Is.EqualTo(none), "the target alone");
+        Assert.That(PlayerBotDriver.FirstAdd(none, "target", ["target", "wolf"], [], 4_500, 80), Is.EqualTo((4, 80)));
+        Assert.That(PlayerBotDriver.FirstAdd(none, "target", [], ["target", "wolf"], 6_999, 55), Is.EqualTo((6, 55)),
+            "coming at it");
+        Assert.That(PlayerBotDriver.FirstAdd((4, 80), "target", ["wolf", "boar"], [], 9_000, 30), Is.EqualTo((4, 80)), "kept");
+        Assert.That(PlayerBotDriver.FirstAdd(none, "target", [], [], 0, 100), Is.EqualTo(none));
+    }
+
     // Every bot engaged with a monster reports its death; bots on one start row share monsters (runs 2-3).
     [Test]
     public void AMonsterLifeCountsOneKillHoweverManyBotsFoughtIt()
@@ -3229,30 +3260,37 @@ public sealed class UT_PlayerBotDriver
     // whether a cast in the fight went with Quickcast on; then (#167) buffs=, its self-buffs up at that first think (F8),
     // petCasts=, a Theurgist's pets cast at the target (F1), and waits=, the thinks a cast due waited for its own swing's
     // interrupt (WaitToCast, F6); then a caster's control casts, ctl=, and its steps back, kites= (F11); then ctlBroken=,
-    // the holds its own swing ended (C3); then addCtl=, its control casts at an add (C4), counted in ctl= too.
+    // the holds its own swing ended (C3); then addCtl=, its control casts at an add (C4), counted in ctl= too; then
+    // (#167, the next leg's) addAt= and addHp=, the seconds into the fight a second monster first hit the bot or came at
+    // it and its health then, breakOff=, the fight dropped by a break-off (C2), engageDist=, the distance at its first
+    // think in reach, and crowd=, the pick's crowding (CrowdingAlong, C5): -1 for none, a defence or Incoming's pick.
     [Test]
     public void FightFormat()
     {
         Assert.That(PlayerBotDriverReport.FormatFight(new PlayerBotFight("Pbotaaaac", 40, "widow claw", 40, ConColor.YELLOW, false,
                 true, 100, 38, 100, 12, 21, 1, 9, 2, 4, 0, 0, Pet: true, Heals: 2, Quickcast: true, Buffs: 3, PetCasts: 2, Waits: 5,
-                Controls: 2, Kites: 1, CtlBroken: 1, AddControls: 1)),
+                Controls: 2, Kites: 1, CtlBroken: 1, AddControls: 1, AddAt: 6, AddHp: 71, BreakOff: true, EngageDistance: 1_450,
+                Crowd: 1)),
             Is.EqualTo("PLAYER_BOT_FIGHT bot=Pbotaaaac level=40 target=\"widow claw\" targetLevel=40 con=YELLOW from=pull result=kill " +
                        "startHp=100 endHp=38 startMana=100 endMana=12 sec=21 adds=1 swings=9 notVisible=2 casts=4 lifeKills=0 rests=0 " +
-                       "pet=alive heals=2 qc=1 buffs=3 petCasts=2 waits=5 ctl=2 kites=1 ctlBroken=1 addCtl=1"));
+                       "pet=alive heals=2 qc=1 buffs=3 petCasts=2 waits=5 ctl=2 kites=1 ctlBroken=1 addCtl=1 addAt=6 addHp=71 " +
+                       "breakOff=1 engageDist=1450 crowd=1"));
         Assert.That(PlayerBotDriverReport.FormatFight(new PlayerBotFight("Pbothaaab", 43, "empyrean guardian", 36, ConColor.BLUE, true,
                 false, 64, 51, 100, 100, 7, 2, 3, 0, 0, 3, 1)),
             Is.EqualTo("PLAYER_BOT_FIGHT bot=Pbothaaab level=43 target=\"empyrean guardian\" targetLevel=36 con=BLUE from=defence " +
                        "result=dropped startHp=64 endHp=51 startMana=100 endMana=100 sec=7 adds=2 swings=3 notVisible=0 casts=0 " +
-                       "lifeKills=3 rests=1 pet=none heals=0 qc=0 buffs=0 petCasts=0 waits=0 ctl=0 kites=0 ctlBroken=0 addCtl=0"));
+                       "lifeKills=3 rests=1 pet=none heals=0 qc=0 buffs=0 petCasts=0 waits=0 ctl=0 kites=0 ctlBroken=0 addCtl=0 " +
+                       "addAt=-1 addHp=-1 breakOff=0 engageDist=-1 crowd=-1"));
     }
 
     // #167: one PLAYER_BOT_REST line per rest when the bot stands: the seconds it sat and why it stood (recovered, hit,
-    // heal, pet or buff: a cast on itself, died, other).
+    // heal, pet or buff: a cast on itself, died, other); then (the next leg's) its health and power when it sat, hp= and
+    // mp=, and respawn=, the killed monsters' spawn spots its rest spot was read against (RespawnSpots, C7).
     [Test]
     public void RestFormat()
     {
-        Assert.That(PlayerBotDriverReport.FormatRest("Pbotaaaac", 40, 37, "recovered"),
-            Is.EqualTo("PLAYER_BOT_REST bot=Pbotaaaac level=40 sec=37 why=recovered"));
+        Assert.That(PlayerBotDriverReport.FormatRest("Pbotaaaac", 40, 37, "recovered", 54, 12, 2),
+            Is.EqualTo("PLAYER_BOT_REST bot=Pbotaaaac level=40 sec=37 why=recovered hp=54 mp=12 respawn=2"));
     }
 
     [Test]
@@ -3276,22 +3314,26 @@ public sealed class UT_PlayerBotDriver
     // then the names the bot avoided when it died (DEATHS.md A3), before this death's; then (#167 F4) again=, no kill
     // since its last release, sinceRelease=, the seconds since it (-1: none this login), and ill=, the resurrection
     // illness on at the fatal fight's start; then (#167 C3) the fatal fight's caster fields as FIGHT gives them, ctl=,
-    // kites=, casts=, qc= and waits=, ctlBroken=, the holds its own swing ended, and addCtl= (C4): -1 out of a fight.
+    // kites=, casts=, qc= and waits=, ctlBroken=, the holds its own swing ended, and addCtl= (C4): -1 out of a fight;
+    // then FIGHT's addAt=, addHp= and engageDist= (-1 out of a fight too) and breakOff=, a death on a break-off's run.
     [Test]
     public void DeathDetailFormat()
     {
         Assert.That(PlayerBotDriverReport.FormatDeathDetail(new PlayerBotDeathDetail(PlayerBotActivity.Fighting, 62, 14, 71, false,
                 2, 3, 0, 40, 100, 6, 1, "widow claw", 40, true, 748, Avoided: 2, Again: true, SinceRelease: 42, Ill: true,
-                Controls: 2, Kites: 1, Casts: 4, Quickcast: 1, Waits: 3, CtlBroken: 1, AddControls: 1)),
+                Controls: 2, Kites: 1, Casts: 4, Quickcast: 1, Waits: 3, CtlBroken: 1, AddControls: 1, AddAt: 6, AddHp: 71,
+                EngageDistance: 1_450)),
             Is.EqualTo("activity=Fighting startHp=62 fightSec=14 targetHp=71 from=pull adds=2 lifeKills=3 rests=0 sinceKillSec=40 " +
                        "mana=100 swings=6 notVisible=1 killer=\"widow claw\" killerLevel=40 killerIsTarget=True fromBind=748 " +
-                       "avoided=2 again=True sinceRelease=42 ill=True ctl=2 kites=1 casts=4 qc=1 waits=3 ctlBroken=1 addCtl=1"));
+                       "avoided=2 again=True sinceRelease=42 ill=True ctl=2 kites=1 casts=4 qc=1 waits=3 ctlBroken=1 addCtl=1 " +
+                       "addAt=6 addHp=71 breakOff=0 engageDist=1450"));
         // Out of a fight, no target, no kill this life, no killer named by the Dying event, the bind in another region.
         Assert.That(PlayerBotDriverReport.FormatDeathDetail(new PlayerBotDeathDetail(PlayerBotActivity.Hunting, -1, -1, -1, true,
-                -1, 0, 2, -1, 37, -1, -1, null, 0, false, -1)),
+                -1, 0, 2, -1, 37, -1, -1, null, 0, false, -1, BreakOff: true)),
             Is.EqualTo("activity=Hunting startHp=-1 fightSec=-1 targetHp=-1 from=defence adds=-1 lifeKills=0 rests=2 sinceKillSec=-1 " +
                        "mana=37 swings=-1 notVisible=-1 killer=\"\" killerLevel=0 killerIsTarget=False fromBind=-1 avoided=0 " +
-                       "again=False sinceRelease=-1 ill=False ctl=-1 kites=-1 casts=-1 qc=-1 waits=-1 ctlBroken=-1 addCtl=-1"));
+                       "again=False sinceRelease=-1 ill=False ctl=-1 kites=-1 casts=-1 qc=-1 waits=-1 ctlBroken=-1 addCtl=-1 " +
+                       "addAt=-1 addHp=-1 breakOff=1 engageDist=-1"), "died on a break-off's run: out of a fight (the dropped one's FIGHT has it)");
     }
 
     // DEATH again= and sinceRelease= (#167 F4): a death with no kill since the bot's last release; none before the first
@@ -3325,7 +3367,7 @@ public sealed class UT_PlayerBotDriver
         Assert.That(PlayerBotDriver.DeathLine(head, detail, target, target), Is.EqualTo(head + " activity=Fighting startHp=62 fightSec=14 " +
             "targetHp=71 from=pull adds=2 lifeKills=3 rests=0 sinceKillSec=40 mana=100 swings=6 notVisible=1 killer=\"widow claw\" " +
             "killerLevel=40 killerIsTarget=True fromBind=748 avoided=0 again=False sinceRelease=-1 ill=False ctl=-1 kites=-1 casts=-1 " +
-            "qc=-1 waits=-1 ctlBroken=-1 addCtl=-1"));
+            "qc=-1 waits=-1 ctlBroken=-1 addCtl=-1 addAt=-1 addHp=-1 breakOff=0 engageDist=-1"));
         Assert.That(PlayerBotDriver.DeathLine(head, detail, add, target),
             Does.Contain(" killer=\"a wolf\" killerLevel=38 killerIsTarget=False fromBind=748 avoided=0 again=False sinceRelease=-1 ill=False "));
         Assert.That(PlayerBotDriver.DeathLine(head, detail, null, null),

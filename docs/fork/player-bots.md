@@ -318,11 +318,17 @@ All start `PLAYER_BOT_`:
   the bot's last step and state, and `queries:`, the stalled step's own navmesh queries and a fresh corridor's step.
   `FIGHT` ends with `buffs=` (its self-buffs up when the fight began), `petCasts=` (a Theurgist's pets cast at the
   target), `waits=` (the thinks a cast waited for its own swing's interrupt), `ctl=` (a caster's control casts),
-  `kites=` (its steps back), `ctlBroken=` (the roots and mezzes on its target its own swing ended) and `addCtl=` (its
-  control casts at an add, in `ctl=` too). `DEATH` ends with
+  `kites=` (its steps back), `ctlBroken=` (the roots and mezzes on its target its own swing ended), `addCtl=` (its
+  control casts at an add, in `ctl=` too), `addAt=` (the seconds into the fight a second monster first hit the bot or
+  came at it; 0 when one was on it by the fight's first think in reach), `addHp=` (the bot's health then), `breakOff=`
+  (1: a break-off dropped the fight), `engageDist=` (its distance to the target at that first think) and `crowd=` (the
+  potential adds round the target and along the walk in when it was picked; -1 for a defence or a monster coming at
+  it). The add is seen from the bot's attacker list each think and from a scan every 2 s. `DEATH` ends with
   `again=` (no kill since its last release), `sinceRelease=` (the seconds since that release, -1 if none since login)
   and `ill=` (the resurrection illness on when the fatal fight began), then the fatal fight's `ctl=`, `kites=`,
-  `casts=`, `qc=`, `waits=`, `ctlBroken=` and `addCtl=` as `FIGHT` gives them (-1 out of a fight).
+  `casts=`, `qc=`, `waits=`, `ctlBroken=`, `addCtl=`, `addAt=`, `addHp=` and `engageDist=` as `FIGHT` gives them (-1
+  out of a fight), and `breakOff=` (1: it died running from a break-off; out of a fight then, as the break-off dropped
+  it, so that fight's own fields are on its `FIGHT result=dropped breakOff=1` line).
   `BLOCKED`'s `walk=` is `target`, `roam`, `clear` (the step out after a release), `rest`, `kite`, `turret` or
   `breakoff`. `RELOCATE` after a death (`reason=died`) ends with `sinceRelease=`, the milliseconds since the release;
   after a break-off its `reason=` is `brokeoff`. A break-off drops its fight (`FIGHT result=dropped`);
@@ -332,8 +338,10 @@ All start `PLAYER_BOT_`:
 - `BACK`: at the first fight after a release, `sec=`, the seconds since the release, and of those `stepOut=` (the step
   out of reach), `hold=` (the back-off, the illness or the hold for the replan) and `walk=` (roaming, the walk back
   among it); then `replan=`: `moved` (a camp planned since), `none` (owed, none planned) or `notOwed`;
-- `REST`: one per rest, when the bot stands: `sec=`, the seconds it sat, and `why=`: `recovered`, `hit`, `incoming` (a
-  monster coming at it), `heal`, `pet` or `buff` (a cast on itself), `died`, or `other`;
+- `REST`: one per rest, when the bot stands: `sec=`, the seconds it sat, `why=`: `recovered`, `hit`, `incoming` (a
+  monster coming at it), `heal`, `pet` or `buff` (a cast on itself), `died`, or `other`; then `hp=` and `mp=`, its
+  health and power when it sat (`mp=100` with no power pool), and `respawn=`, the spawn spots of its recent kills its
+  rest spot was chosen against;
 - `FLOOR_STEP`: a step onto the nearest floor, with where from and to and why;
 - `REPLAN`: a stalled walk planned again, with where, the goal, the count in that walk and the stall's first step;
 - `ERRAND`: the quest bot's steps;

@@ -140,7 +140,7 @@ public sealed class PlayerBotState
     public int FightCtlBroken;                                   // #167 C3: FIGHT ctlBroken=, from the target's root or mez
     public bool TargetHeldBreaks;                                //   at the last think (BrokeHold)
     public GameLiving AddCastTarget;                             // #167 C4: the add a cast under way is at (FacesWhom),
-    public readonly List<GameNPC> AddScan = new();               //   the monsters coming at the bot (Add's scan), its next
+    public readonly List<GameNPC> AddScan = new();               //   the monsters coming at the bot (ScanComing), its next
     public long NextAddScanTick, NextAddTick;                    //   scan, the add step's next try after no sight, the add
     public GameNPC ControlledAdd;                                //   it controls and the casts at it that held nothing;
     public int AddControlTries, FightAddControls;                //   FIGHT addCtl=
@@ -181,6 +181,11 @@ public sealed class PlayerBotState
     public Vector3 TargetSpawn;                                  // #167 C7: the target's spawn spot and the reach it aggroes
     public int TargetRespawnReach;                               //   from (RespawnOf, at the pick), and the last kills'
     public readonly List<(Vector3 At, int Reach, long KilledAt)> RecentKills = new();   //   (RememberKill): rested out of
+    public (int At, int Hp) FightAdd = (-1, -1);                 // #167 FIGHT and DEATH addAt= and addHp= (FirstAdd), the
+    public int EngageDistance = -1, PickCrowd = -1;              //   distance at the first think in reach, the pick's
+                                                                 //   crowding (crowd=, FindWithin's; -1 for another pick);
+    public byte SitHealth, SitMana;                              //   REST hp= and mp= when it sat, and respawn=: the spawn
+    public int RestRespawns;                                     //   spots the rest spot was read against (WalksToRestSpot)
 }
 
 // HearthDAoC player bots (#137): a thin copy of the /bot pilot's think (bots/autonomous/AutonomousPlayerPilot.cs:229-374) for a
@@ -575,6 +580,8 @@ public static class PlayerBotDriver
             state.FightPetCasts = state.FightWaits = state.FightControls = state.FightKites = state.FightCtlBroken = 0;
             state.TargetHeldBreaks = false;                                             // #167 C3
             state.FightAddControls = 0;                                                 // #167 C4
+            (state.FightAdd, state.EngageDistance) = ((-1, -1), distance);              // #167 FIGHT addAt=, engageDist=
+            state.NextAddScanTick = 0;                                                  //   and a fresh add scan (ScanComing)
             state.EngageTargetHealth = target.HealthPercent;                            // #167 C11
             state.ControlTries = 0;                                                     // #167 F11
             state.NextKiteTick = 0;
@@ -591,6 +598,12 @@ public static class PlayerBotDriver
         }
         state.Engaged = true;
         state.FightAdds = Math.Max(state.FightAdds, state.Attackers);
+        if (state.FightAdd.At < 0)                                                      // #167 FIGHT addAt= and addHp=: the
+        {                                                                               //   first second monster on the bot
+            ScanComing(state, player, target, now);
+            state.FightAdd = FirstAdd<GameLiving>(state.FightAdd, target, player.attackComponent.AttackerTracker.Attackers,
+                state.AddScan, now - state.EngagedSince, player.HealthPercent);
+        }
         int swings = state.Swings;
         CountSwing(state, player.attackComponent.attackAction.LastAttackData);
         if (BrokeHold(state.TargetHeldBreaks, held && breaksOnHit, state.Swings > swings)) state.FightCtlBroken++;   // #167 C3
@@ -998,7 +1011,7 @@ public static class PlayerBotDriver
             IsAttackable(player, npc))
             return;
         bool dead = !state.Target.IsAlive;
-        if (state.Engaged) ReportFight(state, player, GameLoop.GameLoopTime, dead);   // with this life's kills before it
+        if (state.Engaged) ReportFight(state, player, GameLoop.GameLoopTime, dead, false);   // with this life's kills before it
         if (state.Engaged && dead)
         {
             state.LifeKills++;                                    // every fight won, a monster another bot counted too
@@ -1033,13 +1046,16 @@ public static class PlayerBotDriver
         // Self-defence every think, then a monster coming at it (#167 F7: its scan every 2 s); the rings only every 2 s,
         // so an idle bot doesn't scan 5,000 units 4 times a second; none during the recovery after a release (#167 F4) or
         // a login's step out (C6): it pulls nothing until that is over
+        int crowd = -1;                                                                    // FIGHT crowd=: FindWithin's
         GameNPC found = Attacker(state, player, now) ?? Incoming(state, player, now) ??     // self-defence first
             (searchDue && !state.AfterRelease                                              // AWBC:3148
-                ? FindWithin(state, player, ImmediateSearchRadius, now) ?? FindWithin(state, player, SearchRadius, now)
+                ? FindWithin(state, player, ImmediateSearchRadius, now, out crowd) ??
+                  FindWithin(state, player, SearchRadius, now, out crowd)
                 : null);
         if (found == state.Target) return;
         state.Target = found;
         state.FromDefence = found != null && IsAttacking(player, found);                  // FIGHT and DEATH from=
+        state.PickCrowd = crowd;                                                           //   and crowd= (#167)
         (state.TargetSpawn, state.TargetRespawnReach) = found?.Brain is StandardMobBrain brain   // #167 C7: its respawn
             ? RespawnOf(found.SpawnPoint, brain.AggroLevel, brain.AggroRange, player.IsObjectGreyCon(found)) : default;
         state.Engaged = false;
@@ -1057,7 +1073,7 @@ public static class PlayerBotDriver
     // the ring for the adds by a candidate at its edge; those along a walk in lie within it. One over the cap is passed over, never taken (DEATHS.md A4: the old rollback
     // reset the death steps to fit it), and the capped clock runs while the wider ring finds nothing else. An avoided
     // name is passed over too, unless the bot was sent to a camp of them (HuntAvoided).
-    private static GameNPC FindWithin(PlayerBotState state, GamePlayer player, ushort radius, long now)
+    private static GameNPC FindWithin(PlayerBotState state, GamePlayer player, ushort radius, long now, out int crowd)
     {
         bool passedOver = false;
         ConColor? safestOver = null;
@@ -1087,7 +1103,7 @@ public static class PlayerBotDriver
             }
         }
         GameNPC best = PickUncrowded(candidates, adds, uncrowdedOnly: radius < SearchRadius,   // #167 C5: the walk in
-            new Vector3(player.X, player.Y, player.Z), PullStop(state, player));                 //   too
+            new Vector3(player.X, player.Y, player.Z), PullStop(state, player), out crowd);      //   too; crowd= its count
         state.SearchAdds.Clear();                                                       // #167 F7: the rest spot's, read
         foreach ((GameNPC add, _, _) in adds) state.SearchAdds.Add(add);                //   live (WalksToRestSpot)
         candidates.Clear();                                                             // no other monster held past the
@@ -1946,7 +1962,13 @@ public static class PlayerBotDriver
     /// (CrowdingAlong, #167 C5); with none such, the least crowded, then the best score; null with uncrowdedOnly, so the
     /// wider ring decides. The first of equals wins, as before.</summary>
     public static T PickUncrowded<T>(IReadOnlyList<(T Npc, Vector3 At, int Score)> candidates,
-        IReadOnlyList<(T Npc, Vector3 At, int AggroRange)> adds, bool uncrowdedOnly, Vector3 from, int stop) where T : class
+        IReadOnlyList<(T Npc, Vector3 At, int AggroRange)> adds, bool uncrowdedOnly, Vector3 from, int stop) where T : class =>
+        PickUncrowded(candidates, adds, uncrowdedOnly, from, stop, out _);
+
+    /// <summary>PickUncrowded, and the pick's crowding as it read it (FIGHT crowd=, #167): -1 when it took none.</summary>
+    public static T PickUncrowded<T>(IReadOnlyList<(T Npc, Vector3 At, int Score)> candidates,
+        IReadOnlyList<(T Npc, Vector3 At, int AggroRange)> adds, bool uncrowdedOnly, Vector3 from, int stop, out int crowd)
+        where T : class
     {
         T best = null;
         int bestCrowd = int.MaxValue, bestScore = int.MaxValue;
@@ -1954,11 +1976,25 @@ public static class PlayerBotDriver
         {
             (T npc, Vector3 at, int score) = candidates[i];
             if (bestCrowd == 0 && score >= bestScore) continue;                         // nothing beats a clear better one
-            int crowd = CrowdingAlong(npc, at, from, StandPoint(from, at, stop), adds);
-            if (uncrowdedOnly && crowd > 0) continue;
-            if (crowd < bestCrowd || crowd == bestCrowd && score < bestScore) (best, bestCrowd, bestScore) = (npc, crowd, score);
+            int count = CrowdingAlong(npc, at, from, StandPoint(from, at, stop), adds);
+            if (uncrowdedOnly && count > 0) continue;
+            if (count < bestCrowd || count == bestCrowd && score < bestScore) (best, bestCrowd, bestScore) = (npc, count, score);
         }
+        crowd = best == null ? -1 : bestCrowd;
         return best;
+    }
+
+    /// <summary>FIGHT and DEATH addAt= and addHp= (#167, the next leg's: when the second-monster case starts): the first
+    /// think in a fight a second monster, any but the target, is on the bot's attacker list or comes at it (coming: the
+    /// add scan's, ScanComing), as the whole seconds since the fight's first think and the bot's health then; kept after
+    /// (seen), and (-1, -1) until then.</summary>
+    public static (int At, int Hp) FirstAdd<T>((int At, int Hp) seen, T target, IEnumerable<T> attackers, IEnumerable<T> coming,
+        long fightMilliseconds, byte health) where T : class
+    {
+        if (seen.At >= 0) return seen;
+        foreach (T monster in attackers.Concat(coming))
+            if (monster != target) return ((int)(fightMilliseconds / 1000), health);
+        return seen;
     }
 
     // A list caster's spells are in its spell lines; a hybrid's (Paladin, Thane...) are among its usable skills, each
@@ -2370,8 +2406,10 @@ public static class PlayerBotDriver
             foreach (GameNPC npc in state.SearchAdds)
                 if (AddReach(player, npc) is > 0 and int reach)
                     adds.Add((npc, new(npc.X, npc.Y, npc.Z), reach));
+            int searchAdds = adds.Count;
             foreach ((Vector3 at, int reach) in RespawnSpots(state.RecentKills, now))    // #167 C7: and its kills'
-                adds.Add((null, at, reach));                                             //   respawns
+                adds.Add((null, at, reach));                                             //   respawns (REST respawn=)
+            state.RestRespawns = adds.Count - searchAdds;
             state.RestGoal = SpotOutOfReach(player, RestSpotRings, adds);
             adds.Clear();
         }
@@ -2461,7 +2499,7 @@ public static class PlayerBotDriver
         state.KilledWithAdds = false;
         BrokeOffFrom(state, player.CurrentRegionID, new(player.X, player.Y, player.Z),
             chasers.Select(npc => npc.Name).Append(state.Target?.Name), now);
-        if (state.Engaged && state.Target != null) ReportFight(state, player, now, false);   // FIGHT result=dropped
+        if (state.Engaged && state.Target != null) ReportFight(state, player, now, false, true);   // FIGHT result=dropped breakOff=1
         Disengage(state, player);
         if (player.Endurance > SprintStartEndurance) player.Sprint(true);              // GamePlayer.cs:8625-8652
         return true;
@@ -2593,7 +2631,9 @@ public static class PlayerBotDriver
             inFight ? state.FightControls : -1, inFight ? state.FightKites : -1,          // #167 C3: the fatal fight's
             inFight ? state.FightCasts : -1, inFight ? (state.FightQuickcast ? 1 : 0) : -1, //   caster fields, as FIGHT's
             inFight ? state.FightWaits : -1, inFight ? state.FightCtlBroken : -1,
-            inFight ? state.FightAddControls : -1);                                       // #167 C4
+            inFight ? state.FightAddControls : -1,                                        // #167 C4
+            inFight ? state.FightAdd.At : -1, inFight ? state.FightAdd.Hp : -1,           // #167, the next leg's: as FIGHT's,
+            state.BreakOffSince != 0, inFight ? state.EngageDistance : -1);               //   and on a break-off's run
         string head = $"PLAYER_BOT_DEATH bot={player.Name} level={player.Level} at=({player.X},{player.Y},{player.Z}) " +
                       $"zone={player.CurrentZone?.ID} {fight} attackers={state.Attackers} deathSteps={state.DeathSafetySteps} " +
                       $"aliveSec={(now - state.AliveSince) / 1000} task={state.Task != null}";
@@ -2615,8 +2655,9 @@ public static class PlayerBotDriver
                 BackReplan(state.BackOwed, state.BackMoved)));
     }
 
-    // One line per fight the bot was in when it settles (SettleTarget), so a fight's cost shows beside the deaths.
-    private static void ReportFight(PlayerBotState state, GamePlayer player, long now, bool killed)
+    // One line per fight the bot was in when it settles (SettleTarget), so a fight's cost shows beside the deaths; or
+    // a break-off drops it (StartsBreakOff, brokeOff).
+    private static void ReportFight(PlayerBotState state, GamePlayer player, long now, bool killed, bool brokeOff)
     {
         if (!Log.IsInfoEnabled) return;
         GameLiving target = state.Target;
@@ -2625,7 +2666,8 @@ public static class PlayerBotDriver
             state.EngageMana, PowerPercent(player.MaxMana, player.ManaPercent), (now - state.EngagedSince) / 1000, state.FightAdds,
             state.Swings, state.NotVisible, state.FightCasts, state.LifeKills, state.LifeRests, state.EngagePet,
             state.FightHeals, state.FightQuickcast, state.EngageBuffs, state.FightPetCasts, state.FightWaits,
-            state.FightControls, state.FightKites, state.FightCtlBroken, state.FightAddControls)));
+            state.FightControls, state.FightKites, state.FightCtlBroken, state.FightAddControls, state.FightAdd.At,
+            state.FightAdd.Hp, brokeOff, state.EngageDistance, state.PickCrowd)));
     }
 
     // APP:585-624, changed: every 10 s, no inventory count, no saves; after 15 minutes with no progress, back to the
@@ -2830,18 +2872,11 @@ public static class PlayerBotDriver
         return true;
     }
 
-    // #167 C4: the add (ChooseAdd) from the monsters on the bot (its attacker list) and those within IncomingRadius with
-    // the bot as their target, scanned every TargetRefreshMilliseconds (Incoming's cadence; Incoming itself isn't asked
-    // in a live fight); a new one starts its tries afresh (a held one is never chosen, so its next turn does too).
+    // #167 C4: the add (ChooseAdd) from the monsters on the bot (its attacker list) and those coming at it (ScanComing);
+    // a new one starts its tries afresh (a held one is never chosen, so its next turn does too).
     private static GameNPC Add(PlayerBotState state, GamePlayer player, GameLiving target, long now)
     {
-        if (now >= state.NextAddScanTick)
-        {
-            state.NextAddScanTick = now + TargetRefreshMilliseconds;
-            state.AddScan.Clear();
-            foreach (GameNPC npc in player.GetNPCsInRadius(IncomingRadius))
-                if (npc != target && npc.TargetObject == player && IsExperienceTarget(npc)) state.AddScan.Add(npc);
-        }
+        ScanComing(state, player, target, now);
         List<(GameNPC Npc, int Distance, bool TargetsBot, bool Held)> monsters = _addCandidates ??= new();
         monsters.Clear();
         foreach (GameLiving living in player.attackComponent.AttackerTracker.Attackers)
@@ -2852,6 +2887,18 @@ public static class PlayerBotDriver
         monsters.Clear();                                                               // no monster held past the think
         if (add != state.ControlledAdd) (state.ControlledAdd, state.AddControlTries) = (add, 0);
         return add;
+    }
+
+    // #167 C4: the monsters within IncomingRadius with the bot as their target, the target aside (AddScan), scanned every
+    // TargetRefreshMilliseconds (Incoming's cadence; Incoming itself isn't asked in a live fight): Add's, and the first
+    // add's (FirstAdd: every role's, until one is seen; a fight's first think scans afresh).
+    private static void ScanComing(PlayerBotState state, GamePlayer player, GameLiving target, long now)
+    {
+        if (now < state.NextAddScanTick) return;
+        state.NextAddScanTick = now + TargetRefreshMilliseconds;
+        state.AddScan.Clear();
+        foreach (GameNPC npc in player.GetNPCsInRadius(IncomingRadius))
+            if (npc != target && npc.TargetObject == player && IsExperienceTarget(npc)) state.AddScan.Add(npc);
     }
 
     // #167 C4: the add step at this add (AddAction) and its control: ChooseControl's add order (no mez from a pet class),
@@ -3185,7 +3232,9 @@ public static class PlayerBotDriver
         {
             player.Sit(true);
             state.LifeRests++;                                                             // FIGHT and DEATH rests=
-            if (player.IsSitting) state.SitSince = now;                                    // REST sec= (#167), if it sat
+            if (player.IsSitting)                                                          // REST sec= (#167), if it sat,
+                (state.SitSince, state.SitHealth, state.SitMana) =                         //   and hp= and mp=
+                    (now, player.HealthPercent, PowerPercent(player.MaxMana, player.ManaPercent));
         }
     }
 
@@ -3200,7 +3249,8 @@ public static class PlayerBotDriver
     {
         if (state.SitSince == 0) return;
         if (Log.IsInfoEnabled)
-            Log.Info(PlayerBotDriverReport.FormatRest(player.Name, player.Level, (now - state.SitSince) / 1000, why));
+            Log.Info(PlayerBotDriverReport.FormatRest(player.Name, player.Level, (now - state.SitSince) / 1000, why,
+                state.SitHealth, state.SitMana, state.RestRespawns));
         state.SitSince = 0;
     }
 
