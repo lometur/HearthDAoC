@@ -1924,11 +1924,51 @@ public sealed class UT_PlayerBotDriver
     [TestCase(true, 1_000L, true, true, 2_500, false, false, false, PlayerBotCasterAction.StepBack)]  // rooted, near
     [TestCase(true, 5_000L, true, true, 2_500, false, false, false, PlayerBotCasterAction.Nuke)]      // rooted, at range
     [TestCase(true, 0L, true, false, 2_500, false, false, false, PlayerBotCasterAction.Nuke)]         // stunned
+    // Each threshold from both sides (the review of 5feb32b: no case told them apart). Before contact, Quickcast ready
+    // and not hit: the control's cast while it ends before contact (more than 3,000 ms), else Quickcast's.
+    [TestCase(true, 3_001L, false, false, 2_500, false, true, false, PlayerBotCasterAction.Control)]
+    [TestCase(true, 3_000L, false, false, 2_500, false, true, false, PlayerBotCasterAction.QcControl)]
+    // A held target the nuke frees: the step back while contact comes before the nuke's end and its margin (3,500).
+    [TestCase(true, 3_499L, true, true, 2_500, false, false, false, PlayerBotCasterAction.StepBack)]
+    [TestCase(true, 3_500L, true, true, 2_500, false, false, false, PlayerBotCasterAction.Nuke)]
+    // The nuke first while there is time for it, the control and both margins (6,500).
+    [TestCase(true, 6_500L, false, false, 2_500, false, false, false, PlayerBotCasterAction.Control)]
+    [TestCase(true, 6_501L, false, false, 2_500, false, false, false, PlayerBotCasterAction.Nuke)]
     public void A_caster_nukes_controls_the_monster_coming_at_it_and_steps_back_from_a_held_one(bool closing, long contactMs,
         bool held, bool holdBreaksOnHit, int controlCastMs, bool interrupted, bool quickcastReady, bool quickcastOn,
         PlayerBotCasterAction expected) =>
         Assert.That(PlayerBotDriver.CasterAction(closing, contactMs, held, holdBreaksOnHit, controlCastMs, 3_000, interrupted,
-            quickcastReady, quickcastOn), Is.EqualTo(expected));
+            quickcastReady, quickcastOn, spellStop: true), Is.EqualTo(expected));
+
+    // The step back only while Engage holds the spell's range (the review of 5feb32b). After a quickcast root in melee,
+    // Quickcast is down and the rooted monster's swings keep interrupting the bot: Engage stops it in melee (80 units),
+    // so each step back (48 units a think) ended past the stop and Engage walked it back in; it stood in the monster's
+    // reach casting nothing and swinging at nothing until the root ended. At a melee stop (that, power under 18%, the
+    // cast watch's block) it nukes: CombatAction swings or casts, as before the step back. Quickcast ready, it holds the
+    // spell's range and steps back.
+    [Test]
+    public void A_caster_steps_back_from_a_held_monster_only_while_it_holds_its_spell_range()
+    {
+        long contact = PlayerBotDriver.TimeToContact(80, 200);
+        bool spellStop = PlayerBotDriver.HoldsSpellRange(true, true, true, false);         // hit, no Quickcast ready
+        Assert.That((spellStop, PlayerBotDriver.CombatStopDistance(true, true, true, false, 200, 1_500)),
+            Is.EqualTo((false, PlayerBotDriver.MeleeStopDistance(200))));
+        Assert.That(PlayerBotDriver.CasterAction(true, contact, true, true, 2_500, 3_000, true, false, false, spellStop),
+            Is.EqualTo(PlayerBotCasterAction.Nuke));
+        Assert.That(PlayerBotDriver.HoldsSpellRange(false, false, false, false), Is.False, "power under 18%, or blocked");
+        spellStop = PlayerBotDriver.HoldsSpellRange(true, true, true, true);                // Quickcast ready
+        Assert.That((spellStop, PlayerBotDriver.CombatStopDistance(true, true, true, true, 200, 1_500)), Is.EqualTo((true, 1_420)));
+        Assert.That(PlayerBotDriver.CasterAction(true, contact, true, true, 2_500, 3_000, true, true, false, spellStop),
+            Is.EqualTo(PlayerBotCasterAction.StepBack));
+    }
+
+    // The step back's point keeps the bot within its stop: Engage's distance (GetDistanceTo) is 3D, KiteStep's range flat
+    // at the bot's height, and the navmesh may move the point up or down. With a stop of 1,420 and the bot arriving
+    // within 20 of it: a point 1,370 out on the flat fits; 1,370 out and 400 up (a slope of 16 degrees) is 1,427 away,
+    // past the stop, where Engage walked it back in and it cast nothing for the whole root.
+    [TestCase(1_370f, 0f, true)] [TestCase(1_400f, 0f, true)] [TestCase(1_401f, 0f, false)] [TestCase(1_370f, 400f, false)]
+    public void A_step_backs_point_lies_within_the_stop_in_3d(float x, float z, bool fits) =>
+        Assert.That(PlayerBotDriver.KiteFits(new Vector3(x, 0, z), Vector3.Zero, 1_420), Is.EqualTo(fits));
 
     // The step back: a point at range from the target, straight away from it, else turned 30, 60 or 90 degrees either
     // way, the first out of every potential add's reach (the adds rule's ring) so the step pulls nothing; none, null.

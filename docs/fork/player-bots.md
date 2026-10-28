@@ -62,8 +62,10 @@ Each bot thinks every 250 ms, a thin copy of the `/bot` pilot's think:
 - A caster (Wizard, Sorcerer, Runemaster, Eldritch, Mentalist) nukes a monster coming at it while there is time for
   a nuke and a control spell after it. Then it stuns, roots or mezzes it, in that order of choice, if the cast ends
   before the monster reaches it. In melee it uses Quickcast for the control spell. A rooted or mezzed monster near it
-  would break free at the next nuke, so it first steps back to range, on a spot clear of other aggressive monsters.
-  Only single-target spells the bot has, that the monster isn't immune to; a mez only on a monster above 75% health.
+  would break free at the next nuke, so it first steps back to range, on a spot clear of other aggressive monsters,
+  within its spell's range. It steps back only while it can cast: with hits blocking its spells and no Quickcast
+  ready, or with too little power, it fights in melee as before. Only single-target spells the bot has, that the
+  monster isn't immune to; a mez only on a monster above 75% health.
 - An Animist pulls from beside its turret, so the monster comes into the turret's reach. When the turret can't reach
   the spot it pulls from, it releases the turret and plants a new one near the target, if the summon is ready and it
   has the power. Its bombers count as damage spells only when their payload does damage, so it no longer casts the

@@ -200,6 +200,7 @@ public static class PlayerBotDriver
     public const int ControlMarginMilliseconds = 500;         //   a cast's slack before contact (inf.)
     public const int MaxControlTries = 3;                     //   control casts per target that held nothing (inf.)
     public const int KitePauseMilliseconds = 5_000;           //   after a blocked step back (inf.)
+    public const int KiteArriveDistance = 20;                 //   the step back ends this near its point
     public static readonly int[] KiteTurns = [0, 30, -30, 60, -60, 90, -90];   // degrees off straight away from the target
     public const int AnimistStandMargin = 150;                // #167 F10b: by its turret; the turret's reach less this
     public const int IncomingRadius = 2_000;                  // #167 F7: a monster this near with the bot as its target
@@ -453,9 +454,11 @@ public static class PlayerBotDriver
             quickcasting ? 0 : Math.Max(0, player.SelfInterruptTime - now), interruptible, quickcastReady, due);
         int stop = CombatStopDistance(canCast, interrupted, interruptible, quickcastReady, player.attackComponent.AttackRange,
             player.castingComponent.CalculateSpellRange(state.Spell));
+        bool spellStop = HoldsSpellRange(canCast, interrupted, interruptible, quickcastReady);
         if (stop > MeleeStopDistance(player.attackComponent.AttackRange) && AnimistApproach(state, player, target, stop, now))
             return;                                                                     // #167 F10b: by its turret
-        if (distance > stop)
+        if (Kites(state, player, target, now)) return;      // #167 F11: a step back under way, before the walk in (after
+        if (distance > stop)                                //   it, the walk in undid each step: the review of 5feb32b)
         {
             player.attackComponent.StopAttack();
             player.StopCurrentSpellcast();
@@ -470,7 +473,6 @@ public static class PlayerBotDriver
             }
             return;
         }
-        if (Kites(state, player, target, now)) return;      // #167 F11: a step back under way
         state.Mover.Stop(now);
         Face(player, target);                                 // in front: AttackComponent.cs:1065
         if (now >= state.NextLosTick)                         // TargetInView: AttackComponent.cs:1065, SpellHandler.cs:450
@@ -510,7 +512,8 @@ public static class PlayerBotDriver
             state.Activity = PlayerBotActivity.Fighting;
             return;
         }
-        if (CasterStep(state, player, target, distance, now, due, interrupted, quickcastReady, quickcasting, quickcast))
+        if (CasterStep(state, player, target, distance, stop, spellStop, now, due, interrupted, quickcastReady, quickcasting,
+                quickcast))
             return;                                                                     // #167 F11
         if (action is PlayerBotCombatAction.Cast &&
             player.IsWithinRadius(target, player.castingComponent.CalculateSpellRange(state.Spell)))
@@ -596,8 +599,14 @@ public static class PlayerBotDriver
     /// between casts). A hit that blocks an interruptible spell with no Quickcast ready means melee, as at d1d524d.</summary>
     public static int CombatStopDistance(bool canCastSpell, bool interruptedByOther, bool interruptible, bool quickcastReady,
         int attackRange, int spellRange) =>
-        CombatAction(canCastSpell, interruptedByOther, 0, interruptible, quickcastReady, due: true) is PlayerBotCombatAction.Swing
-            ? MeleeStopDistance(attackRange) : SpellStopDistance(spellRange);
+        HoldsSpellRange(canCastSpell, interruptedByOther, interruptible, quickcastReady)
+            ? SpellStopDistance(spellRange) : MeleeStopDistance(attackRange);
+
+    /// <summary>Whether Engage stops the bot at its spell's range (CombatStopDistance), not in melee: a cast choice would
+    /// be no swing. A caster steps back from a held monster only then (CasterAction).</summary>
+    public static bool HoldsSpellRange(bool canCastSpell, bool interruptedByOther, bool interruptible, bool quickcastReady) =>
+        CombatAction(canCastSpell, interruptedByOther, 0, interruptible, quickcastReady, due: true)
+            is not PlayerBotCombatAction.Swing;
 
     /// <summary>Whether a player's use of Quickcast would take (QuickCastAbilityHandler.cs:41-84): the ability, not on
     /// already (it toggles off, :51-55), out of its 30-s disable after a quickcast spell (SpellHandler.cs:1430-1434,
@@ -1125,16 +1134,17 @@ public static class PlayerBotDriver
 
     /// <summary>A caster's step against its target (#167 F11). A held one (rooted, mezzed or stunned) it nukes, unless the
     /// hold breaks on the nuke's damage (a root or a mez, GameLiving.cs:1784-1803) and the monster would then reach it
-    /// before the next nuke ends: then it steps back to range first. One coming at it (closing) with a control ready
-    /// (controlCastMs, 0 for none): it nukes while there is time for a nuke and the control after it; then it controls
-    /// while the cast ends before contact (Quickcast first when hits interrupt it); in melee it quickcasts the control
-    /// (the GameBot's rule: a caster under melee controls, BotBrain.cs:3874-3901), or casts it before the first hit, or
-    /// with Quickcast on. Else Nuke: CombatAction's cast, wait, quickcast or swing.</summary>
+    /// before the next nuke ends: then it steps back to range first, only while Engage holds the spell's range
+    /// (spellStop, HoldsSpellRange; at a melee stop Engage walked each step back in, the review of 5feb32b). One coming
+    /// at it (closing) with a control ready (controlCastMs, 0 for none): it nukes while there is time for a nuke and the
+    /// control after it; then it controls while the cast ends before contact (Quickcast first when hits interrupt it); in
+    /// melee it quickcasts the control (the GameBot's rule: a caster under melee controls, BotBrain.cs:3874-3901), or casts
+    /// it before the first hit, or with Quickcast on. Else Nuke: CombatAction's cast, wait, quickcast or swing.</summary>
     public static PlayerBotCasterAction CasterAction(bool closing, long contactMs, bool held, bool holdBreaksOnHit,
-        int controlCastMs, int nukeCastMs, bool interrupted, bool quickcastReady, bool quickcastOn)
+        int controlCastMs, int nukeCastMs, bool interrupted, bool quickcastReady, bool quickcastOn, bool spellStop)
     {
         if (held)
-            return holdBreaksOnHit && contactMs < nukeCastMs + ControlMarginMilliseconds
+            return spellStop && holdBreaksOnHit && contactMs < nukeCastMs + ControlMarginMilliseconds
                 ? PlayerBotCasterAction.StepBack : PlayerBotCasterAction.Nuke;
         if (!closing || controlCastMs <= 0 || contactMs > nukeCastMs + controlCastMs + 2L * ControlMarginMilliseconds)
             return PlayerBotCasterAction.Nuke;
@@ -1161,6 +1171,13 @@ public static class PlayerBotDriver
         }
         return null;
     }
+
+    /// <summary>Whether a step back's point on the navmesh keeps the bot within Engage's stop of its target (the review
+    /// of 5feb32b): Engage's distance (GetDistanceTo) is 3D, KiteStep's range flat at the bot's height, and OnMesh moves
+    /// the point up or down; the bot ends within KiteArriveDistance of it. Past the stop, Engage walked the bot back in
+    /// and it cast nothing while the hold lasted.</summary>
+    public static bool KiteFits(Vector3 point, Vector3 target, int stop) =>
+        Vector3.Distance(point, target) <= stop - KiteArriveDistance;
 
     public static bool IsIncoming(bool targetsBot, bool attackable, int distance) =>
         targetsBot && attackable && distance <= IncomingRadius;
@@ -2025,9 +2042,10 @@ public static class PlayerBotDriver
     // think to CombatAction. A control the target can take (its immunities: SpeedDecreaseSpellHandler.cs:25-33,
     // CCSpellHandler.cs:155-177, :276-285), in range, ready and paid for, at a cast choice; MaxControlTries casts that held
     // nothing and it stops trying on this target until one holds. Control casts do no damage: no cast watch. The time to
-    // contact is at the monster's base speed (a rooted one's speed is 0). True when it acted.
-    private static bool CasterStep(PlayerBotState state, GamePlayer player, GameLiving target, int distance, long now, bool due,
-        bool interrupted, bool quickcastReady, bool quickcasting, Ability quickcast)
+    // contact is at the monster's base speed (a rooted one's speed is 0). The step back only at the spell's stop
+    // (spellStop), to a point within it (KitePoint). True when it acted.
+    private static bool CasterStep(PlayerBotState state, GamePlayer player, GameLiving target, int distance, int stop,
+        bool spellStop, long now, bool due, bool interrupted, bool quickcastReady, bool quickcasting, Ability quickcast)
     {
         if (RoleOf(player.CharacterClass.ID) != PlayerBotRole.Caster || target is not GameNPC npc) return false;
         KnowSpells(state, player);
@@ -2042,11 +2060,12 @@ public static class PlayerBotDriver
                     player.IsWithinRadius(npc, player.castingComponent.CalculateSpellRange(spell)),
                 StunOk(npc), RootOk(npc), MezOk(npc));
         PlayerBotCasterAction step = CasterAction(closing, TimeToContact(distance, npc.MaxSpeedBase), held,
-            breaksOnHit, control?.CastTime ?? 0, state.Spell?.CastTime ?? 3_000, interrupted, quickcastReady, quickcasting);
+            breaksOnHit, control?.CastTime ?? 0, state.Spell?.CastTime ?? 3_000, interrupted, quickcastReady, quickcasting,
+            spellStop);
         switch (step)                                                                   // (inf.) 3 s: the casters' nukes
         {                                                                               //   cast in 2.5-3 s
             case PlayerBotCasterAction.StepBack:
-                if (now < state.NextKiteTick || KitePoint(state, player, npc) is not Vector3 goal) return false;
+                if (now < state.NextKiteTick || KitePoint(state, player, npc, stop) is not Vector3 goal) return false;
                 state.KiteGoal = goal;                                                  // none clear: it nukes from here
                 state.FightKites++;
                 return Kites(state, player, npc, now);
@@ -2080,7 +2099,7 @@ public static class PlayerBotDriver
         }
         player.attackComponent.StopAttack();
         state.Activity = PlayerBotActivity.Fighting;
-        PlayerBotStepResult step = state.Mover.StepToward(goal, 20, now);
+        PlayerBotStepResult step = state.Mover.StepToward(goal, KiteArriveDistance, now);
         if (step is PlayerBotStepResult.Blocked)
         {
             ReportBlocked(state, player, "kite", goal, now);
@@ -2091,19 +2110,21 @@ public static class PlayerBotDriver
         return false;
     }
 
-    // The step back's point (KiteStep) on the navmesh, short of the nuke's stop distance (SpellStopDistance) so Engage
-    // doesn't walk it back in; the adds are the last search's (FindWithin), where they are now, the target not one.
-    private static Vector3? KitePoint(PlayerBotState state, GamePlayer player, GameNPC target)
+    // The step back's point (KiteStep) on the navmesh, short of Engage's stop (the spell's, SpellStopDistance) so Engage
+    // doesn't walk it back in, in 3D too (KiteFits: on a slope or after OnMesh a flat range lay past it); none, null, and
+    // the bot nukes from where it is. The adds are the last search's (FindWithin), where they are now, the target not one.
+    private static Vector3? KitePoint(PlayerBotState state, GamePlayer player, GameNPC target, int stop)
     {
-        int range = SpellStopDistance(state.Spell != null ? player.castingComponent.CalculateSpellRange(state.Spell) : 1_500) - 50;
+        int range = stop - 50;
         List<(GameNPC Npc, Vector3 At, int AggroRange)> adds = _reach ??= new();
         adds.Clear();
         foreach (GameNPC npc in state.SearchAdds)
             if (npc != target && AddReach(player, npc) is > 0 and int reach)
                 adds.Add((npc, new(npc.X, npc.Y, npc.Z), reach));
-        Vector3? point = KiteStep(new Vector3(player.X, player.Y, player.Z), new Vector3(target.X, target.Y, target.Z), range, adds);
+        Vector3 at = new(target.X, target.Y, target.Z);
+        Vector3? point = KiteStep(new Vector3(player.X, player.Y, player.Z), at, range, adds);
         Vector3? onMesh = point is Vector3 p ? OnMesh(player, p) : null;
-        if (onMesh is Vector3 m && InAddReach(m, adds)) onMesh = null;
+        if (onMesh is Vector3 m && (InAddReach(m, adds) || !KiteFits(m, at, stop))) onMesh = null;
         adds.Clear();
         return onMesh;
     }
