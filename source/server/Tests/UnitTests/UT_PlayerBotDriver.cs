@@ -423,13 +423,16 @@ public sealed class UT_PlayerBotDriver
     // --- monsters coming, and the rest out of their reach (#167 F7) ---
 
     // A live monster the bot may attack, within IncomingRadius (2,000) and with the bot as its target, is coming at it:
-    // it counts as an attacker before its first hit, so the bot stands and engages first.
-    [TestCase(true, true, 1_500, true)] [TestCase(true, true, 2_000, true)]
-    [TestCase(true, true, 2_001, false)] [TestCase(true, true, 2_500, false)]
-    [TestCase(false, true, 500, false)] [TestCase(true, false, 500, false)]
+    // it counts as an attacker before its first hit, so the bot stands and engages first. Not the one Engage found
+    // unreachable, between scans too (the review of 9549283: the scan's skip alone left the cached one re-picked, and
+    // walked to and blocked again, every think until the next scan).
+    [TestCase(true, true, 1_500, false, true)] [TestCase(true, true, 2_000, false, true)]
+    [TestCase(true, true, 2_001, false, false)] [TestCase(true, true, 2_500, false, false)]
+    [TestCase(false, true, 500, false, false)] [TestCase(true, false, 500, false, false)]
+    [TestCase(true, true, 500, true, false)]                                                  // unreachable
     public void A_monster_with_the_bot_as_its_target_within_2000_is_coming_at_it(bool targetsBot, bool attackable,
-        int distance, bool incoming) =>
-        Assert.That(PlayerBotDriver.IsIncoming(targetsBot, attackable, distance), Is.EqualTo(incoming));
+        int distance, bool unreachable, bool incoming) =>
+        Assert.That(PlayerBotDriver.IsIncoming(targetsBot, attackable, distance, unreachable), Is.EqualTo(incoming));
 
     // The rest spot: where the bot stands when no potential add reaches it; else the nearest clear point on the rest
     // rings (RestSpotRings, SpotDirections round it). With an add 400 units along +X (aggro 300, reach 500), the ring

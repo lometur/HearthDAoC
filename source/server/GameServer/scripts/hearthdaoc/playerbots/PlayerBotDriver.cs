@@ -946,14 +946,15 @@ public static class PlayerBotDriver
         Attacker(state, player, now, anyHitter: true) ?? Incoming(state, player, now);
 
     // #167 F7: the nearest monster coming at the bot (IsIncoming), from a scan every TargetRefreshMilliseconds, the search
-    // tick's; between scans the one found while it still comes. The one Engage found unreachable is no threat: it would
-    // keep the bot from ever sitting. The errands' UnderAttack stays the hitters' (no detour for a monster on its way).
+    // tick's; between scans the one found while it still comes. The one Engage found unreachable is no threat, between
+    // scans too (the review of 9549283: the cached one was re-picked and walked to each think): it would keep the bot
+    // from ever sitting. The errands' UnderAttack stays the hitters' (no detour for a monster on its way).
     private static GameNPC Incoming(PlayerBotState state, GamePlayer player, long now)
     {
         if (now < state.NextIncomingTick)
         {
             if (state.Incoming is GameNPC held && !IsIncoming(held.TargetObject == player, IsAttackable(player, held),
-                    player.GetDistanceTo(held)))
+                    player.GetDistanceTo(held), held == state.Unreachable && now < state.UnreachableUntil))
                 state.Incoming = null;
             return state.Incoming;
         }
@@ -963,8 +964,9 @@ public static class PlayerBotDriver
         foreach (GameNPC npc in player.GetNPCsInRadius(IncomingRadius))
         {
             int distance = player.GetDistanceTo(npc);
-            if (distance >= bestDistance || npc == state.Unreachable && now < state.UnreachableUntil ||
-                !IsIncoming(npc.TargetObject == player, IsExperienceTarget(npc) && IsAttackable(player, npc), distance))
+            if (distance >= bestDistance || !IsIncoming(npc.TargetObject == player,
+                    IsExperienceTarget(npc) && IsAttackable(player, npc), distance,
+                    npc == state.Unreachable && now < state.UnreachableUntil))
                 continue;
             best = npc;
             bestDistance = distance;
@@ -1179,8 +1181,10 @@ public static class PlayerBotDriver
     public static bool KiteFits(Vector3 point, Vector3 target, int stop) =>
         Vector3.Distance(point, target) <= stop - KiteArriveDistance;
 
-    public static bool IsIncoming(bool targetsBot, bool attackable, int distance) =>
-        targetsBot && attackable && distance <= IncomingRadius;
+    /// <summary>A monster coming at the bot (#167 F7): it may attack it, it has the bot as its target and it is within
+    /// IncomingRadius; not the one Engage found unreachable while that lasts (unreachable), between scans too.</summary>
+    public static bool IsIncoming(bool targetsBot, bool attackable, int distance, bool unreachable) =>
+        targetsBot && attackable && distance <= IncomingRadius && !unreachable;
 
     /// <summary>The candidate spots round here: directions points on each ring, at here's height, the first along +X; the
     /// caller puts each on the navmesh.</summary>
