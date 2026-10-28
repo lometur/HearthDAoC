@@ -106,13 +106,15 @@ Each bot thinks every 250 ms, a thin copy of the `/bot` pilot's think:
   stands up and fights it first. Before it sits, a bot within reach of an aggressive monster from its last search,
   or of the spawn spot of one of its last 3 kills in the last 150 s (where that monster respawns, 80 s after the kill
   in most of the world), walks to the nearest spot out of that reach, 1,200 units away at most.
-- Losing to two, it breaks off: below 40% health with 2 or more monsters on it, or right after a kill in a fight
+- Losing to two, it breaks off: below 40% health with 2 or more monsters on it, or within 3 s of a kill in a fight
   that had 2 or more on it with 1 still on it, unless its target is down to 10% or less. Only from monsters it can
-  outrun: none faster than its run (191), or none as fast as its sprint (248) when its endurance holds the sprint long
-  enough to keep the fastest off it for the 25 s a monster chases. It stops its fight, sprints, and runs 1,500-2,500
-  units straight away from them to a spot clear of other aggressive monsters, on again from there while one still
-  chases it. Still chased after 30 s, or with nowhere to run, it turns and fights them out. Afterwards it takes no
-  camp there and avoids those monsters for 15 minutes, and plans a new camp from where it ran to.
+  outrun, and only with a sprint whose lead takes it out of the fastest one's 200-unit reach: none faster than its
+  run (191), or none as fast as its sprint (248) when its endurance holds the sprint long enough to keep the fastest
+  off it for the 25 s a monster chases. It stops its fight, sprints, and runs 1,500-2,500 units straight away from
+  them to a spot clear of other aggressive monsters that it can walk to, on again from there while one still chases
+  it. A spot it was blocked on it never takes again in that run. Still chased after 30 s, or with nowhere to run, it
+  turns and fights them out. Afterwards it takes no camp there and avoids those monsters for 15 minutes, and plans a
+  new camp from where it ran to before it looks for a new target.
 - After a release it first steps out of the reach of every monster round it that would aggro. Wherever it died (at its
   camp or on a walk), it then plans a new camp from where it died, one it can walk to from there, before it walks
   back. It plans once the release's 10-s immunity is over: until then a player can attack no monster, so a plan found

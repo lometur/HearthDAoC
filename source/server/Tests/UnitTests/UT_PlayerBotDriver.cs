@@ -558,9 +558,15 @@ public sealed class UT_PlayerBotDriver
     // It outruns a chaser no faster than its run (191, GamePlayer.cs:8250; enable_pve_speed is off in the world DB), or
     // one under its sprint (1.3 x 191 = 248, MaxSpeedCalculator.cs:25) while the sprint's lead, 57 units a second, holds
     // it off for the 25 s a monster chases after its last swing (StandardMobState.cs:89, :121): S x 57 >= 25 x (v - 191).
-    [TestCase(191, 0, true)] [TestCase(150, 0, true)] [TestCase(220, 13, true)] [TestCase(220, 12, false)]
-    [TestCase(248, 99, false)] [TestCase(247, 99, true)] [TestCase(200, 4, true)] [TestCase(200, 3, false)]
-    [TestCase(200, int.MaxValue, true)]
+    // The review of 9aacd69: either way the sprint's lead must clear the chaser's melee reach first, S x (248 - v) above
+    // 200 (MeleeAttackRange, GameLiving.cs:303), and it needs a sprint (the old canSprint). With none (endurance 10 or
+    // less) the bot turned its back on a 191 or 185 chaser that started in its reach, which swung at its back for 30 s; a
+    // 247 one gains 99 units on a 99-s sprint, a 200 one 192 on a 4-s one.
+    [TestCase(191, 0, false)] [TestCase(185, 0, false)] [TestCase(150, 0, false)] [TestCase(191, 4, true)]
+    [TestCase(191, 3, false)] [TestCase(150, 3, true)] [TestCase(150, 2, false)]
+    [TestCase(220, 13, true)] [TestCase(220, 12, false)]
+    [TestCase(248, 99, false)] [TestCase(247, 99, false)] [TestCase(200, 5, true)] [TestCase(200, 4, false)]
+    [TestCase(200, 3, false)] [TestCase(200, int.MaxValue, true)]
     public void A_bot_outruns_a_chaser_while_its_sprint_lasts(int fastestSpeed, int sprintSeconds, bool outruns) =>
         Assert.That(PlayerBotDriver.Outruns(fastestSpeed, sprintSeconds), Is.EqualTo(outruns));
 
@@ -595,6 +601,36 @@ public sealed class UT_PlayerBotDriver
         Vector3[] around = [new(-1_500, 0, 0), new(0, -1_500, 0), new(-1_061, -1_061, 0), new(-1_061, 1_061, 0)];
         Assert.That(PlayerBotDriver.BreakOffPoint(here, [new Vector3(300, 0, 0), new Vector3(0, 300, 0)], around, none),
             Is.EqualTo(new Vector3(-1_061, -1_061, 0)), "two chasers: straight away from their middle");
+    }
+
+    // The review of 9aacd69: a point on another mesh island (across water, up a cliff) blocked the step at once, and the
+    // next think chose the same point from the same spot, again and again for 30 s, while the monsters hit the bot. Now
+    // the points it was blocked on (and those within 100 units of one) are left out, and a point is taken only with a walk
+    // there (the corridor test, walkable); one without is blocked too. Blocked twice here, then none is left: it fights.
+    [Test]
+    public void A_break_off_leaves_out_the_points_it_was_blocked_on_and_those_with_no_walk()
+    {
+        Vector3 here = Vector3.Zero, first = new(-1_500, 0, 0), second = new(-1_061, 1_061, 0), third = new(-1_061, -1_061, 0);
+        Vector3[] chasers = [new(300, 0, 0)];
+        Vector3[] candidates = [first, second, third, new(1_500, 0, 0)];
+        var none = new List<(string, Vector3, int)>();
+        var blocked = new List<Vector3>();
+        Assert.That(PlayerBotDriver.NextBreakOffPoint(here, chasers, candidates, none, blocked, _ => true), Is.EqualTo(first));
+        blocked.Add(first);                                                             // its step there blocked
+        Assert.That(PlayerBotDriver.NextBreakOffPoint(here, chasers, candidates, none, blocked, _ => true), Is.EqualTo(second));
+        blocked.Add(second);                                                            // and the next one's
+        Assert.That(PlayerBotDriver.NextBreakOffPoint(here, chasers, candidates, none, blocked, _ => true), Is.EqualTo(third));
+        blocked.Add(third);
+        Assert.That(PlayerBotDriver.NextBreakOffPoint(here, chasers, candidates, none, blocked, _ => true), Is.Null,
+            "none ahead left: it fights at once");
+        Assert.That(PlayerBotDriver.NextBreakOffPoint(here, chasers, candidates, none, [new Vector3(-1_480, 10, 0)], _ => true),
+            Is.EqualTo(second), "near a blocked one");
+        var tested = new List<Vector3>();
+        Assert.That(PlayerBotDriver.NextBreakOffPoint(here, chasers, candidates, none, tested, point => point.Y > 0),
+            Is.EqualTo(second), "no walk to the farthest");
+        Assert.That(tested, Is.EqualTo(new[] { first }), "the point with no walk is left out after");
+        Assert.That(PlayerBotDriver.NextBreakOffPoint(here, chasers, candidates, none, new List<Vector3>(), _ => false), Is.Null,
+            "no walk anywhere");
     }
 
     // The break-off's step: it runs on; at its point with a chaser still after it, it takes the next point; with none
@@ -640,6 +676,67 @@ public sealed class UT_PlayerBotDriver
         settle!.Invoke(null, [state, Player(null)]);
         Assert.That(state.KilledWithAdds, Is.EqualTo(marked));
     }
+
+    // The review of 9aacd69: the mark held until the next fight's first think, so a bot that sat at 35% after the kill
+    // broke off from one monster that jumped it mid-rest (a respawn, a wanderer). The case is the kill's: 3 s from it
+    // (inf.; the analysts' add fights leave out those begun within 3 s of a kill).
+    [TestCase(true, 10_000L, 10_000L, true)] [TestCase(true, 10_000L, 12_999L, true)] [TestCase(true, 10_000L, 13_000L, false)]
+    [TestCase(false, 10_000L, 10_000L, false)]
+    public void The_second_monster_case_holds_only_right_after_the_kill(bool killedWithAdds, long lastKill, long now,
+        bool holds) =>
+        Assert.That(PlayerBotDriver.SecondMonsterCase(killedWithAdds, lastKill, now), Is.EqualTo(holds));
+
+    // The break-off's first rule as StartsBreakOff applies it (the review of 9aacd69: with the kill's mark replaced by false
+    // no test failed): the monsters on the bot, its target's health or, at the kill (no target), the nearest hitter's, the
+    // kill's mark (SecondMonsterCase), and C4's add control, asked only once the rest holds (it scans).
+    [Test]
+    public void At_the_kill_the_break_off_reads_the_kills_mark_and_the_nearest_hitters_health()
+    {
+        var state = new PlayerBotState(Player(null)) { KilledWithAdds = true, LastKillTick = 10_000 };
+        int asked = 0;
+        bool NoControl() { asked++; return false; }
+        Assert.That(PlayerBotDriver.BreakOffFires(state, 39, [(100, 150)], 10_250, NoControl), Is.True, "the second-monster case");
+        Assert.That(PlayerBotDriver.BreakOffFires(state, 39, [(100, 150)], 10_250, () => true), Is.False, "C4's control first");
+        Assert.That(PlayerBotDriver.BreakOffFires(state, 39, [(100, 150)], 13_000, NoControl), Is.False, "3 s on");
+        Assert.That(PlayerBotDriver.BreakOffFires(state, 40, [(100, 150)], 10_250, NoControl), Is.False, "at 40%");
+        Assert.That(PlayerBotDriver.BreakOffFires(state, 39, [(80, 300), (10, 150)], 10_250, NoControl), Is.False,
+            "the nearest hitter nearly dead");
+        Assert.That(PlayerBotDriver.BreakOffFires(state, 39, [(10, 300), (80, 150)], 10_250, NoControl), Is.True);
+        state.KilledWithAdds = false;
+        asked = 0;
+        Assert.That(PlayerBotDriver.BreakOffFires(state, 39, [(100, 150)], 10_250, NoControl), Is.False, "no mark: it fights on");
+        Assert.That(asked, Is.Zero, "the add control is not asked when the rest fails");
+        Assert.That(PlayerBotDriver.BreakOffFires(state, 39, [(100, 150), (80, 300)], 10_250, NoControl), Is.True, "two on it");
+    }
+
+    // The break-off's end where EndBreakOff applies it (the review of 9aacd69: with the relocation's call deleted no test
+    // failed): it clears the run, and unless the bot died it owes the relocation (AfterBreakOff); fought, no new break-off
+    // for 30 s.
+    [TestCase("shook", "brokeoff", 0L)] [TestCase("fought", "brokeoff", 37_000L)] [TestCase("died", null, 0L)]
+    public void A_break_offs_end_owes_the_relocation_unless_it_died(string outcome, string owed, long nextBreakOff)
+    {
+        var state = new PlayerBotState(Player(null)) { BreakOffSince = 2_000, BreakOffGoal = new Vector3(1, 0, 0),
+            BreakOffArrived = true };
+        state.BreakOffChasers.Add(null);
+        state.BreakOffBlocked.Add(Vector3.One);
+        PlayerBotDriver.FinishBreakOff(state, outcome, owesReplan: true, 7_000);
+        Assert.That((state.BreakOffSince, state.BreakOffGoal, state.BreakOffArrived, state.BreakOffChasers.Count,
+            state.BreakOffBlocked.Count), Is.EqualTo((0L, (Vector3?)null, false, 0, 0)));
+        Assert.That((state.ReplanOwed, state.NextBreakOffTick), Is.EqualTo((owed, nextBreakOff)));
+        var held = new PlayerBotState(Player(null)) { BreakOffSince = 2_000 };
+        PlayerBotDriver.FinishBreakOff(held, PlayerBotDriver.Shook, owesReplan: false, 7_000);
+        Assert.That(held.ReplanOwed, Is.Null, "a lever spot bot or a task owes none");
+    }
+
+    // The review of 9aacd69: after a break-off the bot rests (it is under 40%), and the first search after the rest ran
+    // before step 15's relocation, from where it ran to and still leashed to the camp it fled: a monster of another name
+    // there could be pulled. No ring search while a relocation is owed, as after a release (self-defence and a monster
+    // coming at it still go).
+    [TestCase(true, false, null, true)] [TestCase(false, false, null, false)] [TestCase(true, true, null, false)]
+    [TestCase(true, false, "brokeoff", false)]
+    public void No_ring_search_while_the_recovery_lasts_or_a_relocation_is_owed(bool searchDue, bool afterRelease,
+        string replanOwed, bool searches) =>
+        Assert.That(PlayerBotDriver.SearchesRings(searchDue, afterRelease, replanOwed), Is.EqualTo(searches));
 
     // PLAYER_BOT_BREAKOFF: the bot's health, endurance and attackers when it broke off, the seconds it ran and how it ended.
     [Test]
