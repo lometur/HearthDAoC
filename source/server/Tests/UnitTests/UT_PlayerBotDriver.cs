@@ -2121,15 +2121,17 @@ public sealed class UT_PlayerBotDriver
     {
         (Spell, SpellLine)[] sorcerer = [(LesserCrippling, BodyLine), (Cripple, BodyLine), (MinorMesmerization, BodyLine),
             (LesserMesmerization, BodyLine)];
-        Assert.That(PlayerBotDriver.ChooseControl(sorcerer, _ => true, _ => true).Item1, Is.SameAs(Cripple));
-        Assert.That(PlayerBotDriver.ChooseControl(sorcerer, s => s != Cripple, _ => true).Item1, Is.SameAs(LesserCrippling));
-        Assert.That(PlayerBotDriver.ChooseControl(sorcerer, _ => true, s => s.SpellType != eSpellType.SpeedDecrease).Item1,
-            Is.SameAs(LesserMesmerization), "a target that can't be rooted");
-        Assert.That(PlayerBotDriver.ChooseControl(sorcerer, _ => true, s => s.SpellType == eSpellType.Stun).Item1, Is.Null);
+        Assert.That(PlayerBotDriver.ChooseControl(sorcerer, _ => true, _ => true, false, false).Item1, Is.SameAs(Cripple));
+        Assert.That(PlayerBotDriver.ChooseControl(sorcerer, s => s != Cripple, _ => true, false, false).Item1,
+            Is.SameAs(LesserCrippling));
+        Assert.That(PlayerBotDriver.ChooseControl(sorcerer, _ => true, s => s.SpellType != eSpellType.SpeedDecrease, false,
+            false).Item1, Is.SameAs(LesserMesmerization), "a target that can't be rooted");
+        Assert.That(PlayerBotDriver.ChooseControl(sorcerer, _ => true, s => s.SpellType == eSpellType.Stun, false, false).Item1,
+            Is.Null);
         (Spell, SpellLine)[] both = [(Cripple, BodyLine), (PrismaticFlare, SunLine)];
-        Assert.That(PlayerBotDriver.ChooseControl(both, _ => true, _ => true).Item1, Is.SameAs(PrismaticFlare));
-        Assert.That(PlayerBotDriver.ChooseControl(both, _ => true, s => s.SpellType != eSpellType.Stun).Item1, Is.SameAs(Cripple),
-            "stun-immune");
+        Assert.That(PlayerBotDriver.ChooseControl(both, _ => true, _ => true, false, false).Item1, Is.SameAs(PrismaticFlare));
+        Assert.That(PlayerBotDriver.ChooseControl(both, _ => true, s => s.SpellType != eSpellType.Stun, false, false).Item1,
+            Is.SameAs(Cripple), "stun-immune");
     }
 
     // #167 C8: the server's own immunity test. An NPC's stun or mez starts a 60-s NpcImmunityEffect that halves each next
@@ -2182,7 +2184,7 @@ public sealed class UT_PlayerBotDriver
     [TestCase(true, 0L, false, false, 2_500, false, true, false, PlayerBotCasterAction.QcControl)]    // in melee
     [TestCase(true, 0L, false, false, 2_500, true, false, true, PlayerBotCasterAction.Control)]       // quickcast on
     [TestCase(true, 0L, false, false, 2_500, true, false, false, PlayerBotCasterAction.Nuke)]         // hit, no quickcast
-    [TestCase(true, 6_000L, false, false, 2_500, true, true, false, PlayerBotCasterAction.QcControl)] // an add hits it
+    [TestCase(true, 6_000L, false, false, 2_500, true, true, false, PlayerBotCasterAction.QcControl)] // an add hits it (C4: the add step's first)
     [TestCase(true, 6_000L, false, false, 2_500, true, false, false, PlayerBotCasterAction.Nuke)]
     [TestCase(true, 0L, false, false, 0, false, true, false, PlayerBotCasterAction.Nuke)]             // no control ready
     [TestCase(true, 1_000L, true, true, 2_500, false, false, false, PlayerBotCasterAction.StepBack)]  // rooted, near
@@ -2296,6 +2298,122 @@ public sealed class UT_PlayerBotDriver
         Assert.That(PlayerBotDriver.KiteTarget(new Vector3(100, 0, 0), Vector3.Zero, 1_370, none, inMelee: true),
             Is.EqualTo((new Vector3(1_370, 0, 0), true)));
     }
+
+    // --- the add's control (#167 C4) ---
+
+    // Caster add fights were fatal 96% of the time in st-deathsB (51 of 53): casters controlled their target, never an add
+    // (CasterStep's state.Target only). The add: the nearest monster with the bot as its target, not held and not the
+    // target (the merged seam: caster-pulls' attacker within 250 kept as its cases).
+    [Test]
+    public void The_add_to_control_is_the_nearest_unheld_monster_on_the_bot_but_the_target()
+    {
+        Assert.That(PlayerBotDriver.ChooseAdd([("target", 100, true, false), ("a", 600, true, false), ("b", 300, true, true),
+            ("c", 200, false, false)], "target"), Is.EqualTo("a"), "b is held, c isn't on the bot");
+        Assert.That(PlayerBotDriver.ChooseAdd([("A", 1_400, true, false), ("B", 120, true, false)], "A"), Is.EqualTo("B"));
+        Assert.That(PlayerBotDriver.ChooseAdd([("A", 1_400, true, false), ("B", 120, true, false), ("C", 90, true, false)], "A"),
+            Is.EqualTo("C"));
+        Assert.That(PlayerBotDriver.ChooseAdd([("A", 100, true, false), ("B", 120, true, true)], "A"), Is.Null);
+        Assert.That(PlayerBotDriver.ChooseAdd([("A", 100, true, false)], "A"), Is.Null, "only the target");
+    }
+
+    // For an add the order is a mez, then a root, then a stun (the GameBot mezzes adds, BotBrain.cs:3887-3893); a pet class
+    // skips the mez: its pet's defence hits the add and ends it (ControlledMobBrain.cs:930-970, inf.). The target's order
+    // stays a stun, a root, a mez.
+    [Test]
+    public void An_add_takes_a_mez_first_but_from_a_pet_class()
+    {
+        (Spell, SpellLine)[] sorcerer = [(LesserCrippling, BodyLine), (Cripple, BodyLine), (MinorMesmerization, BodyLine),
+            (LesserMesmerization, BodyLine)];
+        Assert.That(PlayerBotDriver.ChooseControl(sorcerer, _ => true, _ => true, forAdd: true, petClass: false).Item1,
+            Is.SameAs(LesserMesmerization));
+        Assert.That(PlayerBotDriver.ChooseControl(sorcerer, _ => true, _ => true, forAdd: false, petClass: false).Item1,
+            Is.SameAs(Cripple), "the target's order");
+        Assert.That(PlayerBotDriver.ChooseControl(sorcerer, _ => true, s => s.SpellType != eSpellType.Mesmerize, forAdd: true,
+            petClass: false).Item1, Is.SameAs(Cripple), "the add under 75%: no mez (CCSpellHandler.cs:173-177)");
+        Assert.That(PlayerBotDriver.ChooseControl(sorcerer, _ => true, _ => true, forAdd: true, petClass: true).Item1,
+            Is.SameAs(Cripple), "a pet class");
+        (Spell, SpellLine)[] enchanter = [(Control(4124, "Prismatic Sheen", "Stun", 36, 0), SunLine)];
+        Assert.That(PlayerBotDriver.ChooseControl(enchanter, _ => true, _ => true, forAdd: true, petClass: true).Item1?.Name,
+            Is.EqualTo("Prismatic Sheen"));
+        Assert.That(PlayerBotDriver.ChooseControl(sorcerer, _ => false, _ => true, forAdd: true, petClass: false).Item1, Is.Null,
+            "none ready");
+    }
+
+    // A root keeps an add off only while it is still away: in melee a rooted monster still hits (inf.). A mez or a stun
+    // stops its hits there too.
+    [Test]
+    public void A_root_on_an_add_already_in_melee_is_no_control()
+    {
+        Assert.That(PlayerBotDriver.ControlKeepsAddOff(Cripple, 251), Is.True);
+        Assert.That(PlayerBotDriver.ControlKeepsAddOff(Cripple, 250), Is.False);
+        Assert.That(PlayerBotDriver.ControlKeepsAddOff(LesserMesmerization, 100), Is.True);
+        Assert.That(PlayerBotDriver.ControlKeepsAddOff(PrismaticFlare, 0), Is.True);
+    }
+
+    // The add's control (a 2,500-ms cast, the 500-ms margin), for every role with a control: cast while it ends before
+    // the add's contact and no hit interrupts the bot; else only with Quickcast (Quickcast ready: turn it on; on: cast).
+    // Not while the target's control comes first (TargetFirst), nor with no add or no control.
+    [TestCase(false, 4_000L, false, 2_500, false, false, false, PlayerBotAddAction.None)]
+    [TestCase(true, 4_000L, false, 2_500, false, false, false, PlayerBotAddAction.Control)]
+    [TestCase(true, 3_001L, false, 2_500, false, true, false, PlayerBotAddAction.Control)]
+    [TestCase(true, 3_000L, false, 2_500, false, true, false, PlayerBotAddAction.QcControl)]
+    [TestCase(true, 3_000L, false, 2_500, false, false, false, PlayerBotAddAction.None)]          // no Quickcast
+    [TestCase(true, 0L, false, 2_500, true, true, false, PlayerBotAddAction.QcControl)]
+    [TestCase(true, 0L, false, 2_500, true, false, true, PlayerBotAddAction.Control)]            // Quickcast on
+    [TestCase(true, 0L, false, 2_500, true, false, false, PlayerBotAddAction.None)]             // a healer once hit
+    [TestCase(true, 6_000L, true, 2_500, false, false, false, PlayerBotAddAction.None)]          // the target's first
+    [TestCase(true, 6_000L, false, 0, false, false, false, PlayerBotAddAction.None)]             // no control
+    [TestCase(true, 6_000L, false, 2_500, true, false, false, PlayerBotAddAction.None)]          // the target's hits
+    [TestCase(true, 6_000L, false, 2_500, true, true, false, PlayerBotAddAction.QcControl)]
+    public void A_bot_controls_the_add_before_it_arrives_else_with_quickcast(bool hasAdd, long addContactMs, bool targetFirst,
+        int controlCastMs, bool interrupted, bool quickcastReady, bool quickcastOn, PlayerBotAddAction expected) =>
+        Assert.That(PlayerBotDriver.AddAction(hasAdd, addContactMs, targetFirst, controlCastMs, interrupted, quickcastReady,
+            quickcastOn), Is.EqualTo(expected));
+
+    // One Quickcast in 30 s (SpellHandler.cs:1430-1434): an add hitting the bot (contact 0) while its target comes at 6 s
+    // took it on the target (CasterAction's "an add hits it" row); the add step runs first now, turns it on for the add,
+    // and casts the add's control with it at the next think, where CasterStep sees it as not ready.
+    [Test]
+    public void Quickcast_goes_to_the_add_first()
+    {
+        Assert.That(PlayerBotDriver.CasterAction(true, 6_000, false, false, 2_500, 3_000, true, true, false),
+            Is.EqualTo(PlayerBotCasterAction.QcControl), "the target's, after the add step");
+        Assert.That(PlayerBotDriver.AddAction(true, 0, PlayerBotDriver.TargetFirst(true, false, true, 6_000, 0), 2_500, true,
+            true, false), Is.EqualTo(PlayerBotAddAction.QcControl), "the add's first");
+        Assert.That(PlayerBotDriver.AddAction(true, 0, false, 2_500, true, false, true), Is.EqualTo(PlayerBotAddAction.Control),
+            "the next think, Quickcast on");
+        Assert.That(PlayerBotDriver.QuickcastReady(true, true, 0, 0, false, 5_000), Is.False, "CasterStep's view: on already");
+    }
+
+    // A caster's own control on its target comes first while the target, un-held and coming at it, reaches it before the
+    // add (CasterStep controls it then); else the add's. Both in melee: the add's, as Quickcast's order has it.
+    [TestCase(true, false, true, 1_000L, 3_000L, true)]
+    [TestCase(true, false, true, 3_000L, 1_000L, false)]
+    [TestCase(true, false, true, 0L, 0L, false)]
+    [TestCase(true, true, true, 1_000L, 3_000L, false)]                                     // the target held
+    [TestCase(false, false, true, 1_000L, 3_000L, false)]                                   // no control for it
+    [TestCase(true, false, false, 1_000L, 3_000L, false)]                                   // not coming at it
+    public void The_targets_control_comes_first_while_it_arrives_first(bool controlsTarget, bool targetHeld, bool closing,
+        long targetContactMs, long addContactMs, bool first) =>
+        Assert.That(PlayerBotDriver.TargetFirst(controlsTarget, targetHeld, closing, targetContactMs, addContactMs),
+            Is.EqualTo(first));
+
+    // The verifier's correction: CheckBeginCast and CheckEndCast need the spell's target in the front 180 degrees
+    // (SpellHandler.cs:725, :939), and Engage faced the target every think before its IsCasting return. While a cast at
+    // the add is under way the bot faces the add.
+    [Test]
+    public void A_bot_casting_at_the_add_faces_the_add()
+    {
+        Assert.That(PlayerBotDriver.FacesWhom("target", "add", casting: true), Is.EqualTo("add"));
+        Assert.That(PlayerBotDriver.FacesWhom("target", "add", casting: false), Is.EqualTo("target"));
+        Assert.That(PlayerBotDriver.FacesWhom("target", null, casting: true), Is.EqualTo("target"));
+    }
+
+    // A mezzed or stunned monster keeps the bot as its target (CrowdControlECSEffect.cs:26-37 stops its attack only), but
+    // it hits nothing: it is not on the bot for the break-off (C2), so a controlled add doesn't start one.
+    [TestCase(true, false, true)] [TestCase(true, true, false)] [TestCase(false, false, false)]
+    public void A_mezzed_or_stunned_add_is_not_on_the_bot(bool attacksBot, bool crowdControlled, bool onBot) =>
+        Assert.That(PlayerBotDriver.OnBot(attacksBot, crowdControlled), Is.EqualTo(onBot));
 
     // --- the nuke per cast (#167 F9) ---
 
@@ -2827,21 +2945,21 @@ public sealed class UT_PlayerBotDriver
     // whether a cast in the fight went with Quickcast on; then (#167) buffs=, its self-buffs up at that first think (F8),
     // petCasts=, a Theurgist's pets cast at the target (F1), and waits=, the thinks a cast due waited for its own swing's
     // interrupt (WaitToCast, F6); then a caster's control casts, ctl=, and its steps back, kites= (F11); then ctlBroken=,
-    // the holds its own swing ended (C3).
+    // the holds its own swing ended (C3); then addCtl=, its control casts at an add (C4), counted in ctl= too.
     [Test]
     public void FightFormat()
     {
         Assert.That(PlayerBotDriverReport.FormatFight(new PlayerBotFight("Pbotaaaac", 40, "widow claw", 40, ConColor.YELLOW, false,
                 true, 100, 38, 100, 12, 21, 1, 9, 2, 4, 0, 0, Pet: true, Heals: 2, Quickcast: true, Buffs: 3, PetCasts: 2, Waits: 5,
-                Controls: 2, Kites: 1, CtlBroken: 1)),
+                Controls: 2, Kites: 1, CtlBroken: 1, AddControls: 1)),
             Is.EqualTo("PLAYER_BOT_FIGHT bot=Pbotaaaac level=40 target=\"widow claw\" targetLevel=40 con=YELLOW from=pull result=kill " +
                        "startHp=100 endHp=38 startMana=100 endMana=12 sec=21 adds=1 swings=9 notVisible=2 casts=4 lifeKills=0 rests=0 " +
-                       "pet=alive heals=2 qc=1 buffs=3 petCasts=2 waits=5 ctl=2 kites=1 ctlBroken=1"));
+                       "pet=alive heals=2 qc=1 buffs=3 petCasts=2 waits=5 ctl=2 kites=1 ctlBroken=1 addCtl=1"));
         Assert.That(PlayerBotDriverReport.FormatFight(new PlayerBotFight("Pbothaaab", 43, "empyrean guardian", 36, ConColor.BLUE, true,
                 false, 64, 51, 100, 100, 7, 2, 3, 0, 0, 3, 1)),
             Is.EqualTo("PLAYER_BOT_FIGHT bot=Pbothaaab level=43 target=\"empyrean guardian\" targetLevel=36 con=BLUE from=defence " +
                        "result=dropped startHp=64 endHp=51 startMana=100 endMana=100 sec=7 adds=2 swings=3 notVisible=0 casts=0 " +
-                       "lifeKills=3 rests=1 pet=none heals=0 qc=0 buffs=0 petCasts=0 waits=0 ctl=0 kites=0 ctlBroken=0"));
+                       "lifeKills=3 rests=1 pet=none heals=0 qc=0 buffs=0 petCasts=0 waits=0 ctl=0 kites=0 ctlBroken=0 addCtl=0"));
     }
 
     // #167: one PLAYER_BOT_REST line per rest when the bot stands: the seconds it sat and why it stood (recovered, hit,
@@ -2874,22 +2992,22 @@ public sealed class UT_PlayerBotDriver
     // then the names the bot avoided when it died (DEATHS.md A3), before this death's; then (#167 F4) again=, no kill
     // since its last release, sinceRelease=, the seconds since it (-1: none this login), and ill=, the resurrection
     // illness on at the fatal fight's start; then (#167 C3) the fatal fight's caster fields as FIGHT gives them, ctl=,
-    // kites=, casts=, qc= and waits=, and ctlBroken=, the holds its own swing ended: -1 out of a fight.
+    // kites=, casts=, qc= and waits=, ctlBroken=, the holds its own swing ended, and addCtl= (C4): -1 out of a fight.
     [Test]
     public void DeathDetailFormat()
     {
         Assert.That(PlayerBotDriverReport.FormatDeathDetail(new PlayerBotDeathDetail(PlayerBotActivity.Fighting, 62, 14, 71, false,
                 2, 3, 0, 40, 100, 6, 1, "widow claw", 40, true, 748, Avoided: 2, Again: true, SinceRelease: 42, Ill: true,
-                Controls: 2, Kites: 1, Casts: 4, Quickcast: 1, Waits: 3, CtlBroken: 1)),
+                Controls: 2, Kites: 1, Casts: 4, Quickcast: 1, Waits: 3, CtlBroken: 1, AddControls: 1)),
             Is.EqualTo("activity=Fighting startHp=62 fightSec=14 targetHp=71 from=pull adds=2 lifeKills=3 rests=0 sinceKillSec=40 " +
                        "mana=100 swings=6 notVisible=1 killer=\"widow claw\" killerLevel=40 killerIsTarget=True fromBind=748 " +
-                       "avoided=2 again=True sinceRelease=42 ill=True ctl=2 kites=1 casts=4 qc=1 waits=3 ctlBroken=1"));
+                       "avoided=2 again=True sinceRelease=42 ill=True ctl=2 kites=1 casts=4 qc=1 waits=3 ctlBroken=1 addCtl=1"));
         // Out of a fight, no target, no kill this life, no killer named by the Dying event, the bind in another region.
         Assert.That(PlayerBotDriverReport.FormatDeathDetail(new PlayerBotDeathDetail(PlayerBotActivity.Hunting, -1, -1, -1, true,
                 -1, 0, 2, -1, 37, -1, -1, null, 0, false, -1)),
             Is.EqualTo("activity=Hunting startHp=-1 fightSec=-1 targetHp=-1 from=defence adds=-1 lifeKills=0 rests=2 sinceKillSec=-1 " +
                        "mana=37 swings=-1 notVisible=-1 killer=\"\" killerLevel=0 killerIsTarget=False fromBind=-1 avoided=0 " +
-                       "again=False sinceRelease=-1 ill=False ctl=-1 kites=-1 casts=-1 qc=-1 waits=-1 ctlBroken=-1"));
+                       "again=False sinceRelease=-1 ill=False ctl=-1 kites=-1 casts=-1 qc=-1 waits=-1 ctlBroken=-1 addCtl=-1"));
     }
 
     // DEATH again= and sinceRelease= (#167 F4): a death with no kill since the bot's last release; none before the first
@@ -2923,7 +3041,7 @@ public sealed class UT_PlayerBotDriver
         Assert.That(PlayerBotDriver.DeathLine(head, detail, target, target), Is.EqualTo(head + " activity=Fighting startHp=62 fightSec=14 " +
             "targetHp=71 from=pull adds=2 lifeKills=3 rests=0 sinceKillSec=40 mana=100 swings=6 notVisible=1 killer=\"widow claw\" " +
             "killerLevel=40 killerIsTarget=True fromBind=748 avoided=0 again=False sinceRelease=-1 ill=False ctl=-1 kites=-1 casts=-1 " +
-            "qc=-1 waits=-1 ctlBroken=-1"));
+            "qc=-1 waits=-1 ctlBroken=-1 addCtl=-1"));
         Assert.That(PlayerBotDriver.DeathLine(head, detail, add, target),
             Does.Contain(" killer=\"a wolf\" killerLevel=38 killerIsTarget=False fromBind=748 avoided=0 again=False sinceRelease=-1 ill=False "));
         Assert.That(PlayerBotDriver.DeathLine(head, detail, null, null),
