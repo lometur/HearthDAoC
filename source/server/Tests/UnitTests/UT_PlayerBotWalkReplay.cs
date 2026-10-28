@@ -11,12 +11,12 @@ using NUnit.Framework;
 namespace DOL.UnitTests;
 
 // HearthDAoC: player-bot walks that stalled, replayed on the installed navmesh. Read-only; never starts the server.
-// Set OFFLINE_DAOC_NAV_ROOT to a folder with navmesh/zone008.nav, zone012.nav, zone126.nav, zone152.nav, zone209.nav,
-// zone250.nav and lib/Detour
+// Set OFFLINE_DAOC_NAV_ROOT to a folder with navmesh/zone008.nav, zone012.nav, zone120.nav, zone126.nav, zone152.nav,
+// zone209.nav, zone250.nav and lib/Detour
 // (tools/linux/odaoc_fetch.py --lock deploy/upstream.lock extract runtime/server/navmesh/zone008.nav
 // FOLDER/navmesh/zone008.nav, and the same for the others). One test per zone: loading a zone's navmesh twice in one
 // process crashes the test host.
-[TestFixture, NonParallelizable, Explicit("Needs OFFLINE_DAOC_NAV_ROOT: a folder with navmesh/zone008.nav, zone012.nav, zone126.nav, zone152.nav, zone209.nav, zone250.nav and lib/Detour")]
+[TestFixture, NonParallelizable, Explicit("Needs OFFLINE_DAOC_NAV_ROOT: a folder with navmesh/zone008.nav, zone012.nav, zone120.nav, zone126.nav, zone152.nav, zone209.nav, zone250.nav and lib/Detour")]
 public class UT_PlayerBotWalkReplay
 {
     // The quest bot stood 513 units short of Olorustos for 14 minutes (lv-r1-stall, 2026-10-25 04:46): its whole-unit
@@ -98,6 +98,23 @@ public class UT_PlayerBotWalkReplay
             Vector3 stall = new(27716.25f, 31724.64f, 16070.8f), goal = new(28693, 33846, 15744);
             Assert.That(UT_PlayerBotDriver.Walk(nav, region, zone, stall, goal, keepExact: true, ticks: 600, blockEnds: true),
                 Is.InRange(1, 600));
+        });
+
+    // st-final4 (and six runs before it): in Jordheim a roaming bot's corridor crossed a ridge by a corner 35 units up. Its moves
+    // toward the corner slid along the ridge's foot into a pocket, and every fresh corridor from there led out and back into it.
+    [Test]
+    public void TheBotWalksOutOfThePocketBelowARidge() =>
+        // Jordheim (region 101, zone 120): OffsetX 1, OffsetY 1, Width 8, Height 8.
+        OnZone(120, "Jordheim", 1, 1, (nav, region, zone) =>
+        {
+            Vector3 pocket = new(32225.28f, 26621.72f, 8762.75f), firstStall = new(32254.63f, 26615.85f, 8762.75f);
+            foreach (Vector3 goal in new Vector3[] { new(32204, 28405, 8801), new(30494, 28040, 8766), new(31746, 27019, 8763) })
+            {
+                Assert.That(UT_PlayerBotDriver.Walk(nav, region, zone, pocket, goal, keepExact: true, ticks: 400, blockEnds: true),
+                    Is.InRange(1, 400), $"from the pocket to {goal}");
+                Assert.That(UT_PlayerBotDriver.Walk(nav, region, zone, firstStall, goal, keepExact: true, ticks: 400, blockEnds: true),
+                    Is.InRange(1, 400), $"from the first stall to {goal}");
+            }
         });
 
     // st-fix2: in Tir na Nog Pbothaacw stood 84 units above the floor, off the mesh: every step lost the walkable
