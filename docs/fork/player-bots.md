@@ -154,8 +154,10 @@ registered, test it in game. The mover:
   again. Off a ledge in Gripklosa the line floated bots over the drop, and the next corridor step took them back up onto
   the ledge, for good. With no corridor the walk ends: the line would take the bot through the floor. A walk whose
   corridor ends where the bot stands, its goal off that floor (a roam goal on a floor straight under the bot, with no
-  way down), ends at once: 6 such walks stood 3 seconds each and ended stalled. Such links are rare (in the nine zones
-  replayed, 0-158 of 1,186-202,142 seam links), and NPCs and GameBots keep Detour's own queries.
+  way down), ends at once: 6 such walks stood 3 seconds each and ended stalled. Where the line runs over a drop only,
+  though, the bot takes it in both cases, as before: offline, 38 walks the line took to their goals ended at once
+  without it, most in Tir na Nog and Jordheim. Such links are rare (in the nine zones replayed, 0-158 of
+  1,186-202,142 seam links), and NPCs and GameBots keep Detour's own queries.
 - within 300 units of its goal, walks straight at it only with a clear line of sight, or within a corner's reach (32
   units across), where the corridor has dropped its last corner; otherwise it follows the corridor (a bot crept along
   a wall 267 units from its target).
@@ -174,7 +176,8 @@ two (about 44 units at one Snowdonia spot), and on a floor link it floats up or 
 70-133 out of Jordheim's walled-in floors, through the ramp above them). GameBots do the same, but a player bot should
 look like a player: worth a look in game near a steep hill and in Tir na Nog. A floor step is a visible jump: 14 in
 one run, of 50-198 units. Off a ledge within 300 units of its goal a bot now drops to the floor below in a step or
-two, where it floated down the straight line before.
+two, where it floated down the straight line before, and it keeps to the floor where the line runs high over lower
+ground: offline, 25 of 41,297 walks took 12-66 more steps, and the walks by Jordheim's links 3.6% more in all.
 
 Known gaps:
 - **Stalls are rare.** In 15-minute runs of 390 hunting bots, 16 walks stalled with #169 (2,421 before #168's fixes,

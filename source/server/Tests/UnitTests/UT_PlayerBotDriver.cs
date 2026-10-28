@@ -1314,17 +1314,20 @@ public sealed class UT_PlayerBotDriver
 
     // A ledge (floor Z Height) up to X 100 and a floor at Z 0 beyond it, joined there, as at a Gripklosa seam whose floors
     // part (#166). The moves take the floor under their end, the 2D ray sees across, and the closest point is the floor
-    // under the point within the box's height.
+    // under the point within the box's height. With NoWay no corridor is found; with Cliff the floor beyond lies off the
+    // ledge's mesh, and the corridor's box (over 64 units high) finds the ledge's edge for a point over it.
     private sealed class DropMesh : PathfindingMgrBase
     {
         public float Height = 100;
         public int Searches;
+        public bool NoWay, Cliff;
         public override bool HasNavmesh(Zone zone) => true;
         private Vector3 On(Vector3 p) => new(p.X, p.Y, p.X < 100 ? Height : 0);
         public override PathfindingResult GetPathStraight(Zone zone, Vector3 start, Vector3 end, EDtPolyFlags[] filters,
             Span<WrappedPathfindingNode> destination)
         {
             Searches++;
+            if (NoWay) return new(PathfindingStatus.NoPathFound, 0);
             destination[0] = new(start, EDtPolyFlags.Walk);
             destination[1] = new(end, EDtPolyFlags.Walk);
             return new(PathfindingStatus.PathFound, 2);
@@ -1333,7 +1336,8 @@ public sealed class UT_PlayerBotDriver
         public override Vector3? GetMoveAlongSurfaceLayered(Zone zone, Vector3 start, Vector3 end, EDtPolyFlags[] filters, bool grounded) =>
             On(end);
         public override Vector3? GetClosestPoint(Zone zone, Vector3 position, float xRange, float yRange, float zRange,
-            EDtPolyFlags[] filters) => Math.Abs(On(position).Z - position.Z) <= zRange ? On(position) : null;
+            EDtPolyFlags[] filters) => Cliff && zRange > 64 ? new(Math.Min(position.X, 99), position.Y, Height)
+            : Math.Abs(On(position).Z - position.Z) <= zRange ? On(position) : null;
         public override bool HasLineOfSight(Zone zone, Vector3 start, Vector3 end, EDtPolyFlags[] filters) => true;
     }
 
@@ -1350,6 +1354,22 @@ public sealed class UT_PlayerBotDriver
         Assert.That(PlayerBotPathMover.TryComputeNext(mesh, region, zone, new PlayerTravelPath(), new(60, 0, ledge), new(280, 0, raised), 0,
             47.75f, 0, out _, out string failure), Is.True, failure);
         Assert.That(mesh.Searches, Is.EqualTo(searches));
+    }
+
+    // Where no corridor leads down off the ledge (NoWay), or the corridor ends where the bot stands on its edge (Cliff),
+    // the bot still takes the line over the drop, as before the fourth review of #166: without it, in the offline
+    // sweeps, 38 walks to goals that the line reached ended at once, most in Tir na Nog and Jordheim. Under the floor it
+    // doesn't (WithNoCorridorRoundTheHillTheWalkEnds).
+    [TestCase(false)] [TestCase(true)]
+    public void WithNoCorridorDownOffALedgeTheBotTakesTheLine(bool cliff)
+    {
+        var (region, zone) = World();
+        var mesh = new DropMesh { NoWay = !cliff, Cliff = cliff };
+        Vector3 from = new(cliff ? 99 : 60, 0, 100), goal = new(cliff ? 150 : 280, 0, cliff ? 20 : 0);
+        Assert.That(PlayerBotPathMover.TryComputeNext(mesh, region, zone, new PlayerTravelPath(), from, goal, 0, 47.75f, 0,
+            out Vector3 next, out string failure), Is.True, failure);
+        Assert.That((mesh.Searches, next.X), Is.EqualTo((1, PlayerTravelPath.Advance(from, goal, 47.75f).X))
+            .Using<(int, float)>((a, b) => a.Item1 == b.Item1 && Math.Abs(a.Item2 - b.Item2) < 0.01f), "a step along the line");
     }
 
     // With no corridor round the hill, as to a goal on a mesh island the 2D ray sees, the walk ends: the line would take the

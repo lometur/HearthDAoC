@@ -126,9 +126,10 @@ public sealed class PlayerBotPathMover
         // from that corner left it queued, and each corridor step after went back to it, for 15 seconds (the review of
         // #166).
         Vector3? link = path.LinkEnd;
+        bool drop = false;
         if (!nav.HasNavmesh(zone) || link is null && remaining <= DirectStepRange &&
             (PlayerTravelPath.HasReachedCorner(current, goal) ||
-             nav.HasLineOfSight(zone, current, goal, nav.DefaultFilters) && !LineLeavesFloor(nav, zone, current, goal, remaining + 1, stepLength)))
+             nav.HasLineOfSight(zone, current, goal, nav.DefaultFilters) && !LineLeavesFloor(nav, zone, current, goal, remaining + 1, stepLength, out drop)))
         {
             next = DirectStep(nav, zone, current, goal, step);
             return true;
@@ -149,16 +150,19 @@ public sealed class PlayerBotPathMover
             if (Vector3.DistanceSquared(next, current) < 1 &&
                 nav.GetClosestPoint(zone, goal, 128, 128, 256, nav.DefaultFilters) is Vector3 end &&
                 PlayerTravelPath.HasReachedCorner(current, end) && !PlayerTravelPath.HasReachedCorner(end, goal))
-            {
                 failure = OffTheCorridor;
-                return false;
-            }
-            return true;
+            else
+                return true;
         }
-        // No corridor: the walk ends with TryStep's failure, also within 300 units where the line runs under the floor. The
-        // line would take the bot through the floor (the review of #166: a fallback to it sank bots onto the floors walled
-        // in under Jordheim's ramps).
-        return false;
+        // No corridor leads on: the walk ends with the failure, also within 300 units where the line runs under the
+        // floor. The line would take the bot through the floor (the review of #166: a fallback to it sank bots onto the
+        // floors walled in under Jordheim's ramps). Over a drop only, the line still goes, as before the fourth review:
+        // without it, in the offline sweeps, 38 walks to goals that the line reached ended at once, most in Tir na Nog
+        // and Jordheim.
+        if (!drop) return false;
+        next = DirectStep(nav, zone, current, goal, step);
+        failure = string.Empty;
+        return true;
     }
 
     // The step straight at the goal, within DirectStepRange in the open.
@@ -197,9 +201,12 @@ public sealed class PlayerBotPathMover
     /// before it. Taken as a wall, it stalled bots under targets raised over the floor beside such an edge (the third
     /// review of #166). A plain move that stops short of it met a wall or a link: up to a unit short on the last
     /// sample, it took bots onto the floor walled in by a Jordheim link's foot, and back and forth (the fourth
-    /// review).</summary>
-    private static bool LineLeavesFloor(IPathfindingMgr nav, Zone zone, Vector3 current, Vector3 goal, float walked, float spacing)
+    /// review). Over a drop only (<paramref name="drop"/>), where no corridor leads on, the bot takes the line
+    /// still.</summary>
+    private static bool LineLeavesFloor(IPathfindingMgr nav, Zone zone, Vector3 current, Vector3 goal, float walked, float spacing,
+        out bool drop)
     {
+        drop = false;
         float length = Vector3.Distance(current, goal), end = Math.Min(walked, length);
         float raised = nav.GetClosestPoint(zone, goal, 2, 2, 64, nav.DefaultFilters) is Vector3 below
             ? Math.Max(0, goal.Z - below.Z) : float.PositiveInfinity;
@@ -212,7 +219,8 @@ public sealed class PlayerBotPathMover
                 Vector2.Distance(new(reached.X, reached.Y), new(line.X, line.Y)) > (floor.HasValue ? 1 : OnTheEdge)) return true; // a wall, or a link to another floor
             if (floor is Vector3 under)
             {
-                if (line.Z < under.Z - FloorSag || line.Z > under.Z + raised + FloorSag) return true;
+                drop = line.Z > under.Z + raised + FloorSag;
+                if (drop || line.Z < under.Z - FloorSag) return true;
                 on = under;
             }
             if (along >= end) return false;
