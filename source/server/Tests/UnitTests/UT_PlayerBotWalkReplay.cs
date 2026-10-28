@@ -146,14 +146,21 @@ public class UT_PlayerBotWalkReplay
                 (new Vector3(31026.96f, 26935.20f, 8804.27f), new Vector3(30992.94f, 26782.56f, 8917.07f)) })
                 Assert.That(UT_PlayerBotDriver.Walk(nav, region, zone, from, goal, keepExact: true, ticks: 400, blockEnds: true),
                     Is.InRange(1, 20), $"from {from} to {goal}");
-            // Without a stall (st-layers1 and the review): half way down a 49-unit link the bot passed its foot and took the
-            // ramp it came from (38 steps, with a replan); a corner on the ramp at its vertices' height, 47 units over a floor
-            // walled in under it and 50 under the ramp's own, took it onto that floor (28); and the top of the link out of a
-            // fourth walled-in floor lay 72 units under the floor it leads onto (lost the walkable surface).
+            // Without a stall (st-layers1 and the reviews): on the way down a link to a foot 73 units below, the bot took
+            // the ramp it came from 22.6 units above the foot (38 steps, with a replan); a corner on the ramp at its
+            // vertices' height, 47 units over a floor walled in under it and 50 under the ramp's own, took it onto that
+            // floor (28); the top of the link out of a floor walled in under another part of the city lay 72 units under
+            // the floor it leads onto, and the bot stalled 56 units under that floor, where its replan found no path; and
+            // a direct step from the top of a link left that corner queued, and each corridor step after went back to it
+            // (72 steps). By two other links the direct steps, the line of sight seeing through the link, and the corridor
+            // took turns, back and forth to the end (400 steps), the corridor's next corner left behind the bot.
             foreach ((Vector3 from, Vector3 goal, int most) in new[] {
                 (new Vector3(31976.0f, 27124.0f, 8829.8f), new Vector3(32364, 27658, 8766), 34),
                 (new Vector3(30957.2f, 26791.2f, 8933.5f), new Vector3(31336.3f, 26464.8f, 8913.1f), 20),
-                (new Vector3(34860, 32405.5f, 8353), new Vector3(34900, 32470, 8480), 10) })
+                (new Vector3(34860, 32405.5f, 8353), new Vector3(34900, 32470, 8480), 10),
+                (new Vector3(31369.525f, 26484.291f, 8803.395f), new Vector3(31023.115f, 26619.355f, 8936.37f), 20),
+                (new Vector3(30625.0f, 26644.5f, 9083.0f), new Vector3(30334.7f, 26579.7f, 8978.3f), 20),
+                (new Vector3(31787.4f, 26990.5f, 8762.7f), new Vector3(32130.6f, 27010.3f, 8802.6f), 20) })
                 Assert.That(UT_PlayerBotDriver.Walk(nav, region, zone, from, goal, keepExact: true, ticks: 400, blockEnds: true),
                     Is.InRange(1, most), $"from {from} to {goal}");
             Assert.That(LayeredQueriesRan(), Is.True, "lib/Detour has the layer-aware queries");

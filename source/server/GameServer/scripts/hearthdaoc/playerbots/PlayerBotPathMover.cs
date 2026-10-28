@@ -113,16 +113,18 @@ public sealed class PlayerBotPathMover
         float step = Math.Min(stepLength, remaining + 1);
         if (step < 1) return true;
         if (region == null || zone == null) { failure = "No zone here."; return false; }
-        // A wall between (no line of sight on the mesh) takes the corridor round it: in st-smoke (#166) a bot 267 units from
-        // its target crept along a wall for the rest of the run. Within a corner's reach of the goal the corridor has
-        // dropped its last corner, so the direct step goes on (the review of #168: the bot stood short of the goal).
-        // Nor when the line to the goal runs under the floor (#166): in Jordheim the line from the top of a ramp to a goal
-        // at its foot ran 25-40 units under the ramp, over a floor walled in below it, and the next step stood on that
-        // floor. The corridor's grounded steps take the ramp.
-        bool open = remaining <= DirectStepRange &&
-            (PlayerTravelPath.HasReachedCorner(current, goal) || nav.HasLineOfSight(zone, current, goal, nav.DefaultFilters));
-        if (!nav.HasNavmesh(zone) || open && (PlayerTravelPath.HasReachedCorner(current, goal) ||
-                                              !RunsUnderFloor(nav, zone, current, goal, remaining + 1, stepLength)))
+        // A wall between (no line of sight on the mesh) takes the corridor round it: in st-smoke (#166) a bot 267 units
+        // from its target crept along a wall for the rest of the run. Within a corner's reach of the goal the corridor
+        // has dropped its last corner, so the direct step goes on (the review of #168: the bot stood short of the
+        // goal). Nor when the line to the goal runs under the floor or leaves it by a link (#166, LineLeavesFloor): in
+        // Jordheim the line from the top of a ramp to a goal at its foot ran 25-40 units under the ramp, over a floor
+        // walled in below it, and the next step stood on that floor. The corridor's grounded steps take the ramp. Nor
+        // on a floor link's climb, until the bot stands on its far corner and the corridor has passed it: a direct step
+        // from that corner left it queued, and each corridor step after went back to it, for 15 seconds (the review of
+        // #166).
+        if (!nav.HasNavmesh(zone) || !path.OnLink && remaining <= DirectStepRange &&
+            (PlayerTravelPath.HasReachedCorner(current, goal) ||
+             nav.HasLineOfSight(zone, current, goal, nav.DefaultFilters) && !LineLeavesFloor(nav, zone, current, goal, remaining + 1, stepLength)))
         {
             next = DirectStep(nav, zone, current, goal, step);
             return true;
@@ -145,15 +147,10 @@ public sealed class PlayerBotPathMover
             }
             return true;
         }
-        // Round a sag with no corridor to take, as to a goal on a mesh island the 2D ray sees: the line, as before (the
-        // review of #166: a caster bot 173 units from its target, which it reached in one step, was blocked there). Only
-        // a step that gets closer: one that stands still would stall the walk where it can end now.
-        if (!open) return false;
-        Vector3 direct = DirectStep(nav, zone, current, goal, step);
-        if (PlayerTravelPath.NoStepCloser(current, direct, goal)) return false;
-        failure = string.Empty;
-        next = direct;
-        return true;
+        // No corridor: the walk ends with TryStep's failure, also within 300 units where the line runs under the floor. The
+        // line would take the bot through the floor (the review of #166: a fallback to it sank bots onto the floors walled
+        // in under Jordheim's ramps).
+        return false;
     }
 
     // The step straight at the goal, within DirectStepRange in the open.
@@ -172,14 +169,17 @@ public sealed class PlayerBotPathMover
                nav.GetClosestPoint(zone, desired, 32, 32, 64, nav.DefaultFilters).HasValue ? desired : next;
     }
 
-    /// <summary>Whether the straight line to the goal runs more than <see cref="FloorSag"/> under the floor the bot walks
-    /// on, somewhere on the part it walks (<paramref name="walked"/>, to its stop distance): the floor is followed a step's
-    /// length at a time (grounded, on its own floor), as the bot would walk under the line. That whole part, not the next
-    /// step: judged a step at a time, the corridor and the line took turns, one step back to a corner and one forward to
-    /// the goal, until the walk was blocked (from st-final4's pocket to (31746, 27019), #166). Not past it: a caster
-    /// stopping 145 units short was sent to a corridor that had no complete way, by a sag beyond its stop (the review).
-    /// </summary>
-    private static bool RunsUnderFloor(IPathfindingMgr nav, Zone zone, Vector3 current, Vector3 goal, float walked, float spacing)
+    /// <summary>Whether the straight line to the goal leaves the floor the bot walks on, somewhere on the part it walks
+    /// (<paramref name="walked"/>, to its stop distance): runs more than <see cref="FloorSag"/> under it, or meets a wall
+    /// or a link to another floor there. The floor is followed a step's length at a time (grounded, on its own floor), as
+    /// the bot would walk under the line. That whole part, not the next step: judged a step at a time, the corridor and
+    /// the line took turns, one step back to a corner and one forward to the goal, until the walk was blocked (from
+    /// st-final4's pocket to (31746, 27019), #166). Not past it: a caster stopping 145 units short was sent to a corridor
+    /// that had no complete way, by a sag beyond its stop (the review). A wall or a link counts because the line of sight
+    /// is 2D and sees through a link to another floor: in Jordheim the line and the corridor took turns by such links,
+    /// as the direct steps left the corridor's next corner behind the bot, back and forth for up to 45 seconds (the review
+    /// of #166).</summary>
+    private static bool LineLeavesFloor(IPathfindingMgr nav, Zone zone, Vector3 current, Vector3 goal, float walked, float spacing)
     {
         float length = Vector3.Distance(current, goal), end = Math.Min(walked, length);
         Vector3 on = current;
@@ -187,7 +187,7 @@ public sealed class PlayerBotPathMover
         {
             Vector3 line = Vector3.Lerp(current, goal, along / length);
             if (nav.GetMoveAlongSurfaceLayered(zone, on, line, nav.DefaultFilters, true) is not Vector3 floor ||
-                Vector2.Distance(new(floor.X, floor.Y), new(line.X, line.Y)) > 1) return false;    // a wall: the step's own concern
+                Vector2.Distance(new(floor.X, floor.Y), new(line.X, line.Y)) > 1) return true;     // a wall, or a link to another floor
             if (line.Z < floor.Z - FloorSag) return true;
             if (along >= end) return false;
             on = floor;
@@ -280,8 +280,8 @@ public sealed class PlayerBotPathMover
     }
 
     /// <summary>For the logs, at a block: what the navmesh says here. The floor under the bot, the straight path's first
-    /// corners toward the goal, and one step toward the first corner (the surface move, the floor under it and the line
-    /// of sight to it, as PlayerTravelPath.TryStep checks them with layers, PTP:143-160).</summary>
+    /// corners toward the goal, and one step toward the first corner (the grounded and the plain surface move, the floor
+    /// under it and the line of sight to it, as PlayerTravelPath.TryStep checks them with layers, PTP:143-160).</summary>
     public string Probe(Vector3 goal)
     {
         Zone zone = _player.CurrentZone;
@@ -297,11 +297,12 @@ public sealed class PlayerBotPathMover
         Vector3? corner = nodes.Take(count).Select(n => (Vector3?)n.Position).FirstOrDefault(c => Vector3.Distance(c.Value, here) > 16);
         if (corner == null) return $"floor={P(floor)} path={result.Status}/{result.NodeCount} corners={corners}";
         Vector3 desired = PlayerTravelPath.Advance(here, corner.Value, 47);
+        Vector3? ground = nav.GetMoveAlongSurfaceLayered(zone, here, desired, nav.DefaultFilters, true);
         Vector3? surface = nav.GetMoveAlongSurfaceLayered(zone, here, desired, nav.DefaultFilters, false);
         Vector3? under = nav.GetClosestPoint(zone, desired, 16, 16, 64, nav.DefaultFilters);
         bool los = under.HasValue && nav.HasLineOfSight(zone, here, under.Value, nav.DefaultFilters);
         return $"floor={P(floor)} path={result.Status}/{result.NodeCount} corners={corners} step={P(desired)} " +
-               $"surface={P(surface)} stepFloor={P(under)} los={los} goalZone={_player.CurrentRegion?.GetZone((int)goal.X, (int)goal.Y)?.ID} " +
+               $"ground={P(ground)} surface={P(surface)} stepFloor={P(under)} los={los} goalZone={_player.CurrentRegion?.GetZone((int)goal.X, (int)goal.Y)?.ID} " +
                Replay(zone, here, goal);
     }
 

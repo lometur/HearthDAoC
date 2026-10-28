@@ -17,9 +17,10 @@ namespace DOL.GS.Commands
         private long _lastProgressTick;
         private int _replans;
         private Vector3? _doorToOpen;
-        private Vector3? _passed, _link; // HearthDAoC: the corridor corner last reached, and the top of the floor link the walker is on (#166)
+        private Vector3? _passed, _link; // HearthDAoC: the corridor corner last reached, and the far corner of the floor link the walker is on (#166)
         public Vector3? DoorNode => _doorToOpen ?? (_nodes.TryPeek(out var node) && (node.Flags & EDtPolyFlags.AnyDoor) != 0
             ? node.Position : null);
+        public bool OnLink => _link is Vector3 end && _nodes.TryPeek(out var head) && head.Position == end; // HearthDAoC: on a floor link, short of its far corner (#166)
 
         public void Clear()
         {
@@ -165,11 +166,13 @@ namespace DOL.GS.Commands
             // by one mesh voxel (observed 13-24 units near Cotswold). Requiring
             // exact equality stalls at the polygon edge. Accept one voxel, then
             // constrain the next movement to the surface; never teleport across it.
-            // HearthDAoC: the far end of a layer link is reached on its own floor, within a corner's 24 units of height, not
-            // under or over it by HasReachedCorner's 64 on the spot: in Jordheim the floor under a ramp lies 70-152 units
-            // below the top of its link, and a player bot (#166) standing on that floor passed the top and stayed there. On the
-            // link's line (_link), only there: 22.6 units above the foot of a 49-unit link, the next move started on the
-            // ramp the bot came from, which Detour's nearest polygon takes within a climb of both floors (st-layers1).
+            // HearthDAoC: the far end of a layer link is reached on its own floor, within a corner's 24 units of
+            // height, not under or over it by HasReachedCorner's 64 on the spot: in Jordheim's zone the floors walled
+            // in under ramps lie 70-152 units below the tops of their links, and a player bot (#166) on such a floor
+            // passed the top and stayed. On the link itself (_link), where the bot heads straight for the far corner,
+            // only on the spot: going down to a foot 73 units below, 22.6 units above it the bot still stood over the
+            // ramp it came from, 51 units under that ramp, and Detour's nearest polygon, counting only the height
+            // beyond a climb, started its next move there (st-layers1).
             while (_nodes.TryPeek(out var reached) && HasReachedCorner(current, reached.Position) &&
                    ((reached.Flags & EDtPolyFlags.LayerLink) == 0 || (_link == reached.Position
                        ? Vector3.DistanceSquared(current, reached.Position) < 1 : Math.Abs(current.Z - reached.Position.Z) <= 24)) &&

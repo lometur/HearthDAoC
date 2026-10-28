@@ -421,7 +421,7 @@ constexpr unsigned short LAYER_LINK = 0x40; // run-time point flag (EDtPolyFlags
 
 // The height of a polygon's floor at pt (2D): its detail surface there, or at the nearest point of its detail edges when
 // pt lies outside it. Not its vertices': on steep ground the polygon lies tens of units off the floor, so a slope that
-// runs on across a tile seam in Snowdonia and in Gripklosa looked like two floors 38-58 units apart.
+// runs on across a tile seam in Snowdonia and in Gripklosa looked like two floors 30-67 units apart.
 static float FloorHeightAt(const dtNavMeshQuery* query, dtPolyRef ref, const float* pt)
 {
 	float closest[3];
@@ -472,8 +472,8 @@ static bool IsLayerLink(const dtNavMeshQuery* query, const dtMeshTile* tile, con
 
 // MoveAlongSurface (grounded = 0) or MoveAlongSurfaceGrounded (grounded = 1), with dtNavMeshQuery::moveAlongSurface
 // (DetourNavMeshQuery.cpp:2044-2232) copied here so that a layer link is a wall: the move slides along its portal as
-// along any wall, also where other links share its edge (there Detour's own move would count the edge as neither wall
-// nor way through). Every other link, and the rest of the search, is Detour's.
+// along any wall, also where other links share its edge (there a first version of this copy counted the edge as neither
+// wall nor way through, where Detour's own move walks through). Every other link, and the rest of the search, is Detour's.
 DLLEXPORT dtStatus MoveAlongSurfaceLayered(dtNavMeshQuery* query, float start[], float end[], float polyPickExt[], dtPolyFlags queryFilter[], int grounded, float* outputVector)
 {
 	dtQueryFilter filter;
@@ -681,14 +681,24 @@ DLLEXPORT dtStatus PathStraightLayered(dtNavMeshQuery* query, float start[], flo
 			points[(n - 1) * 3 + 1] = to[1];
 		// Every corner on its polygon's floor, not at its vertices' height, which on steep ground lies tens of units off
 		// it: in Jordheim a corner 47 units over a floor walled in under a ramp and 50 under the ramp took the walker that
-		// reached it onto that floor, the nearer (the review). Not the walker's start, its goal, nor an off-mesh link's.
+		// reached it onto that floor, the nearer (the review). Not the walker's start, its goal, nor an off-mesh link's. Nor
+		// where the floors on the two sides of the corner's portal part there: in Gripklosa a tile's detail edge drops 170
+		// units in the middle of a seam where the other tile's floor does not, and the walker sank into the slope toward
+		// such a corner (the review of the detail floors). There the corner keeps the vertices' height, as Detour gives it.
 		for (int k = first > 0 ? 1 : 0; k < n; ++k)
 		{
 			const dtMeshTile* cornerTile = 0;
 			const dtPoly* cornerPoly = 0;
-			if (refs[k] && !(straightFlags[k] & (DT_STRAIGHTPATH_START | DT_STRAIGHTPATH_END | DT_STRAIGHTPATH_OFFMESH_CONNECTION)) &&
-				dtStatusSucceed(nav->getTileAndPolyByRef(refs[k], &cornerTile, &cornerPoly)) && cornerPoly->getType() == DT_POLYTYPE_GROUND)
-				points[k * 3 + 1] = FloorHeightAt(query, refs[k], &points[k * 3]);
+			if (!refs[k] || (straightFlags[k] & (DT_STRAIGHTPATH_START | DT_STRAIGHTPATH_END | DT_STRAIGHTPATH_OFFMESH_CONNECTION)) ||
+				dtStatusFailed(nav->getTileAndPolyByRef(refs[k], &cornerTile, &cornerPoly)) || cornerPoly->getType() != DT_POLYTYPE_GROUND)
+				continue;
+			const float floor = FloorHeightAt(query, refs[k], &points[k * 3]);
+			dtPolyRef before = 0; // the corridor's polygon before the one the corner enters
+			for (int j = first + 1; j <= i && !before; ++j)
+				if (polys[j] == refs[k])
+					before = polys[j - 1];
+			if (!before || dtAbs(FloorHeightAt(query, before, &points[k * 3]) - floor) <= cornerTile->header->walkableClimb)
+				points[k * 3 + 1] = floor;
 		}
 		for (int k = first > 0 ? 1 : 0; k < n + (last ? 0 : 1) && *pointCount < MAX_POLY; ++k)
 		{

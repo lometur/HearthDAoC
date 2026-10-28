@@ -96,8 +96,8 @@ Read these with their caveats:
 
 ## Walking
 
-A bot walks with upstream's `PlayerTravelPath` corridor cursor (`PlayerBotPathMover`). Thirteen marked edits there reach
-only player bots: `/travel` isn't registered, and `/grind` uses only `TryBuildCorridor`. If `/travel` is ever
+A bot walks with upstream's `PlayerTravelPath` corridor cursor (`PlayerBotPathMover`). Twenty-one marked edits there
+reach only player bots: `/travel` isn't registered, and `/grind` uses only `TryBuildCorridor`. If `/travel` is ever
 registered, test it in game. The mover:
 - starts each step from the exact spot it last put the bot on. The game stores positions in whole units, and by
   Olorustos the rounded spot lay off the navmesh, so the quest bot stood there for 14 minutes.
@@ -137,16 +137,21 @@ registered, test it in game. The mover:
   3, to the end of a run). The player bots now use two queries added to the server's Detour library, which treat a
   seam link whose floors lie more than a climb (28.8 units) apart at both ends of its portal as a change of floor: the
   surface moves don't take it, and the corridor gives it as two corners at one spot, one on each floor. A floor is the
-  polygon's detail surface, not its vertices' height, which on steep ground lies tens of units off it, and the corridor
-  puts each of its corners on its floor (a corner 47 units over a walled-in floor took a bot onto that floor). The bot
-  climbs between the two corners on the line, as on a floor link. The second counts as reached only within 24 units
-  of its height and, once the bot is on the climb, only at the corner itself: half way up, a bot took it as reached
-  and walked back onto the ramp it came from. Within 300 units of its goal the bot takes the corridor instead of the
-  straight line when the line runs more than 24 units under the floor before the bot would stop, and the line still
-  where there is no corridor and the line gets it closer. A walk whose corridor ends where the bot stands, its goal off
-  that floor (a roam goal on a floor straight under the bot, with no way down), ends at once: 6 such walks stood 3
-  seconds each and ended stalled. Such links are rare (in the eight zones replayed, 0-126 of 1,186-202,142 seam links),
-  and NPCs and GameBots keep Detour's own queries.
+  polygon's detail surface, not its vertices' height, which on steep ground lies tens of units off it, and the
+  corridor puts each of its corners on its floor (a corner 47 units over a walled-in floor took a bot onto that
+  floor). Where the floors on the two sides of a corner part, the corner keeps the vertices' height, as Detour gives
+  it: in Gripklosa one tile's floor drops 170 units in the middle of a seam where the other's doesn't, and the corner
+  sank into the slope. The bot goes straight from where it reached the first corner (up to 32 units across) to the
+  second, through the ramp if need be, as on a floor link, and steps straight at its goal only once it stands on the
+  second. That corner counts as reached only within 24 units of its height and, once the bot is on the climb, only at
+  the corner itself: on the way down, 22.6 units above the foot, a bot took it as reached and walked back onto the
+  ramp it came from. Within 300 units of its goal the bot takes the corridor instead of the straight line when the
+  line runs more than 24 units under the floor, or meets a wall or a link to another floor, before the bot would stop:
+  the line of sight is 2D and sees through such a link, and there direct and corridor steps took turns, back and forth
+  for up to 45 seconds. With no corridor the walk ends: the line would take the bot through the floor. A walk whose
+  corridor ends where the bot stands, its goal off that floor (a roam goal on a floor straight under the bot, with no
+  way down), ends at once: 6 such walks stood 3 seconds each and ended stalled. Such links are rare (in the eight
+  zones replayed, 0-126 of 1,186-202,142 seam links), and NPCs and GameBots keep Detour's own queries.
 - within 300 units of its goal, walks straight at it only with a clear line of sight, or within a corner's reach (32
   units across), where the corridor has dropped its last corner; otherwise it follows the corridor (a bot crept along
   a wall 267 units from its target).
