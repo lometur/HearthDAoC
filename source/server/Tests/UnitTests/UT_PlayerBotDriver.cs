@@ -2003,6 +2003,53 @@ public sealed class UT_PlayerBotDriver
             Is.EqualTo(new[] { "Fungal Pin" }));
     }
 
+    // --- Animists (#167 F10b) ---
+
+    // World-DB spells: an Animist's Creeping Path bombers and their payloads (a bomber casts only its SubSpellID at the
+    // target, BomberBrain.cs:32-34), and an Arboreal Path lifedrain.
+    private static Spell Bomber(int id, string name, int level, int payload) =>
+        new(new DbSpell { SpellID = id, Name = name, Type = "Bomber", Target = "Enemy", Damage = 50, Range = 1500,
+            CastTime = 3.0, SubSpellID = payload }, level);
+
+    private static readonly SpellLine CreepingPath = new("Creeping Path", "Creeping Path", Specs.Creeping_Path, true);
+    private static readonly Spell WispSpark = Bomber(11319, "Wisp Spark", 7, 11343),
+        SpreadingVines = Bomber(11334, "Spreading Vines", 8, 11361),
+        SurvivalOfTheFittest = Nuke(11014, "Survival of the Fittest", "Lifedrain", 8, 33, 1500);
+    private static readonly Dictionary<int, Spell> BomberPayloads = new()
+    {
+        [11343] = Nuke(11343, "Wisp Spark", "DirectDamageWithDebuff", 7, 29, 1500),
+        [11361] = new(new DbSpell { SpellID = 11361, Name = "Spreading Vines", Type = "SpeedDecrease", Target = "Enemy",
+            Value = 99, Range = 1500, Duration = 10 }, 8),
+    };
+
+    // A bomber is a nuke only when its payload does damage: Spreading Vines (Damage 50 on the bomber, a root as its
+    // payload) was the level-9 Animist's best nuke, over its lifedrain, and outranked its damage bomber.
+    [Test]
+    public void An_animists_bomber_is_a_nuke_only_when_its_payload_does_damage()
+    {
+        List<(Spell, SpellLine)> usable = [(WispSpark, CreepingPath), (SpreadingVines, CreepingPath),
+            (SurvivalOfTheFittest, CreepingPath)];
+        List<(Spell Spell, SpellLine Line)> nukes = PlayerBotDriver.DamageSpells(usable, 9, id => BomberPayloads.GetValueOrDefault(id));
+        Assert.That(nukes.Select(pair => pair.Spell.Name), Is.EqualTo(new[] { "Wisp Spark", "Survival of the Fittest" }));
+        Assert.That(PlayerBotDriver.ChooseNuke(nukes, _ => true, false).Item1, Is.SameAs(SurvivalOfTheFittest));
+    }
+
+    // Where an Animist stands to pull, with its turret planted (reach 1,000) and a spell stop of 1,420: by its turret
+    // while it can cast from there (the monster comes to it, into the turret's reach); else at its spell's reach toward
+    // the turret if the turret reaches that spot; else by the target, within the turret's reach of it less the margin
+    // (850), to plant a new turret there.
+    [Test]
+    public void An_animist_pulls_from_by_its_turret_or_plants_a_new_one_by_the_target()
+    {
+        static (Vector3, bool) Stand(float botX, float targetX) =>
+            PlayerBotDriver.AnimistStand(new Vector3(botX, 0, 0), Vector3.Zero, new Vector3(targetX, 0, 0), 1_420, 1_000);
+        Assert.That(Stand(50, 1_000), Is.EqualTo((new Vector3(50, 0, 0), false)), "by its turret already");
+        Assert.That(Stand(600, 1_000), Is.EqualTo((Vector3.Zero, false)), "back to its turret");
+        Assert.That(Stand(100, 2_000), Is.EqualTo((new Vector3(580, 0, 0), false)), "its spell's reach, 580 from the turret");
+        Assert.That(Stand(2_500, 3_000), Is.EqualTo((new Vector3(2_500, 0, 0), true)), "a new turret where it stands");
+        Assert.That(Stand(100, 3_000), Is.EqualTo((new Vector3(2_150, 0, 0), true)), "a new turret 850 from the target");
+    }
+
     // --- the healer's self-heal (DEATHS.md A6) ---
 
     private static readonly SpellLine Mending = new("Rejuvenation", "Rejuvenation", Specs.Rejuvenation, true);

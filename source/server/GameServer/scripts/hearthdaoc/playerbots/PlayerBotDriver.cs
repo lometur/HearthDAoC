@@ -128,6 +128,7 @@ public sealed class PlayerBotState
     public int ControlTries;                                     //   the point it steps back to (KiteStep)
     public Vector3? KiteGoal;
     public long NextKiteTick;
+    public long NextAnimistStandTick;                            // #167 F10b: after a blocked walk to its stand
     public int FightControls, FightKites;                        // #167 FIGHT ctl= and kites=
     public long PetOrderTick;                                    // #167 F10c: when its pet was sent at the target
     public long NextQuickcastTick;                               // Quickcast's next try (UseQuickcast)
@@ -199,6 +200,7 @@ public static class PlayerBotDriver
     public const int MaxControlTries = 3;                     //   control casts per target that held nothing (inf.)
     public const int KitePauseMilliseconds = 5_000;           //   after a blocked step back (inf.)
     public static readonly int[] KiteTurns = [0, 30, -30, 60, -60, 90, -90];   // degrees off straight away from the target
+    public const int AnimistStandMargin = 150;                // #167 F10b: by its turret; the turret's reach less this
     public const int IncomingRadius = 2_000;                  // #167 F7: a monster this near with the bot as its target
     public static readonly int[] RestSpotRings = [300, 600, 900, 1_200];   // #167 F7: the rest spot's candidates (inf.)
     public static readonly long StuckMilliseconds = (long)AutonomousStuckWatchdog.StuckThreshold.TotalMilliseconds; // 15 min
@@ -450,6 +452,8 @@ public static class PlayerBotDriver
             quickcasting ? 0 : Math.Max(0, player.SelfInterruptTime - now), interruptible, quickcastReady, due);
         int stop = CombatStopDistance(canCast, interrupted, interruptible, quickcastReady, player.attackComponent.AttackRange,
             player.castingComponent.CalculateSpellRange(state.Spell));
+        if (stop > MeleeStopDistance(player.attackComponent.AttackRange) && AnimistApproach(state, player, target, stop, now))
+            return;                                                                     // #167 F10b: by its turret
         if (distance > stop)
         {
             player.attackComponent.StopAttack();
@@ -1443,15 +1447,42 @@ public static class PlayerBotDriver
     /// the range filter (checked at cast time), less the ranks a GameBot never casts (BotBrain.IsOutclassedDamageSpell,
     /// BotBrain.cs:3413): a lower rank of a kind it knows higher (Fungal Pin once it has Fungal Thistle), or one under half
     /// the level of its best.</summary>
-    public static List<(Spell Spell, SpellLine Line)> DamageSpells(IEnumerable<(Spell Spell, SpellLine Line)> usable, int level)
+    public static List<(Spell Spell, SpellLine Line)> DamageSpells(IEnumerable<(Spell Spell, SpellLine Line)> usable, int level,
+        Func<int, Spell> payload = null)
     {
-        List<(Spell Spell, SpellLine Line)> all = usable.ToList(), nukes = new();
+        List<(Spell Spell, SpellLine Line)> all = usable.Where(pair => !NoDamageBomber(pair.Spell, payload)).ToList(), nukes = new();
         List<Spell> known = all.ConvertAll(pair => pair.Spell);
         foreach ((Spell spell, SpellLine line) in all)
             if (spell.IsHarmful && spell.Damage > 0 && spell.Range > 0 && !spell.NeedInstrument && spell.Level <= level &&
                 !BotBrain.IsOutclassedDamageSpell(spell, known, level))
                 nukes.Add((spell, line));
         return nukes;
+    }
+
+    // #167 F10b: an Animist's bomber does only its payload (BomberBrain.cs:32-34, its SubSpellID); the bomber's own
+    // Damage (50 on every one) is no damage. One whose payload does none (Spreading Vines: a root) is no nuke, nor does it
+    // outrank a damage bomber (BotBrain.IsOutclassedDamageSpell compares spell types). Production resolves payloads with
+    // SkillBase.GetSpellByID; with no resolver, as before.
+    private static bool NoDamageBomber(Spell spell, Func<int, Spell> payload) =>
+        payload != null && spell.SpellType is eSpellType.Bomber && !(payload(spell.SubSpellID) is Spell sub && sub.Damage > 0);
+
+    /// <summary>Where an Animist stands to pull with its main turret planted (#167 F10b): a turret is planted at the bot's
+    /// feet (SummonPet) and reaches turretReach (its TurretSpell, 1,000; 1,350 for a Verdant taunt), and the monster the
+    /// bot pulls comes to the bot. So by its turret (here, within AnimistStandMargin of it) while its spell reaches the
+    /// target from there; else at its spell's reach (spellStop) toward the turret, if the turret reaches that spot (less
+    /// the margin); else it plants a new one (Replant) by the target, within the turret's reach of it less the margin and
+    /// its spell's, here if it is that near already. The old approach walked it to its spell's reach from wherever it
+    /// was, 1,420 units from the target with most nukes, out of its turret's reach.</summary>
+    public static (Vector3 Stand, bool Replant) AnimistStand(Vector3 bot, Vector3 turret, Vector3 target, int spellStop,
+        int turretReach)
+    {
+        float toTurret = Vector3.Distance(target, turret);
+        if (toTurret <= spellStop)
+            return (Vector3.Distance(bot, turret) <= AnimistStandMargin ? bot : turret, false);
+        Vector3 near = target + (turret - target) * (spellStop / toTurret);
+        if (Vector3.Distance(near, turret) <= turretReach - AnimistStandMargin) return (near, false);
+        float toBot = Vector3.Distance(target, bot), standOff = Math.Min(spellStop, turretReach - AnimistStandMargin);
+        return (toBot <= standOff ? bot : target + (bot - target) * (standOff / toBot), true);
     }
 
     /// <summary>The nuke for this cast (#167 F9), chosen at each cast choice: the bolt when it is ready (a 20-s recast:
@@ -1491,7 +1522,7 @@ public static class PlayerBotDriver
 
     // PLAYER_BOT_TRAIN's spell=: the nuke it opens a fight with, everything ready and no add.
     public static string BestDamageSpellName(GamePlayer player) =>
-        ChooseNuke(DamageSpells(UsableSpells(player), player.Level), _ => true, false).Item1 is Spell s
+        ChooseNuke(DamageSpells(UsableSpells(player), player.Level, SkillBase.GetSpellByID), _ => true, false).Item1 is Spell s
             ? FormattableString.Invariant($"{s.Name.Replace(' ', '_')}:{s.Level}") : "-";
 
     // #167 F9: the nuke at a cast choice, from the damage spells cached per level. An add in an area spell's radius is
@@ -1937,6 +1968,48 @@ public static class PlayerBotDriver
         state.Activity = PlayerBotActivity.Casting;
     }
 
+    // #167 F10b: an Animist with its main turret planted pulls from by it (AnimistStand), before the pull (not engaged,
+    // the target not on it, not a defence), at a spell's stop distance (spellStop). A new turret by the target: the old
+    // one released (CommandNpcRelease, as a GameBot does, BotAnimistPolicy.cs:160-170) when the summon is ready and paid
+    // for and the summon's gate (WantsPet) would pass, so SummonPet plants it at its feet at the next think, before the
+    // pull; else the old approach. A blocked walk: the old approach for UnreachableSkipMilliseconds. True when it acted.
+    private static bool AnimistApproach(PlayerBotState state, GamePlayer player, GameLiving target, int spellStop, long now)
+    {
+        if (player.CharacterClass.ID != (int)eCharacterClass.Animist || state.Engaged || state.FromDefence ||
+            IsAttacking(player, target) || now < state.NextAnimistStandTick ||
+            player.ControlledBrain?.Body is not TurretPet turret || !turret.IsAlive || turret.CurrentRegion != player.CurrentRegion)
+            return false;
+        int reach = turret.TurretSpell is Spell spell ? turret.castingComponent.CalculateSpellRange(spell) : 1_000;
+        Vector3 here = new(player.X, player.Y, player.Z);
+        (Vector3 stand, bool replant) = AnimistStand(here, new(turret.X, turret.Y, turret.Z), new(target.X, target.Y, target.Z),
+            spellStop, reach);
+        if (replant && !CanReplant(state, player, now)) return false;
+        if (Vector3.Distance(here, stand) > AnimistStandMargin)
+        {
+            player.attackComponent.StopAttack();
+            state.Activity = PlayerBotActivity.Hunting;
+            if (state.Mover.StepToward(stand, AnimistStandMargin - 50, now) is not PlayerBotStepResult.Blocked) return true;
+            ReportBlocked(state, player, "turret", stand, now);
+            state.NextAnimistStandTick = now + UnreachableSkipMilliseconds;
+            return false;
+        }
+        if (!replant) return false;
+        state.Mover.Stop(now);
+        player.CommandNpcRelease();                                                     // the target is no pet of its:
+        state.NextSummonTick = 0;                                                       //   its main pet goes
+        return true;
+    }
+
+    // The summon's gate with no pet (WantsPet), the summon ready and paid for: a released turret is planted again at once.
+    private static bool CanReplant(PlayerBotState state, GamePlayer player, long now)
+    {
+        if (!WantsPet(false, Attacker(state, player, now, anyHitter: true) != null, player.InCombat, player.ManaPercent,
+                player.IsCasting, now, 0))
+            return false;
+        (Spell summon, _) = FindPetSpell(UsableSpells(player), player.Level);
+        return summon != null && player.GetSkillDisabledDuration(summon) <= 0 && HasPowerFor(player.MaxMana, player.Mana, summon.Power);
+    }
+
     // #167 F11: a caster's control and step back against a monster (CasterAction), between its casts; Nuke leaves the
     // think to CombatAction. A control the target can take (its immunities: SpeedDecreaseSpellHandler.cs:25-33,
     // CCSpellHandler.cs:155-177, :276-285), in range, ready and paid for, at a cast choice; MaxControlTries casts that held
@@ -2146,7 +2219,7 @@ public static class PlayerBotDriver
     {
         if (state.NukesLevel == player.Level) return;
         List<(Spell Spell, SpellLine Line)> usable = UsableSpells(player).ToList();
-        state.Nukes = DamageSpells(usable, player.Level);
+        state.Nukes = DamageSpells(usable, player.Level, SkillBase.GetSpellByID);    // #167 F10b: bombers' payloads
         state.CombatPets = usable.FindAll(pair => pair.Spell.SpellType is eSpellType.SummonTheurgistPet);
         state.Controls = usable.FindAll(pair => IsControlSpell(pair.Spell) && pair.Spell.Level <= player.Level);   // #167 F11
         state.NukesLevel = player.Level;
