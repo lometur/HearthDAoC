@@ -874,12 +874,14 @@ public static class PlayerBotDriver
     /// <summary>The next self-buff to cast (#167 F8): of the kinds in SelfBuffOrder not active on the bot, the first, its
     /// best rank the bot can cast now: at or below its level, on itself (a Self, Realm or Group target), no song (an
     /// instrument), the concentration it takes left, the power it costs (HasPowerFor), ready (recast). A chant (a
-    /// pulsing spell) only while none is up, as a new pulse effect ends the others (EffectListComponent.cs:362-371),
-    /// and never one that costs power each pulse: it would drain the power the bot's rest waits for. No cap of the
-    /// bot's own: the server's checks decide (its 20-effect limit counts concentration effects only, SpellHandler.cs:34,
-    /// :818; a player has no GameBot exemption there).</summary>
+    /// pulsing spell) only of the kind wanted (wantedChant, WantedChant; #167 C13) while that kind is not the one up
+    /// (chantUp): a new pulse effect ends the others (EffectListComponent.cs:362-371), so the bot swaps one for the other
+    /// (the old rule, none while any was up, kept a Skald's DamageAdd chant and never ran its Song of Rest); and never one
+    /// that costs power each pulse: it would drain the power the bot's rest waits for. No cap of the bot's own: the
+    /// server's checks decide (its 20-effect limit counts concentration effects only, SpellHandler.cs:34, :818; a player
+    /// has no GameBot exemption there).</summary>
     public static (Spell, SpellLine) NextSelfBuff(IEnumerable<(Spell Spell, SpellLine Line)> spells, IReadOnlySet<eSpellType> active,
-        bool chantUp, int level, int concentrationLeft, int maxMana, int mana, Func<Spell, bool> ready)
+        eSpellType? wantedChant, eSpellType? chantUp, int level, int concentrationLeft, int maxMana, int mana, Func<Spell, bool> ready)
     {
         Spell best = null;
         SpellLine bestLine = null;
@@ -889,13 +891,49 @@ public static class PlayerBotDriver
             int kind = Array.IndexOf(SelfBuffOrder, spell.SpellType);
             if (kind < 0 || kind > bestKind || active.Contains(spell.SpellType) || spell.Level > level ||
                 spell.Target is not (eSpellTarget.SELF or eSpellTarget.REALM or eSpellTarget.GROUP) || spell.NeedInstrument ||
-                spell.IsPulsing && (chantUp || spell.PulsePower != 0) ||
+                spell.IsPulsing && (spell.SpellType != wantedChant || chantUp == wantedChant || spell.PulsePower != 0) ||
                 spell.Concentration > concentrationLeft || !HasPowerFor(maxMana, mana, spell.Power) || !ready(spell))
                 continue;
             if (best == null || kind < bestKind || spell.Level > best.Level || spell.Level == best.Level && spell.ID > best.ID)
                 (best, bestLine, bestKind) = (spell, line, kind);
         }
         return (best, bestLine);
+    }
+
+    /// <summary>The chant kinds the bot can run (#167 C13): NextSelfBuff's chants, a pulsing spell of a SelfBuffOrder kind
+    /// at or below its level, on itself, no song (an instrument) and no power each pulse.</summary>
+    public static HashSet<eSpellType> ChantKinds(IEnumerable<(Spell Spell, SpellLine Line)> spells, int level)
+    {
+        HashSet<eSpellType> kinds = new();
+        foreach ((Spell spell, _) in spells)
+            if (spell.IsPulsing && spell.PulsePower == 0 && !spell.NeedInstrument && spell.Level <= level &&
+                (spell.Target is eSpellTarget.SELF or eSpellTarget.REALM or eSpellTarget.GROUP) &&
+                Array.IndexOf(SelfBuffOrder, spell.SpellType) >= 0)
+                kinds.Add(spell.SpellType);
+        return kinds;
+    }
+
+    /// <summary>The chant the bot runs (#167 C13; one at a time, EffectListComponent.cs:362-371): while it rests (resting:
+    /// sitting, or WantsRest), the regeneration chant of what is short of its rest's stop (Recovered's: full health, the
+    /// power stop, RestEnduranceStop), as a Skald runs its Song of Rest (a pulse runs on while it sits, SpellHandler.cs:196-232:
+    /// its rest took about 32 s per kill in st-deathsB); else its first kind by SelfBuffOrder (a combat chant before a
+    /// regeneration one), the one it fights with; none with no chant.</summary>
+    public static eSpellType? WantedChant(IReadOnlyCollection<eSpellType> chantKinds, bool resting, byte health, byte endurance,
+        int maxMana, byte mana, byte powerStop)
+    {
+        if (resting)
+        {
+            if (health < 100 && chantKinds.Contains(eSpellType.HealthRegenBuff)) return eSpellType.HealthRegenBuff;
+            if (maxMana > 0 && mana < powerStop && chantKinds.Contains(eSpellType.PowerRegenBuff)) return eSpellType.PowerRegenBuff;
+            if (endurance < RestEnduranceStop && chantKinds.Contains(eSpellType.EnduranceRegenBuff))
+                return eSpellType.EnduranceRegenBuff;
+        }
+        eSpellType? first = null;
+        int firstKind = int.MaxValue;
+        foreach (eSpellType kind in chantKinds)
+            if (Array.IndexOf(SelfBuffOrder, kind) is >= 0 and int order && order < firstKind)
+                (first, firstKind) = (kind, order);
+        return first;
     }
 
     /// <summary>Whether the self-buff scan runs (#167 C9): standing, or sitting once recovered (it stands to cast,
@@ -3028,7 +3066,9 @@ public static class PlayerBotDriver
     // #167 F8: the class's own self-buffs (NextSelfBuff), one cast at a time, scanned every SelfBuffScanMilliseconds out of
     // a fight (MayRest's view), before a rest as a player buffs and then sits. A release ends them all: the new life
     // scans at once (Think). #167 C9: never mid-rest (BuffScanAllowed), a kill scans at once (SettleTarget) and each buff
-    // cast the next scan, back to back, and only those it keeps up out of a fight (KeepsUpOutOfFight).
+    // cast the next scan, back to back, and only those it keeps up out of a fight (KeepsUpOutOfFight). #167 C13: the
+    // chant it wants (WantedChant): its regeneration one from the kill to the rest's end, once recovered (sitting, the
+    // scan allowed again) its combat one back.
     private static bool SelfBuff(PlayerBotState state, GamePlayer player, long now)
     {
         if (now < state.NextSelfBuffTick || player.IsCasting || state.Engaged && state.Target?.IsAlive == true ||
@@ -3038,9 +3078,12 @@ public static class PlayerBotDriver
         state.NextSelfBuffTick = now + SelfBuffScanMilliseconds;
         byte health = player.HealthPercent, mana = player.ManaPercent, endurance = player.EndurancePercent,
             powerStop = RestPowerStop(RoleOf(player.CharacterClass.ID));
-        (Spell buff, SpellLine line) = NextSelfBuff(UsableSpells(player), ActiveSpellTypes(player),
-            player.effectListComponent.GetPulseEffects().Count > 0, player.Level, player.Concentration, player.MaxMana,
-            player.Mana, spell => player.GetSkillDisabledDuration(spell) <= 0 &&
+        List<(Spell Spell, SpellLine Line)> usable = UsableSpells(player).ToList();
+        bool resting = player.IsSitting || WantsRest(player, state.RecoverBeforePull);  // #167 C13: the chant it runs
+        eSpellType? chant = WantedChant(ChantKinds(usable, player.Level), resting, health, endurance, player.MaxMana, mana,
+            powerStop);
+        (Spell buff, SpellLine line) = NextSelfBuff(usable, ActiveSpellTypes(player), chant, ChantUp(player), player.Level,
+            player.Concentration, player.MaxMana, player.Mana, spell => player.GetSkillDisabledDuration(spell) <= 0 &&
                 KeepsUpOutOfFight(spell, health, player.MaxMana, mana, powerStop, endurance));
         if (buff == null || !CastOnSelf(state, player, now, buff, line, "buff")) return false;
         state.NextSelfBuffTick = 0;                                                     // #167 C9: the next one at once
@@ -3051,10 +3094,18 @@ public static class PlayerBotDriver
     // picks one, cast on itself before the fight's first swing or spell. True when it cast.
     private static bool FightBuff(PlayerBotState state, GamePlayer player, long now)
     {
-        (Spell buff, SpellLine line) = NextSelfBuff(UsableSpells(player), ActiveSpellTypes(player), false, player.Level,
+        (Spell buff, SpellLine line) = NextSelfBuff(UsableSpells(player), ActiveSpellTypes(player), null, null, player.Level,
             player.Concentration, player.MaxMana, player.Mana,
             spell => OpensFight(spell) && player.GetSkillDisabledDuration(spell) <= 0);
         return buff != null && CastOnSelf(state, player, now, buff, line, "buff");
+    }
+
+    // #167 C13: the kind of the chant up (a pulse effect's spell), or none.
+    private static eSpellType? ChantUp(GamePlayer player)
+    {
+        foreach (ECSPulseEffect effect in player.effectListComponent.GetPulseEffects())
+            if (effect.SpellHandler?.Spell is Spell spell) return spell.SpellType;
+        return null;
     }
 
     // The kinds of the spell effects on the bot, a chant's pulse effect too (NextSelfBuff's active).

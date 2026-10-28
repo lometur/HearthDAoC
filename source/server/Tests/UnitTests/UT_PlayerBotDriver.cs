@@ -2929,10 +2929,16 @@ public sealed class UT_PlayerBotDriver
     private static readonly (Spell, SpellLine) DiamondShield = Buff(9, "Diamond Shield", "BaseArmorFactorBuff", "Self", 40, 25),
         BufferOfStone = Buff(22, "Buffer of Stone", "ArmorAbsorptionBuff", "Self", 41, 26);
 
+    // up: the chant up; wanted: the one to run (#167 C13), unless given WantedChant's from the chants the spells give at
+    // that level (ChantKinds), standing, at full health, power and endurance.
     private static string SelfBuffName(IEnumerable<(Spell, SpellLine)> spells, int level, IReadOnlySet<eSpellType> active = null,
-        bool chantUp = false, int concentration = 20, int mana = 300, Func<Spell, bool> ready = null) =>
-        PlayerBotDriver.NextSelfBuff(spells, active ?? new HashSet<eSpellType>(), chantUp, level, concentration, 300, mana,
+        eSpellType? up = null, int concentration = 20, int mana = 300, Func<Spell, bool> ready = null, eSpellType? wanted = null)
+    {
+        (Spell, SpellLine)[] all = spells.ToArray();
+        wanted ??= PlayerBotDriver.WantedChant(PlayerBotDriver.ChantKinds(all, level), false, 100, 100, 300, 100, 100);
+        return PlayerBotDriver.NextSelfBuff(all, active ?? new HashSet<eSpellType>(), wanted, up, level, concentration, 300, mana,
             ready ?? (_ => true)) is (Spell s, SpellLine) ? s.Name : "-";
+    }
 
     // A Wizard's Path of Earth: its armour factor first, then its absorb (Buffer of Stone is level 41), then none once
     // both are up; a level-40 Wizard has no absorb yet.
@@ -2968,8 +2974,9 @@ public sealed class UT_PlayerBotDriver
     }
 
     // A Paladin runs one chant at a time (a new pulse effect ends the others, EffectListComponent.cs:362-371): the first by
-    // the buffs' order while none is up, never one that costs power each pulse (it would drain the power its rest
-    // waits for). Songs need an instrument; buffs on a pet, kinds not kept (haste) and resist buffs are left alone.
+    // the buffs' order (WantedChant), not while it is up, and in place of another that is (#167 C13); never one that costs
+    // power each pulse (it would drain the power its rest waits for). Songs need an instrument; buffs on a pet, kinds not
+    // kept (haste) and resist buffs are left alone.
     [Test]
     public void A_bot_runs_one_chant_that_costs_no_power_each_pulse()
     {
@@ -2981,7 +2988,10 @@ public sealed class UT_PlayerBotDriver
         ];
         Assert.That(SelfBuffName(chants, 30), Is.EqualTo("Crusader's Shelter"));
         Assert.That(SelfBuffName(chants, 28), Is.EqualTo("Greater Battle Fury"));
-        Assert.That(SelfBuffName(chants, 30, chantUp: true), Is.EqualTo("-"));
+        Assert.That(SelfBuffName(chants, 30, new HashSet<eSpellType> { eSpellType.SpecArmorFactorBuff },
+            up: eSpellType.SpecArmorFactorBuff), Is.EqualTo("-"));
+        Assert.That(SelfBuffName(chants, 30, new HashSet<eSpellType> { eSpellType.DamageAdd }, up: eSpellType.DamageAdd),
+            Is.EqualTo("Crusader's Shelter"), "the first by the order in place of the one up");
         Assert.That(SelfBuffName(chants, 27), Is.EqualTo("-"), "Soul Ward costs power each pulse");
         Assert.That(SelfBuffName(
             [
@@ -3071,6 +3081,53 @@ public sealed class UT_PlayerBotDriver
         };
         settle!.Invoke(null, [state, Player(null)]);
         Assert.That(state.NextSelfBuffTick, Is.EqualTo(next));
+    }
+
+    // --- the Skald's Song of Rest while it rests (#167 C13) ---
+
+    // The chant the bot runs: while it rests, the regeneration chant of what is short of its rest's stop (a Skald's Song
+    // of Rest while its health is: the pulse runs on while it sits, SpellHandler.cs:196-232), else its first by the buffs'
+    // order, its combat chant (the DamageAdd came first and blocked every other chant: the Skald never sang its Song).
+    [Test]
+    public void A_skald_wants_its_song_of_rest_while_it_rests_short_of_health_and_its_combat_chant_else()
+    {
+        eSpellType[] skald = [eSpellType.DamageAdd, eSpellType.HealthRegenBuff];
+        eSpellType? Wanted(IReadOnlyCollection<eSpellType> kinds, bool resting, byte health = 100, byte endurance = 100) =>
+            PlayerBotDriver.WantedChant(kinds, resting, health, endurance, 300, 100, 100);
+        Assert.That(Wanted(skald, true, 70), Is.EqualTo(eSpellType.HealthRegenBuff));
+        Assert.That(Wanted(skald, true), Is.EqualTo(eSpellType.DamageAdd), "full health and endurance");
+        Assert.That(Wanted(skald, false, 70), Is.EqualTo(eSpellType.DamageAdd), "not resting");
+        Assert.That(Wanted([eSpellType.DamageAdd], true, 70), Is.EqualTo(eSpellType.DamageAdd), "no Song");
+        Assert.That(Wanted([], true, 70), Is.Null, "no chant");
+    }
+
+    // The chants it can run: of a kind it keeps, at or below its level, no song that needs an instrument and none that
+    // costs power each pulse.
+    [Test]
+    public void A_bots_chants_are_its_kept_kinds_at_its_level_with_no_instrument_or_pulse_power()
+    {
+        (Spell, SpellLine)[] spells =
+        [
+            ChantOfTheWar, SongOfRest, Buff(1093, "Soul Ward", "BodySpiritEnergyBuff", "Group", 25, 0, pulse: 1, pulsePower: 8),
+            Buff(4001, "a chant that costs power", "SpecArmorFactorBuff", "Group", 29, 0, pulse: 1, pulsePower: 2),
+            Buff(4002, "a song", "EnduranceRegenBuff", "Group", 10, 0, pulse: 1, instrument: 1), DiamondShield,
+        ];
+        Assert.That(PlayerBotDriver.ChantKinds(spells, 40), Is.EquivalentTo(new[] { eSpellType.DamageAdd, eSpellType.HealthRegenBuff }));
+        Assert.That(PlayerBotDriver.ChantKinds(spells, 34), Is.EquivalentTo(new[] { eSpellType.HealthRegenBuff }), "the War at 35");
+    }
+
+    // NextSelfBuff runs the chant wanted in place of the one up (one pulse effect ends the others), and none while the
+    // one wanted is up. With C9 the Skald swaps back to its combat chant once recovered.
+    [Test]
+    public void A_skald_swaps_its_chant_for_the_one_it_wants()
+    {
+        (Spell, SpellLine)[] skald = [ChantOfTheWar, SongOfRest];
+        var war = new HashSet<eSpellType> { eSpellType.DamageAdd };
+        Assert.That(SelfBuffName(skald, 40, war, up: eSpellType.DamageAdd, wanted: eSpellType.HealthRegenBuff),
+            Is.EqualTo("Magnificent Song of Rest"));
+        Assert.That(SelfBuffName(skald, 40, war, up: eSpellType.DamageAdd, wanted: eSpellType.DamageAdd), Is.EqualTo("-"));
+        Assert.That(SelfBuffName(skald, 40, new HashSet<eSpellType> { eSpellType.HealthRegenBuff }, up: eSpellType.HealthRegenBuff),
+            Is.EqualTo("Chant of the War"), "recovered: its combat chant back");
     }
 
     // A Necromancer in shade form cannot swing (AttackComponent.cs:511-516): its servant fights.

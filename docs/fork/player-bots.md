@@ -91,7 +91,9 @@ Each bot thinks every 250 ms, a thin copy of the `/bot` pilot's think:
   drops. With none ready (a Shaman's two 20-s spells both on recast), it swings until one is.
 - Out of a fight it keeps its class's own self-buffs up: armour factor, absorb, bladeturn, ablative, damage shield,
   damage add, stat buffs and regeneration buffs, and one chant that costs no power each pulse (so no resist chant: the
-  Paladin's cost power each pulse). It looks every 5 s, and at once after a kill, before it sits, casting the missing
+  Paladin's cost power each pulse): the first of those kinds, but from a kill to the end of its rest a regeneration
+  chant for what it is short of, so a Skald sings its Song of Rest as it sits and its combat chant again once rested.
+  It looks every 5 s, and at once after a kill, before it sits, casting the missing
   ones back to back; never while it sits, until its rest is done. It uses the buffs' real power, concentration and
   recast; the server's own checks decide the rest. A buff under 2 minutes it no longer keeps up between fights: an
   instant one (a Reaver's Surge) goes up at a fight's start instead, one with a cast time (a Spiritmaster's Benison)
@@ -137,8 +139,8 @@ Playing:
 - **Resting:** 43% of their time on `st-layers5`. Most of it is the real cost of player regeneration.
 - **Not done at all:** they don't group, buff others, take part in RvR or battlegrounds, stealth, use realm abilities
   or ride horses (#152, #167).
-- **Ranged and songs:** they can't shoot or sing. Archers fight in melee, and Bards, Minstrels and Skalds have no
-  songs. The level-matched kit gives no bows or instruments.
+- **Ranged and songs:** they can't shoot or play. Archers fight in melee, and Bards and Minstrels have no songs: theirs
+  need an instrument (a Skald's chants don't). The level-matched kit gives no bows or instruments.
 - **Trips:** they don't travel to sell, train or buy gear (#157).
 
 Going live, without the test-world side effects:
