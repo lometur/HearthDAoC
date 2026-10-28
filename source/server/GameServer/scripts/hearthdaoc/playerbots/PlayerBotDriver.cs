@@ -1067,6 +1067,23 @@ public static class PlayerBotDriver
     public static bool DiedAtCamp(Vector3 death, Vector3 anchor) =>
         Vector3.Distance(death, anchor) <= LeashRadius + RoamRadius;
 
+    /// <summary>Whether a death owes a replan before the walk back (#167 F4): on no task, a leash it can move
+    /// (CanRelocate: no lever spot bot, in its anchor's region) and a death at its camp (DiedAtCamp).</summary>
+    public static bool OwesReplan(bool onTask, bool canRelocate, Vector3 death, Vector3 anchor) =>
+        !onTask && canRelocate && DiedAtCamp(death, anchor);
+
+    /// <summary>Where a relocation plans from (PlanRelocation's here): after a death (Died) the spot the bot died at, not
+    /// its bind; else where it is.</summary>
+    public static Vector3 RelocationOrigin(string reason, Vector3 deathSpot, Vector3 here) =>
+        reason == Died ? deathSpot : here;
+
+    /// <summary>Where a relocation's corridor test starts (a corridor is one zone's, PlayerTravelPath.cs:75-81): where the
+    /// bot is when it stands in the plan's zone (inZone); after a death with the bot at a bind in another zone of its
+    /// region, the death spot, which lies in the plan's zone (the review of 77ba437: the test was skipped then); none
+    /// with no navmesh there.</summary>
+    public static Vector3? CorridorOrigin(string reason, bool hasNavmesh, bool inZone, Vector3 deathSpot, Vector3 here) =>
+        !hasNavmesh ? null : inZone ? here : reason == Died ? deathSpot : null;
+
     /// <summary>The recovery after a release (#167 F4), this think's step: it fights back what hits it (attacked); else
     /// it steps out of the reach of any monster that would aggro (stepsOut: in reach, with a clear spot to go to); then
     /// it plans the relocation owed after a death at its camp (replanOwed); then it waits out its back-off (the GameBot's
@@ -1645,7 +1662,8 @@ public static class PlayerBotDriver
     // (DEATHS.md A4): both to the nearest camp that fits the death cap, else to the safest one, as a GameBot falls back
     // after a death (PlanRelocation). A capped bot that cannot move takes the safest con in reach (FallbackInPlace).
     // After a death at its camp (#167 F4) it plans before it walks back, from where it died, in its anchor's region and
-    // the zone it died in (the bind may lie elsewhere), the failed camps barred; with no camp it hunts where it is.
+    // the zone it died in (the bind may lie elsewhere; then the corridors start at the death spot, CorridorOrigin), the
+    // failed camps barred; with no camp it hunts where it is.
     private static void RelocateIfOutgrown(PlayerBotState state, GamePlayer player, long now)
     {
         string reason = RelocateReason(state.RoamingSince, state.CappedSince, now, state.ReplanAfterDeath);
@@ -1659,14 +1677,17 @@ public static class PlayerBotDriver
             return;
         }
         state.NextRelocateTick = now + (reason == Outgrown ? RelocateAfterMilliseconds : CappedRelocateMilliseconds);
-        Vector3 here = new(player.X, player.Y, player.Z), from = died ? state.DeathSpot : here;
+        Vector3 here = new(player.X, player.Y, player.Z), from = RelocationOrigin(reason, state.DeathSpot, here);
         IPathfindingMgr nav = PathfindingProvider.Instance;
         if (nav.HasNavmesh(player.CurrentZone) && nav.GetClosestPoint(player.CurrentZone, here, 64, 64, 128, nav.DefaultFilters) == null)
         {
             FallBack(state, player, reason);  // off the mesh here, every corridor fails (PlayerTravelPath.cs:48-50): blame
             return;                           //   no monster for it
         }
-        bool corridors = nav.HasNavmesh(zone) && player.CurrentZone == zone;      // a corridor is one zone's (PTP:75-81)
+        Vector3? corridorFrom = CorridorOrigin(reason, nav.HasNavmesh(zone), player.CurrentZone == zone, state.DeathSpot, here);
+        if (corridorFrom is Vector3 start && player.CurrentZone != zone &&       // a death spot off the mesh fails every
+            nav.GetClosestPoint(zone, start, 64, 64, 128, nav.DefaultFilters) == null)  // corridor (PTP:80-82): no test
+            corridorFrom = null;                                                 //   then, as before
         ConColor natural = MaximumTargetCon(1, 0);
         List<(GameNPC Npc, Vector3 At, ConColor Con, bool Huntable, bool Avoided)> monsters = new();
         foreach (GameNPC npc in WorldMgr.GetNPCsFromRegion(state.AnchorRegion))   // CanRelocate: the bot's region too
@@ -1684,7 +1705,7 @@ public static class PlayerBotDriver
         foreach (GameNPC npc in nearest)
         {
             Vector3 spot = new(npc.X, npc.Y, npc.Z);
-            if (corridors && !PlayerTravelPath.TryBuildCorridor(nav, zone, here, spot, out _))
+            if (corridorFrom is Vector3 origin && !PlayerTravelPath.TryBuildCorridor(nav, zone, origin, spot, out _))
             {
                 state.RelocateRejected.Add(npc);
                 continue;
@@ -1883,7 +1904,7 @@ public static class PlayerBotDriver
             state.NoXpDeaths = AutonomousDeathRecoveryPolicy.NextNoExperienceDeathStreak(state.NoXpDeaths,   // #167 F4:
                 state.LastDeathTick, now, state.Gained > state.GainedAtDeath);          //   the back-off (AWBC:3778-3786)
             (state.LastDeathTick, state.GainedAtDeath) = (now, state.Gained);
-            state.ReplanAfterDeath = state.Task == null && CanRelocate(state, player) && DiedAtCamp(state.DeathSpot, state.Anchor);
+            state.ReplanAfterDeath = OwesReplan(state.Task != null, CanRelocate(state, player), state.DeathSpot, state.Anchor);
             state.NextRelocateTick = 0;                                                 //   and the plan before the walk back
             state.AfterRelease = false;
             state.CappedSince = 0;

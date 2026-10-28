@@ -355,6 +355,42 @@ public sealed class UT_PlayerBotDriver
     public void A_death_within_its_hunting_reach_is_a_death_at_its_camp(float distance, bool atCamp) =>
         Assert.That(PlayerBotDriver.DiedAtCamp(new Vector3(distance, 0, 0), Vector3.Zero), Is.EqualTo(atCamp));
 
+    // A death owes a replan before the walk back when the bot is on no task, can move its leash (no lever spot bot, in
+    // its anchor's region: CanRelocate) and died at its camp (DiedAtCamp). The review of 77ba437: with it always false,
+    // no test failed.
+    [TestCase(false, true, 5_000f, true)] [TestCase(false, true, 5_400f, true)]
+    [TestCase(true, true, 5_000f, false)] [TestCase(false, false, 5_000f, false)] [TestCase(false, true, 5_401f, false)]
+    public void A_death_at_its_camp_owes_a_replan_unless_on_a_task_or_held(bool onTask, bool canRelocate, float distance,
+        bool owes) =>
+        Assert.That(PlayerBotDriver.OwesReplan(onTask, canRelocate, new Vector3(distance, 0, 0), Vector3.Zero),
+            Is.EqualTo(owes));
+
+    // The plan's origin: after a death the spot it died at, not where it stands (its bind: 5,808 units off at the median
+    // in st-deathsA, the review of 77ba437); a capped or outgrown bot plans from where it is.
+    [Test]
+    public void A_replan_after_a_death_starts_from_the_death_spot()
+    {
+        Vector3 spot = new(1_000, 2_000, 30), here = new(6_000, 5_000, 0);
+        Assert.That(PlayerBotDriver.RelocationOrigin(PlayerBotDriver.Died, spot, here), Is.EqualTo(spot));
+        Assert.That(PlayerBotDriver.RelocationOrigin(PlayerBotDriver.Capped, spot, here), Is.EqualTo(here));
+        Assert.That(PlayerBotDriver.RelocationOrigin(PlayerBotDriver.Outgrown, spot, here), Is.EqualTo(here));
+    }
+
+    // The corridor test's origin (a corridor is one zone's, PlayerTravelPath.cs:75-81): where the bot stands in the plan's
+    // zone; after a death, with the bot at a bind in another zone of its region, the death spot, which lies in the plan's
+    // zone (the review of 77ba437: the test was skipped then, and the anchor moved to a camp across a cliff from it);
+    // none with no navmesh there.
+    [Test]
+    public void A_replans_corridors_start_from_the_death_spot_when_the_bot_is_in_another_zone()
+    {
+        Vector3 spot = new(1_000, 2_000, 30), here = new(6_000, 5_000, 0);
+        Assert.That(PlayerBotDriver.CorridorOrigin(PlayerBotDriver.Died, true, true, spot, here), Is.EqualTo(here));
+        Assert.That(PlayerBotDriver.CorridorOrigin(PlayerBotDriver.Died, true, false, spot, here), Is.EqualTo(spot));
+        Assert.That(PlayerBotDriver.CorridorOrigin(PlayerBotDriver.Capped, true, true, spot, here), Is.EqualTo(here));
+        Assert.That(PlayerBotDriver.CorridorOrigin(PlayerBotDriver.Died, false, false, spot, here), Is.Null, "no navmesh");
+        Assert.That(PlayerBotDriver.CorridorOrigin(PlayerBotDriver.Died, false, true, spot, here), Is.Null);
+    }
+
     // The fit pass bars a failed camp too, not only the fallback (st-deathsA: after a relocation the bots walked back to
     // the camp they died at, the nearest that fitted): with the camp it died at and one 3,000 units on that both fit, the
     // other one.
