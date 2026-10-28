@@ -551,14 +551,14 @@ public static class PlayerBotDriver
     /// <summary>The server's own test for the interrupt timer (SpellHandler.cs:571).</summary>
     public static bool Interruptible(Spell spell) => !spell.Uninterruptible && !spell.IsInstantCast;
 
-    /// <summary>The self-heal's gate, out of a cast and the retry timer due: in a fight below SelfHealBelowPercent
-    /// (DEATHS.md A6); out of one below RestHealBelowPercent with RestHealPowerPercent of its power or more left after the
+    /// <summary>The self-heal's gate, out of a cast and the retry timer due: below SelfHealBelowPercent whatever its power,
+    /// in a fight or out of one (DEATHS.md A6; a GameBot heals itself below 65% before it rests, BotBrain.cs:4890-4897);
+    /// out of a fight also below RestHealBelowPercent with RestHealPowerPercent of its power or more left after the
     /// heal's cost (#167 F2), then it sits for power: a heal is quicker than sitting for health.</summary>
     public static bool WantsSelfHeal(byte healthPercent, bool casting, long now, long nextTry, bool inFight, byte manaPercent,
         int costPercent) =>
-        !casting && now >= nextTry && (inFight
-            ? healthPercent < SelfHealBelowPercent
-            : healthPercent < RestHealBelowPercent && manaPercent - costPercent >= RestHealPowerPercent);
+        !casting && now >= nextTry && (healthPercent < SelfHealBelowPercent || !inFight &&
+            healthPercent < RestHealBelowPercent && manaPercent - costPercent >= RestHealPowerPercent);
 
     /// <summary>A spell's nominal cost in percent of the pool, rounded up: a negative power is a percent already
     /// (SpellHandler.cs:1207-1213); 0 with no pool.</summary>
@@ -1554,8 +1554,9 @@ public static class PlayerBotDriver
         state.Activity = PlayerBotActivity.Casting;
     }
 
-    // A healer's heal on itself (DEATHS.md A6), before a rest as a GameBot's (AWBC:2725); out of a fight (MayRest's
-    // view) from 85% health, then it sits for power (#167 F2). The gate runs first at no cost, then with the heal's.
+    // A healer's heal on itself (DEATHS.md A6), before a rest as a GameBot's (AWBC:2725): below 60% health whatever its
+    // power; out of a fight (MayRest's view) from 85% with power to spare, then it sits for power (#167 F2). The gate
+    // runs first at no cost, then with the heal's.
     private static bool SelfHeal(PlayerBotState state, GamePlayer player, long now)
     {
         bool inFight = !MayRest(Attacker(state, player, now, anyHitter: true) != null, state.Engaged && state.Target?.IsAlive == true);

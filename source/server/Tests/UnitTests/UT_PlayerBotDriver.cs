@@ -1818,11 +1818,17 @@ public sealed class UT_PlayerBotDriver
         Assert.That(PlayerBotDriver.WantsSelfHeal(health, casting, 1_000, nextTry, inFight: true, 10, 8), Is.EqualTo(heals));
 
     // Out of a fight (#167 F2): below 85%, with half its power or more left after the heal's cost, then it sits for power;
-    // a heal is quicker than sitting for health. In a fight the 60% rule stands.
+    // a heal is quicker than sitting for health. Below 60% it heals whatever its power, in a fight or out of one, as
+    // before (d1d524d) and as a GameBot heals itself below 65% before it rests (BotBrain.cs:4890-4897): 45% health
+    // and 40% power, an 8% heal, heals to about 75% and then sits, rather than sitting at 45%.
     [TestCase((byte)84, false, 1_000L, false, (byte)70, 8, true)] [TestCase((byte)84, false, 1_000L, true, (byte)70, 8, false)]
     [TestCase((byte)59, false, 1_000L, true, (byte)70, 8, true)] [TestCase((byte)84, false, 1_000L, false, (byte)55, 8, false)]
     [TestCase((byte)90, false, 1_000L, false, (byte)70, 8, false)] [TestCase((byte)84, false, 1_000L, false, (byte)58, 8, true)]
     [TestCase((byte)84, true, 1_000L, false, (byte)70, 8, false)] [TestCase((byte)84, false, 1_001L, false, (byte)70, 8, false)]
+    [TestCase((byte)85, false, 1_000L, false, (byte)70, 8, false)]                         // the 85% boundary
+    [TestCase((byte)45, false, 1_000L, false, (byte)40, 8, true)]                          // low power: the 60% rule
+    [TestCase((byte)59, false, 1_000L, false, (byte)10, 8, true)] [TestCase((byte)60, false, 1_000L, false, (byte)10, 8, false)]
+    [TestCase((byte)45, true, 1_000L, false, (byte)40, 8, false)] [TestCase((byte)45, false, 1_001L, false, (byte)40, 8, false)]
     public void Out_of_a_fight_a_bot_heals_itself_below_85_percent_before_it_sits(byte health, bool casting, long nextTry,
         bool inFight, byte mana, int cost, bool heals) =>
         Assert.That(PlayerBotDriver.WantsSelfHeal(health, casting, 1_000, nextTry, inFight, mana, cost), Is.EqualTo(heals));
