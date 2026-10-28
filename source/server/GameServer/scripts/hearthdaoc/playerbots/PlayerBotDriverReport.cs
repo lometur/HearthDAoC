@@ -17,20 +17,33 @@ public readonly record struct PlayerBotDriverWindow(
 /// <summary>One settled fight (levelmatch/DEATHS.md 2): the bot's health and power at its first think in reach and now,
 /// the most attackers on a think, the swings seen and those the view gate refused, the casts, and this life's kills and
 /// sits before it; then whether it had a living pet at that first think and its heals on itself since (DEATHS.md A5,
-/// A6), and whether a cast in it went with Quickcast on.</summary>
+/// A6), and whether a cast in it went with Quickcast on; then (#167) its self-buffs up at that first think (F8), a
+/// Theurgist's pets cast at the target (F1), and the thinks a cast due waited for its own swing's interrupt (F6); a
+/// caster's control casts and steps back (F11), the holds on its target its own swing ended (C3, BrokeHold), and its
+/// control casts at an add (C4; in Controls too); then (#167, the next leg's) the whole seconds into the fight a second
+/// monster first hit the bot or came at it and its health then (FirstAdd), the fight dropped by a break-off (C2), the
+/// distance at that first think, and the pick's crowding (CrowdingAlong, C5): -1 for none, a defence or Incoming's pick.</summary>
 public readonly record struct PlayerBotFight(
     string Bot, int Level, string Target, int TargetLevel, ConColor Con, bool FromDefence, bool Killed,
     byte StartHp, byte EndHp, byte StartMana, byte EndMana, long Seconds, int Adds, int Swings, int NotVisible, int Casts,
-    int LifeKills, int Rests, bool Pet = false, int Heals = 0, bool Quickcast = false);
+    int LifeKills, int Rests, bool Pet = false, int Heals = 0, bool Quickcast = false, int Buffs = 0, int PetCasts = 0,
+    int Waits = 0, int Controls = 0, int Kites = 0, int CtlBroken = 0, int AddControls = 0, int AddAt = -1, int AddHp = -1,
+    bool BreakOff = false, int EngageDistance = -1, int Crowd = -1);
 
 /// <summary>What a PLAYER_BOT_DEATH line adds after its first fields (levelmatch/DEATHS.md 2); -1 for none: the fight's
 /// fields (startHp, fightSec, adds, swings, notVisible) out of a fight, targetHp with no target, sinceKillSec with no kill
 /// this life, fromBind with the bind in another region. Avoided: the names the bot avoided as it died, before this
-/// death's (DEATHS.md A3).</summary>
+/// death's (DEATHS.md A3). Again (#167 F4): no kill since its last release (DiedAgain); SinceRelease: the seconds since
+/// it, -1 with none this login; Ill: the resurrection illness on at the fatal fight's start (false out of a fight). Then
+/// (#167 C3, C4) the fatal fight's caster fields as PLAYER_BOT_FIGHT gives them, Quickcast 1 or 0: -1 out of a fight; and
+/// FIGHT's AddAt, AddHp and EngageDistance (-1 out of a fight too), and BreakOff: the bot died on a break-off's run (C2;
+/// out of a fight then, as the break-off dropped it).</summary>
 public readonly record struct PlayerBotDeathDetail(
     PlayerBotActivity Activity, int StartHp, long FightSeconds, int TargetHp, bool FromDefence, int Adds, int LifeKills,
     int Rests, long SinceKillSeconds, byte Mana, int Swings, int NotVisible, string Killer, int KillerLevel,
-    bool KillerIsTarget, int FromBind, int Avoided = 0);
+    bool KillerIsTarget, int FromBind, int Avoided = 0, bool Again = false, long SinceRelease = -1, bool Ill = false,
+    int Controls = -1, int Kites = -1, int Casts = -1, int Quickcast = -1, int Waits = -1, int CtlBroken = -1,
+    int AddControls = -1, int AddAt = -1, int AddHp = -1, bool BreakOff = false, int EngageDistance = -1);
 
 // HearthDAoC player bots (#137): one PLAYER_BOT_DRIVER line a minute, then the lever's PLAYER_BOT_WAKE line, from a thread-pool
 // timer off the game loop, and every TallyEveryWindows windows a PLAYER_BOT_TALLY line per bot (the level-matched run).
@@ -163,14 +176,39 @@ public static class PlayerBotDriverReport
         $"from={(f.FromDefence ? "defence" : "pull")} result={(f.Killed ? "kill" : "dropped")} startHp={f.StartHp} endHp={f.EndHp} " +
         $"startMana={f.StartMana} endMana={f.EndMana} sec={f.Seconds} adds={f.Adds} swings={f.Swings} notVisible={f.NotVisible} " +
         $"casts={f.Casts} lifeKills={f.LifeKills} rests={f.Rests} pet={(f.Pet ? "alive" : "none")} heals={f.Heals} " +
-        $"qc={(f.Quickcast ? 1 : 0)}");
+        $"qc={(f.Quickcast ? 1 : 0)} buffs={f.Buffs} petCasts={f.PetCasts} waits={f.Waits} ctl={f.Controls} kites={f.Kites} " +
+        $"ctlBroken={f.CtlBroken} addCtl={f.AddControls} addAt={f.AddAt} addHp={f.AddHp} breakOff={(f.BreakOff ? 1 : 0)} " +
+        $"engageDist={f.EngageDistance} crowd={f.Crowd}");
+
+    /// <summary>PLAYER_BOT_REST (#167), when a rest ends: the seconds the bot sat and why it stood (PlayerBotDriver.EndRest);
+    /// then its health and power when it sat, and the killed monsters' spawn spots its rest spot was read against (C7).</summary>
+    public static string FormatRest(string bot, int level, long seconds, string why, int hp, int mp, int respawn) =>
+        string.Create(CultureInfo.InvariantCulture,
+            $"PLAYER_BOT_REST bot={bot} level={level} sec={seconds} why={why} hp={hp} mp={mp} respawn={respawn}");
+
+    /// <summary>PLAYER_BOT_BACK (#167 C1), at the first fight after a release (PlayerBotDriver.ReportBack): the seconds
+    /// since the release, those stepping out of reach, held (the back-off, the illness, the replan's hold) and walking
+    /// (Roam), and the replan (PlayerBotDriver.BackReplan).</summary>
+    public static string FormatBack(string bot, int level, long seconds, long stepOut, long hold, long walk, string replan) =>
+        string.Create(CultureInfo.InvariantCulture,
+            $"PLAYER_BOT_BACK bot={bot} level={level} sec={seconds} stepOut={stepOut} hold={hold} walk={walk} replan={replan}");
+
+    /// <summary>PLAYER_BOT_BREAKOFF (#167 C2), when a break-off ends (PlayerBotDriver.EndBreakOff): the bot's health,
+    /// endurance and attackers when it broke off, the seconds it ran, and how it ended (shook: none still after it;
+    /// fought: still chased, or nowhere to run, it turned on them; died).</summary>
+    public static string FormatBreakOff(string bot, int level, int hp, int end, int attackers, long seconds, string outcome) =>
+        string.Create(CultureInfo.InvariantCulture,
+            $"PLAYER_BOT_BREAKOFF bot={bot} level={level} hp={hp} end={end} attackers={attackers} sec={seconds} outcome={outcome}");
 
     /// <summary>The fields PLAYER_BOT_DEATH appends after task= (the ones before stay as they were: legcheck.py reads them).</summary>
     public static string FormatDeathDetail(PlayerBotDeathDetail d) => string.Create(CultureInfo.InvariantCulture,
         $"activity={d.Activity} startHp={d.StartHp} fightSec={d.FightSeconds} targetHp={d.TargetHp} " +
         $"from={(d.FromDefence ? "defence" : "pull")} adds={d.Adds} lifeKills={d.LifeKills} rests={d.Rests} " +
         $"sinceKillSec={d.SinceKillSeconds} mana={d.Mana} swings={d.Swings} notVisible={d.NotVisible} killer=\"{d.Killer}\" " +
-        $"killerLevel={d.KillerLevel} killerIsTarget={d.KillerIsTarget} fromBind={d.FromBind} avoided={d.Avoided}");
+        $"killerLevel={d.KillerLevel} killerIsTarget={d.KillerIsTarget} fromBind={d.FromBind} avoided={d.Avoided} " +
+        $"again={d.Again} sinceRelease={d.SinceRelease} ill={d.Ill} ctl={d.Controls} kites={d.Kites} casts={d.Casts} " +
+        $"qc={d.Quickcast} waits={d.Waits} ctlBroken={d.CtlBroken} addCtl={d.AddControls} addAt={d.AddAt} addHp={d.AddHp} " +
+        $"breakOff={(d.BreakOff ? 1 : 0)} engageDist={d.EngageDistance}");
 
     public static string Format(PlayerBotDriverWindow w)
     {

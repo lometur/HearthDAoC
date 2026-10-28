@@ -34,7 +34,13 @@ Two more settings are read only when bots are on:
 - `HEARTHDAOC_PLAYER_BOT_SPOTS`: a file in the data volume, for example `/data/player-bot-spots.txt`. Each line is
   `realm|region|x|y[|z[|level|class|race]]` and places one bot there, and the bot keeps that spot.
   - A line with a level, class and race makes the bot at that level. It is not levelled through play: its specs come
-    from its class's GameBot plan, and it gets gear by the GameBot rules at its first login.
+    from its class's GameBot plan, and it gets gear by the GameBot rules at its first login. It spends every point a
+    player has, the half levels' points from 41 on too: the points its plan's lines cannot take, now or at a later
+    level, go to the lines the GameBot plan leaves at 1 until 50 (a Warrior's Thrown Weapons, a Bonedancer's second
+    line), as a player spends them. Two changes to the plan are the player bots' own: a Nurture or Regrowth Druid
+    trains Nature first, to 20 (by level 30), for a pet near its level (the GameBot plan leaves Nature at 1, a level-7
+    pet, until 50); a Suppression Spiritmaster raises Suppression from the start (the GameBot plan leaves it at 1
+    until 50).
   - A bad value or an unreadable file keeps the bots off, with a `HEARTHDAOC_PLAYER_BOTS error` line.
 
 ## What they do
@@ -42,17 +48,136 @@ Two more settings are read only when bots are on:
 Each bot thinks every 250 ms, a thin copy of the `/bot` pilot's think:
 - It roams within 4,000 units of its start and hunts monsters within 5,400 that con at most yellow. Each death lowers
   that con by one step, by two at most.
-- It rests to full after each kill, and whenever below a GameBot's rest thresholds (70% health, 45% power, 35%
-  endurance).
-- A bot with a heal heals itself below 60% health. A caster doesn't start a cast that a hit would interrupt, and uses
-  Quickcast once a monster reaches it. A pet class summons its pet and sends it in.
-- It picks a monster with no aggressive neighbours. After deaths it moves to an easier camp. It avoids what killed it
-  for 15 minutes.
+- It rests after each kill, and whenever below a GameBot's rest thresholds (70% health, 45% power, 35% endurance). A
+  rest stops at full health, 60% endurance, and full power, or 90% power for a caster (Wizard, Sorcerer, Runemaster,
+  Eldritch, Mentalist: under 50% power it regains power at half the rate, so a pull that ends below half costs more
+  rest than the last 10%); the quest bot's rests before an errand's walk stop there too.
+- A bot with a heal heals itself below 60% health, whatever its power. Out of a fight it also heals itself below 85%
+  before it sits, if half its power is left after the heal. A caster doesn't start a cast that a hit would interrupt,
+  and uses Quickcast once a monster's hits interrupt it. Its own swing doesn't block its next cast: with a spell to
+  cast, it stops swinging until its own swing's interrupt runs out, and it doesn't swing between casts (an instant
+  spell does not mind). Between casts it keeps its spell range. A pet class summons its pet and sends it in, then
+  holds its spells until the monster turns on the pet, 4 s at most, and never while the bot is being hit. A Theurgist
+  casts a pet at its target at each cast choice while it can cast one, as a GameBot does, and its damage spell only
+  when it can't (the target out of the pet's range or view, or a pet just refused).
+- A caster (Wizard, Sorcerer, Runemaster, Eldritch, Mentalist) nukes a monster coming at it while there is time for a
+  nuke and a control spell after it. Then it stuns, roots or mezzes it, in that order of choice, if the cast ends
+  before the monster reaches it. In melee it uses Quickcast for the control spell. It skips the control while its
+  nukes kill the monster before it arrives, at the rate the fight's nukes have taken its health so far (one nuke more
+  with Quickcast ready, which then goes to that nuke), if it has 60% health or more and no other monster on it. A
+  rooted or mezzed monster near it would break free at the next nuke, so it first steps back to range, on a spot clear
+  of other aggressive monsters, within its spell's range; so it does from a stunned one while hits interrupt it. In
+  melee with no clear spot it steps back 400 units straight away anyway, and never to a spot nearer the target than
+  it stands. While its target is held it keeps its spell's range, even with hits blocking its spells or too little
+  power (then its longest damage spell's range), and it never swings at a rooted or mezzed monster (its hit, or a
+  miss, would free it): it waits instead. Not while another monster that isn't held hits it, and not for 5 s after a
+  blocked step back: then it fights as before. Only single-target spells the bot has, that the monster
+  isn't immune to by the server's own rules: a monster stunned or mezzed in the last minute takes the next one for
+  half the time, then a quarter, and none under 1 s. A mez on its target only as the last escape, the monster about to
+  reach it, and only on a monster above 75% health.
+- Any bot with a control spell (casters, healers, pet classes, a Skald or a Minstrel) also controls an add: the
+  nearest other monster coming at it or hitting it that isn't held. A mez first, then a root, then a stun; no mez
+  from a pet class (its pet would hit the add and free it), and no root on an add already in melee (it still hits
+  from there). Songs that need an instrument don't count as controls (the bots carry none). It casts while the cast
+  ends before the add reaches it and no hit interrupts it, else only with Quickcast, which goes to the add before
+  the target. An instant control (a Skald's or a Minstrel's shout) goes at once, whatever the hits. A caster whose
+  target reaches it first controls the target first, but only when it would cast that control now (ready, paid for,
+  in range, and a mez only as the last escape). The add's control comes before the pet's lead and the caster's own
+  step. It faces the add while that cast is under way, checks its own line of sight to it and keeps its target.
+  After 3 casts that held nothing it stops trying on that add. A Theurgist with no control to cast casts its pets at
+  an add hitting it. A mezzed or stunned add no longer counts as on the bot for the break-off, and a control it can
+  cast at an add comes before one.
+- An Animist pulls from beside its turret, so the monster comes into the turret's reach. When the turret can't reach
+  the spot it pulls from, it releases the turret and plants a new one near the target, if the summon is ready and it
+  has the power. Its bombers count as damage spells only when their payload does damage, so it no longer casts the
+  root bombers (Spreading Vines and the like) as nukes.
+- Each cast it picks the damage spell ready now: its bolt when off its recast, else its best single-target spell,
+  else an area one, never an area one while another monster stands in its radius. It drops the low ranks a GameBot
+  drops. With none ready (a Shaman's two 20-s spells both on recast), it swings until one is.
+- Out of a fight it keeps its class's own self-buffs up: armour factor, absorb, bladeturn, ablative, damage shield,
+  damage add, stat buffs and regeneration buffs, and one chant that costs no power each pulse (so no resist chant: the
+  Paladin's cost power each pulse): the first of those kinds, but from a kill to the end of its rest a regeneration
+  chant for what it is short of, so a Skald sings its Song of Rest as it sits and its combat chant again once rested.
+  It looks every 5 s, and at once after a kill, before it sits, casting the missing
+  ones back to back; never while it sits, until its rest is done. It uses the buffs' real power, concentration and
+  recast; the server's own checks decide the rest. A buff under 2 minutes it no longer keeps up between fights: an
+  instant one (a Reaver's Surge) goes up at a fight's start instead, one with a cast time (a Spiritmaster's Benison)
+  not at all yet, and a regeneration one (a Shaman's Frigg's Cure) only while what it regenerates is short of where
+  the rest stops.
+- It picks a monster with no aggressive neighbours, none within reach of the target, of its walk in, or of the spot
+  it would fight from (its spell's range for a caster, else melee). After deaths it moves to an easier camp. It avoids
+  what killed it for 15 minutes.
+- A monster within 2,000 units that has the bot as its target counts as an attacker before its first hit, so the bot
+  stands up and fights it first. Before it sits, a bot within reach of an aggressive monster from its last search,
+  or of the spawn spot of one of its last 3 kills in the last 150 s (where that monster respawns, 80 s after the kill
+  in most of the world), walks to the nearest spot out of that reach, 1,200 units away at most.
+- Losing to two, it breaks off: below 40% health with 2 or more monsters on it, or within 3 s of a kill in a fight
+  that had 2 or more on it with 1 still on it, unless its target is down to 10% or less. Only from monsters it can
+  outrun, and only with a sprint whose lead takes it out of the fastest one's 200-unit reach: none faster than its
+  run (191), or none as fast as its sprint (248) when its endurance holds the sprint long enough to keep the fastest
+  off it for the 25 s a monster chases. It stops its fight, sprints, and runs 1,500-2,500 units straight away from
+  them to a spot clear of other aggressive monsters that it can walk to, on again from there while one still chases
+  it. A spot it was blocked on it never takes again in that run. Still chased after 30 s, or with nowhere to run, it
+  turns and fights them out. Afterwards it takes no camp there and avoids those monsters for 15 minutes, and plans a
+  new camp from where it ran to before it looks for a new target.
+- After a release it first steps out of the reach of every monster round it that would aggro. Wherever it died (at its
+  camp or on a walk), it then plans a new camp from where it died, one it can walk to from there, before it walks
+  back. It plans once the release's 10-s immunity is over: until then a player can attack no monster, so a plan found
+  none. It takes no camp it died at in the last 15 minutes while another camp that cons yellow or easier is left. From
+  its third death with no XP in between it waits 30-120 s out there, as a GameBot does, and it waits out the
+  resurrection illness there too. It pulls nothing until then, but fights back. No hold for a camp lasts over 60 s:
+  then it hunts where it is.
+- At login it also first steps out of the reach of every monster round it that would aggro, then hunts: no wait and
+  no new camp.
 - It walks on the navmesh. A bot made at a level from a spots line also trains on each level-up.
 - In a run of 3 bots or fewer, `hdbot-alb-01` also does quest 20206 (Immediate Resolution) and its class promotion.
 
-They don't group, take part in RvR or battlegrounds, buff or sing, use bows, stealth, use realm abilities, ride horses,
-or travel to sell or train.
+What they don't do yet is under [Known shortcomings](#known-shortcomings).
+
+## Known shortcomings
+
+Against the GameBots (#167), and between them and a live world. Each line goes when its fix lands.
+
+Playing:
+- **Deaths:** with the rules above (`st-deathsC`: 15 minutes, 390 level-matched bots) they die 2.1 times per
+  bot-hour, against about 1 for the PvE GameBots: melee 1.6, casters 5.2, healers 1.9, pet classes 0.9, archers 2.5.
+  On v0.37b-hearth.9 (`st-layers5`) it was 9.5. Still open:
+  - Casters die most. One that pulls from spell range keeps nuking while the monster closes, and its own swing still
+    ends a root or mez in 8% of its controls. Out-of-power caster deaths doubled (9 to 18).
+  - A caster controls the add in only 1 add fight in 6: its Quickcast has usually gone on the target before the add
+    comes.
+  - After a release, a bot dies again before its next kill as often as before (43%): the new camp's first fight is no
+    safer.
+  - A break-off often comes late (half the deaths on the run come in its first 4 s), and a bot caught on the run
+    usually dies (10 of 13).
+  - Walks don't look ahead for monsters on the route.
+- **Resting:** 49% of their time on `st-deathsC`. Rest per kill fell 2%; the share rose because they die less and
+  kill 5% more per hour. Most of it is the real cost of player regeneration. A buff cast as a bot recovers makes it sit
+  again (84 times), and a Skald stands and sits again within a second (38).
+- **Not done at all:** they don't group, buff others, take part in RvR or battlegrounds, stealth, use realm abilities
+  or ride horses (#152, #167).
+- **Ranged and songs:** they can't shoot or play. Archers fight in melee, and Bards and Minstrels have no songs: theirs
+  need an instrument (a Skald's chants don't). The level-matched kit gives no bows or instruments.
+- **Trips:** they don't travel to sell, train or buy gear (#157).
+
+Going live, without the test-world side effects:
+- **No live mode:** any value but `off` puts the server in test-world mode (above). hdc will manage both kinds of bots
+  and run player bots live (#171).
+- **Training:** a bot spends its spec points on level-up only when it was made from a spots line with a level, class
+  and race. Without one it never trains.
+- **Deaths cost more live:**
+  - A PvE death costs XP, and again at release unless the bot prays at its grave. It also costs constitution.
+  - GameBots lose nothing.
+  - At level 45 a player bot breaks even at about 0.2-0.7 deaths per hour, so live it must die about as rarely as
+    the GameBots.
+- **Bind and prayer:**
+  - A spots bot is bound at its spot.
+  - Live, a bot needs to bind at a bind stone near its camp, and to pray at its grave when it's safe.
+- **Gear:**
+  - A bot has only what it starts with, or the level-matched kit, and no jewellery.
+  - Whether it loots and wears upgrades isn't checked.
+- **Camps:** the test spots were picked to avoid orange and named monsters. A live bot's choice of camp has no such
+  filter.
 
 ## The lever and the quest rule
 
@@ -207,7 +332,34 @@ All start `PLAYER_BOT_`:
   An NPC counts once per think, under its first reason: target, attacker or pet, then quest, then the scan's (an
   aggressive monster a quest names counts as `quest`);
 - `FIGHT`, `DEATH`, `RELOCATE`, `IDLE`, `BLOCKED`: one per event. A stalled walk's `BLOCKED` line ends with `stall:`,
-  the bot's last step and state, and `queries:`, the stalled step's own navmesh queries and a fresh corridor's step;
+  the bot's last step and state, and `queries:`, the stalled step's own navmesh queries and a fresh corridor's step.
+  `FIGHT` ends with `buffs=` (its self-buffs up when the fight began), `petCasts=` (a Theurgist's pets cast at the
+  target), `waits=` (the thinks a cast waited for its own swing's interrupt), `ctl=` (a caster's control casts),
+  `kites=` (its steps back), `ctlBroken=` (the roots and mezzes on its target its own swing ended), `addCtl=` (its
+  control casts at an add, in `ctl=` too), `addAt=` (the seconds into the fight a second monster first hit the bot or
+  came at it; 0 when one was on it by the fight's first think in reach), `addHp=` (the bot's health then), `breakOff=`
+  (1: a break-off dropped the fight), `engageDist=` (its distance to the target at that first think) and `crowd=` (the
+  potential adds round the target and along the walk in when it was picked; -1 for a defence or a monster coming at
+  it). The add is seen from the bot's attacker list each think (only a live monster on the bot, not the last fight's
+  dead target) and, for a bot with a control or a Theurgist's pets, from a scan every 2 s. `DEATH` ends with
+  `again=` (no kill since its last release), `sinceRelease=` (the seconds since that release, -1 if none since login)
+  and `ill=` (the resurrection illness on when the fatal fight began), then the fatal fight's `ctl=`, `kites=`,
+  `casts=`, `qc=`, `waits=`, `ctlBroken=`, `addCtl=`, `addAt=`, `addHp=` and `engageDist=` as `FIGHT` gives them (-1
+  out of a fight), and `breakOff=` (1: it died running from a break-off; out of a fight then, as the break-off dropped
+  it, so that fight's own fields are on its `FIGHT result=dropped breakOff=1` line).
+  `BLOCKED`'s `walk=` is `target`, `roam`, `clear` (the step out after a release), `rest`, `kite`, `turret` or
+  `breakoff`. `RELOCATE` after a death (`reason=died`) ends with `sinceRelease=`, the milliseconds since the release;
+  after a break-off its `reason=` is `brokeoff`. A break-off drops its fight (`FIGHT result=dropped`);
+- `BREAKOFF`: one per break-off, when it ends: the bot's `hp=`, `end=` (endurance) and `attackers=` when it broke off,
+  `sec=`, the seconds it ran, and `outcome=`: `shook` (none still after it), `fought` (still chased after 30 s, or
+  nowhere to run) or `died`;
+- `BACK`: at the first fight after a release, `sec=`, the seconds since the release, and of those `stepOut=` (the step
+  out of reach), `hold=` (the back-off, the illness or the hold for the replan) and `walk=` (roaming, the walk back
+  among it); then `replan=`: `moved` (a camp planned since), `none` (owed, none planned) or `notOwed`;
+- `REST`: one per rest, when the bot stands: `sec=`, the seconds it sat, `why=`: `recovered`, `hit`, `incoming` (a
+  monster coming at it), `heal`, `pet` or `buff` (a cast on itself before it had recovered; after, `recovered`),
+  `died`, or `other`; then `hp=` and `mp=`, its health and power when it sat (`mp=100` with no power pool), and
+  `respawn=`, the spawn spots of its recent kills its rest spot was chosen against;
 - `FLOOR_STEP`: a step onto the nearest floor, with where from and to and why;
 - `REPLAN`: a stalled walk planned again, with where, the goal, the count in that walk and the stall's first step;
 - `ERRAND`: the quest bot's steps;

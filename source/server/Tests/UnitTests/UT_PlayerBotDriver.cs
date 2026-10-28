@@ -145,13 +145,41 @@ public sealed class UT_PlayerBotDriver
 
     // DEATHS.md A4: a bot whose searches find monsters in reach but none under its cap takes none and, 30 s on, moves to
     // a camp that fits; one that has reached no target for 2 minutes has outgrown its ground. The cap's reason wins.
-    [TestCase(0L, 0L, 1_000_000L, null)]
-    [TestCase(10_000L, 0L, 129_999L, null)] [TestCase(10_000L, 0L, 130_000L, "outgrown")]
-    [TestCase(0L, 100_000L, 129_999L, null)] [TestCase(0L, 100_000L, 130_000L, "capped")]
-    [TestCase(10_000L, 100_000L, 130_000L, "capped")]
+    // A death (#167 F4; anywhere, C1b) owes a relocation at once, before the capped and outgrown clocks. None while the
+    // release's immunity lasts (#167 C1): every monster then fails IsAttackable (AbstractServerRules.cs:385-392), and the
+    // death's replan found none (279 of 312 st-deathsB died replans: none checked=0, all 10-19 s after the death). A
+    // break-off (#167 C2) owes one too, as brokeoff.
+    [TestCase(0L, 0L, 1_000_000L, null, false, null)]
+    [TestCase(10_000L, 0L, 129_999L, null, false, null)] [TestCase(10_000L, 0L, 130_000L, null, false, "outgrown")]
+    [TestCase(0L, 100_000L, 129_999L, null, false, null)] [TestCase(0L, 100_000L, 130_000L, null, false, "capped")]
+    [TestCase(10_000L, 100_000L, 130_000L, null, false, "capped")]
+    [TestCase(0L, 0L, 1_000_000L, "died", false, "died")] [TestCase(10_000L, 100_000L, 130_000L, "died", false, "died")]
+    [TestCase(0L, 0L, 1_000_000L, "died", true, null)] [TestCase(10_000L, 100_000L, 130_000L, "died", true, null)]
+    [TestCase(0L, 100_000L, 130_000L, null, true, null)]
+    [TestCase(0L, 0L, 1_000_000L, "brokeoff", false, "brokeoff")] [TestCase(10_000L, 100_000L, 130_000L, "brokeoff", false, "brokeoff")]
     public void A_capped_bot_relocates_after_30_s_and_an_outgrown_one_after_2_minutes(long roamingSince, long cappedSince,
-        long now, string reason) =>
-        Assert.That(PlayerBotDriver.RelocateReason(roamingSince, cappedSince, now), Is.EqualTo(reason));
+        long now, string owed, bool immune, string reason) =>
+        Assert.That(PlayerBotDriver.RelocateReason(roamingSince, cappedSince, now, owed, immune), Is.EqualTo(reason));
+
+    // A player the server holds immune (GamePlayer.cs:12284-12287): the release's 10 s.
+    private sealed class ImmunePlayer : GamePlayer
+    {
+        private ImmunePlayer() : base(null, null) { }
+        public override bool IsInvulnerableToAttack => true;
+    }
+
+    // The replan reads the bot's own immunity where it runs (RelocateIfOutgrown; the review of 9aacd69: with that term put
+    // back to false no test failed, the rows above call RelocateReason alone): a bot still immune after its release
+    // keeps its death's replan owed and plans nothing yet; it no longer falls back to the bind (ReplanOwed none).
+    [Test]
+    public void A_bot_still_immune_after_its_release_keeps_its_replan_for_after()
+    {
+        var player = (ImmunePlayer)RuntimeHelpers.GetUninitializedObject(typeof(ImmunePlayer));
+        var state = new PlayerBotState(Player(null)) { ReplanOwed = PlayerBotDriver.Died };
+        typeof(PlayerBotDriver).GetMethod("RelocateIfOutgrown", BindingFlags.Static | BindingFlags.NonPublic)!
+            .Invoke(null, [state, player, 20_000L]);
+        Assert.That((state.ReplanOwed, state.NextRelocateTick), Is.EqualTo((PlayerBotDriver.Died, 0L)));
+    }
 
     // The capped clock: it starts at the first search that passed a monster over for the cap and found nothing, keeps
     // running while that lasts, and stops at a search that found a target or nothing at all to pass over.
@@ -235,19 +263,40 @@ public sealed class UT_PlayerBotDriver
 
     // Where the bot died, its failed camp, is remembered for a GameBot's failure memory, 15 minutes, every one (its
     // _recentFailedSoloCamps, AWBC:3246, :3803-3804), not forgotten at the next relocation; one whose time is up goes
-    // at the next death.
+    // at the next death. Each is its region's (#167 F4): kept across a region change, and only its own region's count.
     [Test]
     public void Failed_camps_are_remembered_for_15_minutes()
     {
-        var failed = new List<(Vector3 At, long Until)>();
-        PlayerBotDriver.RememberFailedCamp(failed, new Vector3(1, 0, 0), 1_000);
-        PlayerBotDriver.RememberFailedCamp(failed, new Vector3(2, 0, 0), 600_000);
-        Assert.That(PlayerBotDriver.FailedCamps(failed, 900_999),
+        var failed = new List<(ushort Region, Vector3 At, long Until)>();
+        PlayerBotDriver.RememberFailedCamp(failed, 51, new Vector3(1, 0, 0), 1_000);
+        PlayerBotDriver.RememberFailedCamp(failed, 51, new Vector3(2, 0, 0), 600_000);
+        PlayerBotDriver.RememberFailedCamp(failed, 100, new Vector3(5, 0, 0), 600_000);
+        Assert.That(PlayerBotDriver.FailedCamps(failed, 51, 900_999),
             Is.EqualTo(new[] { new Vector3(1, 0, 0), new Vector3(2, 0, 0) }));
-        Assert.That(PlayerBotDriver.FailedCamps(failed, 901_000), Is.EqualTo(new[] { new Vector3(2, 0, 0) }));
-        PlayerBotDriver.RememberFailedCamp(failed, new Vector3(3, 0, 0), 901_000);
-        Assert.That(failed.Select(f => f.At), Is.EqualTo(new[] { new Vector3(2, 0, 0), new Vector3(3, 0, 0) }),
-            "the expired camp went");
+        Assert.That(PlayerBotDriver.FailedCamps(failed, 51, 901_000), Is.EqualTo(new[] { new Vector3(2, 0, 0) }));
+        Assert.That(PlayerBotDriver.FailedCamps(failed, 100, 901_000), Is.EqualTo(new[] { new Vector3(5, 0, 0) }),
+            "another region's camp, kept");
+        PlayerBotDriver.RememberFailedCamp(failed, 51, new Vector3(3, 0, 0), 901_000);
+        Assert.That(failed.Select(f => f.At), Is.EqualTo(new[] { new Vector3(2, 0, 0), new Vector3(5, 0, 0),
+            new Vector3(3, 0, 0) }), "the expired camp went");
+    }
+
+    // A region change (a release to a bind in another region, a re-entry) starts the hunt afresh there but keeps the
+    // failed camps (#167 F4): a bot that released to another region and came back planned into the camp it died at. The
+    // review of 77ba437: with the old Clear put back, no test failed.
+    [Test]
+    public void A_region_change_starts_the_hunt_afresh_but_keeps_the_failed_camps()
+    {
+        var state = new PlayerBotState(Player(null));
+        PlayerBotDriver.RememberFailedCamp(state.FailedCamps, 51, new Vector3(1, 0, 0), 1_000);
+        state.Target = Player(null);
+        state.RoamDestination = new Vector3(1, 2, 3);
+        (state.RoamingSince, state.CappedSince, state.FallbackCap, state.HuntAvoided) = (5, 6, ConColor.BLUE, true);
+        PlayerBotDriver.ResetOnRegionChange(state, 100);
+        Assert.That((state.LastRegion, state.Target, state.RoamDestination, state.RoamingSince, state.CappedSince,
+            state.FallbackCap, state.HuntAvoided), Is.EqualTo(((ushort)100, (GameLiving)null, (Vector3?)null, 0L, 0L,
+            (ConColor?)null, false)));
+        Assert.That(state.FailedCamps.Select(f => (f.Region, f.At)), Is.EqualTo(new[] { ((ushort)51, new Vector3(1, 0, 0)) }));
     }
 
     // A capped bot that cannot move its leash (a lever spot bot, out of its anchor region or off the mesh, or no camp
@@ -261,26 +310,38 @@ public sealed class UT_PlayerBotDriver
         Assert.That(PlayerBotDriver.FallbackInPlace(reason, safest), Is.EqualTo(cap));
 
     // A capped bot stands while it waits to move its leash, unless it walks to its anchor; one that cannot move it now
-    // (FallbackInPlace) roams as before.
-    [TestCase(true, 5_000L, false, true)] [TestCase(true, 0L, false, false)] [TestCase(true, 5_000L, true, false)]
-    [TestCase(false, 5_000L, false, false)]
-    public void A_capped_bot_holds_only_while_it_can_relocate(bool canRelocate, long cappedSince, bool walkingToAnchor,
-        bool holds) =>
-        Assert.That(PlayerBotDriver.HoldsForRelocation(canRelocate, cappedSince, walkingToAnchor), Is.EqualTo(holds));
+    // (FallbackInPlace) roams as before. So does one owed a relocation after a death (#167 F4), from its
+    // release. Neither holds past 60 s: with no camp planned by then it hunts where it is, under its cap (FallbackInPlace
+    // has no cap for a death's relocation, so nothing else would end that hold).
+    [TestCase(true, 5_000L, 0L, false, 5_000L, true)] [TestCase(true, 0L, 0L, false, 5_000L, false)]
+    [TestCase(true, 5_000L, 0L, true, 5_000L, false)] [TestCase(false, 5_000L, 0L, false, 5_000L, false)]
+    [TestCase(true, 5_000L, 0L, false, 64_999L, true)] [TestCase(true, 5_000L, 0L, false, 65_000L, false)]
+    [TestCase(true, 0L, 10_000L, false, 69_999L, true)] [TestCase(true, 0L, 10_000L, false, 70_000L, false)]
+    [TestCase(true, 0L, 10_000L, true, 20_000L, false)] [TestCase(false, 0L, 10_000L, false, 20_000L, false)]
+    [TestCase(true, 5_000L, 10_000L, false, 69_999L, true)]
+    public void A_capped_bot_holds_only_while_it_can_relocate(bool canRelocate, long cappedSince, long replanSince,
+        bool walkingToAnchor, long now, bool holds) =>
+        Assert.That(PlayerBotDriver.HoldsForRelocation(canRelocate, cappedSince, replanSince, walkingToAnchor, now),
+            Is.EqualTo(holds));
 
     // PLAYER_BOT_RELOCATE's fields stay as they were (runs/legcheck.py reads bot= and to or none); its reason and, for a
-    // move, the fallback camp's con (none: the death cap) come last.
+    // move, the fallback camp's con (none: the death cap) come last; after a death, the milliseconds since the release
+    // (#167 C1: sinceRelease=, the replan waits out the immunity).
     [Test]
     public void A_relocation_line_gives_its_reason_last()
     {
         Assert.That(PlayerBotDriver.RelocateLine("Pbotaaaaz", 34, new Vector3(572911.4f, 457576.6f, 2000), new Vector3(579794,
-                456080, 2216.6f), 7040, "silver oaken fellwood", 33, 51, PlayerBotDriver.Capped, ConColor.BLUE),
+                456080, 2216.6f), 7040, "silver oaken fellwood", 33, 51, PlayerBotDriver.Capped, ConColor.BLUE, 0),
             Is.EqualTo("PLAYER_BOT_RELOCATE bot=Pbotaaaaz level=34 from=(572911,457577) to=(579794,456080,2217) distance=7040 " +
                        "monster=\"silver oaken fellwood\" monsterLevel=33 zone=51 reason=capped fallback=BLUE"));
         Assert.That(PlayerBotDriver.RelocateLine("Pbotaaaaz", 34, Vector3.Zero, Vector3.One, 1, "m", 30, 51,
-            PlayerBotDriver.Outgrown, null), Does.EndWith(" zone=51 reason=outgrown fallback=-"));
-        Assert.That(PlayerBotDriver.RelocateNoneLine("Pbotaaaaz", 34, 3, 51, PlayerBotDriver.Capped),
+            PlayerBotDriver.Outgrown, null, 0), Does.EndWith(" zone=51 reason=outgrown fallback=-"));
+        Assert.That(PlayerBotDriver.RelocateNoneLine("Pbotaaaaz", 34, 3, 51, PlayerBotDriver.Capped, 0),
             Is.EqualTo("PLAYER_BOT_RELOCATE bot=Pbotaaaaz level=34 none checked=3 zone=51 reason=capped"));
+        Assert.That(PlayerBotDriver.RelocateLine("Pbotaaaaz", 34, Vector3.Zero, Vector3.One, 1, "m", 30, 51,
+            PlayerBotDriver.Died, null, 10_250), Does.EndWith(" zone=51 reason=died fallback=- sinceRelease=10250"));
+        Assert.That(PlayerBotDriver.RelocateNoneLine("Pbotaaaaz", 34, 0, 51, PlayerBotDriver.Died, 10_250),
+            Is.EqualTo("PLAYER_BOT_RELOCATE bot=Pbotaaaaz level=34 none checked=0 zone=51 reason=died sinceRelease=10250"));
     }
 
     // --- the killer memory (DEATHS.md A3) ---
@@ -333,6 +394,525 @@ public sealed class UT_PlayerBotDriver
         Assert.That(PlayerBotDriver.PlanRelocation(fallback[..2], Vector3.Zero, ConColor.GREEN, ConColor.YELLOW, null,
             new HashSet<string>(), 5), Is.EqualTo((new[] { "s1", "s2" }, (ConColor?)ConColor.BLUE, true)),
             "a stale camp when no fresh one is left");
+    }
+
+    // --- the recovery from a death (#167 F4) ---
+
+    // A death owes a replan before the walk back when the bot is on no task and can move its leash (no lever spot bot,
+    // in its anchor's region: CanRelocate). The review of 77ba437: with it always false, no test failed. Wherever it
+    // died (#167 C1b): a death more than LeashRadius + RoamRadius from its anchor (on a walk, a relocation) owed none,
+    // and the bot walked back past the camp it died at; those lives held 44 of st-deathsB's 146 again deaths.
+    [TestCase(false, true, true)] [TestCase(true, true, false)] [TestCase(false, false, false)] [TestCase(true, false, false)]
+    public void A_death_owes_a_replan_wherever_it_died_unless_on_a_task_or_held(bool onTask, bool canRelocate, bool owes) =>
+        Assert.That(PlayerBotDriver.OwesReplan(onTask, canRelocate), Is.EqualTo(owes));
+
+    // The replan a death owes as HandleDeath sets it, from the death spot and the anchor (the review of 9aacd69: with
+    // the old LeashRadius + RoamRadius limit put back at the call no test failed): died 5,401 or 9,322 units from its
+    // anchor (on a walk, a relocation) it owes one as at its camp; on a task or a lever spot bot, none.
+    [TestCase(false, true, 0f, "died")] [TestCase(false, true, 5_401f, "died")] [TestCase(false, true, 9_322f, "died")]
+    [TestCase(true, true, 5_401f, null)] [TestCase(false, false, 9_322f, null)] [TestCase(true, false, 0f, null)]
+    public void A_deaths_replan_is_owed_however_far_from_its_anchor_it_died(bool onTask, bool canRelocate, float away,
+        string owed) =>
+        Assert.That(PlayerBotDriver.ReplanOwedAfterDeath(onTask, canRelocate, new Vector3(1_000 + away, 2_000, 0),
+            new Vector3(1_000, 2_000, 0)), Is.EqualTo(owed));
+
+    // The plan's origin: after a death the spot it died at, not where it stands (its bind: 5,808 units off at the median
+    // in st-deathsA, the review of 77ba437); a capped or outgrown bot plans from where it is.
+    [Test]
+    public void A_replan_after_a_death_starts_from_the_death_spot()
+    {
+        Vector3 spot = new(1_000, 2_000, 30), here = new(6_000, 5_000, 0);
+        Assert.That(PlayerBotDriver.RelocationOrigin(PlayerBotDriver.Died, spot, here), Is.EqualTo(spot));
+        Assert.That(PlayerBotDriver.RelocationOrigin(PlayerBotDriver.Capped, spot, here), Is.EqualTo(here));
+        Assert.That(PlayerBotDriver.RelocationOrigin(PlayerBotDriver.Outgrown, spot, here), Is.EqualTo(here));
+        Assert.That(PlayerBotDriver.RelocationOrigin(PlayerBotDriver.BrokeOff, spot, here), Is.EqualTo(here), "#167 C2");
+    }
+
+    // The corridor test's origin (a corridor is one zone's, PlayerTravelPath.cs:75-81): where the bot stands in the plan's
+    // zone; after a death, with the bot at a bind in another zone of its region, the death spot, which lies in the plan's
+    // zone (the review of 77ba437: the test was skipped then, and the anchor moved to a camp across a cliff from it);
+    // none with no navmesh there.
+    [Test]
+    public void A_replans_corridors_start_from_the_death_spot_when_the_bot_is_in_another_zone()
+    {
+        Vector3 spot = new(1_000, 2_000, 30), here = new(6_000, 5_000, 0);
+        Assert.That(PlayerBotDriver.CorridorOrigin(PlayerBotDriver.Died, true, true, spot, here), Is.EqualTo(here));
+        Assert.That(PlayerBotDriver.CorridorOrigin(PlayerBotDriver.Died, true, false, spot, here), Is.EqualTo(spot));
+        Assert.That(PlayerBotDriver.CorridorOrigin(PlayerBotDriver.Capped, true, true, spot, here), Is.EqualTo(here));
+        Assert.That(PlayerBotDriver.CorridorOrigin(PlayerBotDriver.Died, false, false, spot, here), Is.Null, "no navmesh");
+        Assert.That(PlayerBotDriver.CorridorOrigin(PlayerBotDriver.Died, false, true, spot, here), Is.Null);
+        Assert.That(PlayerBotDriver.CorridorOrigin(PlayerBotDriver.BrokeOff, true, true, spot, here), Is.EqualTo(here));
+    }
+
+    // The fit pass bars a failed camp too, not only the fallback (st-deathsA: after a relocation the bots walked back to
+    // the camp they died at, the nearest that fitted): with the camp it died at and one 3,000 units on that both fit, the
+    // other one.
+    [Test]
+    public void A_relocation_after_a_death_takes_another_camp_that_fits_not_the_one_it_died_at()
+    {
+        var monsters = new[]
+        {
+            Monster("a1", 0, ConColor.GREEN), Monster("a2", 100, ConColor.GREEN), Monster("a3", 200, ConColor.GREEN),
+            Monster("b1", 3_000, ConColor.GREEN), Monster("b2", 3_100, ConColor.GREEN), Monster("b3", 3_200, ConColor.GREEN),
+        };
+        Vector3[] failed = [new(50, 0, 0)];
+        Assert.That(PlayerBotDriver.PlanRelocation(monsters, Vector3.Zero, ConColor.GREEN, ConColor.YELLOW, failed,
+            new HashSet<string>(), 5), Is.EqualTo((new[] { "b1", "b2", "b3" }, (ConColor?)null, false)));
+        Assert.That(PlayerBotDriver.PlanRelocation(monsters[..3], Vector3.Zero, ConColor.GREEN, ConColor.YELLOW, failed,
+            new HashSet<string>(), 5), Is.EqualTo((new[] { "a1", "a2", "a3" }, (ConColor?)ConColor.GREEN, false)),
+            "the failed camp when it is the only one, as the fallback takes it");
+    }
+
+    // The adds rule's ring, round the bot itself: a monster that would aggro (IsPotentialAdd) reaches its aggro range +
+    // AddMargin; with an aggro range of 500, a spot 300 units off is in its reach and one 800 off is not.
+    [TestCase(300f, true)] [TestCase(700f, true)] [TestCase(701f, false)] [TestCase(800f, false)]
+    public void A_spot_within_an_adds_aggro_range_and_200_is_in_its_reach(float x, bool inReach) =>
+        Assert.That(PlayerBotDriver.InAddReach(Vector3.Zero, new List<(string, Vector3, int)> { ("add", new(x, 0, 0), 500) }),
+            Is.EqualTo(inReach));
+
+    // The clear spots nearest first, and the spot a bot in reach steps to: the nearest out of every reach; none, here.
+    [Test]
+    public void A_bot_in_an_adds_reach_steps_to_the_nearest_clear_spot()
+    {
+        var adds = new List<(string, Vector3, int)> { ("a", new(0, 0, 0), 500), ("b", new(1_200, 0, 0), 500) };
+        Vector3 here = new(100, 0, 0);
+        Vector3[] candidates = [new(600, 0, 0), new(100, -1_500, 0), new(-900, 0, 0), new(100, 900, 0)];
+        Assert.That(PlayerBotDriver.ClearSpots(here, candidates, adds),
+            Is.EqualTo(new[] { new Vector3(100, 900, 0), new Vector3(-900, 0, 0), new Vector3(100, -1_500, 0) }),
+            "(600,0) is in both reaches");
+        Assert.That(PlayerBotDriver.RestSpot(here, candidates, adds), Is.EqualTo(new Vector3(100, 900, 0)));
+        Assert.That(PlayerBotDriver.RestSpot(here, [new Vector3(600, 0, 0)], adds), Is.EqualTo(here));
+    }
+
+    // The candidates: directions points on each ring round the bot, at its height, the first along +X.
+    [Test]
+    public void The_candidate_spots_lie_on_rings_round_the_bot()
+    {
+        Vector3[] points = PlayerBotDriver.RingPoints(new Vector3(1_000, 2_000, 30), [500, 900], 4).ToArray();
+        Vector3[] expected = [new(1_500, 2_000, 30), new(1_000, 2_500, 30), new(500, 2_000, 30), new(1_000, 1_500, 30),
+            new(1_900, 2_000, 30), new(1_000, 2_900, 30), new(100, 2_000, 30), new(1_000, 1_100, 30)];
+        Assert.That(points.Length, Is.EqualTo(expected.Length));
+        for (int i = 0; i < expected.Length; i++)
+            Assert.That(Vector3.Distance(points[i], expected[i]), Is.LessThan(0.01f), $"point {i}: {points[i]}");
+    }
+
+    // After a release: it fights back what hits it; else it steps out of reach, then plans the relocation it owes (any
+    // death, C1b), then waits out its back-off (the GameBot's, from the third death with no XP:
+    // AutonomousDeathRecoveryPolicy) and the resurrection illness; then the recovery is over.
+    [TestCase(true, true, true, true, true, PlayerBotRecovery.Fight)]
+    [TestCase(false, true, true, true, true, PlayerBotRecovery.StepOut)]
+    [TestCase(false, false, true, true, true, PlayerBotRecovery.Replan)]
+    [TestCase(false, false, false, true, false, PlayerBotRecovery.Wait)]
+    [TestCase(false, false, false, false, true, PlayerBotRecovery.Wait)]
+    [TestCase(false, false, false, false, false, PlayerBotRecovery.Done)]
+    public void After_a_release_a_bot_steps_out_of_reach_then_replans_then_backs_off(bool attacked, bool stepsOut,
+        bool replanOwed, bool backingOff, bool ill, PlayerBotRecovery step) =>
+        Assert.That(PlayerBotDriver.AfterReleaseStep(attacked, stepsOut, replanOwed, backingOff, ill), Is.EqualTo(step));
+
+    // #167 C6: a login's first life steps out of reach too (73 of st-deathsB's 370 logins died in their first fight, 37
+    // of the 42 login-life deaths with adds within 60 s of the login: the test spots are camp centres), with no back-off
+    // and no replan; a life after a release does all three (#167 F4); a later think starts none.
+    [TestCase(true, false, true, true)] [TestCase(false, true, true, false)] [TestCase(false, false, false, false)]
+    [TestCase(true, true, true, true)]
+    public void A_login_steps_out_of_reach_as_a_release_does_with_no_back_off(bool afterDeath, bool firstLife,
+        bool stepOut, bool backOff) =>
+        Assert.That(PlayerBotDriver.LifeStart(afterDeath, firstLife), Is.EqualTo((stepOut, backOff)));
+
+    // Its wiring: the login's life starts the step out only (no release time, so DEATH again= and sinceRelease= stay the
+    // release's); the release's the back-off and the replan's hold too.
+    [Test]
+    public void A_new_life_starts_the_step_out_at_login_and_the_whole_recovery_after_a_release()
+    {
+        var login = new PlayerBotState(Player(null));
+        PlayerBotDriver.StartLife(login, 5_000);
+        Assert.That((login.AfterRelease, login.RecoverUntil, login.ReleasedAt, login.ReplanSince, login.AliveSince),
+            Is.EqualTo((true, 5_000L, 0L, 0L, 5_000L)));
+        var released = new PlayerBotState(Player(null)) { AliveSince = 1_000, DeathRecorded = true,
+            ReplanOwed = PlayerBotDriver.Died, NoXpDeaths = 3 };
+        PlayerBotDriver.StartLife(released, 9_000);
+        Assert.That((released.AfterRelease, released.RecoverUntil, released.ReleasedAt, released.ReplanSince,
+            released.AliveSince), Is.EqualTo((true, 39_000L, 9_000L, 9_000L, 9_000L)), "the third death with no XP: 30 s");
+        var later = new PlayerBotState(Player(null)) { AliveSince = 1_000 };
+        PlayerBotDriver.StartLife(later, 9_000);
+        Assert.That((later.AfterRelease, later.AliveSince), Is.EqualTo((false, 1_000L)), "no new life");
+    }
+
+    // PLAYER_BOT_BACK (#167 C1, the verifier's logging): from a release to the first fight, the seconds in all and those
+    // stepping out, held and walking, and the replan: moved (a camp planned since the release), none (owed, no camp
+    // planned) or notOwed. The 40 s more from a death to the next fight in st-deathsB was not the failed replan.
+    [Test]
+    public void The_way_back_line_splits_the_time_from_a_release_to_the_first_fight() =>
+        Assert.That(PlayerBotDriverReport.FormatBack("Pbotaaaaz", 34, 81, 6, 42, 20, "moved"),
+            Is.EqualTo("PLAYER_BOT_BACK bot=Pbotaaaaz level=34 sec=81 stepOut=6 hold=42 walk=20 replan=moved"));
+
+    [TestCase(false, false, "notOwed")] [TestCase(false, true, "notOwed")]
+    [TestCase(true, true, "moved")] [TestCase(true, false, "none")]
+    public void The_way_back_gives_the_replan_owed_at_the_release(bool owed, bool moved, string replan) =>
+        Assert.That(PlayerBotDriver.BackReplan(owed, moved), Is.EqualTo(replan));
+
+    // A release starts the way back's count afresh (the replan owed then, nothing moved, no time in any phase); a login
+    // starts none: no release, no line.
+    [Test]
+    public void A_release_starts_the_way_back_and_a_login_does_not()
+    {
+        var released = new PlayerBotState(Player(null)) { AliveSince = 1_000, DeathRecorded = true,
+            ReplanOwed = PlayerBotDriver.Died, BackMoved = true, BackStepOutMs = 5_000, BackHoldMs = 250, BackWalkMs = 500 };
+        PlayerBotDriver.StartLife(released, 9_000);
+        Assert.That((released.BackPending, released.BackOwed, released.BackMoved, released.BackStepOutMs,
+            released.BackHoldMs, released.BackWalkMs), Is.EqualTo((true, true, false, 0L, 0L, 0L)));
+        var login = new PlayerBotState(Player(null));
+        PlayerBotDriver.StartLife(login, 5_000);
+        Assert.That(login.BackPending, Is.False);
+    }
+
+    // A camp planned (PlanCamp, RelocateIfOutgrown's move) after a death sets BACK replan=moved; a capped or outgrown
+    // move doesn't. Either way the relocation owed is planned (none owed after), the leash and the walk go to the spot,
+    // the capped clock starts afresh. The review of 9aacd69: with BackMoved's line dropped no test failed.
+    [TestCase("died", true)] [TestCase("brokeoff", false)] [TestCase("capped", false)]
+    public void A_planned_camp_ends_the_replan_owed_and_counts_for_the_way_back_after_a_death(string reason, bool moved)
+    {
+        var state = new PlayerBotState(Player(null)) { ReplanOwed = reason == "capped" ? null : reason,
+            ReplanSince = 4_000, CappedSince = 3_000, BackOwed = true };
+        Vector3 spot = new(5_000, 6_000, 70);
+        PlayerBotDriver.PlanCamp(state, spot, ConColor.BLUE, stale: true, reason);
+        Assert.That((state.Anchor, state.RoamDestination, state.FallbackCap, state.HuntAvoided, state.CappedSince),
+            Is.EqualTo((spot, (Vector3?)spot, (ConColor?)ConColor.BLUE, true, 0L)));
+        Assert.That((state.ReplanOwed, state.ReplanSince, state.BackMoved), Is.EqualTo(((string)null, 0L, moved)));
+    }
+
+    // The fight's first think in reach (OpenFight) starts its counts afresh, ends the kill's second-monster case (C2) and
+    // gives BACK once since the release: the review of 9aacd69, with Engage's ReportBack dropped no test failed.
+    [Test]
+    public void A_fights_first_think_starts_its_counts_and_gives_the_way_back_once()
+    {
+        var state = new PlayerBotState(Player(null)) { BackPending = true, KilledWithAdds = true, ControlTries = 3,
+            FightCasts = 4, FightAdd = (2, 50), NextAddScanTick = 9_000, NextKiteTick = 9_000, TargetHeldBreaks = true };
+        Assert.That(PlayerBotDriver.OpenFight(state, 10_000, 90, 60, 1_420, 100), Is.True, "the first fight since a release");
+        Assert.That((state.BackPending, state.KilledWithAdds, state.ControlTries, state.FightCasts, state.FightAdd),
+            Is.EqualTo((false, false, 0, 0, (-1, -1))));
+        Assert.That((state.EngagedSince, state.EngageHealth, state.EngageMana, state.EngageDistance, state.EngageTargetHealth),
+            Is.EqualTo((10_000L, (byte)90, (byte)60, 1_420, (byte)100)));
+        Assert.That((state.NextAddScanTick, state.NextKiteTick, state.TargetHeldBreaks), Is.EqualTo((0L, 0L, false)));
+        Assert.That(PlayerBotDriver.OpenFight(state, 30_000, 90, 60, 1_420, 100), Is.False, "the next one");
+    }
+
+    // --- the break-off when losing to two (#167 C2) ---
+
+    // It breaks off with 2 or more monsters on it, or right after a kill in a fight that had 2 or more on it with 1 still
+    // on (the second-monster case, k12's rule at the kill), below 40% health, its target (at the kill: the one still on
+    // it) above 10%, no control ready for the add (C4), and only from chasers it outruns. One monster in an ordinary
+    // fight, it fights on.
+    [TestCase(2, false, (byte)39, (byte)50, false, true, true)]
+    [TestCase(2, false, (byte)40, (byte)50, false, true, false)]
+    [TestCase(1, false, (byte)20, (byte)50, false, true, false)]
+    [TestCase(2, false, (byte)39, (byte)10, false, true, false)] [TestCase(2, false, (byte)39, (byte)11, false, true, true)]
+    [TestCase(2, false, (byte)39, (byte)50, true, true, false)]
+    [TestCase(2, false, (byte)39, (byte)50, false, false, false)]
+    [TestCase(3, false, (byte)10, (byte)90, false, true, true)]
+    [TestCase(1, true, (byte)39, (byte)100, false, true, true)] [TestCase(1, true, (byte)40, (byte)100, false, true, false)]
+    [TestCase(0, true, (byte)20, (byte)100, false, true, false)]
+    public void A_bot_losing_to_two_breaks_off(int monstersOnBot, bool addFight, byte health, byte targetHealth,
+        bool addControlReady, bool outruns, bool breaksOff) =>
+        Assert.That(PlayerBotDriver.BreaksOff(monstersOnBot, addFight, health, targetHealth, addControlReady, outruns),
+            Is.EqualTo(breaksOff));
+
+    // It outruns a chaser no faster than its run (191, GamePlayer.cs:8250; enable_pve_speed is off in the world DB), or
+    // one under its sprint (1.3 x 191 = 248, MaxSpeedCalculator.cs:25) while the sprint's lead, 57 units a second, holds
+    // it off for the 25 s a monster chases after its last swing (StandardMobState.cs:89, :121): S x 57 >= 25 x (v - 191).
+    // The review of 9aacd69: either way the sprint's lead must clear the chaser's melee reach first, S x (248 - v) above
+    // 200 (MeleeAttackRange, GameLiving.cs:303), and it needs a sprint (the old canSprint). With none (endurance 10 or
+    // less) the bot turned its back on a 191 or 185 chaser that started in its reach, which swung at its back for 30 s; a
+    // 247 one gains 99 units on a 99-s sprint, a 200 one 192 on a 4-s one.
+    [TestCase(191, 0, false)] [TestCase(185, 0, false)] [TestCase(150, 0, false)] [TestCase(191, 4, true)]
+    [TestCase(191, 3, false)] [TestCase(150, 3, true)] [TestCase(150, 2, false)]
+    [TestCase(220, 13, true)] [TestCase(220, 12, false)]
+    [TestCase(248, 99, false)] [TestCase(247, 99, false)] [TestCase(200, 5, true)] [TestCase(200, 4, false)]
+    [TestCase(200, 3, false)] [TestCase(200, int.MaxValue, true)]
+    public void A_bot_outruns_a_chaser_while_its_sprint_lasts(int fastestSpeed, int sprintSeconds, bool outruns) =>
+        Assert.That(PlayerBotDriver.Outruns(fastestSpeed, sprintSeconds), Is.EqualTo(outruns));
+
+    // The sprint's seconds, at the least, from the bot's endurance and its real cost (GamePlayer.cs:2393-2413): each
+    // second's regeneration (no base while moving or in combat, ClassicRestRegeneration.cs:12-15: buffs and items only)
+    // less the sprint's 5 (less Long Wind's), scaled by the fatigue consumption above 1%; the sprint ends at 5 endurance
+    // or less (GamePlayer.cs:2420-2423, SprintECSEffect.cs) and doesn't start at 10 or less (GamePlayer.cs:8633). A cost
+    // of 0 or less never ends it.
+    [TestCase(100, 0, 100, 5, 18)] [TestCase(11, 0, 100, 5, 1)] [TestCase(10, 0, 100, 5, 0)] [TestCase(50, 0, 100, 5, 8)]
+    [TestCase(100, 2, 100, 5, 31)] [TestCase(100, 0, 50, 5, 47)] [TestCase(100, 5, 100, 5, int.MaxValue)]
+    [TestCase(100, 0, 100, 4, 23)]
+    public void A_sprint_lasts_while_the_endurance_pays_for_it(int endurance, int regeneration, int fatigueConsumption,
+        int longWind, int seconds) =>
+        Assert.That(PlayerBotDriver.SprintSeconds(endurance, regeneration, fatigueConsumption, longWind), Is.EqualTo(seconds));
+
+    // Where it runs: ahead of straight away from its chasers (a dot product above 0, so never square to them), out of
+    // every other monster's reach, the farthest from the nearest chaser; none, null.
+    [Test]
+    public void A_break_off_runs_ahead_away_from_the_chasers_and_clear_of_the_adds()
+    {
+        Vector3 here = Vector3.Zero;
+        Vector3[] chasers = [new(300, 0, 0)];
+        Vector3[] candidates = [new(-1_500, 0, 0), new(1_500, 0, 0), new(0, 1_500, 0), new(-1_061, 1_061, 0)];
+        var none = new List<(string, Vector3, int)>();
+        Assert.That(PlayerBotDriver.BreakOffPoint(here, chasers, candidates, none), Is.EqualTo(new Vector3(-1_500, 0, 0)));
+        var add = new List<(string, Vector3, int)> { ("add", new(-1_500, 0, 0), 500) };
+        Assert.That(PlayerBotDriver.BreakOffPoint(here, chasers, candidates, add), Is.EqualTo(new Vector3(-1_061, 1_061, 0)));
+        Assert.That(PlayerBotDriver.BreakOffPoint(here, chasers, [new Vector3(0, 1_500, 0), new Vector3(1_500, 0, 0)], none),
+            Is.Null, "square to the chaser, or toward it");
+        var both = new List<(string, Vector3, int)> { ("a", new(-1_500, 0, 0), 500), ("b", new(-1_061, 1_061, 0), 500) };
+        Assert.That(PlayerBotDriver.BreakOffPoint(here, chasers, candidates, both), Is.Null, "every point ahead in reach");
+        Vector3[] around = [new(-1_500, 0, 0), new(0, -1_500, 0), new(-1_061, -1_061, 0), new(-1_061, 1_061, 0)];
+        Assert.That(PlayerBotDriver.BreakOffPoint(here, [new Vector3(300, 0, 0), new Vector3(0, 300, 0)], around, none),
+            Is.EqualTo(new Vector3(-1_061, -1_061, 0)), "two chasers: straight away from their middle");
+    }
+
+    // The review of 9aacd69: a point on another mesh island (across water, up a cliff) blocked the step at once, and the
+    // next think chose the same point from the same spot, again and again for 30 s, while the monsters hit the bot. Now
+    // the points it was blocked on (and those within 100 units of one) are left out, and a point is taken only with a walk
+    // there (the corridor test, walkable); one without is blocked too. Blocked twice here, then none is left: it fights.
+    [Test]
+    public void A_break_off_leaves_out_the_points_it_was_blocked_on_and_those_with_no_walk()
+    {
+        Vector3 here = Vector3.Zero, first = new(-1_500, 0, 0), second = new(-1_061, 1_061, 0), third = new(-1_061, -1_061, 0);
+        Vector3[] chasers = [new(300, 0, 0)];
+        Vector3[] candidates = [first, second, third, new(1_500, 0, 0)];
+        var none = new List<(string, Vector3, int)>();
+        var blocked = new List<Vector3>();
+        Assert.That(PlayerBotDriver.NextBreakOffPoint(here, chasers, candidates, none, blocked, _ => true), Is.EqualTo(first));
+        blocked.Add(first);                                                             // its step there blocked
+        Assert.That(PlayerBotDriver.NextBreakOffPoint(here, chasers, candidates, none, blocked, _ => true), Is.EqualTo(second));
+        blocked.Add(second);                                                            // and the next one's
+        Assert.That(PlayerBotDriver.NextBreakOffPoint(here, chasers, candidates, none, blocked, _ => true), Is.EqualTo(third));
+        blocked.Add(third);
+        Assert.That(PlayerBotDriver.NextBreakOffPoint(here, chasers, candidates, none, blocked, _ => true), Is.Null,
+            "none ahead left: it fights at once");
+        Assert.That(PlayerBotDriver.NextBreakOffPoint(here, chasers, candidates, none, [new Vector3(-1_480, 10, 0)], _ => true),
+            Is.EqualTo(second), "near a blocked one");
+        var tested = new List<Vector3>();
+        Assert.That(PlayerBotDriver.NextBreakOffPoint(here, chasers, candidates, none, tested, point => point.Y > 0),
+            Is.EqualTo(second), "no walk to the farthest");
+        Assert.That(tested, Is.EqualTo(new[] { first }), "the point with no walk is left out after");
+        Assert.That(PlayerBotDriver.NextBreakOffPoint(here, chasers, candidates, none, new List<Vector3>(), _ => false), Is.Null,
+            "no walk anywhere");
+    }
+
+    // The break-off's step: it runs on; at its point with a chaser still after it, it takes the next point; with none
+    // after it, it is done; still chased after 30 s, it fights.
+    [TestCase(false, 2, 3_000L, PlayerBotBreakOff.Run)] [TestCase(true, 1, 8_000L, PlayerBotBreakOff.NextPoint)]
+    [TestCase(false, 0, 8_000L, PlayerBotBreakOff.Done)] [TestCase(true, 0, 8_000L, PlayerBotBreakOff.Done)]
+    [TestCase(false, 1, 29_999L, PlayerBotBreakOff.Run)] [TestCase(false, 1, 30_000L, PlayerBotBreakOff.Fight)]
+    [TestCase(true, 1, 30_000L, PlayerBotBreakOff.Fight)]
+    public void A_break_off_runs_until_no_monster_chases_it_or_30_s(bool arrived, int chasers, long sinceMs,
+        PlayerBotBreakOff step) =>
+        Assert.That(PlayerBotDriver.BreakOffStep(arrived, chasers, sinceMs), Is.EqualTo(step));
+
+    // At its start the bot remembers the camp and the names as after a death (DEATHS.md A3, #167 F4), and at its end it
+    // owes a relocation planned from where it stands: FailedCamps is read by PlanRelocation only, and with the anchor
+    // left at the camp Roam's leash walked it back in. A lever spot bot or a task owes none (OwesReplan).
+    [Test]
+    public void A_break_off_bars_the_camp_and_its_names_and_owes_a_relocation()
+    {
+        var state = new PlayerBotState(Player(null));
+        PlayerBotDriver.BrokeOffFrom(state, 51, new Vector3(1_000, 0, 0), ["forest bear", null, "Forest Bear", "wolf"], 2_000);
+        Assert.That((PlayerBotDriver.IsAvoided(state.AvoidUntil, "forest bear", 2_001),
+            PlayerBotDriver.IsAvoided(state.AvoidUntil, "wolf", 2_001)), Is.EqualTo((true, true)));
+        Assert.That(PlayerBotDriver.FailedCamps(state.FailedCamps, 51, 2_001), Is.EqualTo(new[] { new Vector3(1_000, 0, 0) }));
+        state.NextRelocateTick = 50_000;
+        state.RelocateRejected.Add(null);
+        PlayerBotDriver.AfterBreakOff(state, true, 7_000);
+        Assert.That((state.ReplanOwed, state.ReplanSince, state.NextRelocateTick, state.RelocateRejected.Count),
+            Is.EqualTo((PlayerBotDriver.BrokeOff, 7_000L, 0L, 0)));
+        var held = new PlayerBotState(Player(null));
+        PlayerBotDriver.AfterBreakOff(held, false, 7_000);
+        Assert.That((held.ReplanOwed, held.ReplanSince), Is.EqualTo(((string)null, 0L)));
+    }
+
+    // The second-monster case's mark: a kill in a fight that had 2 or more monsters on the bot (FIGHT adds=), so the
+    // break-off may fire at once with the one still on it; a kill with one, or a fight dropped, sets none.
+    [TestCase(true, 2, true)] [TestCase(true, 1, false)] [TestCase(false, 3, false)]
+    public void A_kill_with_an_add_still_on_marks_the_second_monster_case(bool engaged, int fightAdds, bool marked)
+    {
+        MethodInfo settle = typeof(PlayerBotDriver).GetMethod("SettleTarget", BindingFlags.Static | BindingFlags.NonPublic);
+        PlayerBotState state = (PlayerBotState)RuntimeHelpers.GetUninitializedObject(typeof(PlayerBotState));
+        (state.Target, state.Engaged, state.FightAdds) = ((GameNPC)RuntimeHelpers.GetUninitializedObject(typeof(GameNPC)),
+            engaged, fightAdds);                                                         // health 0: dead
+        settle!.Invoke(null, [state, Player(null)]);
+        Assert.That(state.KilledWithAdds, Is.EqualTo(marked));
+    }
+
+    // The review of 9aacd69: the mark held until the next fight's first think, so a bot that sat at 35% after the kill
+    // broke off from one monster that jumped it mid-rest (a respawn, a wanderer). The case is the kill's: 3 s from it
+    // (inf.; the analysts' add fights leave out those begun within 3 s of a kill).
+    [TestCase(true, 10_000L, 10_000L, true)] [TestCase(true, 10_000L, 12_999L, true)] [TestCase(true, 10_000L, 13_000L, false)]
+    [TestCase(false, 10_000L, 10_000L, false)]
+    public void The_second_monster_case_holds_only_right_after_the_kill(bool killedWithAdds, long lastKill, long now,
+        bool holds) =>
+        Assert.That(PlayerBotDriver.SecondMonsterCase(killedWithAdds, lastKill, now), Is.EqualTo(holds));
+
+    // The break-off's first rule as StartsBreakOff applies it (the review of 9aacd69: with the kill's mark replaced by false
+    // no test failed): the monsters on the bot, its target's health or, at the kill (no target), the nearest hitter's, the
+    // kill's mark (SecondMonsterCase), and C4's add control, asked only once the rest holds (it scans).
+    [Test]
+    public void At_the_kill_the_break_off_reads_the_kills_mark_and_the_nearest_hitters_health()
+    {
+        var state = new PlayerBotState(Player(null)) { KilledWithAdds = true, LastKillTick = 10_000 };
+        int asked = 0;
+        bool NoControl() { asked++; return false; }
+        Assert.That(PlayerBotDriver.BreakOffFires(state, 39, [(100, 150)], 10_250, NoControl), Is.True, "the second-monster case");
+        Assert.That(PlayerBotDriver.BreakOffFires(state, 39, [(100, 150)], 10_250, () => true), Is.False, "C4's control first");
+        Assert.That(PlayerBotDriver.BreakOffFires(state, 39, [(100, 150)], 13_000, NoControl), Is.False, "3 s on");
+        Assert.That(PlayerBotDriver.BreakOffFires(state, 40, [(100, 150)], 10_250, NoControl), Is.False, "at 40%");
+        Assert.That(PlayerBotDriver.BreakOffFires(state, 39, [(80, 300), (10, 150)], 10_250, NoControl), Is.False,
+            "the nearest hitter nearly dead");
+        Assert.That(PlayerBotDriver.BreakOffFires(state, 39, [(10, 300), (80, 150)], 10_250, NoControl), Is.True);
+        state.KilledWithAdds = false;
+        asked = 0;
+        Assert.That(PlayerBotDriver.BreakOffFires(state, 39, [(100, 150)], 10_250, NoControl), Is.False, "no mark: it fights on");
+        Assert.That(asked, Is.Zero, "the add control is not asked when the rest fails");
+        Assert.That(PlayerBotDriver.BreakOffFires(state, 39, [(100, 150), (80, 300)], 10_250, NoControl), Is.True, "two on it");
+    }
+
+    // The break-off's end where EndBreakOff applies it (the review of 9aacd69: with the relocation's call deleted no test
+    // failed): it clears the run, and unless the bot died it owes the relocation (AfterBreakOff); fought, no new break-off
+    // for 30 s.
+    [TestCase("shook", "brokeoff", 0L)] [TestCase("fought", "brokeoff", 37_000L)] [TestCase("died", null, 0L)]
+    public void A_break_offs_end_owes_the_relocation_unless_it_died(string outcome, string owed, long nextBreakOff)
+    {
+        var state = new PlayerBotState(Player(null)) { BreakOffSince = 2_000, BreakOffGoal = new Vector3(1, 0, 0),
+            BreakOffArrived = true };
+        state.BreakOffChasers.Add(null);
+        state.BreakOffBlocked.Add(Vector3.One);
+        PlayerBotDriver.FinishBreakOff(state, outcome, owesReplan: true, 7_000);
+        Assert.That((state.BreakOffSince, state.BreakOffGoal, state.BreakOffArrived, state.BreakOffChasers.Count,
+            state.BreakOffBlocked.Count), Is.EqualTo((0L, (Vector3?)null, false, 0, 0)));
+        Assert.That((state.ReplanOwed, state.NextBreakOffTick), Is.EqualTo((owed, nextBreakOff)));
+        var held = new PlayerBotState(Player(null)) { BreakOffSince = 2_000 };
+        PlayerBotDriver.FinishBreakOff(held, PlayerBotDriver.Shook, owesReplan: false, 7_000);
+        Assert.That(held.ReplanOwed, Is.Null, "a lever spot bot or a task owes none");
+    }
+
+    // The review of 9aacd69: after a break-off the bot rests (it is under 40%), and the first search after the rest ran
+    // before step 15's relocation, from where it ran to and still leashed to the camp it fled: a monster of another name
+    // there could be pulled. No ring search while a relocation is owed, as after a release (self-defence and a monster
+    // coming at it still go).
+    [TestCase(true, false, null, true)] [TestCase(false, false, null, false)] [TestCase(true, true, null, false)]
+    [TestCase(true, false, "brokeoff", false)]
+    public void No_ring_search_while_the_recovery_lasts_or_a_relocation_is_owed(bool searchDue, bool afterRelease,
+        string replanOwed, bool searches) =>
+        Assert.That(PlayerBotDriver.SearchesRings(searchDue, afterRelease, replanOwed), Is.EqualTo(searches));
+
+    // PLAYER_BOT_BREAKOFF: the bot's health, endurance and attackers when it broke off, the seconds it ran and how it ended.
+    [Test]
+    public void A_break_off_line_gives_its_start_and_outcome() =>
+        Assert.That(PlayerBotDriverReport.FormatBreakOff("Pbotaaaaz", 34, 38, 72, 2, 26, "shook"),
+            Is.EqualTo("PLAYER_BOT_BREAKOFF bot=Pbotaaaaz level=34 hp=38 end=72 attackers=2 sec=26 outcome=shook"));
+
+    // --- monsters coming, and the rest out of their reach (#167 F7) ---
+
+    // A live monster the bot may attack, within IncomingRadius (2,000) and with the bot as its target, is coming at it:
+    // it counts as an attacker before its first hit, so the bot stands and engages first. Not the one Engage found
+    // unreachable, between scans too (the review of 9549283: the scan's skip alone left the cached one re-picked, and
+    // walked to and blocked again, every think until the next scan).
+    [TestCase(true, true, 1_500, false, true)] [TestCase(true, true, 2_000, false, true)]
+    [TestCase(true, true, 2_001, false, false)] [TestCase(true, true, 2_500, false, false)]
+    [TestCase(false, true, 500, false, false)] [TestCase(true, false, 500, false, false)]
+    [TestCase(true, true, 500, true, false)]                                                  // unreachable
+    public void A_monster_with_the_bot_as_its_target_within_2000_is_coming_at_it(bool targetsBot, bool attackable,
+        int distance, bool unreachable, bool incoming) =>
+        Assert.That(PlayerBotDriver.IsIncoming(targetsBot, attackable, distance, unreachable), Is.EqualTo(incoming));
+
+    // The rest spot: where the bot stands when no potential add reaches it; else the nearest clear point on the rest
+    // rings (RestSpotRings, SpotDirections round it). With an add 400 units along +X (aggro 300, reach 500), the ring
+    // of 300 is clear only past 90 degrees, and the first clear point there is at 120.
+    [Test]
+    public void A_bot_rests_where_it_is_unless_an_add_reaches_it_then_on_the_nearest_clear_ring_point()
+    {
+        var adds = new List<(string, Vector3, int)> { ("add", new(400, 0, 0), 300) };
+        Vector3 spot = PlayerBotDriver.RestSpot(Vector3.Zero,
+            PlayerBotDriver.RingPoints(Vector3.Zero, PlayerBotDriver.RestSpotRings, PlayerBotDriver.SpotDirections), adds);
+        Assert.That(Vector3.Distance(spot, new Vector3(-150, 259.81f, 0)), Is.LessThan(0.1f), $"{spot}");
+        Vector3 clear = new(-1_000, 0, 0);
+        Assert.That(PlayerBotDriver.RestSpot(clear, PlayerBotDriver.RingPoints(clear, PlayerBotDriver.RestSpotRings,
+            PlayerBotDriver.SpotDirections), adds), Is.EqualTo(clear), "out of every reach: where it is");
+    }
+
+    // --- the rest out of the killed monsters' respawns (#167 C7) ---
+
+    // A kill's spawn spot counts for RespawnWatchMilliseconds (150 s; the world's usual RespawnInterval is 80 s): 142 of
+    // st-deathsB's rests were stood up 75-95 s after a kill by a monster of the killed one's name, and 18 deaths followed.
+    [Test]
+    public void A_kills_spawn_spot_counts_for_150_s()
+    {
+        var kills = new List<(Vector3, int, long)> { (Vector3.Zero, 500, 0) };
+        Assert.That((PlayerBotDriver.RespawnSpots(kills, 60_000).Count(), PlayerBotDriver.RespawnSpots(kills, 151_000).Count()),
+            Is.EqualTo((1, 0)));
+    }
+
+    // The bot keeps its last 3 kills, while the watch lasts.
+    [Test]
+    public void A_bot_remembers_its_last_three_kills_while_the_watch_lasts()
+    {
+        var kills = new List<(Vector3 At, int Reach, long KilledAt)>();
+        for (int i = 0; i < 4; i++) PlayerBotDriver.RememberKill(kills, new Vector3(i, 0, 0), 500, i * 10_000L);
+        Assert.That(kills.Select(kill => kill.At.X), Is.EqualTo(new[] { 1f, 2f, 3f }));
+        PlayerBotDriver.RememberKill(kills, new Vector3(9, 0, 0), 500, 175_000);
+        Assert.That(kills.Select(kill => kill.At.X), Is.EqualTo(new[] { 3f, 9f }), "the kills at 10 and 20 s are over 150 s old");
+    }
+
+    private static List<(string, Vector3, int)> Spots(IEnumerable<(Vector3 At, int Reach)> spots) =>
+        spots.Select(spot => ((string)null, spot.At, spot.Reach)).ToList();
+
+    // Before it sits, the bot steps out of the reach of its recent kills' spawn spots as of a live add's: AddReach gives a
+    // dead monster none, so F7's rest spot never saw the camp the bot had just emptied, and a sitting player takes double
+    // melee damage that never misses (AttackAction.cs:236-238, AttackComponent.cs:2206-2208).
+    [Test]
+    public void A_bot_rests_out_of_reach_of_its_kills_spawn_spots_and_the_live_adds()
+    {
+        List<(string, Vector3, int)> adds = Spots(PlayerBotDriver.RespawnSpots(
+            new List<(Vector3, int, long)> { (Vector3.Zero, 500, 0) }, 60_000));
+        Assert.That(PlayerBotDriver.RestSpot(new Vector3(100, 0, 0), [new(600, 0, 0), new(100, 900, 0), new(-900, 0, 0)], adds),
+            Is.EqualTo(new Vector3(100, 900, 0)));
+        adds.Add(("add", new(1_200, 0, 0), 500));
+        Assert.That(PlayerBotDriver.RestSpot(new Vector3(100, 0, 0), [new(600, 0, 0), new(100, -1_500, 0)], adds),
+            Is.EqualTo(new Vector3(100, -1_500, 0)));
+    }
+
+    // At the pick the bot reads its target's spawn spot, where it respawns (GameNPC.cs:3278-3280), not where it stands
+    // (the verifier's correction: a defence pick often stands far from it), and the reach it will aggro from: its aggro
+    // range when it would aggro the bot at all (IsPotentialAdd), else none.
+    // The review of 9aacd69: RespawnOf took any spot, and with where the target stood passed in no test failed; it reads
+    // the monster's own spawn spot now, here 4,900 units from where it stands.
+    [Test]
+    public void A_targets_respawn_is_its_spawn_spot_and_aggro_range_when_it_would_aggro()
+    {
+        GameNPC Monster(Point3D spawn)
+        {
+            var npc = (GameNPC)RuntimeHelpers.GetUninitializedObject(typeof(GameNPC));
+            var mover = (NpcMovementComponent)RuntimeHelpers.GetUninitializedObject(typeof(NpcMovementComponent));
+            typeof(MovementComponent).GetField("_ownerPosition", Hidden)!.SetValue(mover, new Vector3(5_000, 200, 30));
+            npc.movementComponent = mover;
+            npc.SpawnPoint = spawn;
+            return npc;
+        }
+        GameNPC wolf = Monster(new Point3D(100, 200, 30)), unplaced = Monster(null);
+        Assert.That(wolf.X, Is.EqualTo(5_000), "where it stands");
+        Assert.That(PlayerBotDriver.RespawnOf(wolf, 50, 500, false), Is.EqualTo((new Vector3(100, 200, 30), 500)));
+        Assert.That((PlayerBotDriver.RespawnOf(wolf, 0, 500, false).Reach, PlayerBotDriver.RespawnOf(wolf, 50, 500, true).Reach,
+            PlayerBotDriver.RespawnOf(unplaced, 50, 500, false).Reach, PlayerBotDriver.RespawnOf(null, 50, 500, false).Reach),
+            Is.EqualTo((0, 0, 0, 0)), "passive, grey, no spawn spot, none");
+    }
+
+    // A kill remembers that spot (RememberKill); a target that would not aggro, or a fight the bot never had, none.
+    [TestCase(true, 500, 1)] [TestCase(true, 0, 0)] [TestCase(false, 500, 0)]
+    public void A_kill_remembers_its_targets_respawn(bool engaged, int reach, int remembered)
+    {
+        MethodInfo settle = typeof(PlayerBotDriver).GetMethod("SettleTarget", BindingFlags.Static | BindingFlags.NonPublic);
+        var state = new PlayerBotState(Player(null))
+        {
+            Target = (GameNPC)RuntimeHelpers.GetUninitializedObject(typeof(GameNPC)), Engaged = engaged,   // health 0: dead
+            TargetSpawn = new(100, 200, 30), TargetRespawnReach = reach,
+        };
+        settle!.Invoke(null, [state, Player(null)]);
+        Assert.That(state.RecentKills.Select(kill => (kill.At, kill.Reach)),
+            Is.EqualTo(Enumerable.Repeat((new Vector3(100, 200, 30), reach), remembered)));
     }
 
     // Runs r1-r1h (2026-10-21): on the switchback stairs by Master Lorik the two corners at their foot (Z 1795) counted as
@@ -932,6 +1512,45 @@ public sealed class UT_PlayerBotDriver
         Assert.That((won.RecoverBeforePull, late.RecoverBeforePull), Is.EqualTo((true, false)), "the late bot never fought it");
     }
 
+    // #167 F3, C10: a caster's rest stops at full health, its power stop (90) and 60% endurance; power counts only with
+    // a pool.
+    [TestCase((byte)100, 300, (byte)90, (byte)61, true)] [TestCase((byte)99, 300, (byte)100, (byte)100, false)]
+    [TestCase((byte)100, 300, (byte)89, (byte)61, false)] [TestCase((byte)100, 0, (byte)0, (byte)61, true)]
+    [TestCase((byte)100, 300, (byte)100, (byte)59, false)] [TestCase((byte)100, 300, (byte)90, (byte)60, true)]
+    [TestCase((byte)100, 300, (byte)72, (byte)100, false)]
+    public void A_rest_stops_at_full_health_and_the_power_and_endurance_stops(byte health, int maxMana, byte mana,
+        byte endurance, bool recovered) =>
+        Assert.That(PlayerBotDriver.Recovered(health, maxMana, mana, endurance, PlayerBotDriver.RestPowerStop(PlayerBotRole.Caster),
+            PlayerBotDriver.RestEnduranceStop), Is.EqualTo(recovered));
+
+    // The class roles of tools/lmroles.py (CLASS_ROLES, by class id): the Hunter has a pet and counts as pet.
+    [Test]
+    public void The_class_role_is_the_one_lmroles_gives()
+    {
+        var roles = new Dictionary<PlayerBotRole, int[]>
+        {
+            [PlayerBotRole.Pet] = [5, 12, 13, 25, 27, 30, 41, 47, 55], [PlayerBotRole.Healer] = [6, 10, 26, 28, 46, 48],
+            [PlayerBotRole.Caster] = [7, 8, 29, 40, 42], [PlayerBotRole.Archer] = [3, 50],
+        };
+        foreach ((PlayerBotRole role, int[] ids) in roles)
+            foreach (int id in ids)
+                Assert.That(PlayerBotDriver.RoleOf(id), Is.EqualTo(role), $"class {id}");
+        foreach (int id in Enum.GetValues<eCharacterClass>().Select(c => (int)c).Where(id => !roles.Values.Any(ids => ids.Contains(id))))
+            Assert.That(PlayerBotDriver.RoleOf(id), Is.EqualTo(PlayerBotRole.Melee), $"class {id}");
+    }
+
+    // Casters stop resting power at 90% (#167 C10: a list caster regenerates at half rate under 50% power,
+    // PowerRegenerationAmountCalculator.cs:38-50, and 46.6% of st-deathsB's caster pulls ended under 50% with batch A's
+    // 70); pet classes keep 100% (a 75% stop raised their pet deaths per 100 kills 16% in the model), and so does every
+    // other role until measured.
+    [Test]
+    public void Only_a_caster_stops_resting_power_short_of_full()
+    {
+        foreach (PlayerBotRole role in Enum.GetValues<PlayerBotRole>())
+            Assert.That(PlayerBotDriver.RestPowerStop(role), Is.EqualTo(role == PlayerBotRole.Caster ? 90 : 100), role.ToString());
+        Assert.That(PlayerBotDriver.RestEnduranceStop, Is.EqualTo(60));
+    }
+
     [TestCase(1000, ConColor.YELLOW, 1000)] [TestCase(1000, ConColor.BLUE, 1220)] [TestCase(700, ConColor.GREEN, 1140)]
     public void TargetScore(int distance, ConColor con, int expected) =>
         Assert.That(PlayerBotDriver.TargetScore(distance, con), Is.EqualTo(expected));
@@ -948,13 +1567,20 @@ public sealed class UT_PlayerBotDriver
     private static (string, Vector3, int) At(string name, float x, int score) => (name, new Vector3(x, 0, 0), score);
     private static (string, Vector3, int) Add(string name, float x, int aggroRange = 500) => (name, new Vector3(x, 0, 0), aggroRange);
 
+    // The pick with no walk in (#167 C5): a bot within its stop of every candidate stands where it is, on a spot no add
+    // reaches, so CrowdingAlong counts the adds round each target only, as Crowding did.
+    private static readonly Vector3 Aside = new(0, 100_000, 0);
+    private static string Pick(IReadOnlyList<(string, Vector3, int)> candidates, IReadOnlyList<(string, Vector3, int)> adds,
+        bool uncrowdedOnly) =>
+        PlayerBotDriver.PickUncrowded(candidates, adds, uncrowdedOnly, Aside, int.MaxValue);
+
     [Test]
     public void A_crowded_candidate_gives_way_to_one_with_no_add_near_it()
     {
         var candidates = new List<(string, Vector3, int)> { At("crowded", 0, 100), At("clear", 5_000, 900) };
         var adds = new List<(string, Vector3, int)> { Add("wolf", 600) };                // 500 + 200 reaches 0
-        Assert.That(PlayerBotDriver.PickUncrowded(candidates, adds, uncrowdedOnly: false), Is.EqualTo("clear"));
-        Assert.That(PlayerBotDriver.PickUncrowded(candidates, [], uncrowdedOnly: false), Is.EqualTo("crowded"),
+        Assert.That(Pick(candidates, adds, uncrowdedOnly: false), Is.EqualTo("clear"));
+        Assert.That(Pick(candidates, [], uncrowdedOnly: false), Is.EqualTo("crowded"),
             "with no adds, the best score as before");
     }
 
@@ -975,7 +1601,7 @@ public sealed class UT_PlayerBotDriver
     {
         var candidates = new List<(string, Vector3, int)> { At("two", 0, 100), At("one", 10_000, 900), At("one, nearer", 20_000, 800) };
         var adds = new List<(string, Vector3, int)> { Add("a", 100), Add("b", 200), Add("c", 10_100), Add("d", 20_100) };
-        Assert.That(PlayerBotDriver.PickUncrowded(candidates, adds, uncrowdedOnly: false), Is.EqualTo("one, nearer"));
+        Assert.That(Pick(candidates, adds, uncrowdedOnly: false), Is.EqualTo("one, nearer"));
     }
 
     // The 2,600-unit ring takes only an uncrowded target; with none, the 5,000-unit ring decides.
@@ -984,11 +1610,113 @@ public sealed class UT_PlayerBotDriver
     {
         var crowded = new List<(string, Vector3, int)> { At("crowded", 0, 100) };
         var adds = new List<(string, Vector3, int)> { Add("wolf", 100) };
-        Assert.That(PlayerBotDriver.PickUncrowded(crowded, adds, uncrowdedOnly: true), Is.Null);
+        Assert.That(Pick(crowded, adds, uncrowdedOnly: true), Is.Null);
         crowded.Add(At("clear", 5_000, 900));
-        Assert.That(PlayerBotDriver.PickUncrowded(crowded, adds, uncrowdedOnly: true), Is.EqualTo("clear"));
-        Assert.That(PlayerBotDriver.PickUncrowded(new List<(string, Vector3, int)>(), adds, uncrowdedOnly: false), Is.Null);
+        Assert.That(Pick(crowded, adds, uncrowdedOnly: true), Is.EqualTo("clear"));
+        Assert.That(Pick(new List<(string, Vector3, int)>(), adds, uncrowdedOnly: false), Is.Null);
     }
+
+    // --- the pick checks the walk in and the stand spot (#167 C5) ---
+
+    // Where the bot stands to fight its target: its stop short of the target toward the bot (a caster's 1,420 for a
+    // 1,500-unit spell), or where it is when it is that near already.
+    [Test]
+    public void The_stand_point_is_the_stop_short_of_the_target_or_where_the_bot_is()
+    {
+        Assert.That(Vector3.Distance(PlayerBotDriver.StandPoint(Vector3.Zero, new(3_000, 0, 0), 1_420), new(1_580, 0, 0)),
+            Is.LessThan(0.01f));
+        Assert.That(PlayerBotDriver.StandPoint(Vector3.Zero, new(1_000, 0, 0), 1_420), Is.EqualTo(Vector3.Zero));
+    }
+
+    // The stop the pick checks the walk in to (PullStopDistance, FindWithin's): Engage's first think's, the spell's with
+    // a damage spell it can cast now and the power for it (18%, ShouldCast), else melee's. The review of 9aacd69: with
+    // no stop passed (the walk in unchecked) no test failed.
+    [TestCase(true, 50, 1_420)] [TestCase(true, 18, 1_420)] [TestCase(true, 17, 152)] [TestCase(false, 100, 152)]
+    public void The_pick_checks_the_walk_in_to_the_stop_its_pull_takes(bool nuke, int mana, int stop) =>
+        Assert.That(PlayerBotDriver.PullStopDistance(nuke ? FungalOoze : null, (byte)mana, 200, nuke ? 1_500 : 0),
+            Is.EqualTo(stop));
+
+    // An add counts once when its reach (aggro + 200) covers the target or the walk from the bot, at (0,0), to its stand
+    // point: st-deathsB's 82 defence fights begun 2 s or more after a recovered rest were jumped on the way in (59% with
+    // adds, 17 fatal), and 16 pulls had an add's ring over the stand spot but not over the target, which is all Crowding
+    // looks at. The first row's add is 1,552 units from the target: Crowding gives 0.
+    [TestCase(3_000f, 2_920f, 1_500f, 400f, 1)] [TestCase(3_000f, 2_920f, 1_500f, 701f, 0)]
+    [TestCase(3_000f, 1_580f, 900f, -650f, 1)]                                       // a caster's stand spot
+    [TestCase(1_000f, 920f, 950f, 300f, 1)]                                          // the target and the walk: once
+    public void An_add_counts_once_when_its_reach_covers_the_target_or_the_walk_to_the_stand_point(float targetX,
+        float standX, float addX, float addY, int crowd) =>
+        Assert.That(PlayerBotDriver.CrowdingAlong("target", new Vector3(targetX, 0, 0), Vector3.Zero, new Vector3(standX, 0, 0),
+            new List<(string, Vector3, int)> { ("add", new(addX, addY, 0), 500) }), Is.EqualTo(crowd));
+
+    [Test]
+    public void A_candidate_is_not_its_own_add_on_the_walk_in_either()
+    {
+        var adds = new List<(string, Vector3, int)> { ("target", new(3_000, 0, 0), 500), ("wolf", new(1_500, 400, 0), 500) };
+        Assert.That(PlayerBotDriver.CrowdingAlong("target", new Vector3(3_000, 0, 0), Vector3.Zero, new Vector3(2_920, 0, 0),
+            adds), Is.EqualTo(1));
+    }
+
+    // The pick counts the adds along the walk in from where the bot stands to its stand point at its stop: a target
+    // behind an add gives way to one with a clear walk, and the near ring takes it no more; from beside it, the walk in
+    // is clear and its better score wins.
+    [Test]
+    public void A_target_behind_an_add_gives_way_to_one_with_a_clear_walk_in()
+    {
+        var candidates = new List<(string, Vector3, int)> { ("behind", new(3_000, 0, 0), 100), ("clear", new(0, 3_000, 0), 900) };
+        var adds = new List<(string, Vector3, int)> { ("wolf", new(1_500, 400, 0), 500) };
+        Assert.That(PlayerBotDriver.PickUncrowded(candidates, adds, false, Vector3.Zero, 80), Is.EqualTo("clear"));
+        Assert.That(PlayerBotDriver.PickUncrowded(candidates.Take(1).ToList(), adds, true, Vector3.Zero, 80), Is.Null,
+            "the near ring");
+        Assert.That(PlayerBotDriver.PickUncrowded(candidates, adds, false, new Vector3(3_000, 1_000, 0), 80),
+            Is.EqualTo("behind"));
+    }
+
+    // FIGHT crowd= (#167, the next leg's): the pick's crowding as the pick read it (CrowdingAlong): 0 for a clear one, the
+    // least when every one is crowded, -1 when the ring took none.
+    [Test]
+    public void The_pick_gives_the_crowding_it_read()
+    {
+        var candidates = new List<(string, Vector3, int)> { ("behind", new(3_000, 0, 0), 100), ("near", new(0, 3_000, 0), 900) };
+        var adds = new List<(string, Vector3, int)>
+            { ("wolf", new(1_500, 400, 0), 500), ("boar", new(3_200, 0, 0), 500), ("bear", new(0, 3_300, 0), 500) };
+        Assert.That((PlayerBotDriver.PickUncrowded(candidates, adds, false, Vector3.Zero, 80, out int crowd), crowd),
+            Is.EqualTo(("near", 1)));
+        Assert.That((PlayerBotDriver.PickUncrowded(candidates, adds, true, Vector3.Zero, 80, out crowd), crowd),
+            Is.EqualTo(((string)null, -1)), "the near ring took none");
+        Assert.That((PlayerBotDriver.PickUncrowded(candidates, [], false, Vector3.Zero, 80, out crowd), crowd),
+            Is.EqualTo(("behind", 0)));
+    }
+
+    // FIGHT and DEATH addAt= and addHp= (#167, the next leg's): the first think in a fight a second monster, any but the
+    // target, is on the bot's attacker list or comes at it (the add scan's): the whole seconds into the fight and the
+    // bot's health then, kept after; -1 until then. Only one alive and on the bot (onBot; the review of 9aacd69: the
+    // last fight's dead target stays in the attacker list until its attack interval runs out, AttackerTracker.cs:209-219,
+    // and a lone next monster engaged within it read addAt=0).
+    [Test]
+    public void The_first_add_is_the_first_monster_but_the_target_on_the_bot()
+    {
+        (int, int) none = (-1, -1);
+        Func<string, bool> any = _ => true, alive = monster => monster != "the last kill";
+        Assert.That(PlayerBotDriver.FirstAdd(none, "target", ["target"], [], any, 4_500, 80), Is.EqualTo(none),
+            "the target alone");
+        Assert.That(PlayerBotDriver.FirstAdd(none, "target", ["target", "wolf"], [], any, 4_500, 80), Is.EqualTo((4, 80)));
+        Assert.That(PlayerBotDriver.FirstAdd(none, "target", [], ["target", "wolf"], any, 6_999, 55), Is.EqualTo((6, 55)),
+            "coming at it");
+        Assert.That(PlayerBotDriver.FirstAdd((4, 80), "target", ["wolf", "boar"], [], any, 9_000, 30), Is.EqualTo((4, 80)),
+            "kept");
+        Assert.That(PlayerBotDriver.FirstAdd(none, "target", [], [], any, 0, 100), Is.EqualTo(none));
+        Assert.That(PlayerBotDriver.FirstAdd(none, "target", ["the last kill", "target"], ["the last kill"], alive, 0, 100),
+            Is.EqualTo(none), "the dead last target, still in the list");
+        Assert.That(PlayerBotDriver.FirstAdd(none, "target", ["the last kill", "wolf"], [], alive, 2_000, 90),
+            Is.EqualTo((2, 90)));
+    }
+
+    // FIGHT addAt='s scan of the monsters coming at the bot (the review of 9aacd69: every role scanned 2,000 units every
+    // 2 s for the whole of an add-free fight, for a log field): only a bot that scans for its add step anyway, one with a
+    // control or a Theurgist's pets (Add); the others read their attacker list alone.
+    [TestCase(0, 0, false)] [TestCase(1, 0, true)] [TestCase(0, 2, true)] [TestCase(3, 1, true)]
+    public void Only_a_bot_with_an_add_step_scans_for_monsters_coming_at_it(int controls, int combatPets, bool scans) =>
+        Assert.That(PlayerBotDriver.ScansComing(controls, combatPets), Is.EqualTo(scans));
 
     // Every bot engaged with a monster reports its death; bots on one start row share monsters (runs 2-3).
     [Test]
@@ -1597,7 +2325,8 @@ public sealed class UT_PlayerBotDriver
     [TestCase(true, (byte)50, 1_001L, false, false, false)] [TestCase(true, (byte)50, 1_000L, false, false, true)]
     public void A_bot_starts_no_interruptible_cast_while_hits_interrupt_it(bool hasSpell, byte mana, long blockedUntil,
         bool interrupted, bool interruptible, bool casts) =>
-        Assert.That(PlayerBotDriver.ShouldCast(hasSpell, mana, 1_000, blockedUntil, interrupted, interruptible), Is.EqualTo(casts));
+        Assert.That(PlayerBotDriver.CombatAction(PlayerBotDriver.ShouldCast(hasSpell, mana, 1_000, blockedUntil), interrupted, 0,
+            interruptible, false, due: true, heldBreaksOnHit: false) == PlayerBotCombatAction.Cast, Is.EqualTo(casts));
 
     // A class with Quickcast, its damage spell blocked only by the hits' interrupt, uses it as a player does, then casts
     // (SpellHandler.cs:578-590 lets a quickcast spell through). Not while it is on (the ability toggles it off,
@@ -1618,8 +2347,59 @@ public sealed class UT_PlayerBotDriver
     public void An_interrupted_caster_with_Quickcast_uses_it_then_casts(bool hasQuickcast, bool quickcastOn, int disabled,
         long nextTry, bool casting, bool hasSpell, byte mana, long blockedUntil, bool interrupted, bool interruptible,
         bool uses) =>
-        Assert.That(PlayerBotDriver.ShouldQuickcast(hasQuickcast, quickcastOn, disabled, nextTry, casting, hasSpell, mana, 1_000,
-            blockedUntil, interrupted, interruptible), Is.EqualTo(uses));
+        Assert.That(PlayerBotDriver.CombatAction(PlayerBotDriver.ShouldCast(hasSpell, mana, 1_000, blockedUntil), interrupted, 0,
+            interruptible, PlayerBotDriver.QuickcastReady(hasQuickcast, quickcastOn, disabled, nextTry, casting, 1_000),
+            due: true, heldBreaksOnHit: false) == PlayerBotCombatAction.Quickcast, Is.EqualTo(uses));
+
+    // #167 F6: the bot's own swing must not block its next cast. A swing interrupts the swinger for 3 s
+    // (StartInterruptTimer, GameLiving.cs:686-693; InterruptRemainingDuration, :736), and a player then gets "must wait"
+    // (SpellHandler.cs:570-590): with a spell it can cast and no monster interrupting it, the bot stops swinging and waits
+    // it out, as a GameBot caster ends its own swings before a spell (BotBrain.cs:3074-3080). A hit from another still
+    // means Quickcast or a swing; an instant or uninterruptible spell goes whatever the interrupt.
+    [TestCase(true, false, 0L, true, false, PlayerBotCombatAction.Cast)]
+    [TestCase(true, false, 2_000L, true, false, PlayerBotCombatAction.WaitToCast)]
+    [TestCase(true, true, 0L, true, true, PlayerBotCombatAction.Quickcast)]
+    [TestCase(true, true, 0L, true, false, PlayerBotCombatAction.Swing)]
+    [TestCase(true, true, 0L, false, false, PlayerBotCombatAction.Cast)]                   // an instant spell
+    [TestCase(true, false, 2_000L, false, false, PlayerBotCombatAction.Cast)]              // an instant spell
+    [TestCase(true, true, 2_000L, true, false, PlayerBotCombatAction.Swing)]               // another's hit decides
+    [TestCase(false, false, 2_000L, true, false, PlayerBotCombatAction.Swing)]             // nothing to cast
+    public void The_bots_own_swing_does_not_block_its_next_cast(bool canCastSpell, bool interruptedByOther, long selfInterrupt,
+        bool interruptible, bool quickcastReady, PlayerBotCombatAction action) =>
+        Assert.That(PlayerBotDriver.CombatAction(canCastSpell, interruptedByOther, selfInterrupt, interruptible, quickcastReady,
+            due: true, heldBreaksOnHit: false), Is.EqualTo(action));
+
+    // Between casts (the cast choice not due yet, :417) the old think restarted the swing after every cast, and that swing
+    // blocked the next cast: with a spell it can cast the bot waits instead. An instant spell does not mind the swing.
+    [TestCase(true, false, 0L, true, PlayerBotCombatAction.WaitToCast)]
+    [TestCase(true, false, 0L, false, PlayerBotCombatAction.Swing)]                        // an instant spell
+    [TestCase(false, false, 0L, true, PlayerBotCombatAction.Swing)]                        // the watch's block, no power
+    [TestCase(true, true, 0L, true, PlayerBotCombatAction.Swing)]                          // hit: the old rule
+    public void Between_casts_a_bot_with_a_spell_to_cast_does_not_swing(bool canCastSpell, bool interruptedByOther,
+        long selfInterrupt, bool interruptible, PlayerBotCombatAction action) =>
+        Assert.That(PlayerBotDriver.CombatAction(canCastSpell, interruptedByOther, selfInterrupt, interruptible, false,
+            due: false, heldBreaksOnHit: false), Is.EqualTo(action));
+
+    // The stop distance comes from the spell the bot may cast, not from this think's action: between casts it swings
+    // with an instant spell (above), yet holds its spell range. A Bonedancer's Crunch Skeleton (Lifedrain, instant,
+    // 1,500 units) cast from 1,420 units walked it toward melee until its next choice, every 4 s. A hit that blocks an
+    // interruptible spell with no Quickcast ready, or nothing to cast, still means melee, as at d1d524d.
+    [TestCase(true, false, false, false, 1_420)]                                          // an instant spell
+    [TestCase(true, false, true, false, 1_420)]
+    [TestCase(true, true, false, false, 1_420)]                                           // an instant spell, hit
+    [TestCase(true, true, true, true, 1_420)]                                             // hit, Quickcast ready
+    [TestCase(true, true, true, false, 152)]                                              // hit, no Quickcast: melee
+    [TestCase(false, false, false, false, 152)]                                           // nothing to cast
+    public void Between_casts_a_bot_holds_its_spell_range(bool canCastSpell, bool interruptedByOther, bool interruptible,
+        bool quickcastReady, int stop)
+    {
+        Assert.That(PlayerBotDriver.CombatStopDistance(canCastSpell, interruptedByOther, interruptible, quickcastReady, 200, 1_500,
+            casterHold: false), Is.EqualTo(stop));
+        Assert.That(PlayerBotDriver.CombatAction(true, false, 0, false, false, due: false, heldBreaksOnHit: false),
+            Is.EqualTo(PlayerBotCombatAction.Swing));
+        Assert.That(1_420 > PlayerBotDriver.CombatStopDistance(true, false, false, false, 200, 1_500, casterHold: false), Is.False,
+            "at 1,420 units an instant caster between casts takes no step toward its target");
+    }
 
     [Test]
     public void A_cast_is_interruptible_unless_it_is_instant_or_uninterruptible()   // SpellHandler.cs:571
@@ -1654,6 +2434,630 @@ public sealed class UT_PlayerBotDriver
         Assert.That(PlayerBotDriver.BestDamageSpellName(Caster(40, [(storm, null)], [(fire, [])])), Is.EqualTo("-"));
     }
 
+    // --- casters control and step back (#167 F11) ---
+
+    // World-DB spells (Spell, LineXSpell): a Sorcerer's Body Destruction roots and Mind Twisting mezzes, a Wizard's
+    // Path of Ice root, an Eldritch's Way of the Sun stun, a Bonedancer's snare and a Wizard's area root.
+    private static Spell Control(int id, string name, string type, int level, double value, int radius = 0,
+        double castTime = 2.5, int duration = 20) =>
+        new(new DbSpell { SpellID = id, Name = name, Type = type, Target = "Enemy", Value = value, Range = 1500,
+            Radius = radius, CastTime = castTime, Duration = duration }, level);
+
+    private static readonly SpellLine BodyLine = new("Body Destruction", "Body Destruction", Specs.Body_Magic, true),
+        SunLine = new("Way of the Sun", "Way of the Sun", Specs.Light, true);
+
+    private static readonly Spell LesserCrippling = Control(682, "Lesser Crippling", "SpeedDecrease", 6, 99),
+        Cripple = Control(683, "Cripple", "SpeedDecrease", 13, 99),
+        MinorMesmerization = Control(911, "Minor Mesmerization", "Mesmerize", 1, 0, castTime: 3.0),
+        LesserMesmerization = Control(912, "Lesser Mesmerization", "Mesmerize", 5, 0, castTime: 3.0),
+        ColdsBitterGrip = Control(171, "Cold's Bitter Grip (Lesser)", "SpeedDecrease", 5, 99),
+        PrismaticFlare = Control(4121, "Prismatic Flare", "Stun", 5, 0),
+        ShroudOfDoubt = Control(10082, "Shroud of Doubt", "SpeedDecrease", 14, 50, castTime: 3.0),
+        TremblingEarth = Control(78, "Trembling Earth", "SpeedDecrease", 13, 99, radius: 350);
+
+    // The GameBot's control split (GameBot.cs:1957-1962: a mez, or a speed decrease of 99, a root), with the stun the
+    // brief adds, single-target only: an area one would pull the adds round the target.
+    [Test]
+    public void A_control_spell_is_a_single_target_root_mez_or_stun()
+    {
+        Assert.That(new[] { ColdsBitterGrip, Cripple, MinorMesmerization, PrismaticFlare }.All(PlayerBotDriver.IsControlSpell));
+        Assert.That(PlayerBotDriver.IsControlSpell(ShroudOfDoubt), Is.False, "a snare (50%) is no root");
+        Assert.That(PlayerBotDriver.IsControlSpell(TremblingEarth), Is.False, "an area root");
+        Assert.That(PlayerBotDriver.IsControlSpell(FungalOoze), Is.False, "a nuke");
+    }
+
+    // The review of 9aacd69: a Minstrel's Instruments mezzes (Compelling Cadence and the rest: Mesmerize, Enemy, range
+    // 1,500, InstrumentRequirement 3) counted as controls, so its add step spent its 3 tries an add on a mez the server
+    // refuses with no instrument (SpellHandler.cs:546-553). A song is no control, as the damage spells, heals, self-buffs
+    // and chants already leave it out; a Bard's mezzes need no instrument (InstrumentRequirement 0) and stay.
+    [Test]
+    public void A_song_that_needs_an_instrument_is_no_control()
+    {
+        Spell cadence = new(new DbSpell { SpellID = 5001, Name = "Compelling Cadence", Type = "Mesmerize", Target = "Enemy",
+            Range = 1500, CastTime = 3.0, Duration = 20, InstrumentRequirement = 3 }, 20);
+        Spell melody = new(new DbSpell { SpellID = 5002, Name = "Mesmerizing Melody", Type = "Mesmerize", Target = "Enemy",
+            Range = 1500, CastTime = 3.0, Duration = 20 }, 20);
+        Assert.That((PlayerBotDriver.IsControlSpell(cadence), PlayerBotDriver.IsControlSpell(melody)), Is.EqualTo((false, true)));
+    }
+
+    // The stun first (damage doesn't break it, GameLiving.cs:1784-1803), then the root, then the mez (the server resists
+    // a mez on a monster under 75% health, CCSpellHandler.cs:173-177); the highest level of each; only one the target
+    // can take now (allowed, #167 C8: the server's own tests) and that is ready.
+    [Test]
+    public void A_caster_controls_with_a_stun_then_a_root_then_a_mez_the_highest_ready()
+    {
+        (Spell, SpellLine)[] sorcerer = [(LesserCrippling, BodyLine), (Cripple, BodyLine), (MinorMesmerization, BodyLine),
+            (LesserMesmerization, BodyLine)];
+        Assert.That(PlayerBotDriver.ChooseControl(sorcerer, _ => true, _ => true, false, false).Item1, Is.SameAs(Cripple));
+        Assert.That(PlayerBotDriver.ChooseControl(sorcerer, s => s != Cripple, _ => true, false, false).Item1,
+            Is.SameAs(LesserCrippling));
+        Assert.That(PlayerBotDriver.ChooseControl(sorcerer, _ => true, s => s.SpellType != eSpellType.SpeedDecrease, false,
+            false).Item1, Is.SameAs(LesserMesmerization), "a target that can't be rooted");
+        Assert.That(PlayerBotDriver.ChooseControl(sorcerer, _ => true, s => s.SpellType == eSpellType.Stun, false, false).Item1,
+            Is.Null);
+        (Spell, SpellLine)[] both = [(Cripple, BodyLine), (PrismaticFlare, SunLine)];
+        Assert.That(PlayerBotDriver.ChooseControl(both, _ => true, _ => true, false, false).Item1, Is.SameAs(PrismaticFlare));
+        Assert.That(PlayerBotDriver.ChooseControl(both, _ => true, s => s.SpellType != eSpellType.Stun, false, false).Item1,
+            Is.SameAs(Cripple), "stun-immune");
+    }
+
+    // #167 C8: the server's own immunity test. An NPC's stun or mez starts a 60-s NpcImmunityEffect that halves each next
+    // hold and refuses one under 1 s (ECSImmunityEffect.cs:38-51; CCSpellHandler.cs:168-169, :282-283), which the old
+    // StunOk and MezOk read as full immunity: Eldritch and Mentalist cast 0.90 and 0.92 controls per kill, the root classes 1.30-1.81.
+    // World-DB stuns (Way of the Sun): an 8-s Prismatic Sheen holds 4 s the second time and 2 s the third, a 5-s
+    // Prismatic Flash 2.5 s the second time; an 8-s one is refused the sixth time (800 ms).
+    [Test]
+    public void A_stun_or_mez_goes_while_the_servers_diminishing_immunity_still_allows_a_second_of_it()
+    {
+        Spell sheen = Control(4124, "Prismatic Sheen", "Stun", 36, 0), flash = Control(4122, "Prismatic Flash", "Stun", 15, 0);
+        NpcStunImmunityEffect Immunity(Spell spell) =>
+            new(new ECSGameEffectInitParams(null, 60_000, 1, new DOL.GS.Spells.StunSpellHandler(null, spell, SunLine)));
+        NpcStunImmunityEffect afterSheen = Immunity(sheen), afterFlash = Immunity(flash);
+        Assert.That((afterSheen.CalculateNewEffectDuration(8_000), afterFlash.CalculateNewEffectDuration(5_000)),
+            Is.EqualTo((4_000L, 2_500L)), "the second time");
+        Assert.That(PlayerBotDriver.DiminishedAllows(null, 8_000), Is.True, "none on it");
+        Assert.That(PlayerBotDriver.DiminishedAllows(afterSheen, 8_000), Is.True, "the old rule: immune");
+        afterSheen.OnApplyNewEffect();
+        Assert.That(afterSheen.CalculateNewEffectDuration(8_000), Is.EqualTo(2_000L), "the third time");
+        afterSheen.OnApplyNewEffect();
+        afterSheen.OnApplyNewEffect();
+        Assert.That(PlayerBotDriver.DiminishedAllows(afterSheen, 8_000), Is.True, "1 s, the fifth time");
+        afterSheen.OnApplyNewEffect();
+        Assert.That(PlayerBotDriver.DiminishedAllows(afterSheen, 8_000), Is.False, "800 ms, the sixth time");
+        Assert.That(PlayerBotDriver.DiminishedAllows(Immunity(flash), 1_500), Is.False, "750 ms the second time");
+    }
+
+    // Takes as the controls read it (the review of 9aacd69: with the old "any immunity effect is immune" terms put back
+    // in Takes no test failed): the server's own tests by kind. After one Prismatic Sheen the monster takes the next for
+    // 4 s (the old rule: immune), not the sixth (800 ms); a CC-immune monster or one immune to the kind takes none; a mez
+    // only from 75% health (CCSpellHandler.cs:173-177); a root reads no diminishing immunity.
+    [Test]
+    public void A_monster_takes_a_control_by_the_servers_own_tests_of_its_kind()
+    {
+        Spell sheen = Control(4124, "Prismatic Sheen", "Stun", 36, 0, duration: 8);
+        var afterSheen = new NpcStunImmunityEffect(new ECSGameEffectInitParams(null, 60_000, 1,
+            new DOL.GS.Spells.StunSpellHandler(null, sheen, SunLine)));
+        Assert.That(PlayerBotDriver.Takes(sheen, false, false, afterSheen, 100), Is.True, "the second hold, 4 s");
+        Assert.That(PlayerBotDriver.Takes(sheen, false, false, null, 100), Is.True);
+        Assert.That((PlayerBotDriver.Takes(sheen, true, false, null, 100), PlayerBotDriver.Takes(sheen, false, true, null, 100)),
+            Is.EqualTo((false, false)), "CC-immune, stun-immune");
+        for (int i = 0; i < 4; i++) afterSheen.OnApplyNewEffect();
+        Assert.That(PlayerBotDriver.Takes(sheen, false, false, afterSheen, 100), Is.False, "the sixth hold, 800 ms");
+        Assert.That((PlayerBotDriver.Takes(LesserMesmerization, false, false, null, 75),
+            PlayerBotDriver.Takes(LesserMesmerization, false, false, null, 74)), Is.EqualTo((true, false)));
+        Assert.That(PlayerBotDriver.Takes(Cripple, false, false, afterSheen, 10), Is.True, "a root");
+        Assert.That(PlayerBotDriver.Takes(Cripple, false, true, null, 100), Is.False, "root-immune");
+    }
+
+    // CasterStep's filter on its target (C8; the review of 9aacd69: with MezWanted dropped from it no test failed): one the
+    // target takes, and a mez only as the escape.
+    [TestCase(false, true, 5_000L, true)] [TestCase(true, true, 3_500L, true)] [TestCase(true, true, 3_501L, false)]
+    [TestCase(false, false, 0L, false)] [TestCase(true, false, 0L, false)]
+    public void A_caster_controls_its_target_with_what_it_takes_and_a_mez_only_as_the_escape(bool mez, bool takes,
+        long contactMs, bool allowed) =>
+        Assert.That(PlayerBotDriver.CasterControlAllowed(mez ? LesserMesmerization : Cripple, takes, contactMs),
+            Is.EqualTo(allowed));
+
+    // #167 C8: a mez goes on the target only as the escape, the monster in reach before the mez and its margin end (it
+    // breaks on the next nuke's damage, GameLiving.cs:1784-1803); an add takes it whenever (C4).
+    [TestCase(0L, 3_000, true)] [TestCase(3_500L, 3_000, true)] [TestCase(3_501L, 3_000, false)] [TestCase(5_000L, 3_000, false)]
+    public void A_mez_on_the_target_is_only_the_escape(long contactMs, int mezCastMs, bool wanted) =>
+        Assert.That(PlayerBotDriver.MezWanted(contactMs, mezCastMs), Is.EqualTo(wanted));
+
+    // The time a monster needs to reach the bot: to ContactDistance (250) at its own speed, none at a speed of 0.
+    [TestCase(1_250, 200, 5_000L)] [TestCase(250, 200, 0L)] [TestCase(100, 200, 0L)] [TestCase(1_000, 0, long.MaxValue)]
+    public void A_monster_reaches_the_bot_at_its_own_speed(int distance, int speed, long contactMs) =>
+        Assert.That(PlayerBotDriver.TimeToContact(distance, speed), Is.EqualTo(contactMs));
+
+    // A caster's action against its target (a nuke of 3 s, a control of 2.5 s): it nukes while there is time for a nuke
+    // and the control after it; then it controls the monster coming at it while the cast ends before contact; in melee
+    // it quickcasts the control (the GameBot's rule: a caster under melee controls, BotBrain.cs:3874-3901). A held target
+    // it nukes, unless the monster is near and the nuke would break a root or mez, or hits interrupt the bot (#167 C3):
+    // then it steps back to range first. Nuke hands the think back to CombatAction (cast, wait, quickcast or swing).
+    [TestCase(false, 2_000L, false, false, 2_500, false, false, false, PlayerBotCasterAction.Nuke)]   // not coming at it
+    [TestCase(true, 8_000L, false, false, 2_500, false, false, false, PlayerBotCasterAction.Nuke)]    // time for a nuke
+    [TestCase(true, 6_000L, false, false, 2_500, false, false, false, PlayerBotCasterAction.Control)]
+    [TestCase(true, 3_000L, false, false, 2_500, false, false, false, PlayerBotCasterAction.Control)]
+    [TestCase(true, 2_900L, false, false, 2_500, false, false, false, PlayerBotCasterAction.Control)] // not yet hit
+    [TestCase(true, 0L, false, false, 2_500, false, true, false, PlayerBotCasterAction.QcControl)]    // in melee
+    [TestCase(true, 0L, false, false, 2_500, true, false, true, PlayerBotCasterAction.Control)]       // quickcast on
+    [TestCase(true, 0L, false, false, 2_500, true, false, false, PlayerBotCasterAction.Nuke)]         // hit, no quickcast
+    [TestCase(true, 6_000L, false, false, 2_500, true, true, false, PlayerBotCasterAction.QcControl)] // an add hits it (C4: the add step's first)
+    [TestCase(true, 6_000L, false, false, 2_500, true, false, false, PlayerBotCasterAction.Nuke)]
+    [TestCase(true, 0L, false, false, 0, false, true, false, PlayerBotCasterAction.Nuke)]             // no control ready
+    [TestCase(true, 1_000L, true, true, 2_500, false, false, false, PlayerBotCasterAction.StepBack)]  // rooted, near
+    [TestCase(true, 5_000L, true, true, 2_500, false, false, false, PlayerBotCasterAction.Nuke)]      // rooted, at range
+    [TestCase(true, 0L, true, false, 2_500, false, false, false, PlayerBotCasterAction.Nuke)]         // stunned
+    // #167 C3, the caster melee trap (81 of st-deathsB's 111 caster deaths): rooted in melee and hit, it nuked or swung,
+    // and its own hit ended the root (GameLiving.cs:1762-1777); a stun in melee with hits on it, it steps back too.
+    [TestCase(true, 0L, true, true, 0, true, false, false, PlayerBotCasterAction.StepBack)]           // rooted, hit
+    [TestCase(true, 0L, true, false, 0, true, false, false, PlayerBotCasterAction.StepBack)]          // stunned, hit
+    // Each threshold from both sides (the review of 5feb32b: no case told them apart). Before contact, Quickcast ready
+    // and not hit: the control's cast while it ends before contact (more than 3,000 ms), else Quickcast's.
+    [TestCase(true, 3_001L, false, false, 2_500, false, true, false, PlayerBotCasterAction.Control)]
+    [TestCase(true, 3_000L, false, false, 2_500, false, true, false, PlayerBotCasterAction.QcControl)]
+    // A held target the nuke frees: the step back while contact comes before the nuke's end and its margin (3,500).
+    [TestCase(true, 3_499L, true, true, 2_500, false, false, false, PlayerBotCasterAction.StepBack)]
+    [TestCase(true, 3_500L, true, true, 2_500, false, false, false, PlayerBotCasterAction.Nuke)]
+    // The nuke first while there is time for it, the control and both margins (6,500).
+    [TestCase(true, 6_500L, false, false, 2_500, false, false, false, PlayerBotCasterAction.Control)]
+    [TestCase(true, 6_501L, false, false, 2_500, false, false, false, PlayerBotCasterAction.Nuke)]
+    public void A_caster_nukes_controls_the_monster_coming_at_it_and_steps_back_from_a_held_one(bool closing, long contactMs,
+        bool held, bool holdBreaksOnHit, int controlCastMs, bool interrupted, bool quickcastReady, bool quickcastOn,
+        PlayerBotCasterAction expected) =>
+        Assert.That(PlayerBotDriver.CasterAction(closing, contactMs, held, holdBreaksOnHit, controlCastMs, 3_000, interrupted,
+            quickcastReady, quickcastOn, killsFirst: false), Is.EqualTo(expected));
+
+    // #167 C3, the caster melee trap: after a quickcast root in melee, Quickcast is down and the rooted monster's hits
+    // kept interrupting the bot (AttackComponent.cs:1298), so Engage stopped it in melee (HoldsSpellRange false), the held
+    // branch nuked, CombatAction swung, and the bot's own hit ended the root (a miss a mez, GameLiving.cs:1762-1777). Now
+    // a caster's held target (CasterHolds) keeps the spell's stop, so the step back (83dcb96's gate, spellStop, goes:
+    // Kites runs before the walk in) ends within it; and its swing, which would end a root or mez (SwingBreaksHold), waits
+    // instead, power under 18% too: it stands off until the hold ends rather than break it.
+    [Test]
+    public void A_caster_in_melee_with_a_held_monster_steps_back_and_holds_its_spell_range()
+    {
+        long contact = PlayerBotDriver.TimeToContact(80, 200);
+        Assert.That(PlayerBotDriver.CasterAction(true, contact, true, true, 0, 3_000, true, false, false, false),
+            Is.EqualTo(PlayerBotCasterAction.StepBack), "rooted in melee, hit, no Quickcast ready: it nuked");
+        Assert.That(PlayerBotDriver.CombatStopDistance(true, true, true, false, 200, 1_500, casterHold: true), Is.EqualTo(1_420));
+        Assert.That(PlayerBotDriver.CombatStopDistance(true, true, true, false, 200, 1_500, casterHold: false),
+            Is.EqualTo(PlayerBotDriver.MeleeStopDistance(200)), "no hold: melee, as before");
+        Assert.That(PlayerBotDriver.CombatAction(true, true, 0, true, false, due: true, heldBreaksOnHit: true),
+            Is.EqualTo(PlayerBotCombatAction.WaitToCast));
+        Assert.That(PlayerBotDriver.CombatAction(true, true, 0, true, false, due: true, heldBreaksOnHit: false),
+            Is.EqualTo(PlayerBotCombatAction.Swing));
+        Assert.That(PlayerBotDriver.CombatAction(false, false, 0, true, false, due: true, heldBreaksOnHit: true),
+            Is.EqualTo(PlayerBotCombatAction.WaitToCast), "nothing to cast (power under 18%): it waits, no swing");
+        Assert.That(PlayerBotDriver.CombatAction(true, true, 0, true, true, due: true, heldBreaksOnHit: true),
+            Is.EqualTo(PlayerBotCombatAction.Quickcast), "only a swing becomes a wait");
+    }
+
+    // The trap's rows where Engage takes them (the review of 9aacd69: with Engage's casterHold, swingBreaksHold, the
+    // blocked step back or the guard switched off no test failed): one plan gives the action and the stop. A caster with
+    // its target rooted in melee, hit and no Quickcast: a wait, and the spell's stop (1,420), not the swing that freed it;
+    // its step back blocked: the swing, as before, the stop kept; an un-held add hitting it, or a melee class: melee's
+    // (152); a stun: the swing (a hit doesn't end it) and the spell's stop.
+    [TestCase(PlayerBotRole.Caster, true, true, false, false, PlayerBotCombatAction.WaitToCast, 1_420, true)]
+    [TestCase(PlayerBotRole.Caster, true, true, false, true, PlayerBotCombatAction.Swing, 1_420, true)]      // step back blocked
+    [TestCase(PlayerBotRole.Caster, true, true, true, false, PlayerBotCombatAction.Swing, 152, false)]      // an add hits it
+    [TestCase(PlayerBotRole.Caster, true, false, false, false, PlayerBotCombatAction.Swing, 1_420, true)]   // a stun
+    [TestCase(PlayerBotRole.Caster, false, false, false, false, PlayerBotCombatAction.Swing, 152, false)]   // not held
+    [TestCase(PlayerBotRole.Melee, true, true, false, false, PlayerBotCombatAction.Swing, 152, false)]
+    public void A_caster_rooted_in_melee_waits_at_its_spell_range_unless_its_step_back_is_blocked_or_an_add_hits_it(
+        PlayerBotRole role, bool held, bool breaksOnHit, bool otherHitting, bool stepBackBlocked, PlayerBotCombatAction action,
+        int stop, bool holds) =>
+        Assert.That(PlayerBotDriver.CasterHoldPlan(role, held, breaksOnHit, otherHitting, stepBackBlocked, canCast: true,
+            interrupted: true, selfInterruptMs: 0, interruptible: true, quickcastReady: false, due: true, attackRange: 200,
+            spellRange: 1_500), Is.EqualTo((action, stop, holds)));
+
+    // The review of 9aacd69: with no nuke chosen (power under the cheapest one's cost, or all recasting), Engage read the
+    // stop from CalculateSpellRange(null), 32 (CastingComponent.cs:188-192): SpellStopDistance's 145. A caster with its
+    // target rooted 1,000 units off walked in to 145, inside the monster's reach, "stepped back" 95 units from it (nearer
+    // than it stood), and waited there taking hits until the root ended. The stop now reads its longest damage spell's
+    // range; the step back goes only farther out than the bot stands; and with no damage spell at all it holds nothing.
+    [Test]
+    public void A_caster_with_no_nuke_chosen_holds_its_longest_nukes_range_off_a_rooted_monster()
+    {
+        (Spell, SpellLine)[] nukes = [(FungalOoze, null), (FungalThistle, null)];
+        Assert.That(PlayerBotDriver.StopSpellRange(null, nukes, spell => spell.Range), Is.EqualTo(1_875), "the longest");
+        Assert.That(PlayerBotDriver.StopSpellRange(FungalOoze, nukes, spell => spell.Range), Is.EqualTo(FungalOoze.Range));
+        Assert.That(PlayerBotDriver.StopSpellRange(null, [], spell => spell.Range), Is.Zero);
+        Assert.That(PlayerBotDriver.StopSpellRange(null, null, spell => spell.Range), Is.Zero);
+        Assert.That(PlayerBotDriver.CasterHoldPlan(PlayerBotRole.Caster, true, true, false, false, canCast: false,
+            interrupted: false, selfInterruptMs: 0, interruptible: false, quickcastReady: false, due: true, attackRange: 200,
+            spellRange: 1_875), Is.EqualTo((PlayerBotCombatAction.WaitToCast, 1_795, true)), "it stands off, no swing");
+        Assert.That(PlayerBotDriver.CasterHoldPlan(PlayerBotRole.Caster, true, true, false, false, canCast: false,
+            interrupted: false, selfInterruptMs: 0, interruptible: false, quickcastReady: false, due: true, attackRange: 200,
+            spellRange: 0), Is.EqualTo((PlayerBotCombatAction.Swing, 152, false)), "no damage spell: no hold to keep");
+        Assert.That(PlayerBotDriver.KiteRange(1_420, 100), Is.EqualTo(1_370));
+        Assert.That((PlayerBotDriver.KiteRange(145, 145), PlayerBotDriver.KiteRange(1_420, 1_370)),
+            Is.EqualTo(((int?)null, (int?)null)), "never toward the target");
+    }
+
+    // Only a caster, only while its target is held, and only while no other monster hits it that is not held (the guard:
+    // then the add's control, C4, or a break-off, C2): the step back would not shake an add, and a wait with an add's
+    // hits on it would stand the bot idle.
+    [TestCase(PlayerBotRole.Caster, true, false, true)]
+    [TestCase(PlayerBotRole.Caster, true, true, false)]                                     // an add hits it, not held
+    [TestCase(PlayerBotRole.Caster, false, false, false)]                                   // not held
+    [TestCase(PlayerBotRole.Healer, true, false, false)]                                    // no caster: as before
+    [TestCase(PlayerBotRole.Melee, true, false, false)]
+    public void Only_a_caster_alone_with_its_held_target_keeps_the_hold(PlayerBotRole role, bool held, bool otherHitting,
+        bool holds) =>
+        Assert.That(PlayerBotDriver.CasterHolds(role, held, otherHitting), Is.EqualTo(holds));
+
+    // The verifier's correction: a blocked step back pauses KitePauseMilliseconds (Kites), and the wait would stand the bot
+    // idle in the rooted monster's reach that long: then the old rule, a swing (or the cast). A stun, which a hit doesn't
+    // end (GameLiving.cs:1784-1803), takes the swing as before.
+    [TestCase(true, true, false, PlayerBotCombatAction.WaitToCast)]
+    [TestCase(true, true, true, PlayerBotCombatAction.Swing)]                               // its step back blocked
+    [TestCase(true, false, false, PlayerBotCombatAction.Swing)]                             // a stun
+    [TestCase(false, true, false, PlayerBotCombatAction.Swing)]                             // no caster's hold
+    public void A_caster_with_its_step_back_blocked_swings_as_before(bool casterHold, bool breaksOnHit, bool stepBackBlocked,
+        PlayerBotCombatAction action) =>
+        Assert.That(PlayerBotDriver.CombatAction(true, true, 0, true, false, due: true,
+            PlayerBotDriver.SwingBreaksHold(casterHold, breaksOnHit, stepBackBlocked)), Is.EqualTo(action));
+
+    // The step back's point keeps the bot within its stop: Engage's distance (GetDistanceTo) is 3D, KiteStep's range flat
+    // at the bot's height, and the navmesh may move the point up or down. With a stop of 1,420 and the bot arriving
+    // within 20 of it: a point 1,370 out on the flat fits; 1,370 out and 400 up (a slope of 16 degrees) is 1,427 away,
+    // past the stop, where Engage walked it back in and it cast nothing for the whole root.
+    [TestCase(1_370f, 0f, true)] [TestCase(1_400f, 0f, true)] [TestCase(1_401f, 0f, false)] [TestCase(1_370f, 400f, false)]
+    public void A_step_backs_point_lies_within_the_stop_in_3d(float x, float z, bool fits) =>
+        Assert.That(PlayerBotDriver.KiteFits(new Vector3(x, 0, z), Vector3.Zero, 1_420), Is.EqualTo(fits));
+
+    // The step back: a point at range from the target, straight away from it, else turned 30, 60 or 90 degrees either
+    // way, the first out of every potential add's reach (the adds rule's ring) so the step pulls nothing; none, null.
+    [Test]
+    public void A_caster_steps_back_away_from_its_target_clear_of_the_adds()
+    {
+        var none = new List<(string, Vector3, int)>();
+        Assert.That(PlayerBotDriver.KiteStep(new Vector3(300, 0, 0), Vector3.Zero, 1_420, none), Is.EqualTo(new Vector3(1_420, 0, 0)));
+        Assert.That(PlayerBotDriver.KiteStep(Vector3.Zero, Vector3.Zero, 1_420, none), Is.EqualTo(new Vector3(1_420, 0, 0)),
+            "on top of it: along +X");
+        var behind = new List<(string, Vector3, int)> { ("add", new(1_400, 0, 0), 300) };
+        Vector3? turned = PlayerBotDriver.KiteStep(new Vector3(300, 0, 0), Vector3.Zero, 1_420, behind);
+        Assert.That(turned, Is.Not.Null);
+        Assert.That(Vector3.Distance(turned!.Value, new Vector3(1_229.76f, 710f, 0)), Is.LessThan(0.1f), $"{turned}");
+        var round = new List<(string, Vector3, int)> { ("add", Vector3.Zero, 1_500) };
+        Assert.That(PlayerBotDriver.KiteStep(new Vector3(300, 0, 0), Vector3.Zero, 1_420, round), Is.Null);
+    }
+
+    // #167 C3 (inf.): with no point clear of the adds, a bot in melee steps back anyway, straight away to 400 units from
+    // its target: a null left it in the held monster's reach. Out of melee, none, as before. A clear point is Clear: its
+    // place on the navmesh is checked against the adds again, the fallback's is not.
+    [Test]
+    public void A_caster_in_melee_with_no_clear_point_steps_back_straight_away_anyway()
+    {
+        var round = new List<(string, Vector3, int)> { ("add", Vector3.Zero, 1_500) };
+        Assert.That(PlayerBotDriver.KiteTarget(new Vector3(100, 0, 0), Vector3.Zero, 1_370, round, inMelee: true),
+            Is.EqualTo((new Vector3(400, 0, 0), false)));
+        Assert.That(PlayerBotDriver.KiteTarget(new Vector3(600, 0, 0), Vector3.Zero, 1_370, round, inMelee: false), Is.Null);
+        var none = new List<(string, Vector3, int)>();
+        Assert.That(PlayerBotDriver.KiteTarget(new Vector3(100, 0, 0), Vector3.Zero, 1_370, none, inMelee: true),
+            Is.EqualTo((new Vector3(1_370, 0, 0), true)));
+    }
+
+    // --- no control when the nukes kill first (#167 C11) ---
+
+    // The nukes the target still needs, from what the fight's casts took off it so far: ceil(health / ((start - health)
+    // / casts)); nothing measured (no cast, or no health off it yet), int.MaxValue.
+    [TestCase(100, 65, 1, 2)] [TestCase(100, 70, 1, 3)] [TestCase(100, 30, 2, 1)] [TestCase(100, 0, 3, 0)]
+    [TestCase(100, 100, 1, int.MaxValue)] [TestCase(100, 100, 0, int.MaxValue)]
+    public void The_nukes_a_target_still_needs_come_from_what_the_fights_casts_took(int startHealth, int health, int nukesCast,
+        int needed) =>
+        Assert.That(PlayerBotDriver.NukesNeeded(startHealth, health, nukesCast), Is.EqualTo(needed));
+
+    // Whether those nukes land before the monster reaches the bot: one per nuke's cast and 250 ms, and one more with
+    // Quickcast ready (the killing nuke through the hits).
+    [TestCase(2, 6_100L, 3_000, true, true)] [TestCase(2, 6_100L, 3_000, false, false)]
+    [TestCase(1, 3_300L, 3_000, false, true)] [TestCase(1, 0L, 3_000, true, true)]
+    [TestCase(int.MaxValue, 60_000L, 3_000, true, false)]
+    public void The_nukes_kill_first_while_they_land_before_contact(int needed, long contactMs, int nukeCastMs,
+        bool quickcastReady, bool killsFirst) =>
+        Assert.That(PlayerBotDriver.KillsFirst(needed, contactMs, nukeCastMs, quickcastReady), Is.EqualTo(killsFirst));
+
+    // A GREEN pull with 3 nukes took 9.5 s in st-deathsA and 16.8 s in st-deathsB: the control went whenever contact was
+    // under a nuke, the control and 1 s (6.5 s), every pull from 1,420 units. Now the nuke while the nukes kill first;
+    // in melee, hit, with Quickcast ready, the nuke too (CombatAction quickcasts it).
+    [Test]
+    public void A_caster_nukes_instead_of_controlling_when_the_nukes_kill_first()
+    {
+        Assert.That(PlayerBotDriver.CasterAction(true, 6_000, false, false, 2_500, 3_000, false, true, false, killsFirst: true),
+            Is.EqualTo(PlayerBotCasterAction.Nuke));
+        Assert.That(PlayerBotDriver.CasterAction(true, 6_000, false, false, 2_500, 3_000, false, true, false, killsFirst: false),
+            Is.EqualTo(PlayerBotCasterAction.Control));
+        Assert.That(PlayerBotDriver.CasterAction(true, 0, false, false, 2_500, 3_000, true, true, false, killsFirst: true),
+            Is.EqualTo(PlayerBotCasterAction.Nuke));
+        Assert.That(PlayerBotDriver.CombatAction(true, true, 0, true, true, due: true, heldBreaksOnHit: false),
+            Is.EqualTo(PlayerBotCombatAction.Quickcast), "the killing nuke quickcast");
+        Assert.That(PlayerBotDriver.CasterAction(true, 1_000, true, true, 2_500, 3_000, false, false, false, killsFirst: true),
+            Is.EqualTo(PlayerBotCasterAction.StepBack), "a held one: as before");
+    }
+
+    // CasterStep's killsFirst as it reads it (the review of 9aacd69: forced false there, no test failed): the nukes the
+    // fight's casts say the target needs land before contact, the bot at 60% health or more and one monster at most on it.
+    [TestCase(100, 65, 1, 6_100L, 3_000, true, (byte)100, 1, true)]
+    [TestCase(100, 65, 1, 6_100L, 3_000, false, (byte)100, 1, false)]                        // no Quickcast: 1 lands
+    [TestCase(100, 65, 1, 6_100L, 3_000, true, (byte)59, 1, false)]                          // under 60%
+    [TestCase(100, 65, 1, 6_100L, 3_000, true, (byte)60, 1, true)]
+    [TestCase(100, 65, 1, 6_100L, 3_000, true, (byte)100, 2, false)]                         // an add on it
+    [TestCase(100, 100, 0, 60_000L, 3_000, true, (byte)100, 0, false)]                       // nothing measured
+    public void A_caster_skips_its_control_when_its_nukes_kill_first_healthy_and_alone(int engageHealth, int health,
+        int casts, long contactMs, int nukeCastMs, bool quickcastReady, byte botHealth, int attackers, bool killsFirst) =>
+        Assert.That(PlayerBotDriver.KillsFirstNow(engageHealth, health, casts, contactMs, nukeCastMs, quickcastReady, botHealth,
+            attackers), Is.EqualTo(killsFirst));
+
+    // --- the add's control (#167 C4) ---
+
+    // Caster add fights were fatal 96% of the time in st-deathsB (51 of 53): casters controlled their target, never an add
+    // (CasterStep's state.Target only). The add: the nearest monster with the bot as its target, not held and not the
+    // target (the merged seam: caster-pulls' attacker within 250 kept as its cases).
+    [Test]
+    public void The_add_to_control_is_the_nearest_unheld_monster_on_the_bot_but_the_target()
+    {
+        Assert.That(PlayerBotDriver.ChooseAdd([("target", 100, true, false), ("a", 600, true, false), ("b", 300, true, true),
+            ("c", 200, false, false)], "target"), Is.EqualTo("a"), "b is held, c isn't on the bot");
+        Assert.That(PlayerBotDriver.ChooseAdd([("A", 1_400, true, false), ("B", 120, true, false)], "A"), Is.EqualTo("B"));
+        Assert.That(PlayerBotDriver.ChooseAdd([("A", 1_400, true, false), ("B", 120, true, false), ("C", 90, true, false)], "A"),
+            Is.EqualTo("C"));
+        Assert.That(PlayerBotDriver.ChooseAdd([("A", 100, true, false), ("B", 120, true, true)], "A"), Is.Null);
+        Assert.That(PlayerBotDriver.ChooseAdd([("A", 100, true, false)], "A"), Is.Null, "only the target");
+    }
+
+    // For an add the order is a mez, then a root, then a stun (the GameBot mezzes adds, BotBrain.cs:3887-3893); a pet class
+    // skips the mez: its pet's defence hits the add and ends it (ControlledMobBrain.cs:930-970, inf.). The target's order
+    // stays a stun, a root, a mez.
+    [Test]
+    public void An_add_takes_a_mez_first_but_from_a_pet_class()
+    {
+        (Spell, SpellLine)[] sorcerer = [(LesserCrippling, BodyLine), (Cripple, BodyLine), (MinorMesmerization, BodyLine),
+            (LesserMesmerization, BodyLine)];
+        Assert.That(PlayerBotDriver.ChooseControl(sorcerer, _ => true, _ => true, forAdd: true, petClass: false).Item1,
+            Is.SameAs(LesserMesmerization));
+        Assert.That(PlayerBotDriver.ChooseControl(sorcerer, _ => true, _ => true, forAdd: false, petClass: false).Item1,
+            Is.SameAs(Cripple), "the target's order");
+        Assert.That(PlayerBotDriver.ChooseControl(sorcerer, _ => true, s => s.SpellType != eSpellType.Mesmerize, forAdd: true,
+            petClass: false).Item1, Is.SameAs(Cripple), "the add under 75%: no mez (CCSpellHandler.cs:173-177)");
+        Assert.That(PlayerBotDriver.ChooseControl(sorcerer, _ => true, _ => true, forAdd: true, petClass: true).Item1,
+            Is.SameAs(Cripple), "a pet class");
+        (Spell, SpellLine)[] enchanter = [(Control(4124, "Prismatic Sheen", "Stun", 36, 0), SunLine)];
+        Assert.That(PlayerBotDriver.ChooseControl(enchanter, _ => true, _ => true, forAdd: true, petClass: true).Item1?.Name,
+            Is.EqualTo("Prismatic Sheen"));
+        Assert.That(PlayerBotDriver.ChooseControl(sorcerer, _ => false, _ => true, forAdd: true, petClass: false).Item1, Is.Null,
+            "none ready");
+    }
+
+    // A root keeps an add off only while it is still away: in melee a rooted monster still hits (inf.). A mez or a stun
+    // stops its hits there too.
+    [Test]
+    public void A_root_on_an_add_already_in_melee_is_no_control()
+    {
+        Assert.That(PlayerBotDriver.ControlKeepsAddOff(Cripple, 251), Is.True);
+        Assert.That(PlayerBotDriver.ControlKeepsAddOff(Cripple, 250), Is.False);
+        Assert.That(PlayerBotDriver.ControlKeepsAddOff(LesserMesmerization, 100), Is.True);
+        Assert.That(PlayerBotDriver.ControlKeepsAddOff(PrismaticFlare, 0), Is.True);
+    }
+
+    // The add's control (a 2,500-ms cast, the 500-ms margin), for every role with a control: cast while it ends before
+    // the add's contact and no hit interrupts the bot; else only with Quickcast (Quickcast ready: turn it on; on: cast).
+    // Not while the target's control comes first (TargetFirst), nor with no add or no control. The review of 9aacd69: an
+    // instant control (a cast time of 0: a Skald's Stunning Shout and Disabling Shout, a Minstrel's Stunning Yell) read
+    // as none; it goes whatever the hits and the contact, as CombatAction casts an uninterruptible spell.
+    [TestCase(false, true, 4_000L, false, 2_500, true, false, false, false, PlayerBotAddAction.None)]
+    [TestCase(true, true, 4_000L, false, 2_500, true, false, false, false, PlayerBotAddAction.Control)]
+    [TestCase(true, true, 3_001L, false, 2_500, true, false, true, false, PlayerBotAddAction.Control)]
+    [TestCase(true, true, 3_000L, false, 2_500, true, false, true, false, PlayerBotAddAction.QcControl)]
+    [TestCase(true, true, 3_000L, false, 2_500, true, false, false, false, PlayerBotAddAction.None)]          // no Quickcast
+    [TestCase(true, true, 0L, false, 2_500, true, true, true, false, PlayerBotAddAction.QcControl)]
+    [TestCase(true, true, 0L, false, 2_500, true, true, false, true, PlayerBotAddAction.Control)]            // Quickcast on
+    [TestCase(true, true, 0L, false, 2_500, true, true, false, false, PlayerBotAddAction.None)]             // a healer once hit
+    [TestCase(true, true, 6_000L, true, 2_500, true, false, false, false, PlayerBotAddAction.None)]          // the target's first
+    [TestCase(true, false, 6_000L, false, 0, true, false, false, false, PlayerBotAddAction.None)]            // no control
+    [TestCase(true, true, 6_000L, false, 2_500, true, true, false, false, PlayerBotAddAction.None)]          // the target's hits
+    [TestCase(true, true, 6_000L, false, 2_500, true, true, true, false, PlayerBotAddAction.QcControl)]
+    [TestCase(true, true, 0L, false, 0, false, true, false, false, PlayerBotAddAction.Control)]              // instant, in melee, hit
+    [TestCase(true, true, 6_000L, false, 0, false, false, false, false, PlayerBotAddAction.Control)]         // instant
+    [TestCase(true, true, 0L, true, 0, false, true, false, false, PlayerBotAddAction.None)]                  // the target's first
+    public void A_bot_controls_the_add_before_it_arrives_else_with_quickcast(bool hasAdd, bool hasControl, long addContactMs,
+        bool targetFirst, int controlCastMs, bool interruptible, bool interrupted, bool quickcastReady, bool quickcastOn,
+        PlayerBotAddAction expected) =>
+        Assert.That(PlayerBotDriver.AddAction(hasAdd, hasControl, addContactMs, targetFirst, controlCastMs, interruptible,
+            interrupted, quickcastReady, quickcastOn), Is.EqualTo(expected));
+
+    // One Quickcast in 30 s (SpellHandler.cs:1430-1434): an add hitting the bot (contact 0) while its target comes at 6 s
+    // took it on the target (CasterAction's "an add hits it" row); the add step runs first now, turns it on for the add,
+    // and casts the add's control with it at the next think, where CasterStep sees it as not ready.
+    [Test]
+    public void Quickcast_goes_to_the_add_first()
+    {
+        Assert.That(PlayerBotDriver.CasterAction(true, 6_000, false, false, 2_500, 3_000, true, true, false, false),
+            Is.EqualTo(PlayerBotCasterAction.QcControl), "the target's, after the add step");
+        Assert.That(PlayerBotDriver.AddAction(true, true, 0, PlayerBotDriver.TargetFirst(true, false, true, 6_000, 0), 2_500,
+            true, true, true, false), Is.EqualTo(PlayerBotAddAction.QcControl), "the add's first");
+        Assert.That(PlayerBotDriver.AddAction(true, true, 0, false, 2_500, true, true, false, true),
+            Is.EqualTo(PlayerBotAddAction.Control), "the next think, Quickcast on");
+        Assert.That(PlayerBotDriver.QuickcastReady(true, true, 0, 0, false, 5_000), Is.False, "CasterStep's view: on already");
+    }
+
+    // A caster's own control on its target comes first while the target, un-held and coming at it, reaches it before the
+    // add (CasterStep controls it then); else the add's. Both in melee: the add's, as Quickcast's order has it.
+    [TestCase(true, false, true, 1_000L, 3_000L, true)]
+    [TestCase(true, false, true, 3_000L, 1_000L, false)]
+    [TestCase(true, false, true, 0L, 0L, false)]
+    [TestCase(true, true, true, 1_000L, 3_000L, false)]                                     // the target held
+    [TestCase(false, false, true, 1_000L, 3_000L, false)]                                   // no control for it
+    [TestCase(true, false, false, 1_000L, 3_000L, false)]                                   // not coming at it
+    public void The_targets_control_comes_first_while_it_arrives_first(bool controlsTarget, bool targetHeld, bool closing,
+        long targetContactMs, long addContactMs, bool first) =>
+        Assert.That(PlayerBotDriver.TargetFirst(controlsTarget, targetHeld, closing, targetContactMs, addContactMs),
+            Is.EqualTo(first));
+
+    // The review of 9aacd69: TargetFirst counted any control the target takes, not one CasterStep would cast now. The
+    // target's only control a mez not yet wanted (contact 5,000 against its 3,000-ms cast: MezWanted) gave the add's step
+    // None, and CasterStep nuked: the add reached melee uncontrolled. Now it is CasterStep's own choice (its filter,
+    // CasterControlAllowed), so with none the add's mez goes (6,000 ms off).
+    [Test]
+    public void The_target_comes_first_only_with_a_control_casterstep_would_cast_now()
+    {
+        (Spell, SpellLine)[] onlyMez = [(LesserMesmerization, BodyLine)];
+        Spell forTarget = PlayerBotDriver.ChooseControl(onlyMez, _ => true,
+            spell => PlayerBotDriver.CasterControlAllowed(spell, takes: true, contactMs: 5_000), false, false).Item1;
+        Assert.That(forTarget, Is.Null, "a mez not yet wanted");
+        bool targetFirst = PlayerBotDriver.TargetFirst(forTarget != null, false, true, 5_000, 6_000);
+        Assert.That(PlayerBotDriver.AddAction(true, true, 6_000, targetFirst, 3_000, true, false, false, false),
+            Is.EqualTo(PlayerBotAddAction.Control));
+        Spell escape = PlayerBotDriver.ChooseControl(onlyMez, _ => true,
+            spell => PlayerBotDriver.CasterControlAllowed(spell, takes: true, contactMs: 3_000), false, false).Item1;
+        Assert.That(PlayerBotDriver.TargetFirst(escape != null, false, true, 3_000, 6_000), Is.True, "the escape: the target's");
+    }
+
+    // The verifier's correction: CheckBeginCast and CheckEndCast need the spell's target in the front 180 degrees
+    // (SpellHandler.cs:725, :939), and Engage faced the target every think before its IsCasting return. While a cast at
+    // the add is under way the bot faces the add.
+    [Test]
+    public void A_bot_casting_at_the_add_faces_the_add()
+    {
+        Assert.That(PlayerBotDriver.FacesWhom("target", "add", casting: true), Is.EqualTo("add"));
+        Assert.That(PlayerBotDriver.FacesWhom("target", "add", casting: false), Is.EqualTo("target"));
+        Assert.That(PlayerBotDriver.FacesWhom("target", null, casting: true), Is.EqualTo("target"));
+    }
+
+    // Whom Engage faces, from the add a cast was made at (the review of 9aacd69: with Engage's facing set back to the target
+    // no test failed): the add while the cast at it is under way and it lives; once it died, or the cast ended, the target.
+    [TestCase("add", true, true, "add")] [TestCase("add", true, false, "target")] [TestCase("add", false, true, "target")]
+    [TestCase(null, true, true, "target")]
+    public void Engage_faces_the_add_while_its_cast_is_under_way_and_it_lives(string addCast, bool casting, bool addAlive,
+        string faced) =>
+        Assert.That(PlayerBotDriver.EngageFacing("target", addCast, casting, addAlive), Is.EqualTo(faced));
+
+    // The order of Engage's steps (the review of 9aacd69: with the add's step switched off no test failed): a cast under
+    // way, nothing; at a due cast choice the add's step first when it acts (its control, Quickcast for it, or a
+    // Theurgist's pets at it), then the pet leads, then CasterStep and CombatAction.
+    [TestCase(true, true, PlayerBotAddAction.Control, true, PlayerBotEngageStep.Wait)]
+    [TestCase(true, false, PlayerBotAddAction.Control, true, PlayerBotEngageStep.Add)]
+    [TestCase(true, false, PlayerBotAddAction.QcControl, false, PlayerBotEngageStep.Add)]
+    [TestCase(true, false, PlayerBotAddAction.Pets, false, PlayerBotEngageStep.Add)]
+    [TestCase(false, false, PlayerBotAddAction.Control, true, PlayerBotEngageStep.PetLeads)]
+    [TestCase(true, false, PlayerBotAddAction.None, true, PlayerBotEngageStep.PetLeads)]
+    [TestCase(true, false, PlayerBotAddAction.None, false, PlayerBotEngageStep.Caster)]
+    [TestCase(false, false, PlayerBotAddAction.Control, false, PlayerBotEngageStep.Caster)]
+    public void The_adds_control_comes_before_the_pet_leads_and_the_casters_step(bool due, bool casting,
+        PlayerBotAddAction addAction, bool petLeads, PlayerBotEngageStep step) =>
+        Assert.That(PlayerBotDriver.EngageStepOrder(due, casting, addAction, petLeads), Is.EqualTo(step));
+
+    // A mezzed or stunned monster keeps the bot as its target (CrowdControlECSEffect.cs:26-37 stops its attack only), but
+    // it hits nothing: it is not on the bot for the break-off (C2), so a controlled add doesn't start one.
+    [TestCase(true, false, true)] [TestCase(true, true, false)] [TestCase(false, false, false)]
+    public void A_mezzed_or_stunned_add_is_not_on_the_bot(bool attacksBot, bool crowdControlled, bool onBot) =>
+        Assert.That(PlayerBotDriver.OnBot(attacksBot, crowdControlled), Is.EqualTo(onBot));
+
+    // --- the nuke per cast (#167 F9) ---
+
+    // World-DB spells (Spell, LineXSpell): a Shaman's Subterranean bolts and its direct damage, a Wizard's Pyromancy.
+    private static Spell Nuke(int id, string name, string type, int level, double damage, int range, int radius = 0) =>
+        new(new DbSpell { SpellID = id, Name = name, Type = type, Target = "Enemy", Damage = damage, Range = range,
+            Radius = radius, CastTime = 3.0 }, level);
+
+    private static readonly Spell FungalPin = Nuke(3461, "Fungal Pin", "Bolt", 1, 7, 1875),
+        FungalThistle = Nuke(3466, "Fungal Thistle", "Bolt", 20, 114, 1875),
+        FungalOoze = Nuke(3490, "Fungal Ooze", "DirectDamage", 20, 73, 1500),
+        FlameStreak = Nuke(374, "Flame Streak", "Bolt", 19, 133, 1875),
+        LesserConflagration = Nuke(357, "Lesser Conflagration", "DirectDamage", 23, 108, 1500),
+        ConcussiveBlast = Nuke(366, "Concussive Blast", "DirectDamage", 24, 87, 1500, radius: 350);
+
+    private static readonly SpellLine Subterranean = new("Subterranean Spec", "Subterranean", Specs.Subterranean, true),
+        Pyromancy = new("Pyromancy", "Pyromancy", Specs.Fire_Magic, true);
+
+    private static string NukeName(IEnumerable<Spell> spells, Func<Spell, bool> ready, bool addInRadius = false) =>
+        PlayerBotDriver.ChooseNuke(spells.Select(spell => (spell, Subterranean)), ready, addInRadius).Item1?.Name ?? "-";
+
+    [Test]
+    public void A_bot_casts_its_bolt_when_it_is_ready_else_its_best_ready_nuke()
+    {
+        // Fungal Thistle and Fungal Ooze share no timer, each a 20-s recast: the Ooze while the Thistle waits (the old
+        // choice kept the Thistle, the better spell, and the cast failed)
+        Spell[] shaman = [FungalThistle, FungalOoze];
+        Assert.That(NukeName(shaman, spell => spell != FungalThistle), Is.EqualTo("Fungal Ooze"));
+        Assert.That(NukeName(shaman, _ => true), Is.EqualTo("Fungal Thistle"));
+        Assert.That(NukeName(shaman, _ => false), Is.EqualTo("-"));                  // none ready: it swings
+        // a ready bolt before a higher, single-target spell (Better's choice): the Wizard's Flame Streak at 19
+        Spell[] wizard = [LesserConflagration, FlameStreak];
+        Assert.That(NukeName(wizard, _ => true), Is.EqualTo("Flame Streak"));
+        Assert.That(NukeName(wizard, spell => spell != FlameStreak), Is.EqualTo("Lesser Conflagration"));
+    }
+
+    [Test]
+    public void An_area_nuke_comes_after_the_single_target_ones_and_never_with_an_add_in_its_radius()
+    {
+        Spell[] wizard = [ConcussiveBlast, LesserConflagration];                       // Pyromancy at 24
+        Assert.That(NukeName(wizard, _ => true), Is.EqualTo("Lesser Conflagration"));   // not the higher area one
+        Assert.That(NukeName(wizard, spell => spell == ConcussiveBlast), Is.EqualTo("Concussive Blast"));
+        Assert.That(NukeName(wizard, spell => spell == ConcussiveBlast, addInRadius: true), Is.EqualTo("-"));
+        Assert.That(NukeName(wizard, _ => true, addInRadius: true), Is.EqualTo("Lesser Conflagration"));
+    }
+
+    [Test]
+    public void A_bots_damage_spells_leave_out_the_ranks_a_gamebot_outgrew()        // BotBrain.cs:3413
+    {
+        List<(Spell, SpellLine)> usable = [(FungalPin, Subterranean), (FungalThistle, Subterranean),
+            (FungalOoze, Subterranean), (Damage("DirectDamage", 30, 90), Subterranean)];
+        Assert.That(PlayerBotDriver.DamageSpells(usable, 20, _ => null).Select(pair => pair.Spell.Name),
+            Is.EqualTo(new[] { "Fungal Thistle", "Fungal Ooze" }));                    // Pin: the Thistle outranks it; 30: above
+        Assert.That(PlayerBotDriver.DamageSpells(usable, 19, _ => null).Select(pair => pair.Spell.Name),
+            Is.EqualTo(new[] { "Fungal Pin" }));
+    }
+
+    // --- Animists (#167 F10b) ---
+
+    // World-DB spells: an Animist's Creeping Path bombers and their payloads (a bomber casts only its SubSpellID at the
+    // target, BomberBrain.cs:32-34), and an Arboreal Path lifedrain.
+    private static Spell Bomber(int id, string name, int level, int payload) =>
+        new(new DbSpell { SpellID = id, Name = name, Type = "Bomber", Target = "Enemy", Damage = 50, Range = 1500,
+            CastTime = 3.0, SubSpellID = payload }, level);
+
+    private static readonly SpellLine CreepingPath = new("Creeping Path", "Creeping Path", Specs.Creeping_Path, true);
+    private static readonly Spell WispSpark = Bomber(11319, "Wisp Spark", 7, 11343),
+        SpreadingVines = Bomber(11334, "Spreading Vines", 8, 11361),
+        SurvivalOfTheFittest = Nuke(11014, "Survival of the Fittest", "Lifedrain", 8, 33, 1500);
+    private static readonly Dictionary<int, Spell> BomberPayloads = new()
+    {
+        [11343] = Nuke(11343, "Wisp Spark", "DirectDamageWithDebuff", 7, 29, 1500),
+        [11361] = new(new DbSpell { SpellID = 11361, Name = "Spreading Vines", Type = "SpeedDecrease", Target = "Enemy",
+            Value = 99, Range = 1500, Duration = 10 }, 8),
+    };
+
+    // A bomber is a nuke only when its payload does damage: Spreading Vines (Damage 50 on the bomber, a root as its
+    // payload) was the level-9 Animist's best nuke, over its lifedrain, and outranked its damage bomber.
+    [Test]
+    public void An_animists_bomber_is_a_nuke_only_when_its_payload_does_damage()
+    {
+        List<(Spell, SpellLine)> usable = [(WispSpark, CreepingPath), (SpreadingVines, CreepingPath),
+            (SurvivalOfTheFittest, CreepingPath)];
+        List<(Spell Spell, SpellLine Line)> nukes = PlayerBotDriver.DamageSpells(usable, 9, id => BomberPayloads.GetValueOrDefault(id));
+        Assert.That(nukes.Select(pair => pair.Spell.Name), Is.EqualTo(new[] { "Wisp Spark", "Survival of the Fittest" }));
+        Assert.That(PlayerBotDriver.ChooseNuke(nukes, _ => true, false).Item1, Is.SameAs(SurvivalOfTheFittest));
+        Assert.That(PlayerBotDriver.DamageSpells(usable, 9, _ => null).Select(pair => pair.Spell.Name),
+            Is.EqualTo(new[] { "Survival of the Fittest" }), "a payload it cannot resolve is none");
+    }
+
+    // Where an Animist stands to pull, with its turret planted (reach 1,000) and a spell stop of 1,420: by its turret
+    // while it can cast from there (the monster comes to it, into the turret's reach); else at its spell's reach toward
+    // the turret if the turret reaches that spot; else by the target, within the turret's reach of it less the margin
+    // (850), to plant a new turret there.
+    [Test]
+    public void An_animist_pulls_from_by_its_turret_or_plants_a_new_one_by_the_target()
+    {
+        static (Vector3, bool) Stand(float botX, float targetX) =>
+            PlayerBotDriver.AnimistStand(new Vector3(botX, 0, 0), Vector3.Zero, new Vector3(targetX, 0, 0), 1_420, 1_000);
+        Assert.That(Stand(50, 1_000), Is.EqualTo((new Vector3(50, 0, 0), false)), "by its turret already");
+        Assert.That(Stand(600, 1_000), Is.EqualTo((Vector3.Zero, false)), "back to its turret");
+        Assert.That(Stand(100, 2_000), Is.EqualTo((new Vector3(580, 0, 0), false)), "its spell's reach, 580 from the turret");
+        Assert.That(Stand(2_500, 3_000), Is.EqualTo((new Vector3(2_500, 0, 0), true)), "a new turret where it stands");
+        Assert.That(Stand(100, 3_000), Is.EqualTo((new Vector3(2_150, 0, 0), true)), "a new turret 850 from the target");
+    }
+
     // --- the healer's self-heal (DEATHS.md A6) ---
 
     private static readonly SpellLine Mending = new("Rejuvenation", "Rejuvenation", Specs.Rejuvenation, true);
@@ -1669,12 +3073,33 @@ public sealed class UT_PlayerBotDriver
         PlayerBotDriver.FindSelfHeal(spells, level, maxHealth, interrupted, ready ?? (_ => true)) is (Spell s, SpellLine)
             ? FormattableString.Invariant($"{s.Name}:{s.Value}") : "-";
 
-    // Below 60% and out of a cast, as a GameBot heals itself below 65% before it fights or rests (BotBrain.cs:4890-4897,
-    // AutonomousWorldBotController.cs:2725), with the retry timer's wait.
+    // In a fight: below 60% and out of a cast, as a GameBot heals itself below 65% before it fights or rests
+    // (BotBrain.cs:4890-4897, AutonomousWorldBotController.cs:2725), with the retry timer's wait; whatever its power.
     [TestCase((byte)59, false, 0L, true)] [TestCase((byte)60, false, 0L, false)] [TestCase((byte)30, true, 0L, false)]
     [TestCase((byte)30, false, 1_001L, false)] [TestCase((byte)30, false, 1_000L, true)]
     public void A_bot_heals_itself_below_60_percent_out_of_a_cast(byte health, bool casting, long nextTry, bool heals) =>
-        Assert.That(PlayerBotDriver.WantsSelfHeal(health, casting, 1_000, nextTry), Is.EqualTo(heals));
+        Assert.That(PlayerBotDriver.WantsSelfHeal(health, casting, 1_000, nextTry, inFight: true, 10, 8), Is.EqualTo(heals));
+
+    // Out of a fight (#167 F2): below 85%, with half its power or more left after the heal's cost, then it sits for power;
+    // a heal is quicker than sitting for health. Below 60% it heals whatever its power, in a fight or out of one, as
+    // before (d1d524d) and as a GameBot heals itself below 65% before it rests (BotBrain.cs:4890-4897): 45% health
+    // and 40% power, an 8% heal, heals to about 75% and then sits, rather than sitting at 45%.
+    [TestCase((byte)84, false, 1_000L, false, (byte)70, 8, true)] [TestCase((byte)84, false, 1_000L, true, (byte)70, 8, false)]
+    [TestCase((byte)59, false, 1_000L, true, (byte)70, 8, true)] [TestCase((byte)84, false, 1_000L, false, (byte)55, 8, false)]
+    [TestCase((byte)90, false, 1_000L, false, (byte)70, 8, false)] [TestCase((byte)84, false, 1_000L, false, (byte)58, 8, true)]
+    [TestCase((byte)84, true, 1_000L, false, (byte)70, 8, false)] [TestCase((byte)84, false, 1_001L, false, (byte)70, 8, false)]
+    [TestCase((byte)85, false, 1_000L, false, (byte)70, 8, false)]                         // the 85% boundary
+    [TestCase((byte)45, false, 1_000L, false, (byte)40, 8, true)]                          // low power: the 60% rule
+    [TestCase((byte)59, false, 1_000L, false, (byte)10, 8, true)] [TestCase((byte)60, false, 1_000L, false, (byte)10, 8, false)]
+    [TestCase((byte)45, true, 1_000L, false, (byte)40, 8, false)] [TestCase((byte)45, false, 1_001L, false, (byte)40, 8, false)]
+    public void Out_of_a_fight_a_bot_heals_itself_below_85_percent_before_it_sits(byte health, bool casting, long nextTry,
+        bool inFight, byte mana, int cost, bool heals) =>
+        Assert.That(PlayerBotDriver.WantsSelfHeal(health, casting, 1_000, nextTry, inFight, mana, cost), Is.EqualTo(heals));
+
+    // A spell's cost in percent of the pool, rounded up: a negative power is a percent already (SpellHandler.cs:1207-1213).
+    [TestCase(300, 24, 8)] [TestCase(300, 25, 9)] [TestCase(300, -12, 12)] [TestCase(0, 24, 0)] [TestCase(300, 0, 0)]
+    public void A_spells_cost_in_percent_of_the_pool(int maxMana, int power, int percent) =>
+        Assert.That(PlayerBotDriver.CostPercent(maxMana, power), Is.EqualTo(percent));
 
     // A heal on the bot itself: a Heal on a realm mate, itself or its group, at or below its level, with no instrument;
     // the most health back (a negative value is a percent of its health, GameBot.cs:1887-1892).
@@ -1767,6 +3192,332 @@ public sealed class UT_PlayerBotDriver
     public void A_bot_summons_its_pet_when_it_has_none_out_of_combat_with_power(bool hasPet, bool beingHit, bool inCombat,
         byte mana, bool casting, long nextTry, bool summons) =>
         Assert.That(PlayerBotDriver.WantsPet(hasPet, beingHit, inCombat, mana, casting, 1_000, nextTry), Is.EqualTo(summons));
+
+    // --- the Theurgist's pets at its target (#167 F1) ---
+
+    // As the world's rows: an Enemy target, 12% of the pool, a 3-s cast, no recast, 2,000 units (Abrasion, Refrigeration,
+    // Vapormancy).
+    private static (Spell, SpellLine) TheurgistPet(int level, int id) =>
+        (new(new DbSpell { SpellID = id, Name = $"Elemental{level}#{id}", Type = "SummonTheurgistPet", Target = "Enemy",
+            Power = -12, CastTime = 3.0, Range = 2000 }, level), Mending);
+
+    private static string CombatPetName(IEnumerable<(Spell, SpellLine)> spells, int level, Func<Spell, bool> ready = null) =>
+        PlayerBotDriver.FindCombatPetSpell(spells, level, ready ?? (_ => true)) is (Spell s, SpellLine) ? s.Name : "-";
+
+    // A GameBot Theurgist casts its pet at the target whenever it can (AutonomousPetSupport.cs:636-650): the highest
+    // summon at or below its level that is ready, then the higher ID, as FindPetSpell picks a main pet.
+    [Test]
+    public void A_theurgist_casts_its_highest_ready_pet_at_its_target()
+    {
+        var spells = new List<(Spell, SpellLine)>
+        {
+            TheurgistPet(10, 102), TheurgistPet(20, 104), TheurgistPet(30, 105), (Damage("DirectDamage", 20, 90), Mending),
+        };
+        Assert.That(CombatPetName(spells, 25), Is.EqualTo("Elemental20#104"));
+        Assert.That(CombatPetName(spells, 25, spell => spell.Level != 20), Is.EqualTo("Elemental10#102"));   // not ready
+        Assert.That(CombatPetName([TheurgistPet(20, 264), TheurgistPet(20, 454)], 25), Is.EqualTo("Elemental20#454"));
+        Assert.That(CombatPetName([(Damage("Bolt", 20, 90), Mending), Summon("SummonCommander", 15, 10102)], 25),
+            Is.EqualTo("-"));                                                           // a Wizard's, a main pet's
+    }
+
+    // At a cast choice: a pet summon ready, the target within its range and in view, out of a cast, the retry timer due.
+    [TestCase(true, true, false, 1_000L, true)] [TestCase(false, true, false, 1_000L, false)]
+    [TestCase(true, false, false, 1_000L, false)] [TestCase(true, true, true, 1_000L, false)]
+    [TestCase(true, true, false, 1_001L, false)]
+    public void A_theurgist_wants_a_pet_at_its_target_when_one_is_ready_in_range(bool hasSpell, bool inRange, bool casting,
+        long nextTry, bool wants) =>
+        Assert.That(PlayerBotDriver.WantsCombatPet(hasSpell, inRange, casting, 1_000, nextTry), Is.EqualTo(wants));
+
+    // A summon hurts the target only once its pet reaches it: three in a row would read as fruitless and block the
+    // bot's spells for 10 s (the cast watch), so only the damage spells count.
+    [Test]
+    public void A_pet_cast_does_not_count_in_the_cast_watch()
+    {
+        Assert.That(PlayerBotDriver.CountsInCastWatch(TheurgistPet(20, 104).Item1), Is.False);
+        Assert.That(PlayerBotDriver.CountsInCastWatch(Damage("DirectDamage", 20, 90)), Is.True);
+        Assert.That(PlayerBotDriver.CountsInCastWatch(Damage("Bolt", 20, 90)), Is.True);
+    }
+
+    // The watch's step Engage takes per cast request: 4 pet casts at an unhurt target never stall it and leave it as it
+    // was (its target too); 4 damage casts do. Pets between damage casts neither stall the run nor start a new one.
+    [Test]
+    public void Pet_casts_never_stall_the_cast_watch_and_damage_casts_do()
+    {
+        object monster = new(), earlier = new();
+        Spell pet = TheurgistPet(20, 104).Item1, nuke = Damage("DirectDamage", 20, 90);
+        (object castTarget, int attempts, byte mark, bool stalled) = (earlier, 2, (byte)100, false);
+        for (int i = 1; i <= 4; i++)
+        {
+            (castTarget, attempts, mark, stalled) = PlayerBotDriver.WatchStep(pet, castTarget, monster, attempts, mark, 100);
+            Assert.That(stalled, Is.False, $"pet cast {i}");
+        }
+        Assert.That((castTarget, attempts, mark), Is.EqualTo((earlier, 2, (byte)100)), "the watch as it was");
+        for (int i = 1; i <= 4; i++)
+            (castTarget, attempts, mark, stalled) = PlayerBotDriver.WatchStep(nuke, castTarget, monster, attempts, mark, 100);
+        Assert.That((castTarget, attempts, stalled), Is.EqualTo((monster, 4, true)), "a new target's run, stalled at 4");
+        (castTarget, attempts, mark, stalled) = (null, 0, (byte)0, false);
+        foreach (Spell spell in new[] { nuke, pet, nuke, pet, nuke, pet })
+            (castTarget, attempts, mark, stalled) = PlayerBotDriver.WatchStep(spell, castTarget, monster, attempts, mark, 100);
+        Assert.That((attempts, stalled), Is.EqualTo((3, false)));
+        Assert.That(PlayerBotDriver.WatchStep(nuke, castTarget, monster, attempts, mark, 100).Stalled, Is.True);
+    }
+
+    // The spell choice (the pet, then the damage spell, with its add scan) is made when the choice is due, out of a cast,
+    // at most once a second while no cast follows (walking in, swinging, waiting); a cast, a refused pet and a new
+    // target make the next due think choose afresh (Engage, RefreshTarget).
+    [TestCase(true, false, 1_000L, true)] [TestCase(false, false, 0L, false)] [TestCase(true, true, 0L, false)]
+    [TestCase(true, false, 1_001L, false)] [TestCase(true, false, 0L, true)]
+    public void A_bot_chooses_its_spell_when_due_at_most_once_a_second(bool due, bool casting, long nextChoice, bool chooses) =>
+        Assert.That(PlayerBotDriver.ChoosesSpell(due, casting, 1_000, nextChoice), Is.EqualTo(chooses));
+
+    // --- the pet leads (#167 F10c) ---
+
+    // An owner that anything is hitting never holds (the GameBot's LetMainPetLead needs an owner out of combat,
+    // AutonomousPetSupport.cs:913): an add on it while the pet has not drawn the target left it idle for up to 4 s.
+    [Test]
+    public void The_owner_holds_its_nuke_until_the_target_is_on_its_pet_or_4_s_pass()
+    {
+        // petAlive, targetOnPet, targetOnBot, beingHit, sinceOrderMs
+        Assert.That(PlayerBotDriver.PetLeads(true, false, false, false, 0, 4_000), Is.True);       // the pet just sent in
+        Assert.That(PlayerBotDriver.PetLeads(true, false, false, false, 3_999, 4_000), Is.True);
+        Assert.That(PlayerBotDriver.PetLeads(true, false, false, false, 4_000, 4_000), Is.False);  // 4 s: the owner nukes
+        Assert.That(PlayerBotDriver.PetLeads(true, true, false, false, 500, 4_000), Is.False);     // on the pet: nuke
+        Assert.That(PlayerBotDriver.PetLeads(false, false, false, false, 500, 4_000), Is.False);   // no pet to lead
+        Assert.That(PlayerBotDriver.PetLeads(true, false, true, false, 500, 4_000), Is.False);     // the target on the owner
+        Assert.That(PlayerBotDriver.PetLeads(true, false, false, true, 500, 4_000), Is.False);     // an add hitting it
+    }
+
+    // --- the class's own self-buffs (#167 F8) ---
+
+    // As the world's rows (Spell, LineXSpell): power, concentration, pulse and pulse power as there; the duration (s) and
+    // the cast time (s) as there when given (#167 C9), else 20 minutes and 3 s (none and instant for a concentration buff
+    // and a chant).
+    private static (Spell, SpellLine) Buff(int id, string name, string type, string target, int level, int power,
+        int concentration = 0, int pulse = 0, int pulsePower = 0, int instrument = 0, int? duration = null,
+        double? castTime = null) =>
+        (new(new DbSpell { SpellID = id, Name = name, Type = type, Target = target, Power = power, Concentration = concentration,
+            Pulse = pulse, PulsePower = pulsePower, Frequency = pulse == 0 ? 0 : 50, InstrumentRequirement = instrument,
+            CastTime = castTime ?? (pulse == 0 ? 3.0 : 0),
+            Duration = duration ?? (concentration > 0 ? 0 : pulse == 0 ? 1200 : 6) }, level), Mending);
+
+    private static readonly (Spell, SpellLine) DiamondShield = Buff(9, "Diamond Shield", "BaseArmorFactorBuff", "Self", 40, 25),
+        BufferOfStone = Buff(22, "Buffer of Stone", "ArmorAbsorptionBuff", "Self", 41, 26);
+
+    // up: the chant up; wanted: the one to run (#167 C13), unless given WantedChant's from the chants the spells give at
+    // that level (ChantKinds), standing, at full health, power and endurance.
+    private static string SelfBuffName(IEnumerable<(Spell, SpellLine)> spells, int level, IReadOnlySet<eSpellType> active = null,
+        eSpellType? up = null, int concentration = 20, int mana = 300, Func<Spell, bool> ready = null, eSpellType? wanted = null)
+    {
+        (Spell, SpellLine)[] all = spells.ToArray();
+        wanted ??= PlayerBotDriver.WantedChant(PlayerBotDriver.ChantKinds(all, level), false, 100, 100, 300, 100, 100);
+        return PlayerBotDriver.NextSelfBuff(all, active ?? new HashSet<eSpellType>(), wanted, up, level, concentration, 300, mana,
+            ready ?? (_ => true)) is (Spell s, SpellLine) ? s.Name : "-";
+    }
+
+    // A Wizard's Path of Earth: its armour factor first, then its absorb (Buffer of Stone is level 41), then none once
+    // both are up; a level-40 Wizard has no absorb yet.
+    [Test]
+    public void A_bot_keeps_its_armour_factor_then_its_absorb_up()
+    {
+        (Spell, SpellLine)[] earth = [BufferOfStone, DiamondShield];
+        var af = new HashSet<eSpellType> { eSpellType.BaseArmorFactorBuff };
+        Assert.That(SelfBuffName(earth, 41), Is.EqualTo("Diamond Shield"));
+        Assert.That(SelfBuffName(earth, 41, af), Is.EqualTo("Buffer of Stone"));
+        Assert.That(SelfBuffName(earth, 41, new HashSet<eSpellType> { eSpellType.BaseArmorFactorBuff, eSpellType.ArmorAbsorptionBuff }),
+            Is.EqualTo("-"));
+        Assert.That(SelfBuffName(earth, 40, af), Is.EqualTo("-"), "Buffer of Stone comes at 41");
+        Assert.That(SelfBuffName(earth, 41, mana: 24), Is.EqualTo("-"), "neither for 24 of 300 power: 25, 26 needed");
+        Assert.That(SelfBuffName(earth, 41, ready: spell => spell.ID != 9), Is.EqualTo("Buffer of Stone"), "AF not ready");
+    }
+
+    // A Cleric's concentration buffs (Enhancement) need the concentration they take; with too little, the best rank that
+    // fits, or a buff that takes none (Hammer of Faith). No cap of our own: the server's 20-effect limit counts
+    // concentration effects only (SpellHandler.cs:34, :818).
+    [Test]
+    public void A_concentration_buff_needs_the_concentration_left()
+    {
+        (Spell, SpellLine)[] cleric =
+        [
+            Buff(1465, "Aura of Guarding", "BaseArmorFactorBuff", "Realm", 22, 0, concentration: 8),
+            Buff(1466, "Greater Aura of Guarding", "BaseArmorFactorBuff", "Realm", 31, 0, concentration: 11),
+            Buff(1651, "Hammer of Faith", "DamageAdd", "Self", 1, 2),
+        ];
+        Assert.That(SelfBuffName(cleric, 35, concentration: 11), Is.EqualTo("Greater Aura of Guarding"));
+        Assert.That(SelfBuffName(cleric, 35, concentration: 9), Is.EqualTo("Aura of Guarding"));
+        Assert.That(SelfBuffName(cleric, 35, concentration: 0), Is.EqualTo("Hammer of Faith"));
+    }
+
+    // A Paladin runs one chant at a time (a new pulse effect ends the others, EffectListComponent.cs:362-371): the first by
+    // the buffs' order (WantedChant), not while it is up, and in place of another that is (#167 C13); never one that costs
+    // power each pulse (it would drain the power its rest waits for). Songs need an instrument; buffs on a pet, kinds not
+    // kept (haste) and resist buffs are left alone.
+    [Test]
+    public void A_bot_runs_one_chant_that_costs_no_power_each_pulse()
+    {
+        (Spell, SpellLine)[] chants =
+        [
+            Buff(1093, "Soul Ward", "BodySpiritEnergyBuff", "Group", 25, 0, pulse: 1, pulsePower: 8),
+            Buff(1026, "Greater Battle Fury", "DamageAdd", "Group", 28, 0, pulse: 1),
+            Buff(1036, "Crusader's Shelter", "SpecArmorFactorBuff", "Group", 29, 0, pulse: 1),
+        ];
+        Assert.That(SelfBuffName(chants, 30), Is.EqualTo("Crusader's Shelter"));
+        Assert.That(SelfBuffName(chants, 28), Is.EqualTo("Greater Battle Fury"));
+        Assert.That(SelfBuffName(chants, 30, new HashSet<eSpellType> { eSpellType.SpecArmorFactorBuff },
+            up: eSpellType.SpecArmorFactorBuff), Is.EqualTo("-"));
+        Assert.That(SelfBuffName(chants, 30, new HashSet<eSpellType> { eSpellType.DamageAdd }, up: eSpellType.DamageAdd),
+            Is.EqualTo("Crusader's Shelter"), "the first by the order in place of the one up");
+        Assert.That(SelfBuffName(chants, 27), Is.EqualTo("-"), "Soul Ward costs power each pulse");
+        Assert.That(SelfBuffName(
+            [
+                Buff(2001, "Song of Rest", "HealthRegenBuff", "Group", 10, 0, pulse: 1, instrument: 1),
+                Buff(2002, "Spirit Shield", "BaseArmorFactorBuff", "Pet", 10, 5),
+                Buff(2003, "Haste", "CombatSpeedBuff", "Self", 10, 5),
+                Buff(2004, "Ward of the Spirit", "BodySpiritEnergyBuff", "Self", 10, 5),     // a resist buff, no chant
+            ], 30), Is.EqualTo("-"));
+    }
+
+    // The resist chants are no self-buff the bot keeps: the world's only ones of those kinds a class casts are the
+    // Paladin's (Chants), and each costs power every pulse (v0.37b Spell and LineXSpell rows), so a bot at any level never
+    // ran one; not even one that pulsed for free would be kept, and FIGHT buffs= does not count them.
+    [Test]
+    public void A_bot_keeps_no_resist_chant()
+    {
+        (Spell, SpellLine)[] paladin =
+        [
+            Buff(1093, "Soul Ward", "BodySpiritEnergyBuff", "Group", 25, 0, pulse: 1, pulsePower: 8),
+            Buff(1091, "Elemental Ward", "HeatColdMatterBuff", "Group", 27, 0, pulse: 1, pulsePower: 9),
+            Buff(1094, "Soul Shield", "BodySpiritEnergyBuff", "Group", 44, 0, pulse: 1, pulsePower: 15),
+            Buff(1092, "Elemental Shield", "HeatColdMatterBuff", "Group", 46, 0, pulse: 1, pulsePower: 16),
+        ];
+        Assert.That(SelfBuffName(paladin, 50), Is.EqualTo("-"));
+        Assert.That(SelfBuffName(
+            [
+                Buff(1093, "Soul Ward", "BodySpiritEnergyBuff", "Group", 25, 0, pulse: 1),
+                Buff(1091, "Elemental Ward", "HeatColdMatterBuff", "Group", 27, 0, pulse: 1),
+            ], 50), Is.EqualTo("-"), "a resist chant that pulsed for free");
+        Assert.That(PlayerBotDriver.SelfBuffsUp([eSpellType.BodySpiritEnergyBuff, eSpellType.HeatColdMatterBuff]), Is.Zero);
+    }
+
+    // --- self-buffs in the post-kill window, never mid-rest; short ones only in a fight (#167 C9) ---
+
+    // Short buffs as the world has them (c-rest/out-a7.txt): a Spiritmaster's Benison of the Fallen, a Reaver's Surge of
+    // Maiming (12% of its power, instant), a Shaman's Frigg's Cure; a Sorcerer's Perspicuity of Power lasts 20 minutes.
+    private static readonly (Spell, SpellLine) Benison = Buff(3001, "Benison of the Fallen", "DamageShield", "Self", 30, 18,
+            duration: 60, castTime: 4.0),
+        Surge = Buff(3002, "Surge of Maiming", "DamageAdd", "Self", 30, -12, duration: 30, castTime: 0),
+        FriggsCure = Buff(3003, "Frigg's Cure", "HealthRegenBuff", "Realm", 30, 15, duration: 30, castTime: 3.0),
+        Perspicuity = Buff(3004, "Perspicuity of Power", "PowerRegenBuff", "Self", 30, 20, duration: 1_200),
+        ChantOfTheWar = Buff(3005, "Chant of the War", "DamageAdd", "Group", 35, 0, pulse: 1),
+        SongOfRest = Buff(3006, "Magnificent Song of Rest", "HealthRegenBuff", "Group", 30, 0, pulse: 1);
+
+    // The scan runs standing, or sitting once recovered (it stands to cast, CastOnSelf): never mid-rest. 708 of
+    // st-deathsB's 788 rests a buff ended were stood up in their middle, 2,989 s of casts.
+    [TestCase(false, false, true)] [TestCase(true, false, false)] [TestCase(true, true, true)] [TestCase(false, true, true)]
+    public void The_self_buff_scan_never_stands_the_bot_mid_rest(bool sitting, bool recovered, bool allowed) =>
+        Assert.That(PlayerBotDriver.BuffScanAllowed(sitting, recovered), Is.EqualTo(allowed));
+
+    // SelfBuff's whole gate (SelfBuffScanDue; the review of 9aacd69: with BuffScanAllowed switched off in it no test
+    // failed): its scan due, no cast under way, no live fight, and never mid-rest.
+    [TestCase(5_000L, 5_000L, false, false, false, false, true)] [TestCase(4_999L, 5_000L, false, false, false, false, false)]
+    [TestCase(5_000L, 0L, true, false, false, false, false)] [TestCase(5_000L, 0L, false, true, false, false, false)]
+    [TestCase(5_000L, 0L, false, false, true, false, false)] [TestCase(5_000L, 0L, false, false, true, true, true)]
+    public void The_self_buff_scan_runs_due_out_of_a_cast_and_a_fight_and_never_mid_rest(long now, long next, bool casting,
+        bool fighting, bool sitting, bool recovered, bool due) =>
+        Assert.That(PlayerBotDriver.SelfBuffScanDue(now, next, casting, fighting, sitting, recovered), Is.EqualTo(due));
+
+    // Out of a fight the bot keeps up chants and buffs of 2 minutes or more (or for good); a shorter one only a
+    // regeneration buff while its resource is under its rest's stop: Benison (176 stands in st-deathsB), Surge (85, up at
+    // engage in 35% of the Reaver's fights) and Frigg's Cure at full health (157) were cast again and again between fights.
+    [Test]
+    public void Out_of_a_fight_a_bot_keeps_up_its_long_buffs_and_its_chant_a_short_one_only_to_regenerate()
+    {
+        bool Keeps((Spell Spell, SpellLine) buff, byte health = 100) =>
+            PlayerBotDriver.KeepsUpOutOfFight(buff.Spell, health, 300, 100, 100, 100);
+        Assert.That((Keeps(Benison), Keeps(Surge), Keeps(FriggsCure, 80), Keeps(FriggsCure, 100)),
+            Is.EqualTo((false, false, true, false)));
+        Assert.That((Keeps(Perspicuity), Keeps(DiamondShield), Keeps(ChantOfTheWar)), Is.EqualTo((true, true, true)));
+        Assert.That(PlayerBotDriver.KeepsUpOutOfFight(Buff(3007, "a short power regeneration", "PowerRegenBuff", "Self", 30, 5,
+            duration: 30).Item1, 100, 300, 89, 90, 100), Is.True, "under the caster's power stop");
+    }
+
+    // The short buffs go up in a fight instead: an instant one at the fight's first think (Surge); one with a cast
+    // (Benison, Frigg's Cure), a long one or a chant not then.
+    [Test]
+    public void A_fight_opens_with_an_instant_short_buff()
+    {
+        Assert.That(PlayerBotDriver.OpensFight(Surge.Item1), Is.True);
+        Assert.That((PlayerBotDriver.OpensFight(Benison.Item1), PlayerBotDriver.OpensFight(FriggsCure.Item1),
+            PlayerBotDriver.OpensFight(DiamondShield.Item1), PlayerBotDriver.OpensFight(ChantOfTheWar.Item1)),
+            Is.EqualTo((false, false, false, false)));
+    }
+
+    // After a kill the self-buffs scan at once, in the window before the rest, and back to back (the verifier's correction:
+    // preset, or the test passes before the fix). A dropped fight leaves the scan's time.
+    [TestCase(true, 0L)] [TestCase(false, 9_000L)]
+    public void A_kill_has_the_self_buffs_scan_at_once(bool engaged, long next)
+    {
+        MethodInfo settle = typeof(PlayerBotDriver).GetMethod("SettleTarget", BindingFlags.Static | BindingFlags.NonPublic);
+        var state = new PlayerBotState(Player(null))
+        {
+            Target = (GameNPC)RuntimeHelpers.GetUninitializedObject(typeof(GameNPC)), Engaged = engaged,   // health 0: dead
+            NextSelfBuffTick = 9_000,
+        };
+        settle!.Invoke(null, [state, Player(null)]);
+        Assert.That(state.NextSelfBuffTick, Is.EqualTo(next));
+    }
+
+    // --- the Skald's Song of Rest while it rests (#167 C13) ---
+
+    // The chant the bot runs: while it rests, the regeneration chant of what is short of its rest's stop (a Skald's Song
+    // of Rest while its health is: the pulse runs on while it sits, SpellHandler.cs:196-232), else its first by the buffs'
+    // order, its combat chant (the DamageAdd came first and blocked every other chant: the Skald never sang its Song).
+    [Test]
+    public void A_skald_wants_its_song_of_rest_while_it_rests_short_of_health_and_its_combat_chant_else()
+    {
+        eSpellType[] skald = [eSpellType.DamageAdd, eSpellType.HealthRegenBuff];
+        eSpellType? Wanted(IReadOnlyCollection<eSpellType> kinds, bool resting, byte health = 100, byte endurance = 100) =>
+            PlayerBotDriver.WantedChant(kinds, resting, health, endurance, 300, 100, 100);
+        Assert.That(Wanted(skald, true, 70), Is.EqualTo(eSpellType.HealthRegenBuff));
+        Assert.That(Wanted(skald, true), Is.EqualTo(eSpellType.DamageAdd), "full health and endurance");
+        Assert.That(Wanted(skald, false, 70), Is.EqualTo(eSpellType.DamageAdd), "not resting");
+        Assert.That(Wanted([eSpellType.DamageAdd], true, 70), Is.EqualTo(eSpellType.DamageAdd), "no Song");
+        Assert.That(Wanted([], true, 70), Is.Null, "no chant");
+    }
+
+    // It rests for the chant while sitting or wanting a rest (Resting, SelfBuff's; the review of 9aacd69: with it false
+    // no test failed and no Song of Rest ran).
+    [TestCase(true, false, true)] [TestCase(false, true, true)] [TestCase(false, false, false)] [TestCase(true, true, true)]
+    public void A_bot_sings_for_its_rest_while_it_sits_or_wants_one(bool sitting, bool wantsRest, bool resting) =>
+        Assert.That(PlayerBotDriver.Resting(sitting, wantsRest), Is.EqualTo(resting));
+
+    // The chants it can run: of a kind it keeps, at or below its level, no song that needs an instrument and none that
+    // costs power each pulse.
+    [Test]
+    public void A_bots_chants_are_its_kept_kinds_at_its_level_with_no_instrument_or_pulse_power()
+    {
+        (Spell, SpellLine)[] spells =
+        [
+            ChantOfTheWar, SongOfRest, Buff(1093, "Soul Ward", "BodySpiritEnergyBuff", "Group", 25, 0, pulse: 1, pulsePower: 8),
+            Buff(4001, "a chant that costs power", "SpecArmorFactorBuff", "Group", 29, 0, pulse: 1, pulsePower: 2),
+            Buff(4002, "a song", "EnduranceRegenBuff", "Group", 10, 0, pulse: 1, instrument: 1), DiamondShield,
+        ];
+        Assert.That(PlayerBotDriver.ChantKinds(spells, 40), Is.EquivalentTo(new[] { eSpellType.DamageAdd, eSpellType.HealthRegenBuff }));
+        Assert.That(PlayerBotDriver.ChantKinds(spells, 34), Is.EquivalentTo(new[] { eSpellType.HealthRegenBuff }), "the War at 35");
+    }
+
+    // NextSelfBuff runs the chant wanted in place of the one up (one pulse effect ends the others), and none while the
+    // one wanted is up. With C9 the Skald swaps back to its combat chant once recovered.
+    [Test]
+    public void A_skald_swaps_its_chant_for_the_one_it_wants()
+    {
+        (Spell, SpellLine)[] skald = [ChantOfTheWar, SongOfRest];
+        var war = new HashSet<eSpellType> { eSpellType.DamageAdd };
+        Assert.That(SelfBuffName(skald, 40, war, up: eSpellType.DamageAdd, wanted: eSpellType.HealthRegenBuff),
+            Is.EqualTo("Magnificent Song of Rest"));
+        Assert.That(SelfBuffName(skald, 40, war, up: eSpellType.DamageAdd, wanted: eSpellType.DamageAdd), Is.EqualTo("-"));
+        Assert.That(SelfBuffName(skald, 40, new HashSet<eSpellType> { eSpellType.HealthRegenBuff }, up: eSpellType.HealthRegenBuff),
+            Is.EqualTo("Chant of the War"), "recovered: its combat chant back");
+    }
 
     // A Necromancer in shade form cannot swing (AttackComponent.cs:511-516): its servant fights.
     [Test]
@@ -1864,38 +3615,100 @@ public sealed class UT_PlayerBotDriver
 
     // pet= and heals= come last (the earlier fields stay as they were: runs/tools read them): whether the bot had a
     // living pet at the fight's first think in reach (DEATHS.md A5), and its heals on itself in the fight (A6); then qc=,
-    // whether a cast in the fight went with Quickcast on.
+    // whether a cast in the fight went with Quickcast on; then (#167) buffs=, its self-buffs up at that first think (F8),
+    // petCasts=, a Theurgist's pets cast at the target (F1), and waits=, the thinks a cast due waited for its own swing's
+    // interrupt (WaitToCast, F6); then a caster's control casts, ctl=, and its steps back, kites= (F11); then ctlBroken=,
+    // the holds its own swing ended (C3); then addCtl=, its control casts at an add (C4), counted in ctl= too; then
+    // (#167, the next leg's) addAt= and addHp=, the seconds into the fight a second monster first hit the bot or came at
+    // it and its health then, breakOff=, the fight dropped by a break-off (C2), engageDist=, the distance at its first
+    // think in reach, and crowd=, the pick's crowding (CrowdingAlong, C5): -1 for none, a defence or Incoming's pick.
     [Test]
     public void FightFormat()
     {
         Assert.That(PlayerBotDriverReport.FormatFight(new PlayerBotFight("Pbotaaaac", 40, "widow claw", 40, ConColor.YELLOW, false,
-                true, 100, 38, 100, 12, 21, 1, 9, 2, 4, 0, 0, Pet: true, Heals: 2, Quickcast: true)),
+                true, 100, 38, 100, 12, 21, 1, 9, 2, 4, 0, 0, Pet: true, Heals: 2, Quickcast: true, Buffs: 3, PetCasts: 2, Waits: 5,
+                Controls: 2, Kites: 1, CtlBroken: 1, AddControls: 1, AddAt: 6, AddHp: 71, BreakOff: true, EngageDistance: 1_450,
+                Crowd: 1)),
             Is.EqualTo("PLAYER_BOT_FIGHT bot=Pbotaaaac level=40 target=\"widow claw\" targetLevel=40 con=YELLOW from=pull result=kill " +
                        "startHp=100 endHp=38 startMana=100 endMana=12 sec=21 adds=1 swings=9 notVisible=2 casts=4 lifeKills=0 rests=0 " +
-                       "pet=alive heals=2 qc=1"));
+                       "pet=alive heals=2 qc=1 buffs=3 petCasts=2 waits=5 ctl=2 kites=1 ctlBroken=1 addCtl=1 addAt=6 addHp=71 " +
+                       "breakOff=1 engageDist=1450 crowd=1"));
         Assert.That(PlayerBotDriverReport.FormatFight(new PlayerBotFight("Pbothaaab", 43, "empyrean guardian", 36, ConColor.BLUE, true,
                 false, 64, 51, 100, 100, 7, 2, 3, 0, 0, 3, 1)),
             Is.EqualTo("PLAYER_BOT_FIGHT bot=Pbothaaab level=43 target=\"empyrean guardian\" targetLevel=36 con=BLUE from=defence " +
                        "result=dropped startHp=64 endHp=51 startMana=100 endMana=100 sec=7 adds=2 swings=3 notVisible=0 casts=0 " +
-                       "lifeKills=3 rests=1 pet=none heals=0 qc=0"));
+                       "lifeKills=3 rests=1 pet=none heals=0 qc=0 buffs=0 petCasts=0 waits=0 ctl=0 kites=0 ctlBroken=0 addCtl=0 " +
+                       "addAt=-1 addHp=-1 breakOff=0 engageDist=-1 crowd=-1"));
     }
 
+    // #167: one PLAYER_BOT_REST line per rest when the bot stands: the seconds it sat and why it stood (recovered, hit,
+    // heal, pet or buff: a cast on itself, died, other); then (the next leg's) its health and power when it sat, hp= and
+    // mp=, and respawn=, the killed monsters' spawn spots its rest spot was read against (RespawnSpots, C7).
+    [Test]
+    public void RestFormat()
+    {
+        Assert.That(PlayerBotDriverReport.FormatRest("Pbotaaaac", 40, 37, "recovered", 54, 12, 2),
+            Is.EqualTo("PLAYER_BOT_REST bot=Pbotaaaac level=40 sec=37 why=recovered hp=54 mp=12 respawn=2"));
+    }
+
+    [Test]
+    public void The_self_buffs_up_count_each_kept_kind_once()                    // FIGHT buffs= (#167 F8)
+    {
+        Assert.That(PlayerBotDriver.SelfBuffsUp([eSpellType.BaseArmorFactorBuff, eSpellType.BaseArmorFactorBuff,
+            eSpellType.StrengthBuff, eSpellType.CombatSpeedBuff, eSpellType.DirectDamage]), Is.EqualTo(2));
+        Assert.That(PlayerBotDriver.SelfBuffsUp([]), Is.Zero);
+    }
+
+    [Test]
+    public void A_rest_ends_recovered_unless_a_fight_stood_the_bot_up()           // PLAYER_BOT_REST why=
+    {
+        Assert.That((PlayerBotDriver.RestStop(mayRest: true, incomingOnly: false),
+            PlayerBotDriver.RestStop(mayRest: false, incomingOnly: false)), Is.EqualTo(("recovered", "hit")));
+        Assert.That(PlayerBotDriver.RestStop(mayRest: false, incomingOnly: true), Is.EqualTo("incoming"),
+            "a monster coming at it, no hit yet (#167 F7)");
+    }
+
+    // A cast on itself that stands the bot up ends the rest as heal, pet or buff, unless the bot had recovered (the review
+    // of 9aacd69: C9's buffs wait for the rest's end, so a rest that ended recovered logged why=buff, and every Skald's
+    // did, its Song of Rest swapped back; C9's mid-rest count reads why=buff).
+    [TestCase("buff", true, "recovered")] [TestCase("pet", true, "recovered")] [TestCase("buff", false, "buff")]
+    [TestCase("heal", false, "heal")]
+    public void A_cast_on_itself_ends_a_rest_as_recovered_once_the_bot_has(string why, bool recovered, string logged) =>
+        Assert.That(PlayerBotDriver.RestEndWhy(why, recovered), Is.EqualTo(logged));
+
     // The fields PLAYER_BOT_DEATH appends after task= (its earlier fields stay as they were: runs/legcheck.py reads them),
-    // the last the names the bot avoided when it died (DEATHS.md A3), before this death's.
+    // then the names the bot avoided when it died (DEATHS.md A3), before this death's; then (#167 F4) again=, no kill
+    // since its last release, sinceRelease=, the seconds since it (-1: none this login), and ill=, the resurrection
+    // illness on at the fatal fight's start; then (#167 C3) the fatal fight's caster fields as FIGHT gives them, ctl=,
+    // kites=, casts=, qc= and waits=, ctlBroken=, the holds its own swing ended, and addCtl= (C4): -1 out of a fight;
+    // then FIGHT's addAt=, addHp= and engageDist= (-1 out of a fight too) and breakOff=, a death on a break-off's run.
     [Test]
     public void DeathDetailFormat()
     {
         Assert.That(PlayerBotDriverReport.FormatDeathDetail(new PlayerBotDeathDetail(PlayerBotActivity.Fighting, 62, 14, 71, false,
-                2, 3, 0, 40, 100, 6, 1, "widow claw", 40, true, 748, Avoided: 2)),
+                2, 3, 0, 40, 100, 6, 1, "widow claw", 40, true, 748, Avoided: 2, Again: true, SinceRelease: 42, Ill: true,
+                Controls: 2, Kites: 1, Casts: 4, Quickcast: 1, Waits: 3, CtlBroken: 1, AddControls: 1, AddAt: 6, AddHp: 71,
+                EngageDistance: 1_450)),
             Is.EqualTo("activity=Fighting startHp=62 fightSec=14 targetHp=71 from=pull adds=2 lifeKills=3 rests=0 sinceKillSec=40 " +
                        "mana=100 swings=6 notVisible=1 killer=\"widow claw\" killerLevel=40 killerIsTarget=True fromBind=748 " +
-                       "avoided=2"));
+                       "avoided=2 again=True sinceRelease=42 ill=True ctl=2 kites=1 casts=4 qc=1 waits=3 ctlBroken=1 addCtl=1 " +
+                       "addAt=6 addHp=71 breakOff=0 engageDist=1450"));
         // Out of a fight, no target, no kill this life, no killer named by the Dying event, the bind in another region.
         Assert.That(PlayerBotDriverReport.FormatDeathDetail(new PlayerBotDeathDetail(PlayerBotActivity.Hunting, -1, -1, -1, true,
-                -1, 0, 2, -1, 37, -1, -1, null, 0, false, -1)),
+                -1, 0, 2, -1, 37, -1, -1, null, 0, false, -1, BreakOff: true)),
             Is.EqualTo("activity=Hunting startHp=-1 fightSec=-1 targetHp=-1 from=defence adds=-1 lifeKills=0 rests=2 sinceKillSec=-1 " +
-                       "mana=37 swings=-1 notVisible=-1 killer=\"\" killerLevel=0 killerIsTarget=False fromBind=-1 avoided=0"));
+                       "mana=37 swings=-1 notVisible=-1 killer=\"\" killerLevel=0 killerIsTarget=False fromBind=-1 avoided=0 " +
+                       "again=False sinceRelease=-1 ill=False ctl=-1 kites=-1 casts=-1 qc=-1 waits=-1 ctlBroken=-1 addCtl=-1 " +
+                       "addAt=-1 addHp=-1 breakOff=1 engageDist=-1"), "died on a break-off's run: out of a fight (the dropped one's FIGHT has it)");
     }
+
+    // DEATH again= and sinceRelease= (#167 F4): a death with no kill since the bot's last release; none before the first
+    // release of the login.
+    [TestCase(0L, 0, 9_000L, false, -1L)] [TestCase(5_000L, 0, 47_500L, true, 42L)] [TestCase(5_000L, 2, 47_500L, false, 42L)]
+    public void A_death_with_no_kill_since_the_last_release_is_a_death_again(long releasedAt, int lifeKills, long now, bool again,
+        long sinceRelease) =>
+        Assert.That((PlayerBotDriver.DiedAgain(releasedAt, lifeKills), PlayerBotDriver.SecondsSinceRelease(releasedAt, now)),
+            Is.EqualTo((again, sinceRelease)));
 
     private sealed class TestKiller : GameObject
     {
@@ -1919,11 +3732,12 @@ public sealed class UT_PlayerBotDriver
         const string head = "PLAYER_BOT_DEATH bot=Pbotaaaac task=False";
         Assert.That(PlayerBotDriver.DeathLine(head, detail, target, target), Is.EqualTo(head + " activity=Fighting startHp=62 fightSec=14 " +
             "targetHp=71 from=pull adds=2 lifeKills=3 rests=0 sinceKillSec=40 mana=100 swings=6 notVisible=1 killer=\"widow claw\" " +
-            "killerLevel=40 killerIsTarget=True fromBind=748 avoided=0"));
+            "killerLevel=40 killerIsTarget=True fromBind=748 avoided=0 again=False sinceRelease=-1 ill=False ctl=-1 kites=-1 casts=-1 " +
+            "qc=-1 waits=-1 ctlBroken=-1 addCtl=-1 addAt=-1 addHp=-1 breakOff=0 engageDist=-1"));
         Assert.That(PlayerBotDriver.DeathLine(head, detail, add, target),
-            Does.EndWith(" killer=\"a wolf\" killerLevel=38 killerIsTarget=False fromBind=748 avoided=0"));
+            Does.Contain(" killer=\"a wolf\" killerLevel=38 killerIsTarget=False fromBind=748 avoided=0 again=False sinceRelease=-1 ill=False "));
         Assert.That(PlayerBotDriver.DeathLine(head, detail, null, null),
-            Does.EndWith(" killer=\"\" killerLevel=0 killerIsTarget=False fromBind=748 avoided=0"),
+            Does.Contain(" killer=\"\" killerLevel=0 killerIsTarget=False fromBind=748 avoided=0 again=False sinceRelease=-1 ill=False "),
             "no killer and no target: not the target");
     }
 
@@ -1945,6 +3759,14 @@ public sealed class UT_PlayerBotDriver
         PlayerBotDriver.CountSwing(state, new AttackData { AttackResult = eAttackResult.Missed });
         Assert.That((state.Swings, state.NotVisible), Is.EqualTo((4, 2)));
     }
+
+    // FIGHT and DEATH ctlBroken= (#167 C3): a hold the bot's own swing ended, as a think sees it: its target held by a root
+    // or a mez (a hit or a miss ends them, GameLiving.cs:1762-1777) at the last think, no longer now, and a swing of its
+    // own counted since (CountSwing).
+    [TestCase(true, false, true, true)] [TestCase(true, true, true, false)] [TestCase(true, false, false, false)]
+    [TestCase(false, false, true, false)]
+    public void A_hold_that_ends_with_the_bots_own_swing_counts_as_broken(bool heldBefore, bool heldNow, bool swung, bool broke) =>
+        Assert.That(PlayerBotDriver.BrokeHold(heldBefore, heldNow, swung), Is.EqualTo(broke));
 
     [Test]
     public void The_dying_handler_names_a_bots_killer_ignores_anyone_else_and_goes_with_stop()
