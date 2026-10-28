@@ -615,9 +615,12 @@ public static class PlayerBotDriver
         state.FightAdds = Math.Max(state.FightAdds, state.Attackers);
         if (state.FightAdd.At < 0)                                                      // #167 FIGHT addAt= and addHp=: the
         {                                                                               //   first second monster on the bot
-            ScanComing(state, player, target, now);
+            KnowSpells(state, player);
+            bool scans = ScansComing(state.Controls.Count, state.CombatPets.Count);    // the review of 9aacd69: no scan of
+            if (scans) ScanComing(state, player, target, now);                         //   its own for a log field
             state.FightAdd = FirstAdd<GameLiving>(state.FightAdd, target, player.attackComponent.AttackerTracker.Attackers,
-                state.AddScan, now - state.EngagedSince, player.HealthPercent);
+                scans ? state.AddScan : Enumerable.Empty<GameLiving>(), living => IsAttacking(player, living),
+                now - state.EngagedSince, player.HealthPercent);
         }
         int swings = state.Swings;
         CountSwing(state, player.attackComponent.attackAction.LastAttackData);
@@ -2143,17 +2146,25 @@ public static class PlayerBotDriver
     }
 
     /// <summary>FIGHT and DEATH addAt= and addHp= (#167, the next leg's: when the second-monster case starts): the first
-    /// think in a fight a second monster, any but the target, is on the bot's attacker list or comes at it (coming: the
-    /// add scan's, ScanComing), as the whole seconds since the fight's first think and the bot's health then; kept after
-    /// (seen), and (-1, -1) until then.</summary>
+    /// think in a fight a second monster, any but the target, alive and on the bot (onBot: IsAttacking), is on the bot's
+    /// attacker list or comes at it (coming: the add scan's, ScanComing), as the whole seconds since the fight's first
+    /// think and the bot's health then; kept after (seen), and (-1, -1) until then. The review of 9aacd69: the last
+    /// fight's dead target stays in the attacker list until its attack interval runs out (AttackerTracker.cs:209-219),
+    /// and a lone next monster engaged within it read addAt=0.</summary>
     public static (int At, int Hp) FirstAdd<T>((int At, int Hp) seen, T target, IEnumerable<T> attackers, IEnumerable<T> coming,
-        long fightMilliseconds, byte health) where T : class
+        Func<T, bool> onBot, long fightMilliseconds, byte health) where T : class
     {
         if (seen.At >= 0) return seen;
         foreach (T monster in attackers.Concat(coming))
-            if (monster != target) return ((int)(fightMilliseconds / 1000), health);
+            if (monster != target && onBot(monster)) return ((int)(fightMilliseconds / 1000), health);
         return seen;
     }
+
+    /// <summary>Whether Engage scans for monsters coming at the bot for FIGHT addAt= (#167; the review of 9aacd69: every
+    /// role scanned 2,000 units every 2 s for the whole of an add-free fight, for a log field): only a bot whose add step
+    /// scans anyway (Add), one with a control (controls) or a Theurgist's pets (combatPets); the others read their
+    /// attacker list alone.</summary>
+    public static bool ScansComing(int controls, int combatPets) => controls > 0 || combatPets > 0;
 
     // A list caster's spells are in its spell lines; a hybrid's (Paladin, Thane...) are among its usable skills, each
     // with its line (GamePlayerUtils.cs:544-560; REVIEW-FIXES 19).
@@ -3409,7 +3420,7 @@ public static class PlayerBotDriver
         state.Mover.Stop(now);
         if (player.IsSitting)
         {
-            EndRest(state, player, now, why);                                          // PLAYER_BOT_REST why= (#167)
+            EndRest(state, player, now, RestEndWhy(why, Recovered(player)));           // PLAYER_BOT_REST why= (#167)
             player.Sit(false);
         }
         if (spell.Target is not eSpellTarget.SELF) player.TargetObject = player;
@@ -3441,6 +3452,12 @@ public static class PlayerBotDriver
     /// died, and the server's stand (a hit while sitting) as hit, or other.</summary>
     public static string RestStop(bool mayRest, bool incomingOnly) =>
         mayRest ? "recovered" : incomingOnly ? "incoming" : "hit";
+
+    /// <summary>Why a cast on itself that stands the bot up ends its rest (PLAYER_BOT_REST why=, #167): heal, pet or buff
+    /// (why), or recovered once the bot has (the review of 9aacd69: C9's buffs wait for the rest's end, BuffScanAllowed,
+    /// so a rest that ended recovered logged why=buff, every Skald's with its Song of Rest swapped back, and C9's
+    /// mid-rest count reads why=buff).</summary>
+    public static string RestEndWhy(string why, bool recovered) => recovered ? "recovered" : why;
 
     // #167: PLAYER_BOT_REST once per rest, when it ends.
     private static void EndRest(PlayerBotState state, GamePlayer player, long now, string why)

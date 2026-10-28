@@ -330,7 +330,8 @@ All start `PLAYER_BOT_`:
   came at it; 0 when one was on it by the fight's first think in reach), `addHp=` (the bot's health then), `breakOff=`
   (1: a break-off dropped the fight), `engageDist=` (its distance to the target at that first think) and `crowd=` (the
   potential adds round the target and along the walk in when it was picked; -1 for a defence or a monster coming at
-  it). The add is seen from the bot's attacker list each think and from a scan every 2 s. `DEATH` ends with
+  it). The add is seen from the bot's attacker list each think (only a live monster on the bot, not the last fight's
+  dead target) and, for a bot with a control or a Theurgist's pets, from a scan every 2 s. `DEATH` ends with
   `again=` (no kill since its last release), `sinceRelease=` (the seconds since that release, -1 if none since login)
   and `ill=` (the resurrection illness on when the fatal fight began), then the fatal fight's `ctl=`, `kites=`,
   `casts=`, `qc=`, `waits=`, `ctlBroken=`, `addCtl=`, `addAt=`, `addHp=` and `engageDist=` as `FIGHT` gives them (-1
@@ -346,9 +347,9 @@ All start `PLAYER_BOT_`:
   out of reach), `hold=` (the back-off, the illness or the hold for the replan) and `walk=` (roaming, the walk back
   among it); then `replan=`: `moved` (a camp planned since), `none` (owed, none planned) or `notOwed`;
 - `REST`: one per rest, when the bot stands: `sec=`, the seconds it sat, `why=`: `recovered`, `hit`, `incoming` (a
-  monster coming at it), `heal`, `pet` or `buff` (a cast on itself), `died`, or `other`; then `hp=` and `mp=`, its
-  health and power when it sat (`mp=100` with no power pool), and `respawn=`, the spawn spots of its recent kills its
-  rest spot was chosen against;
+  monster coming at it), `heal`, `pet` or `buff` (a cast on itself before it had recovered; after, `recovered`),
+  `died`, or `other`; then `hp=` and `mp=`, its health and power when it sat (`mp=100` with no power pool), and
+  `respawn=`, the spawn spots of its recent kills its rest spot was chosen against;
 - `FLOOR_STEP`: a step onto the nearest floor, with where from and to and why;
 - `REPLAN`: a stalled walk planned again, with where, the goal, the count in that walk and the stall's first step;
 - `ERRAND`: the quest bot's steps;

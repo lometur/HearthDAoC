@@ -1607,18 +1607,34 @@ public sealed class UT_PlayerBotDriver
 
     // FIGHT and DEATH addAt= and addHp= (#167, the next leg's): the first think in a fight a second monster, any but the
     // target, is on the bot's attacker list or comes at it (the add scan's): the whole seconds into the fight and the
-    // bot's health then, kept after; -1 until then.
+    // bot's health then, kept after; -1 until then. Only one alive and on the bot (onBot; the review of 9aacd69: the
+    // last fight's dead target stays in the attacker list until its attack interval runs out, AttackerTracker.cs:209-219,
+    // and a lone next monster engaged within it read addAt=0).
     [Test]
     public void The_first_add_is_the_first_monster_but_the_target_on_the_bot()
     {
         (int, int) none = (-1, -1);
-        Assert.That(PlayerBotDriver.FirstAdd(none, "target", ["target"], [], 4_500, 80), Is.EqualTo(none), "the target alone");
-        Assert.That(PlayerBotDriver.FirstAdd(none, "target", ["target", "wolf"], [], 4_500, 80), Is.EqualTo((4, 80)));
-        Assert.That(PlayerBotDriver.FirstAdd(none, "target", [], ["target", "wolf"], 6_999, 55), Is.EqualTo((6, 55)),
+        Func<string, bool> any = _ => true, alive = monster => monster != "the last kill";
+        Assert.That(PlayerBotDriver.FirstAdd(none, "target", ["target"], [], any, 4_500, 80), Is.EqualTo(none),
+            "the target alone");
+        Assert.That(PlayerBotDriver.FirstAdd(none, "target", ["target", "wolf"], [], any, 4_500, 80), Is.EqualTo((4, 80)));
+        Assert.That(PlayerBotDriver.FirstAdd(none, "target", [], ["target", "wolf"], any, 6_999, 55), Is.EqualTo((6, 55)),
             "coming at it");
-        Assert.That(PlayerBotDriver.FirstAdd((4, 80), "target", ["wolf", "boar"], [], 9_000, 30), Is.EqualTo((4, 80)), "kept");
-        Assert.That(PlayerBotDriver.FirstAdd(none, "target", [], [], 0, 100), Is.EqualTo(none));
+        Assert.That(PlayerBotDriver.FirstAdd((4, 80), "target", ["wolf", "boar"], [], any, 9_000, 30), Is.EqualTo((4, 80)),
+            "kept");
+        Assert.That(PlayerBotDriver.FirstAdd(none, "target", [], [], any, 0, 100), Is.EqualTo(none));
+        Assert.That(PlayerBotDriver.FirstAdd(none, "target", ["the last kill", "target"], ["the last kill"], alive, 0, 100),
+            Is.EqualTo(none), "the dead last target, still in the list");
+        Assert.That(PlayerBotDriver.FirstAdd(none, "target", ["the last kill", "wolf"], [], alive, 2_000, 90),
+            Is.EqualTo((2, 90)));
     }
+
+    // FIGHT addAt='s scan of the monsters coming at the bot (the review of 9aacd69: every role scanned 2,000 units every
+    // 2 s for the whole of an add-free fight, for a log field): only a bot that scans for its add step anyway, one with a
+    // control or a Theurgist's pets (Add); the others read their attacker list alone.
+    [TestCase(0, 0, false)] [TestCase(1, 0, true)] [TestCase(0, 2, true)] [TestCase(3, 1, true)]
+    public void Only_a_bot_with_an_add_step_scans_for_monsters_coming_at_it(int controls, int combatPets, bool scans) =>
+        Assert.That(PlayerBotDriver.ScansComing(controls, combatPets), Is.EqualTo(scans));
 
     // Every bot engaged with a monster reports its death; bots on one start row share monsters (runs 2-3).
     [Test]
@@ -3554,6 +3570,14 @@ public sealed class UT_PlayerBotDriver
         Assert.That(PlayerBotDriver.RestStop(mayRest: false, incomingOnly: true), Is.EqualTo("incoming"),
             "a monster coming at it, no hit yet (#167 F7)");
     }
+
+    // A cast on itself that stands the bot up ends the rest as heal, pet or buff, unless the bot had recovered (the review
+    // of 9aacd69: C9's buffs wait for the rest's end, so a rest that ended recovered logged why=buff, and every Skald's
+    // did, its Song of Rest swapped back; C9's mid-rest count reads why=buff).
+    [TestCase("buff", true, "recovered")] [TestCase("pet", true, "recovered")] [TestCase("buff", false, "buff")]
+    [TestCase("heal", false, "heal")]
+    public void A_cast_on_itself_ends_a_rest_as_recovered_once_the_bot_has(string why, bool recovered, string logged) =>
+        Assert.That(PlayerBotDriver.RestEndWhy(why, recovered), Is.EqualTo(logged));
 
     // The fields PLAYER_BOT_DEATH appends after task= (its earlier fields stay as they were: runs/legcheck.py reads them),
     // then the names the bot avoided when it died (DEATHS.md A3), before this death's; then (#167 F4) again=, no kill
