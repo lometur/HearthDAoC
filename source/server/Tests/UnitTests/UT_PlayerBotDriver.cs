@@ -1768,6 +1768,51 @@ public sealed class UT_PlayerBotDriver
         byte mana, bool casting, long nextTry, bool summons) =>
         Assert.That(PlayerBotDriver.WantsPet(hasPet, beingHit, inCombat, mana, casting, 1_000, nextTry), Is.EqualTo(summons));
 
+    // --- the Theurgist's pets at its target (#167 F1) ---
+
+    // As the world's rows: an Enemy target, 12% of the pool, a 3-s cast, no recast, 2,000 units (Abrasion, Refrigeration,
+    // Vapormancy).
+    private static (Spell, SpellLine) TheurgistPet(int level, int id) =>
+        (new(new DbSpell { SpellID = id, Name = $"Elemental{level}#{id}", Type = "SummonTheurgistPet", Target = "Enemy",
+            Power = -12, CastTime = 3.0, Range = 2000 }, level), Mending);
+
+    private static string CombatPetName(IEnumerable<(Spell, SpellLine)> spells, int level, Func<Spell, bool> ready = null) =>
+        PlayerBotDriver.FindCombatPetSpell(spells, level, ready ?? (_ => true)) is (Spell s, SpellLine) ? s.Name : "-";
+
+    // A GameBot Theurgist casts its pet at the target whenever it can (AutonomousPetSupport.cs:636-650): the highest
+    // summon at or below its level that is ready, then the higher ID, as FindPetSpell picks a main pet.
+    [Test]
+    public void A_theurgist_casts_its_highest_ready_pet_at_its_target()
+    {
+        var spells = new List<(Spell, SpellLine)>
+        {
+            TheurgistPet(10, 102), TheurgistPet(20, 104), TheurgistPet(30, 105), (Damage("DirectDamage", 20, 90), Mending),
+        };
+        Assert.That(CombatPetName(spells, 25), Is.EqualTo("Elemental20#104"));
+        Assert.That(CombatPetName(spells, 25, spell => spell.Level != 20), Is.EqualTo("Elemental10#102"));   // not ready
+        Assert.That(CombatPetName([TheurgistPet(20, 264), TheurgistPet(20, 454)], 25), Is.EqualTo("Elemental20#454"));
+        Assert.That(CombatPetName([(Damage("Bolt", 20, 90), Mending), Summon("SummonCommander", 15, 10102)], 25),
+            Is.EqualTo("-"));                                                           // a Wizard's, a main pet's
+    }
+
+    // At a cast choice: a pet summon ready, the target within its range and in view, out of a cast, the retry timer due.
+    [TestCase(true, true, false, 1_000L, true)] [TestCase(false, true, false, 1_000L, false)]
+    [TestCase(true, false, false, 1_000L, false)] [TestCase(true, true, true, 1_000L, false)]
+    [TestCase(true, true, false, 1_001L, false)]
+    public void A_theurgist_wants_a_pet_at_its_target_when_one_is_ready_in_range(bool hasSpell, bool inRange, bool casting,
+        long nextTry, bool wants) =>
+        Assert.That(PlayerBotDriver.WantsCombatPet(hasSpell, inRange, casting, 1_000, nextTry), Is.EqualTo(wants));
+
+    // A summon hurts the target only once its pet reaches it: three in a row would read as fruitless and block the
+    // bot's spells for 10 s (the cast watch), so only the damage spells count.
+    [Test]
+    public void A_pet_cast_does_not_count_in_the_cast_watch()
+    {
+        Assert.That(PlayerBotDriver.CountsInCastWatch(TheurgistPet(20, 104).Item1), Is.False);
+        Assert.That(PlayerBotDriver.CountsInCastWatch(Damage("DirectDamage", 20, 90)), Is.True);
+        Assert.That(PlayerBotDriver.CountsInCastWatch(Damage("Bolt", 20, 90)), Is.True);
+    }
+
     // A Necromancer in shade form cannot swing (AttackComponent.cs:511-516): its servant fights.
     [Test]
     public void A_shade_does_not_swing()
