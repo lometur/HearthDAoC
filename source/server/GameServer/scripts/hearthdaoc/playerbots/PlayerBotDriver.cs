@@ -1383,10 +1383,20 @@ public static class PlayerBotDriver
             if (state.TargetRespawnReach > 0)                     // #167 C7: rested out of (WalksToRestSpot)
                 RememberKill(state.RecentKills, state.TargetSpawn, state.TargetRespawnReach, GameLoop.GameLoopTime);
         }
-        else if (dead) state.RoamingSince = 0;                   // killed by another before this bot got there: not outgrown
+        SettleIdleClockAtTargetEnd(state, dead);
         state.KilledWithAdds = state.Engaged && dead && state.FightAdds >= 2;   // #167 C2: the second-monster case
         state.Target = null;
         state.Engaged = false;
+    }
+
+    /// <summary>SettleTarget's idle clock (RoamingSince): a target that died stops it, its camp not outgrown, engaged or
+    /// not. Killed by another before this bot got there, as before; #167 E fix U2b: or while the bot stepped in out of
+    /// sight, where step 16 no longer stops it (SettleIdleClock), so a kill (by another, or its own damage over time)
+    /// left the clock running into the rest after it, and the outgrown camp's relocation could follow a kill. A target
+    /// gone alive leaves it as it was.</summary>
+    public static void SettleIdleClockAtTargetEnd(PlayerBotState state, bool dead)
+    {
+        if (dead) state.RoamingSince = 0;
     }
 
     private static void Disengage(PlayerBotState state, GamePlayer player)

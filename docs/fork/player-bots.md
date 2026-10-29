@@ -433,9 +433,9 @@ Known gaps:
   for all, a Thane on a pocket of Muspelheim's navmesh above its camp, with no path down, took two monsters in turn
   every 2 s for its last 3.5 minutes, four blocked walks a second. Nor did it move camp, which a bot does after 2
   minutes with no target reached: a step toward a monster out of sight counted as one reached, and that walk was
-  blocked too. A step that ends blocked counts for nothing now. On a pocket the move may still only reach a monster on
-  the pocket, and how the bot got onto it is open (likely a short direct step there). A GameBot's target and camp
-  choice is part of the parity work (#167).
+  blocked too. A step that ends blocked counts for nothing now; one whose monster dies on the way still counts. On a
+  pocket the move may still only reach a monster on the pocket, and how the bot got onto it is open (likely a short
+  direct step there). A GameBot's target and camp choice is part of the parity work (#167).
 - A Tir na Nog bot stalled at one spot (21263, 35215) in most runs, though the same step replayed offline walks on
   (same navmesh, same Detour library). It is likely the polygon-edge case above: the log rounds the spot, and starts a
   few hundredths of a unit apart can differ there. In the last four runs none stalled there; one stalled once beside

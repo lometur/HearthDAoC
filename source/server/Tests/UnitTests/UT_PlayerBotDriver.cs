@@ -6139,6 +6139,21 @@ public sealed class UT_PlayerBotDriver
         Assert.That(state.RoamingSince, Is.EqualTo(8_000L), "a walk in: the clock runs");
     }
 
+    // #167 E fix U2b: a target that dies stops the idle clock (SettleTarget), engaged or not. Before U2 an engaged bot's
+    // clock was already stopped; a step in out of sight no longer stops it (SettleIdleClock), and the old reset was for
+    // a target killed before the bot got there (not engaged) only, so one killed while the bot stepped in (by another
+    // bot, or its own damage over time) left the clock running into the rest after the kill: an outgrown camp's
+    // relocation (RelocateReason) with a kill just made. On st-deathsE2/E2b, 6 and 12 step-in fights ended in a kill
+    // with no swing and no cast of the bot's. A target gone alive leaves the clock as it was.
+    [TestCase(true, true, 0L)] [TestCase(false, true, 0L)] [TestCase(true, false, 5_000L)] [TestCase(false, false, 5_000L)]
+    public void A_target_that_dies_stops_the_idle_clock_during_a_step_in_too(bool engaged, bool dead, long clock)
+    {
+        var state = new PlayerBotState(Player(null))
+            { Target = Mob(), Engaged = engaged, BlindStop = 419, RoamingSince = 5_000 };   // stepping in
+        PlayerBotDriver.SettleIdleClockAtTargetEnd(state, dead);
+        Assert.That(state.RoamingSince, Is.EqualTo(clock));
+    }
+
     // #167: one PLAYER_BOT_REST line per rest when the bot stands: the seconds it sat and why it stood (recovered, hit,
     // heal, pet or buff: a cast on itself, died, other); then (the next leg's) its health and power when it sat, hp= and
     // mp=, and respawn=, the killed monsters' spawn spots its rest spot was read against (RespawnSpots, C7); then (#167
