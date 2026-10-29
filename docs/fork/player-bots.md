@@ -163,7 +163,11 @@ Each bot thinks every 250 ms, a thin copy of the `/bot` pilot's think:
 - After a release it first steps out of the reach of every monster round it that would aggro, a keep guard of another
   realm or of none too. Such a guard also counts as an add when it picks a target, a spot to rest and where to run in a
   break-off, but it never pulls one. Wherever it died (at its camp or on a walk), it then plans a new camp from where it
-  died, one it can walk to from there, before it walks back. It plans at once, while the release's 10-s immunity lasts:
+  died, one it can walk to from there, before it walks back. Within 15 minutes of a death (a died, break-off or capped
+  plan) it first takes a camp within 10,000 units of where it stands, in the zone it stands in, that it can walk to:
+  one that fits its cap, else the safest that cons blue or easier, never one it died at; only with none it plans as
+  before. That gain depends on where it binds: on the test spots each bot binds at its camp, so a near camp is there;
+  a bot bound in a town gains little. It plans at once, while the release's 10-s immunity lasts:
   the plan counts the monsters it may not attack until then. With a camp planned and the immunity still on, no monster
   may attack it, so it walks out toward the camp instead of standing: sprinting, from spot to spot out of every
   aggressive monster's reach, each the one that leaves the least of the way, as far as the immunity left lets it get,
@@ -422,8 +426,10 @@ All start `PLAYER_BOT_`:
   or `breakoff`. `RELOCATE` after a death (`reason=died`) ends with `sinceRelease=`, the milliseconds since the release;
   after a break-off its `reason=` is `brokeoff`. Either ends with `barred=old` when the death or the break-off came on
   the walk to the camp it had, which the plan then leaves out. Any `RELOCATE` then ends with `capKill=`, the lowest con
-  that killed the bot in the last 5 minutes, yellow or harder (a blue or green killer logs none), while there is one. A
-  break-off drops its fight (`FIGHT result=dropped`);
+  that killed the bot in the last 5 minutes, yellow or harder (a blue or green killer logs none), while there is one.
+  Then `recent=1` on a plan made within 15 minutes of a death (a died, break-off or capped one), and `near=1` when the
+  camp came from its near pass (within 10,000 units of where the bot stood). A break-off drops its fight (`FIGHT
+  result=dropped`);
 - `BREAKOFF`: one per break-off, when it ends: the bot's `hp=`, `end=` (endurance) and `attackers=` when it broke off,
   `sec=`, the seconds it ran, and `outcome=`: `shook` (none still after it, or from 30 s none within 1,500 units),
   `fought` (still chased after 45 s, caught with no control to cast, or nowhere to run) or `died`; then `rate=`, the

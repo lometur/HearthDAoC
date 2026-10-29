@@ -470,6 +470,12 @@ public sealed class UT_PlayerBotDriver
             Does.EndWith(" reason=died fallback=BLUE sinceRelease=10250 barred=old capKill=YELLOW"));
         Assert.That(PlayerBotDriver.RelocateNoneLine("Pbotaaaaz", 34, 3, 51, PlayerBotDriver.Capped, 0, false, ConColor.BLUE),
             Is.EqualTo("PLAYER_BOT_RELOCATE bot=Pbotaaaaz level=34 none checked=3 zone=51 reason=capped capKill=BLUE"));
+        // #167 E W1: then recent=1 on a plan after a death, and near=1 on a camp its near pass took
+        Assert.That(PlayerBotDriver.RelocateLine("Pbotaaaaz", 34, Vector3.Zero, Vector3.One, 1, "m", 30, 51,
+                PlayerBotDriver.Died, ConColor.BLUE, 10_250, false, ConColor.YELLOW, recent: true, near: true),
+            Does.EndWith(" reason=died fallback=BLUE sinceRelease=10250 capKill=YELLOW recent=1 near=1"));
+        Assert.That(PlayerBotDriver.RelocateNoneLine("Pbotaaaaz", 34, 0, 51, PlayerBotDriver.BrokeOff, 0, false, null,
+            recent: true), Is.EqualTo("PLAYER_BOT_RELOCATE bot=Pbotaaaaz level=34 none checked=0 zone=51 reason=brokeoff recent=1"));
     }
 
     // --- the killer memory (DEATHS.md A3) ---
@@ -523,6 +529,49 @@ public sealed class UT_PlayerBotDriver
             new HashSet<string>(), 5), Is.EqualTo((new[] { "s1", "s2" }, (ConColor?)ConColor.BLUE, true)),
             "a stale camp when no fresh one is left");
     }
+
+    // #167 E W1: a plan after a death first looks near the bot: within 10,000 of where it stands (its bind after a
+    // release), a fit camp, else the safest no harder than BLUE, never one it failed at; only with none the plan as
+    // before, from the death spot. st-deathsD2/D2b: after-death plans of 10k+ died first 27 of 72, under 10k 13 of 148.
+    [Test]
+    public void A_replan_after_a_death_takes_a_near_camp_before_a_far_fit()
+    {
+        var monsters = new[]
+        {
+            Monster("b1", 3_000, ConColor.BLUE), Monster("b2", 3_100, ConColor.BLUE), Monster("b3", 3_200, ConColor.BLUE),
+            Monster("g1", 30_000, ConColor.GREEN), Monster("g2", 30_100, ConColor.GREEN), Monster("g3", 30_200, ConColor.GREEN),
+        };
+        Vector3 bind = Vector3.Zero, deathSpot = new(20_000, 0, 0);
+        Vector3[] failed = [deathSpot];
+        Assert.That(PlayerBotDriver.PlanCampChoice(monsters, monsters, bind, deathSpot, ConColor.GREEN, ConColor.YELLOW,
+                failed, new HashSet<string>(), 5, null, afterDeath: true),
+            Is.EqualTo((new[] { "b1", "b2", "b3" }, (ConColor?)ConColor.BLUE, false, true)), "the blue camp 3,000 away");
+        Assert.That(PlayerBotDriver.PlanCampChoice(monsters, monsters, bind, deathSpot, ConColor.GREEN, ConColor.YELLOW,
+                failed, new HashSet<string>(), 5, null, afterDeath: false),
+            Is.EqualTo((new[] { "g1", "g2", "g3" }, (ConColor?)null, false, false)), "no recent death: as before");
+        Assert.That(PlayerBotDriver.PlanCampChoice(monsters, monsters, bind, deathSpot, ConColor.GREEN, ConColor.YELLOW,
+                new[] { deathSpot, new Vector3(3_100, 0, 0) }, new HashSet<string>(), 5, null, afterDeath: true),
+            Is.EqualTo((new[] { "g1", "g2", "g3" }, (ConColor?)null, false, false)), "never a near camp it failed at");
+        Assert.That(PlayerBotDriver.PlanCampChoice(monsters, monsters, bind, deathSpot, ConColor.GREEN, ConColor.YELLOW,
+                failed, new HashSet<string>(), 5, null, afterDeath: true, tryNear: false),
+            Is.EqualTo((new[] { "g1", "g2", "g3" }, (ConColor?)null, false, false)), "no corridor to the near camps");
+        var yellowNear = new[]
+        {
+            Monster("y1", 3_000, ConColor.YELLOW), Monster("y2", 3_100, ConColor.YELLOW), Monster("y3", 3_200, ConColor.YELLOW),
+            Monster("g1", 30_000, ConColor.GREEN), Monster("g2", 30_100, ConColor.GREEN), Monster("g3", 30_200, ConColor.GREEN),
+        };
+        Assert.That(PlayerBotDriver.PlanCampChoice(yellowNear, yellowNear, bind, deathSpot, ConColor.GREEN, ConColor.YELLOW,
+                failed, new HashSet<string>(), 5, null, afterDeath: true),
+            Is.EqualTo((new[] { "g1", "g2", "g3" }, (ConColor?)null, false, false)), "no near camp harder than blue");
+    }
+
+    // #167 E W1: a plan after a death is a died, brokeoff or capped one within 15 minutes of the last death (a GameBot's
+    // failure memory); an outgrown one is left alone.
+    [TestCase("died", 10_000L, true)] [TestCase("brokeoff", 899_999L, true)] [TestCase("capped", 0L, true)]
+    [TestCase("outgrown", 10_000L, false)] [TestCase("brokeoff", 900_000L, false)] [TestCase("died", -1L, false)]
+    public void A_plan_after_a_death_is_a_died_brokeoff_or_capped_one_within_15_minutes(string reason, long sinceDeathMs,
+        bool afterDeath) =>
+        Assert.That(PlayerBotDriver.AfterDeathPlan(reason, sinceDeathMs), Is.EqualTo(afterDeath));
 
     // --- the killers' cons (#167 D6) ---
 
