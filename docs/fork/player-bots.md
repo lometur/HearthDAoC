@@ -178,12 +178,13 @@ Each bot thinks every 250 ms, a thin copy of the `/bot` pilot's think:
   within 250 units of it for 2 s, attacking it in the last 2 s (a miss, block, parry or evade counts too), has caught
   it: it stops, casts a control at it (as at an add, with Quickcast while hit), faces it until the cast is done and runs
   on; with no control to cast it turns on the weakest monster in reach. From 30 s it is done once none is within 1,500
-  units; still chased at 45 s, it turns and fights them out. With nowhere to run it tries again each second, 800 units
-  out too (never into another aggressive monster's reach), and holds where it stands meanwhile: it turns when a chaser
-  that isn't held comes within 250 units or one hits it while it holds, and a caster or pet class that can still pay
-  for a damage spell turns at once, to open at range. Afterwards it takes no camp there and avoids those monsters for
-  15 minutes, and plans a new camp from where it ran to before it looks for a new target. A break-off on the walk to
-  its camp, more than 1,400 units short of it, bars that camp too for 15 minutes.
+  units (done where another monster would aggro it, a chaser that gave up too, it runs on to its point first); still
+  chased at 45 s, it turns and fights them out. With nowhere to run it tries again each second, 800 units out too (never
+  into another aggressive monster's reach), and holds where it stands meanwhile: it turns when a chaser that isn't held
+  comes within 250 units or one hits it while it holds, and a caster or pet class that can still pay for a damage spell
+  turns at once, to open at range. Afterwards it takes no camp there and avoids those monsters for 15 minutes, and plans
+  a new camp from where it ran to before it looks for a new target. A break-off on the walk to its camp, more than 1,400
+  units short of it, bars that camp too for 15 minutes.
 - In a close fight (2 or more monsters on it now or earlier in the fight, a defence, the fight after a kill with adds,
   or a fight the race since the first hit on it projects it to end under 30% health) a bot keeps the endurance a sprint
   away from the fastest monster on it would need, plus 5: 31 against a monster no faster than its run, up to 41 against
@@ -472,24 +473,24 @@ All start `PLAYER_BOT_`:
   capped one), and `near=1` when the camp came from its near pass (within 10,000 units of where the bot stood). A
   break-off drops its fight (`FIGHT result=dropped`);
 - `BREAKOFF`: one per break-off, when it ends: the bot's `hp=`, `end=` (endurance) and `attackers=` when it broke off,
-  `sec=`, the seconds it ran, and `outcome=`: `shook` (none still after it, or from 30 s none within 1,500 units),
-  `fought` (still chased after 45 s, caught with no control to cast, or nowhere to run) or `died`; then `rate=`, the
-  health it lost a second over the 3 s before it broke off, and `why=`, the rule that fired: `adds` (2 or more on
-  it), `atkill` (1 still on it within 3 s of a kill with adds), `followup` (the fight after that kill), `avoided` (one
-  it avoids), `caster` (a caster losing to one), `race` (a bot that isn't a caster losing the race to one) or `spent` (a
-  caster out of power with its target held); then `sprintOff=`, the seconds into the run its sprint first went off (-1:
-  never), and `endLeft=`, its endurance when the run ended; then `turn=`, why a fought one turned: `caught`, `nopoint`
-  (nowhere to run, with a chaser not held within 250 units, a hit while it held, or as a caster or pet class with
-  power), `blocked` (the same after a blocked step) or `cap` (45 s), `-` otherwise; `holds=`, its one-second tries
-  that found no point while it held; `speed=` and `chaserSpeed=`, its run speed (191 unencumbered, less when
-  encumbered) and the fastest chaser's when it began (-1 before they are read). A break-off that would fire but doesn't
-  logs once a fight as `outcome=refused` with `sec=0` and the bot's `hp=`, `end=`, `attackers=` and `rate=` then, and
-  `why=`: `control` (an add's control comes first), `speed` (a chaser as fast as its sprint), `sprint` (its sprint too
-  short for the fastest), `ranged` (a chaser that harms from range) or `point` (nowhere to run), with `sprintOff=-1`,
-  `endLeft=` its endurance then and its `speed=` and `chaserSpeed=` (-1 for `control`); it is no break-off, so leave it
-  out of break-off counts. The fight it dropped (`FIGHT result=dropped breakOff=1`) counts the monsters on the bot then
-  in its `adds=` (never fewer than `attackers=`), and with 2 or more and no add seen before, its `addAt=` and `addHp=`
-  are the break-off's;
+  `sec=`, the seconds it ran (a run on to its point, done in another monster's reach, counts in it), and `outcome=`:
+  `shook` (none still after it, or from 30 s none within 1,500 units), `fought` (still chased after 45 s, caught with no
+  control to cast, or nowhere to run) or `died`; then `rate=`, the health it lost a second over the 3 s before it broke
+  off, and `why=`, the rule that fired: `adds` (2 or more on it), `atkill` (1 still on it within 3 s of a kill with
+  adds), `followup` (the fight after that kill), `avoided` (one it avoids), `caster` (a caster losing to one), `race` (a
+  bot that isn't a caster losing the race to one) or `spent` (a caster out of power with its target held); then
+  `sprintOff=`, the seconds into the run its sprint first went off (-1: never), and `endLeft=`, its endurance when the
+  run ended; then `turn=`, why a fought one turned: `caught`, `nopoint` (nowhere to run, with a chaser not held within
+  250 units, a hit while it held, or as a caster or pet class with power), `blocked` (the same after a blocked step) or
+  `cap` (45 s), `-` otherwise; `holds=`, its one-second tries that found no point while it held; `speed=` and
+  `chaserSpeed=`, its run speed (191 unencumbered, less when encumbered) and the fastest chaser's when it began (-1
+  before they are read). A break-off that would fire but doesn't logs once a fight as `outcome=refused` with `sec=0` and
+  the bot's `hp=`, `end=`, `attackers=` and `rate=` then, and `why=`: `control` (an add's control comes first), `speed`
+  (a chaser as fast as its sprint), `sprint` (its sprint too short for the fastest), `ranged` (a chaser that harms from
+  range) or `point` (nowhere to run), with `sprintOff=-1`, `endLeft=` its endurance then and its `speed=` and
+  `chaserSpeed=` (-1 for `control`); it is no break-off, so leave it out of break-off counts. The fight it dropped
+  (`FIGHT result=dropped breakOff=1`) counts the monsters on the bot then in its `adds=` (never fewer than
+  `attackers=`), and with 2 or more and no add seen before, its `addAt=` and `addHp=` are the break-off's;
 - `TURRET`: an Animist's new turret by its target (`step=replant`) or a monster it left because it couldn't plant
   one (`step=skip`), with the target's `con=`, its distance from the turret it had (`toTurret=`) and that turret's
   reach (`reach=`);

@@ -219,6 +219,7 @@ public sealed class PlayerBotState
     public string BreakOffHoldWhy, BreakOffTurn;                 //   and why it began (nopoint, blocked), why it turned
     public int BreakOffSpeed = -1, BreakOffChaserSpeed = -1;     //   (turn=), and its run speed and the fastest chaser's
                                                                  //   when it began (speed=, chaserSpeed=; -1: not read)
+    public bool BreakOffRunsOn;                                  // #167 E T2b: running on to its point past Done (RunsOnToClear)
     public bool BackPending, BackOwed, BackMoved;                // #167 C1: PLAYER_BOT_BACK, from a release to its first
     public long BackStepOutMs, BackHoldMs, BackWalkMs;           //   fight: the line due, the replan owed and a camp planned
                                                                  //   since, and the time stepping out, held and walking;
@@ -2438,6 +2439,14 @@ public static class PlayerBotDriver
     /// A held one counts in no reach (CaughtNow, WeakestInReach).</summary>
     public static bool KeepsChaser(bool targetsBot, int distance) => targetsBot && distance <= ChaseRadius;
 
+    /// <summary>#167 E T2b: a break-off done (BreakOffStep's Done) runs on to its point instead of stopping where it is when
+    /// it has one it hasn't reached (hasGoal, arrived), under BreakOffMaxMilliseconds, and it stands in another monster's
+    /// reach (inAddReachHere, StandsInAddReach: read once, runningOn after). A chaser that gave up stands in its own aggro
+    /// reach, so this reaches it too (the review). st-deathsD2/D2b: a fight opened within 3 s of 10 of 135 shook ends, 7
+    /// of them fatal.</summary>
+    public static bool RunsOnToClear(bool hasGoal, bool arrived, long sinceMs, bool runningOn, Func<bool> inAddReachHere) =>
+        hasGoal && !arrived && sinceMs < BreakOffMaxMilliseconds && (runningOn || inAddReachHere());
+
     /// <summary>Whom a caught bot turns on with no control to cast (#167 D2): the chaser within reach, not held, with the
     /// least health (a monster under 33% health also moves slower, MaxSpeedCalculator.cs:142-143); none, null.</summary>
     public static T WeakestInReach<T>(IReadOnlyList<(T Npc, byte Health, int Distance, bool Held)> chasers, int reach)
@@ -2495,8 +2504,8 @@ public static class PlayerBotDriver
     /// <summary>A break-off's end in the state (#167 C2; EndBreakOff's, the review of 9aacd69): the run cleared, and unless
     /// the bot died (its death's own recovery then, HandleDeath) the relocation owed (AfterBreakOff, owesReplan:
     /// OwesReplan's rule); fought, no new break-off for BreakOffMilliseconds: it fights them out. #167 D1: a spent
-    /// caster's owes no relocation but a rest (RecoverBeforePull): it was short of power, not of a camp. #167 E T1: the
-    /// turn, the holds, the retry and the speeds go with the run.</summary>
+    /// caster's owes no relocation but a rest (RecoverBeforePull): it was short of power, not of a camp. #167 E T1, T2b:
+    /// the turn, the holds, the retry, the speeds and the run-on go with the run.</summary>
     public static void FinishBreakOff(PlayerBotState state, string outcome, bool owesReplan, long now)
     {
         bool spent = state.BreakOffWhy == Spent;
@@ -2504,7 +2513,7 @@ public static class PlayerBotDriver
         (state.BreakOffWhy, state.CaughtSince) = (null, 0);
         (state.BreakOffTurn, state.BreakOffHolds, state.NextBreakOffRetryTick) = (null, 0, 0);   // #167 E T1
         (state.BreakOffHoldSince, state.BreakOffHoldWhy) = (0, null);
-        (state.BreakOffSpeed, state.BreakOffChaserSpeed) = (-1, -1);
+        (state.BreakOffSpeed, state.BreakOffChaserSpeed, state.BreakOffRunsOn) = (-1, -1, false);   // #167 E T2b: the run-on
         state.BreakOffChasers.Clear();
         state.BreakOffBlocked.Clear();
         if (outcome == Died) return;
@@ -4167,14 +4176,19 @@ public static class PlayerBotDriver
     // standing and facing it while that cast is under way; with no control it turns on the weakest chaser in reach
     // (WeakestChaser, TurnOn). True while it runs. #167 E T1: with no point (NextPoint with none, a blocked step, or
     // holding) it tries for one each second, 800 out too, and holds or turns (GoalOrHold); BREAKOFF turn= says why it
-    // turned.
+    // turned. #167 E T2b: done in another monster's reach with its point ahead, it runs on to the point first
+    // (RunsOnToClear); a blocked step with none after it then is done.
     private static bool BreaksOffNow(PlayerBotState state, GamePlayer player, long now)
     {
         if (state.BreakOffSince == 0 && !StartsBreakOff(state, player, now)) return false;
         KeepChasers(state, player);
         (int nearest, GameNPC free, int freeDistance) = NearestChasers(state, player);
-        PlayerBotBreakOff next = BreakOffStep(state.BreakOffArrived, state.BreakOffChasers.Count, now - state.BreakOffSince,
-            nearest, CaughtThink(state, player, freeDistance, now));
+        long since = now - state.BreakOffSince;
+        PlayerBotBreakOff next = BreakOffStep(state.BreakOffArrived, state.BreakOffChasers.Count, since, nearest,
+            CaughtThink(state, player, freeDistance, now));
+        if (next is PlayerBotBreakOff.Done && RunsOnToClear(state.BreakOffGoal != null, state.BreakOffArrived, since,
+                state.BreakOffRunsOn, () => StandsInAddReach(player)))
+            (next, state.BreakOffRunsOn) = (PlayerBotBreakOff.Run, true);               // #167 E T2b: on to its point
         if (next is not (PlayerBotBreakOff.Done or PlayerBotBreakOff.Fight) && player.IsCasting)
         {
             state.Mover.Stop(now);                                                      // #167 D2: its control at a caught
@@ -4219,9 +4233,28 @@ public static class PlayerBotDriver
             ReportBlocked(state, player, "breakoff", goal, now);
             state.BreakOffBlocked.Add(goal);                                            // never chosen again (NextBreakOffPoint)
             (state.BreakOffGoal, state.NextBreakOffRetryTick) = (null, 0);              // #167 E T1: a new point at once,
+            if (state.BreakOffChasers.Count == 0)                                       // #167 E T2b: running on, none after
+            {                                                                           //   it: done
+                EndBreakOff(state, player, now, Shook);
+                return false;
+            }
             return GoalOrHold(state, player, now, nearest, freeDistance, TurnBlocked);  //   else it holds or turns
         }
         return true;
+    }
+
+    // #167 E T2b: whether the bot stands in the reach of a monster that would aggro (IsBreakOffAdd, AddReach; InAddReach's
+    // ring), from one scan of AddScanMargin round it (500 aggro and AddMargin), once per Done with a point ahead.
+    private static bool StandsInAddReach(GamePlayer player)
+    {
+        List<(GameNPC Npc, Vector3 At, int AggroRange)> adds = _reach ??= new();
+        adds.Clear();
+        foreach (GameNPC npc in player.GetNPCsInRadius((ushort)AddScanMargin))
+            if (IsBreakOffAdd(npc, player, player.Realm) && AddReach(player, npc) is > 0 and int reach)
+                adds.Add((npc, new(npc.X, npc.Y, npc.Z), reach));
+        bool inReach = InAddReach(new Vector3(player.X, player.Y, player.Z), adds);
+        adds.Clear();                                                                   // no monster held past the scan
+        return inReach;
     }
 
     // #167 E T1: with no point to run to, a try for one each BreakOffRetryMilliseconds (BreakOffGoal with its 800 pass,

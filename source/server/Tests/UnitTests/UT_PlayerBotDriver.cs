@@ -1939,6 +1939,27 @@ public sealed class UT_PlayerBotDriver
         int fastest, int endurance, bool? sprint) =>
         Assert.That(PlayerBotDriver.BreakOffSprint(sprinting, nearestFree, fastest, endurance), Is.EqualTo(sprint));
 
+    // #167 E T2b: done (the chasers gone, or from 30 s none within 1,500) in another monster's reach with its point ahead,
+    // it runs on to the point (one scan, then remembered); at its point, with none, or at the 45-s cap it stops.
+    // st-deathsD2/D2b: Done stopped the bot where the chaser gave up, and a fight opened there within 3 s of 7 fatal
+    // shook ends (a chaser that gave up stands in its own aggro reach).
+    [TestCase(true, false, 26_000L, false, true, true)]
+    [TestCase(true, false, 26_000L, false, false, false)]                      // clear where it is
+    [TestCase(true, false, 26_000L, true, false, true)]                        // running on: no new scan
+    [TestCase(true, true, 26_000L, false, true, false)]                        // at its point
+    [TestCase(false, false, 26_000L, false, true, false)]                      // no point (holding)
+    [TestCase(true, false, 45_000L, false, true, false)]                       // the cap
+    [TestCase(true, false, 45_000L, true, true, false)]
+    public void A_break_off_done_in_a_monsters_reach_runs_on_to_its_point(bool hasGoal, bool arrived, long sinceMs,
+        bool runningOn, bool inReach, bool runsOn)
+    {
+        bool scanned = false;
+        Assert.That(PlayerBotDriver.RunsOnToClear(hasGoal, arrived, sinceMs, runningOn, () => { scanned = true; return inReach; }),
+            Is.EqualTo(runsOn));
+        if (!hasGoal || arrived || runningOn || sinceMs >= PlayerBotDriver.BreakOffMaxMilliseconds)
+            Assert.That(scanned, Is.False, "no scan then");
+    }
+
     // #167 D2: caught on the run, a chaser (not held) within 250 (ChaserReach and 50) for 2 s. st-deathsD: the clock started
     // with the chaser still in contact and fired 2 s into the run, before the sprint could gain on it (57 a second at
     // most on a 191 chaser): 89 of 98 break-offs ended fought at sec=2, and health fell during only 31 of 87 runs. Now
@@ -2183,6 +2204,9 @@ public sealed class UT_PlayerBotDriver
                 turned.BreakOffHoldWhy, turned.BreakOffSpeed, turned.BreakOffChaserSpeed),
             Is.EqualTo(((string)null, 0, 0L, 0L, (string)null, -1, -1)),
             "#167 E T1: the turn, the holds, the retry and the speeds go with the run");
+        var ranOn = new PlayerBotState(Player(null)) { BreakOffSince = 2_000, BreakOffRunsOn = true };
+        PlayerBotDriver.FinishBreakOff(ranOn, PlayerBotDriver.Shook, owesReplan: true, 7_000);
+        Assert.That(ranOn.BreakOffRunsOn, Is.False, "#167 E T2b: and the run-on");
     }
 
     // The review of 9aacd69: after a break-off the bot rests (it is under 40%), and the first search after the rest ran
