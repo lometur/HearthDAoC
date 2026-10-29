@@ -387,6 +387,7 @@ public sealed class UT_PlayerBotDriver
     [TestCase("outgrown", ConColor.BLUE, null, null)] [TestCase(null, ConColor.BLUE, null, null)]
     [TestCase("capped", ConColor.BLUE, ConColor.YELLOW, ConColor.BLUE)] [TestCase("capped", ConColor.BLUE, ConColor.BLUE, null)]
     [TestCase("capped", ConColor.YELLOW, ConColor.BLUE, null)]
+    [TestCase("capped", ConColor.GREEN, ConColor.GREEN, ConColor.GREEN)]      // the review of D: the cap's own floor
     public void A_capped_bot_that_cannot_move_takes_the_safest_con_it_passed_over(string reason, ConColor? safest,
         ConColor? lowestKillerCon, ConColor? cap) =>
         Assert.That(PlayerBotDriver.FallbackInPlace(reason, safest, lowestKillerCon), Is.EqualTo(cap));
@@ -623,6 +624,34 @@ public sealed class UT_PlayerBotDriver
             Is.EqualTo((new[] { "y1", "y2" }, (ConColor?)ConColor.YELLOW, false)), "the other camp before the failed one");
         Assert.That(Plan(monsters, [new Vector3(1_050, 0, 0)], ConColor.YELLOW),
             Is.EqualTo((new[] { "b1", "b2" }, (ConColor?)ConColor.BLUE, false)));
+    }
+
+    // The review of D (D6): the fallback's limit is the cap's (UnderKillerCon): the con under the lowest killer's, never
+    // under GREEN. A GREEN killer leaves the bot its GREEN cap, so a GREEN fallback camp too: with `median < killer` no
+    // camp was left (grey monsters form none), and a capped bot planned none every 30 s for 15 minutes.
+    [TestCase(ConColor.ORANGE, ConColor.YELLOW)] [TestCase(ConColor.YELLOW, ConColor.BLUE)]
+    [TestCase(ConColor.BLUE, ConColor.GREEN)] [TestCase(ConColor.GREEN, ConColor.GREEN)]
+    public void The_con_under_a_killers_is_never_under_green(ConColor killer, ConColor under) =>
+        Assert.That(PlayerBotDriver.UnderKillerCon(killer), Is.EqualTo(under));
+
+    [Test]
+    public void After_a_green_killer_a_green_fallback_camp_is_left()
+    {
+        var monsters = new[]
+        {
+            Monster("g1", 1_000, ConColor.GREEN), Monster("g2", 1_100, ConColor.GREEN),
+            Monster("b1", 10_000, ConColor.BLUE), Monster("b2", 10_100, ConColor.BLUE),
+        };
+        (string[], ConColor?, bool) Plan(IReadOnlyList<(string, Vector3, ConColor, bool, bool)> camps, ConColor? killerCon) =>
+            PlayerBotDriver.PlanRelocation(camps, Vector3.Zero, ConColor.GREEN, ConColor.YELLOW, [new Vector3(1_050, 0, 0)],
+                new HashSet<string>(), 5, killerCon);
+        Assert.That(Plan(monsters, null), Is.EqualTo((new[] { "b1", "b2" }, (ConColor?)ConColor.BLUE, false)),
+            "the other camp before the failed one");
+        Assert.That(Plan(monsters, ConColor.GREEN), Is.EqualTo((new[] { "g1", "g2" }, (ConColor?)ConColor.GREEN, false)),
+            "the failed GREEN camp, the only one under the cap's floor");
+        Assert.That(Plan(monsters[..2], ConColor.GREEN), Is.EqualTo((new[] { "g1", "g2" }, (ConColor?)ConColor.GREEN, false)));
+        Assert.That(Plan(monsters[2..], ConColor.GREEN), Is.EqualTo((Array.Empty<string>(), (ConColor?)null, false)),
+            "a BLUE camp after a GREEN killer: none");
     }
 
     // --- the recovery from a death (#167 F4) ---

@@ -48,8 +48,8 @@ Two more settings are read only when bots are on:
 Each bot thinks every 250 ms, a thin copy of the `/bot` pilot's think:
 - It roams within 4,000 units of its start and hunts monsters within 5,400 that con at most yellow. Each death lowers
   that con by one step, by two at most. For 15 minutes after a death it also hunts nothing that cons as high as its
-  killer did, down to green at the lowest, and takes no fallback camp that cons as high: a bot killed by a yellow
-  hunts blue at most.
+  killer did, down to green at the lowest, and takes no fallback camp that cons higher than that: a bot killed by a
+  yellow hunts blue at most, and one killed by a green still takes a green camp.
 - It rests after each kill, and whenever below a GameBot's rest thresholds (70% health, 45% power, 35% endurance). A
   rest stops at full health, 60% endurance, and full power, or 90% power for a caster (Wizard, Sorcerer, Runemaster,
   Eldritch, Mentalist: under 50% power it regains power at half the rate, so a pull that ends below half costs more

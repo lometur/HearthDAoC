@@ -1443,9 +1443,13 @@ public static class PlayerBotDriver
     public static ConColor CapAfterDeaths(ConColor deathCap, ConColor? fallback, ConColor? lowestKillerCon)
     {
         ConColor cap = AutonomousDeathRecoveryPolicy.EncounterMaximum(deathCap, MaximumTargetCon(1, 0), fallback, false);
-        return lowestKillerCon is ConColor killer && cap >= killer
-            ? (ConColor)Math.Max((int)ConColor.GREEN, (int)killer - 1) : cap;
+        return lowestKillerCon is ConColor killer && cap >= killer ? UnderKillerCon(killer) : cap;
     }
+
+    /// <summary>#167 D6: the highest con under a killer's, never under GREEN: the cap's limit (CapAfterDeaths) and the
+    /// fallback's (PlanRelocation, FallbackInPlace). The review of D: the fallback took only a camp under the killer's con,
+    /// so after a GREEN killer none was left (grey monsters form no camp), though the cap still hunts GREEN.</summary>
+    public static ConColor UnderKillerCon(ConColor killer) => (ConColor)Math.Max((int)ConColor.GREEN, (int)killer - 1);
 
     /// <summary>#167 D6: the plan's caps (RelocateIfOutgrown): its fit pass under the death cap and the killers' cons as
     /// the pulls are (CapAfterDeaths with no fallback: the plan picks the next one), else it planned a camp the bot then
@@ -1458,7 +1462,7 @@ public static class PlayerBotDriver
 
     /// <summary>#167 D6: a killer's con (con, against the bot's level then), kept for a GameBot's failure memory
     /// (FailureMemoryMilliseconds, 15 minutes), each death's; those whose time is up go. A grey killer is none: no cap
-    /// goes under GREY, and every camp would fall under its fallback filter.</summary>
+    /// goes under GREEN (UnderKillerCon), so it would only count as a GREEN one.</summary>
     public static void RememberKillerCon(List<(ConColor Con, long Until)> cons, ConColor con, long now)
     {
         cons.RemoveAll(kept => kept.Until <= now);
@@ -2556,9 +2560,11 @@ public static class PlayerBotDriver
     /// anchor region or off the mesh, or no camp in its zone): the safest con it passed over, as a GameBot takes the
     /// safest camp there is rather than plan forever (AutonomousBotDecisionEngine.cs:287-313); the old rollback did so
     /// at once. Null for an outgrown bot, and for one that passed over only names it avoids: they expire. #167 D6: null
-    /// too for a con at or over the lowest that killed the bot (lowestKillerCon, LowestKillerCon).</summary>
+    /// too for a con over the cap's limit after the lowest that killed the bot (lowestKillerCon, LowestKillerCon;
+    /// UnderKillerCon, never under GREEN).</summary>
     public static ConColor? FallbackInPlace(string reason, ConColor? safestPassedOver, ConColor? lowestKillerCon) =>
-        reason == Capped && (lowestKillerCon is not ConColor killer || safestPassedOver < killer) ? safestPassedOver : null;
+        reason == Capped && (lowestKillerCon is not ConColor killer || safestPassedOver <= UnderKillerCon(killer))
+            ? safestPassedOver : null;
 
     /// <summary>The relocation's spots (DEATHS.md A4), at most count, nearest first: monsters the bot would hunt
     /// (Huntable, not rejected for want of a corridor) that are its camps. A monster's camp is the non-grey monsters
@@ -2574,7 +2580,8 @@ public static class PlayerBotDriver
     /// GameBot hunts its camp's monster, AWBC:3087-3088), not one the bot died at in the last 15 minutes (within
     /// RoamRadius of a failedCamps spot; AWBC:3246, :3803-3804) while another is left, those with the safest median, and
     /// that median as Fallback, the con the bot hunts there (AWBC:3446-3452). #167 D6: no fallback camp whose median is
-    /// at or over killerCon, the lowest con that killed the bot in the last 15 minutes (none: no camp).</summary>
+    /// over the cap's limit after killerCon, the lowest con that killed the bot in the last 15 minutes (UnderKillerCon:
+    /// under it, never under GREEN; none: no camp).</summary>
     public static (T[] Spots, ConColor? Fallback, bool Stale) PlanRelocation<T>(
         IReadOnlyList<(T Npc, Vector3 At, ConColor Con, bool Huntable, bool Avoided)> monsters, Vector3 here, ConColor cap,
         ConColor natural, IReadOnlyCollection<Vector3> failedCamps, ISet<T> rejected, int count, ConColor? killerCon = null)
@@ -2606,8 +2613,8 @@ public static class PlayerBotDriver
         foreach (int i in order)
         {
             (ConColor median, ConColor fresh) = CampCon(monsters, grid, i);
-            if (median <= natural && (killerCon is not ConColor killer || median < killer))   // #167 D6: under the
-                safe.Add((i, median, fresh <= natural, Failed(i)));                          //   lowest con that killed it
+            if (median <= natural && (killerCon is not ConColor killer || median <= UnderKillerCon(killer)))   // #167 D6
+                safe.Add((i, median, fresh <= natural, Failed(i)));
         }
         if (safe.Count == 0) return (Array.Empty<T>(), null, false);
         bool stale = !safe.Any(c => c.Fresh);
