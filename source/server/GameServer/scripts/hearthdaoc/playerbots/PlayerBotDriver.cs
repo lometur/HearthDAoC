@@ -1554,13 +1554,21 @@ public static class PlayerBotDriver
     public static bool IsBreakOffAdd(GameNPC npc, GameObject bot, eRealm botRealm) =>
         npc.TargetObject != bot && IsThreat(npc, botRealm);
 
-    // A copy of AutonomousWorldBotController.IsExperienceMonster (AWBC:4855-4861, private there).
+    // A copy of AutonomousWorldBotController.IsExperienceMonster (AWBC:4855-4861, private there); #167 E M1: and no
+    // training dummy (IsTrainingPropName).
     public static bool IsExperienceTarget(GameNPC npc) =>
         npc?.ObjectState is GameObject.eObjectState.Active && npc.Realm == eRealm.None && npc.Brain != null &&
         (npc.Flags & (GameNPC.eFlags.PEACE | GameNPC.eFlags.CANTTARGET)) == 0 &&
         npc is not GameMerchant and not GameGuard and not GameTaxi and not GameSummonedPet and not GameKeepGuard and
             not GameTrainer and not GameTeleporter and not GameHealer and not CraftNPC &&
-        !AutonomousNeutralTownPolicy.IsTownResident(npc);
+        !AutonomousNeutralTownPolicy.IsTownResident(npc) && !IsTrainingPropName(npc.Name);
+
+    /// <summary>#167 E M1: a training dummy by its name ("training dummy", "fighting dummy", "Hitback Dummy - ..."): region
+    /// 51's are plain GameNPC rows (levels 29-39) that never lose health. st-deathsD2: a bot died on one in 92 s, two
+    /// planned camps of them and killed nothing for about 12 minutes each. "dummy golem" is a monster.</summary>
+    public static bool IsTrainingPropName(string name) =>
+        name != null && (name.EndsWith(" dummy", StringComparison.OrdinalIgnoreCase) ||
+            name.Contains(" dummy ", StringComparison.OrdinalIgnoreCase));
 
     // = APP:549-559 = AWBC:3834-3846: YELLOW solo, one step lower per death, never below GREEN.
     public static ConColor MaximumTargetCon(int groupSize, int deathSteps)

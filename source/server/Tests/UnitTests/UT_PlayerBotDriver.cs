@@ -203,6 +203,25 @@ public sealed class UT_PlayerBotDriver
         Assert.That(PlayerBotDriver.IsPlannable(player, monster), Is.False, "a dead one");
     }
 
+    // #167 E M1: a training dummy is no monster: region 51's are plain GameNPC rows that never lose health (st-deathsD2:
+    // a bot died on one in 92 s; two planned camps of them and killed nothing for about 12 minutes each).
+    [TestCase("training dummy", true)] [TestCase("fighting dummy", true)] [TestCase("target dummy", true)]
+    [TestCase("Hitback Dummy - Right Click to Reset", true)] [TestCase("dummy golem", false)]
+    [TestCase("tattered product", false)] [TestCase(null, false)]
+    public void A_training_dummy_is_known_by_its_name(string name, bool prop) =>
+        Assert.That(PlayerBotDriver.IsTrainingPropName(name), Is.EqualTo(prop));
+
+    [Test]
+    public void The_plan_and_the_pick_leave_out_a_training_dummy()
+    {
+        GameNPC dummy = Mob(), monster = Mob();
+        typeof(GameObject).GetField("m_name", Hidden)!.SetValue(dummy, "training dummy");     // the setter needs a client
+        typeof(GameObject).GetField("m_name", Hidden)!.SetValue(monster, "tattered product"); //   service when active
+        Assert.That(PlayerBotDriver.IsExperienceTarget(dummy), Is.False);
+        Assert.That(PlayerBotDriver.IsPlannable(LiveImmunePlayer(), dummy), Is.False);
+        Assert.That(PlayerBotDriver.IsExperienceTarget(monster), Is.True);
+    }
+
     // A monster the plan would count, alive in region at (x, y) (an NPC's position is its movement component's).
     private static GameNPC CampMonster(Region region, float x, float y, byte level)
     {
