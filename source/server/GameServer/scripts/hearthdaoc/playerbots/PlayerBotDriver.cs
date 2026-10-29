@@ -186,6 +186,7 @@ public sealed class PlayerBotState
     public readonly List<Vector3> BreakOffBlocked = new();       //   (NextBreakOffPoint), and its start's health,
     public byte BreakOffHealth, BreakOffEndurance;               //   endurance and attackers (BREAKOFF)
     public int BreakOffAttackers;
+    public double BreakOffRate;                                  // #167 BREAKOFF rate=: its loss rate then (HealthRate)
     public bool BackPending, BackOwed, BackMoved;                // #167 C1: PLAYER_BOT_BACK, from a release to its first
     public long BackStepOutMs, BackHoldMs, BackWalkMs;           //   fight: the line due, the replan owed and a camp planned
                                                                  //   since, and the time stepping out, held and walking
@@ -427,6 +428,8 @@ public static class PlayerBotDriver
         state.DeathRecorded = false;
         state.ReleaseRequested = false;
         state.Attackers = player.attackComponent.AttackerTracker.Count;                 //    Die clears it (GameLiving.cs:2050)
+        if (state.Engaged) state.FightAdds = Math.Max(state.FightAdds, state.Attackers);   //    #167 D2: adds= on a think
+                                                                                         //    Engage doesn't reach too
         PlayerBotWake.OnThink(state, player, now);                                       // 6b. the #137 lever's wakes
         if (RecoverIfStuck(state, player, now)) return;                                  // 7
         if (player.IsCrowdControlled)                                                    // 8
@@ -1533,6 +1536,14 @@ public static class PlayerBotDriver
         bool outruns) =>
         (monstersOnBot >= 2 || addFight && monstersOnBot >= 1) && health < BreakOffHealthPercent &&
         targetHealth > BreakOffTargetPercent && !addControlReady && outruns;
+
+    /// <summary>The dropped FIGHT line's adds= at a break-off (#167 D2, StartsBreakOff): BreaksOffNow returns before Engage
+    /// folds the attackers into FightAdds, so the monsters on the bot (onBot, BREAKOFF attackers=) fold in here; with 2 or
+    /// more and no add seen yet (add.At -1), the add came now: the whole seconds into the fight (fightMs) and the bot's
+    /// health (FIGHT addAt= and addHp=). One on it, or an add seen, it stays as it was.</summary>
+    public static (int Adds, (int At, int Hp) Add) FoldBreakOffAdds(int fightAdds, (int At, int Hp) add, int onBot,
+        long fightMs, byte health) =>
+        (Math.Max(fightAdds, onBot), add.At >= 0 || onBot < 2 ? add : ((int)(fightMs / 1000), health));
 
     /// <summary>The second-monster case (#167 C2): a kill in a fight that had 2 or more on the bot (killedWithAdds,
     /// SettleTarget), for SecondMonsterMilliseconds from it (lastKillTick). The review of 9aacd69: the mark held until the
@@ -2807,10 +2818,16 @@ public static class PlayerBotDriver
         }
         (state.BreakOffSince, state.BreakOffGoal, state.BreakOffArrived) = (now, goal, false);
         (state.BreakOffHealth, state.BreakOffEndurance, state.BreakOffAttackers) = (health, player.EndurancePercent, onBot);
+        state.BreakOffRate = HealthRate(state.HealthSamples, now, health);              // #167 BREAKOFF rate=
         state.KilledWithAdds = false;
         BrokeOffFrom(state, player.CurrentRegionID, new(player.X, player.Y, player.Z),
             chasers.Select(npc => npc.Name).Append(state.Target?.Name), now);
-        if (state.Engaged && state.Target != null) ReportFight(state, player, now, false, true);   // FIGHT result=dropped breakOff=1
+        if (state.Engaged && state.Target != null)
+        {
+            (state.FightAdds, state.FightAdd) = FoldBreakOffAdds(state.FightAdds, state.FightAdd, onBot,   // #167 D2: adds=
+                now - state.EngagedSince, health);                                                         //   >= attackers=
+            ReportFight(state, player, now, false, true);                               // FIGHT result=dropped breakOff=1
+        }
         Disengage(state, player);
         if (player.Endurance > SprintStartEndurance) player.Sprint(true);              // GamePlayer.cs:8625-8652
         return true;
@@ -2866,7 +2883,7 @@ public static class PlayerBotDriver
     {
         if (Log.IsInfoEnabled)
             Log.Info(PlayerBotDriverReport.FormatBreakOff(player.Name, player.Level, state.BreakOffHealth,
-                state.BreakOffEndurance, state.BreakOffAttackers, (now - state.BreakOffSince) / 1000, outcome));
+                state.BreakOffEndurance, state.BreakOffAttackers, (now - state.BreakOffSince) / 1000, outcome, state.BreakOffRate));
         FinishBreakOff(state, outcome, OwesReplan(state.Task != null, CanRelocate(state, player)), now);
         if (outcome == Died) return;
         player.Sprint(false);

@@ -360,7 +360,9 @@ All start `PLAYER_BOT_`:
   after a break-off its `reason=` is `brokeoff`. A break-off drops its fight (`FIGHT result=dropped`);
 - `BREAKOFF`: one per break-off, when it ends: the bot's `hp=`, `end=` (endurance) and `attackers=` when it broke off,
   `sec=`, the seconds it ran, and `outcome=`: `shook` (none still after it), `fought` (still chased after 30 s, or
-  nowhere to run) or `died`;
+  nowhere to run) or `died`; then `rate=`, the health it lost a second over the 3 s before it broke off. The fight it
+  dropped (`FIGHT result=dropped breakOff=1`) counts the monsters on the bot then in its `adds=` (never fewer than
+  `attackers=`), and with 2 or more and no add seen before, its `addAt=` and `addHp=` are the break-off's;
 - `BACK`: at the first fight after a release, `sec=`, the seconds since the release, and of those `stepOut=` (the step
   out of reach), `hold=` (the back-off, the illness or the hold for the replan) and `walk=` (roaming, the walk back
   among it); then `replan=`: `moved` (a camp planned since), `none` (owed, none planned) or `notOwed`;

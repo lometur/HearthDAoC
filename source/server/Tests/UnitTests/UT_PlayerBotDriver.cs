@@ -805,11 +805,24 @@ public sealed class UT_PlayerBotDriver
         string replanOwed, bool searches) =>
         Assert.That(PlayerBotDriver.SearchesRings(searchDue, afterRelease, replanOwed), Is.EqualTo(searches));
 
-    // PLAYER_BOT_BREAKOFF: the bot's health, endurance and attackers when it broke off, the seconds it ran and how it ended.
+    // PLAYER_BOT_BREAKOFF: the bot's health, endurance and attackers when it broke off, the seconds it ran and how it ended;
+    // then (#167, st-deathsD's) rate=, the health it lost a second over the 3 s before it broke off (HealthRate).
     [Test]
     public void A_break_off_line_gives_its_start_and_outcome() =>
-        Assert.That(PlayerBotDriverReport.FormatBreakOff("Pbotaaaaz", 34, 38, 72, 2, 26, "shook"),
-            Is.EqualTo("PLAYER_BOT_BREAKOFF bot=Pbotaaaaz level=34 hp=38 end=72 attackers=2 sec=26 outcome=shook"));
+        Assert.That(PlayerBotDriverReport.FormatBreakOff("Pbotaaaaz", 34, 38, 72, 2, 26, "shook", 6.26),
+            Is.EqualTo("PLAYER_BOT_BREAKOFF bot=Pbotaaaaz level=34 hp=38 end=72 attackers=2 sec=26 outcome=shook rate=6.3"));
+
+    // The dropped FIGHT line's adds= (#167 D2): BreaksOffNow returns before Engage folds the attackers in, so the monsters
+    // on the bot at the break-off (BREAKOFF attackers=) fold in there; with 2 or more and no add seen yet, the add came now
+    // (addAt=, the whole seconds into the fight, and addHp=, the bot's health). One on it, or an add seen, as it was.
+    [TestCase(1, -1, -1, 2, 12_400L, (byte)36, 2, 12, 36)]
+    [TestCase(4, 2, 86, 5, 13_000L, (byte)36, 5, 2, 86)]
+    [TestCase(3, 1, 90, 2, 5_000L, (byte)30, 3, 1, 90)]
+    [TestCase(1, -1, -1, 1, 5_000L, (byte)30, 1, -1, -1)]
+    public void A_break_off_folds_the_monsters_on_the_bot_into_the_dropped_fights_adds(int fightAdds, int addAt, int addHp,
+        int onBot, long fightMs, byte health, int adds, int at, int hp) =>
+        Assert.That(PlayerBotDriver.FoldBreakOffAdds(fightAdds, (addAt, addHp), onBot, fightMs, health),
+            Is.EqualTo((adds, (at, hp))));
 
     // --- monsters coming, and the rest out of their reach (#167 F7) ---
 
