@@ -120,8 +120,9 @@ Each bot thinks every 250 ms, a thin copy of the `/bot` pilot's think:
   spell reaches the monster, or from its spell's reach toward the turret when the turret reaches that spot. Otherwise
   it releases the turret and plants a new one near the target, if the summon is ready and it has the power: a damage
   turret close enough, with room to spare for where the walk stops, that it reaches the monster and keeps. If it
-  can't, it holds the pull up to 12 s and then leaves that monster for 30 s. Its bombers count as damage spells only
-  when their payload does damage, so it no longer casts the root bombers (Spreading Vines and the like) as nukes.
+  can't, it holds the pull up to 12 s and then leaves that monster for 30 s: it picks no fight with it then, but
+  still fights it back if it attacks. Its bombers count as damage spells only when their payload does damage, so it no
+  longer casts the root bombers (Spreading Vines and the like) as nukes.
 - Each cast it picks the damage spell ready now. A caster (Wizard, Sorcerer, Runemaster, Eldritch, Mentalist) takes the
   single-target spell, its bolt included, that does the most damage per second of casting by the server's own numbers:
   the bot's spec in the spell's line (an unspecced line does about 60% of a specced one), the monster's level and its

@@ -5090,6 +5090,22 @@ public sealed class UT_PlayerBotDriver
         bool canReplant, long waitSince, long now, PlayerBotAnimistStep step) =>
         Assert.That(PlayerBotDriver.AnimistStepFor(toStand, replant, canReplant, waitSince, now), Is.EqualTo(step));
 
+    // #167 E CY3: the target an Animist leaves (Skip) is out of a new turret's reach, not unreachable: the pick alone
+    // passes it over 30 s (MarkBlind, as M2's blind drop), so self-defence (Attacker) and the monster coming at it
+    // (Incoming) still answer it if it aggroes, and a blocked walk's Unreachable mark is kept.
+    [Test]
+    public void A_target_an_animist_leaves_is_passed_over_by_the_pick_only()
+    {
+        GameNPC left = Mob(), blocked = Mob();
+        var state = new PlayerBotState(Player(null)) { Target = left, Unreachable = blocked, UnreachableUntil = 20_000 };
+        PlayerBotDriver.LeaveTurretTarget(state, left, 10_000);
+        Assert.That((state.Target, state.BlindSkip == left, state.BlindSkipUntil), Is.EqualTo(((GameLiving)null, true, 40_000L)),
+            "the pick passes it over 30 s");
+        Assert.That((state.Unreachable == blocked, state.UnreachableUntil), Is.EqualTo((true, 20_000L)), "the unreachable one kept");
+        Assert.That(PlayerBotDriver.SkipsHitter(left == state.Unreachable, 39_999, state.UnreachableUntil, false), Is.False,
+            "self-defence still takes it");
+    }
+
     [Test]
     public void A_turret_line_gives_its_step_and_the_turrets_reach() =>
         Assert.That(PlayerBotDriver.TurretLine("Pbothaaaj", 35, PlayerBotAnimistStep.Skip, "irewood", ConColor.GREEN, 1_419, 1_000),

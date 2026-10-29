@@ -90,8 +90,8 @@ public sealed class PlayerBotState
     public volatile PlayerBotActivity Activity;      // read by the report thread
     public volatile int NearPlayerBots, NearGamebots;
     public GameLiving Target, Unreachable;
-    public GameLiving BlindSkip;                                 // #167 E M2: a target dropped for want of sight, passed
-    public long BlindSkipUntil;                                  //   over by the pick only (BlindSkipped) until then
+    public GameLiving BlindSkip;                                 // #167 E M2: a target dropped for want of sight (or CY3's
+    public long BlindSkipUntil;                                  //   skip), passed over by the pick only until then
     public bool Engaged;
     public Spell Spell;
     public SpellLine SpellLine;
@@ -3228,10 +3228,11 @@ public static class PlayerBotDriver
     public static bool DropsBlindTarget(long blindSince, long now, bool fightsBot, bool petOnTarget) =>
         blindSince != 0 && now - blindSince >= BlindDropMilliseconds && !fightsBot && !petOnTarget;
 
-    /// <summary>#167 E M2: a target dropped for want of sight (DropBlind) is marked for the pick alone (BlindSkip, until
-    /// UnreachableSkipMilliseconds on): the review, a blocked walk's Unreachable mark made self-defence (Attacker) and the
-    /// monster coming at it (Incoming) pass it over too, so one that came round and hit the bot was no hitter for 30 s,
-    /// and it overwrote a real unreachable mark.</summary>
+    /// <summary>#167 E M2: a target dropped for want of sight (DropBlind), or one an Animist left for want of a turret in
+    /// reach (CY3's skip, LeaveTurretTarget), is marked for the pick alone (BlindSkip, until UnreachableSkipMilliseconds
+    /// on): the review, a blocked walk's Unreachable mark made self-defence (Attacker) and the monster coming at it
+    /// (Incoming) pass it over too, so one that came round and hit the bot was no hitter for 30 s, and it overwrote a
+    /// real unreachable mark.</summary>
     public static void MarkBlind(PlayerBotState state, GameLiving target, long now) =>
         (state.BlindSkip, state.BlindSkipUntil) = (target, now + UnreachableSkipMilliseconds);
 
@@ -3497,6 +3498,16 @@ public static class PlayerBotDriver
             ? waitSince != 0 && now - waitSince >= TurretWaitMilliseconds ? PlayerBotAnimistStep.Skip : PlayerBotAnimistStep.Wait
             : toStand > AnimistStandMargin ? PlayerBotAnimistStep.Walk
             : replant ? PlayerBotAnimistStep.Replant : PlayerBotAnimistStep.Pull;
+
+    /// <summary>#167 E CY3: the target an Animist leaves (AnimistStepFor's Skip) is out of a new turret's reach, not
+    /// unreachable: the pick alone passes it over (MarkBlind, as M2's blind drop), so self-defence (Attacker) and the
+    /// monster coming at it (Incoming) still answer it if it aggroes, and a blocked walk's Unreachable mark is kept (the
+    /// review: Unreachable left a skipped monster that hit the bot unanswered 30 s).</summary>
+    public static void LeaveTurretTarget(PlayerBotState state, GameLiving target, long now)
+    {
+        MarkBlind(state, target, now);
+        state.Target = null;
+    }
 
     /// <summary>#167 E CY3: PLAYER_BOT_TURRET, an Animist's new turret by its target (step=replant: the old one
     /// released) or a target it left (step=skip: no turret it could plant within TurretWaitMilliseconds), with the
@@ -4947,9 +4958,9 @@ public static class PlayerBotDriver
     // one released (CommandNpcRelease, as a GameBot does, BotAnimistPolicy.cs:160-170) when the summon is ready and paid
     // for and the summon's gate (WantsPet) would pass, so SummonPet plants it at its feet at the next think, before the
     // pull. #167 E CY3: else it holds the pull up to TurretWaitMilliseconds, then leaves the target for
-    // UnreachableSkipMilliseconds, as an unreachable one (F10b took the old approach then: the pull from its spell's
-    // reach that the turret didn't reach). A blocked walk: the old approach for UnreachableSkipMilliseconds. True when
-    // it acted.
+    // UnreachableSkipMilliseconds: the pick passes it over, self-defence still answers it (LeaveTurretTarget; F10b took
+    // the old approach then: the pull from its spell's reach that the turret didn't reach). A blocked walk: the old
+    // approach for UnreachableSkipMilliseconds. True when it acted.
     private static bool AnimistApproach(PlayerBotState state, GamePlayer player, GameLiving target, int spellStop, long now)
     {
         if (player.CharacterClass.ID != (int)eCharacterClass.Animist || state.Engaged || state.FromDefence ||
@@ -4979,9 +4990,7 @@ public static class PlayerBotDriver
                 player.attackComponent.StopAttack();
                 return true;
             case PlayerBotAnimistStep.Skip:
-                state.Unreachable = target;
-                state.UnreachableUntil = now + UnreachableSkipMilliseconds;
-                state.Target = null;
+                LeaveTurretTarget(state, target, now);
                 return true;
             case PlayerBotAnimistStep.Walk:
                 player.attackComponent.StopAttack();
