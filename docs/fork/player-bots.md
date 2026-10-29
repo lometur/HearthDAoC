@@ -103,9 +103,12 @@ Each bot thinks every 250 ms, a thin copy of the `/bot` pilot's think:
   its target. After 3 casts that held nothing it stops trying on that add. A Theurgist with no control to cast casts
   its pets at an add hitting it. A mezzed or stunned add no longer counts as on the bot for the break-off, and a
   control it can cast at an add comes before one.
-- An Animist pulls from beside its turret, so the monster comes into the turret's reach. When the turret can't reach
-  the spot it pulls from, it releases the turret and plants a new one near the target, if the summon is ready and it
-  has the power. Its bombers count as damage spells only when their payload does damage, so it no longer casts the
+- An Animist pulls from beside its turret, so the monster comes into the turret's reach: with a damage turret
+  (Arboreal) only while both its spell and its turret reach the monster from there, so the turret starts on it at
+  once; with a snare or taunt turret (Creeping, Verdant), which slows or draws the monster on its way in, while its
+  spell reaches the monster, or from its spell's reach toward the turret when the turret reaches that spot. Otherwise
+  it releases the turret and plants a new one near the target, if the summon is ready and it has the power. If it
+  can't, it holds the pull up to 12 s and then leaves that monster for 30 s. Its bombers count as damage spells only when their payload does damage, so it no longer casts the
   root bombers (Spreading Vines and the like) as nukes.
 - Each cast it picks the damage spell ready now: its bolt when off its recast, else its best single-target spell,
   else an area one, never an area one while another monster stands in its radius. It drops the low ranks a GameBot
@@ -430,6 +433,9 @@ All start `PLAYER_BOT_`:
   (nowhere to run); it is no break-off, so leave it out of break-off counts. The fight it dropped (`FIGHT
   result=dropped breakOff=1`) counts the monsters on the bot then in its `adds=` (never fewer than `attackers=`), and
   with 2 or more and no add seen before, its `addAt=` and `addHp=` are the break-off's;
+- `TURRET`: an Animist's new turret by its target (`step=replant`) or a monster it left because it couldn't plant
+  one (`step=skip`), with the target's `con=`, its distance from the turret it had (`toTurret=`) and that turret's
+  reach (`reach=`);
 - `RELEASE`: each release the bot asks for, with `try=` (its count in this death: 2 or more means one didn't take) and
   `sinceDeath=` (the milliseconds since the death);
 - `BACK`: at the first fight after a release, `sec=`, the seconds since the release, and of those `stepOut=` (the step

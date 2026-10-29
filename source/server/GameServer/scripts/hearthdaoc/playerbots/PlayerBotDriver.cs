@@ -41,6 +41,9 @@ public enum PlayerBotEngageStep { Wait, Add, PetLeads, Caster }
 /// <summary>What the bot does in reach of its target this think (PlayerBotDriver.CombatAction, #167 F6).</summary>
 public enum PlayerBotCombatAction { Cast, WaitToCast, Quickcast, Swing }
 
+/// <summary>An Animist's step before a pull (PlayerBotDriver.AnimistStepFor, #167 E CY3).</summary>
+public enum PlayerBotAnimistStep { Pull, Walk, Replant, Wait, Skip }
+
 /// <summary>A think's walk (#167 FIGHT and DEATH walk=, F12d's field; PlayerBotDriver.NextWalk): to its target or an
 /// Animist's stand (Hunt), to its anchor (Anchor) or a roam point (Roam), out of reach after a release (Clear), to its
 /// rest spot (Rest), a caster's step back (Kite), a break-off's run (BreakOff), the walk out toward the camp planned
@@ -150,6 +153,7 @@ public sealed class PlayerBotState
     public Vector3? KiteGoal;
     public long NextKiteTick;
     public long NextAnimistStandTick;                            // #167 F10b: after a blocked walk to its stand
+    public long TurretWaitSince;                                 // #167 E CY3: a pull held for a turret it can't plant yet
     public int FightControls, FightKites;                        // #167 FIGHT ctl= and kites=
     public int FightCtlBroken;                                   // #167 C3: FIGHT ctlBroken=, from the target's root or mez
     public (int Range, int Clear, int Mesh, int Fit) FightKiteNone;   // #167 D8: FIGHT kiteNone=, step backs with no point
@@ -285,6 +289,7 @@ public static class PlayerBotDriver
         KiteMissMesh = "mesh", KiteMissFit = "fit";
     public const byte KillFirstHealthPercent = 60;            // #167 C11: the nukes before the control from this health
     public const int AnimistStandMargin = 150;                // #167 F10b: by its turret; the turret's reach less this
+    public const int TurretWaitMilliseconds = 12_000;         // #167 E CY3: the in-combat window (GameLiving.cs:31) and 2 s
     public const int IncomingRadius = 2_000;                  // #167 F7: a monster this near with the bot as its target
     public static readonly int[] RestSpotRings = [300, 600, 900, 1_200];   // #167 F7: the rest spot's candidates (inf.)
     public const int RestSpotTries = 3;                       // #167 D10: rest walks per rest, each blocked one the next (inf.)
@@ -2991,24 +2996,51 @@ public static class PlayerBotDriver
     private static bool NoDamageBomber(Spell spell, Func<int, Spell> payload) =>
         spell.SpellType is eSpellType.Bomber && !(payload?.Invoke(spell.SubSpellID) is Spell sub && sub.Damage > 0);
 
-    /// <summary>Where an Animist stands to pull with its main turret planted (#167 F10b): a turret is planted at the bot's
-    /// feet (SummonPet) and reaches turretReach (its TurretSpell, 1,000; 1,350 for a Verdant taunt), and the monster the
-    /// bot pulls comes to the bot. So by its turret (here, within AnimistStandMargin of it) while its spell reaches the
-    /// target from there; else at its spell's reach (spellStop) toward the turret, if the turret reaches that spot (less
-    /// the margin); else it plants a new one (Replant) by the target, within the turret's reach of it less the margin and
-    /// its spell's, here if it is that near already. The old approach walked it to its spell's reach from wherever it
-    /// was, 1,420 units from the target with most nukes, out of its turret's reach.</summary>
+    /// <summary>Where an Animist stands to pull with its main turret planted (#167 F10b, E CY3): a turret is planted at
+    /// the bot's feet (SummonPet) and reaches turretReach (its TurretSpell, 1,000; 1,350 for a Verdant taunt), and the
+    /// monster the bot pulls comes to the bot. With a damage turret (damageTurret: Arboreal's), by its turret (here,
+    /// within AnimistStandMargin of it) while both its spell and its turret reach the target from there, the turret less
+    /// the margin (limit); else it plants a new one (Replant) by the target, within that limit of it, here if it is that
+    /// near already. F10b stood by the turret while only the spell reached (1,420 with most nukes), or at the spell's
+    /// reach toward the turret (the target up to 2,270 from it): the turret's aggro range is its spell's
+    /// (TurretBrain.cs:18-24), so the monster reached the bot unhurt. Over st-deathsD2 and D2b Arboreal one-monster pulls
+    /// opened beyond the limit died 8 of 15, within it 0 of 33. A snare or taunt turret (Creeping's, Verdant's) keeps
+    /// F10b's stand: by it while its spell reaches the target, else at its spell's reach toward the turret if the turret
+    /// reaches that spot (less the margin), else the new one; it wears the monster down or draws it on its way in (its
+    /// pulls beyond the limit died 1 of 33, 0 of 28 on st-hearth11 and 11b).</summary>
     public static (Vector3 Stand, bool Replant) AnimistStand(Vector3 bot, Vector3 turret, Vector3 target, int spellStop,
-        int turretReach)
+        int turretReach, bool damageTurret)
     {
-        float toTurret = Vector3.Distance(target, turret);
-        if (toTurret <= spellStop)
+        float limit = Math.Min(spellStop, turretReach - AnimistStandMargin), toTurret = Vector3.Distance(target, turret);
+        if (toTurret <= (damageTurret ? limit : spellStop))
             return (Vector3.Distance(bot, turret) <= AnimistStandMargin ? bot : turret, false);
-        Vector3 near = target + (turret - target) * (spellStop / toTurret);
-        if (Vector3.Distance(near, turret) <= turretReach - AnimistStandMargin) return (near, false);
-        float toBot = Vector3.Distance(target, bot), standOff = Math.Min(spellStop, turretReach - AnimistStandMargin);
-        return (toBot <= standOff ? bot : target + (bot - target) * (standOff / toBot), true);
+        if (!damageTurret)                                                              // F10b: a snare or taunt turret
+        {                                                                               //   wears or draws the monster
+            Vector3 near = target + (turret - target) * (spellStop / toTurret);
+            if (Vector3.Distance(near, turret) <= turretReach - AnimistStandMargin) return (near, false);
+        }
+        float toBot = Vector3.Distance(target, bot);
+        return (toBot <= limit ? bot : target + (bot - target) * (limit / toBot), true);
     }
+
+    /// <summary>#167 E CY3: an Animist's step before a pull (AnimistApproach), from AnimistStand's stand (toStand: the
+    /// bot's distance to it) and replant, and whether it can plant a new turret now (CanReplant). When it must and
+    /// can't, it waits (its in-combat flag, its pet's too, lasts 10 s after a fight: WantsPet), from waitSince (0: not
+    /// yet) for TurretWaitMilliseconds, then leaves the target (Skip); F10b pulled it from its spell's reach then, out
+    /// of the turret's. Else it walks to the stand, then plants (Replant) or pulls.</summary>
+    public static PlayerBotAnimistStep AnimistStepFor(float toStand, bool replant, bool canReplant, long waitSince, long now) =>
+        replant && !canReplant
+            ? waitSince != 0 && now - waitSince >= TurretWaitMilliseconds ? PlayerBotAnimistStep.Skip : PlayerBotAnimistStep.Wait
+            : toStand > AnimistStandMargin ? PlayerBotAnimistStep.Walk
+            : replant ? PlayerBotAnimistStep.Replant : PlayerBotAnimistStep.Pull;
+
+    /// <summary>#167 E CY3: PLAYER_BOT_TURRET, an Animist's new turret by its target (step=replant: the old one
+    /// released) or a target it left (step=skip: no turret it could plant within TurretWaitMilliseconds), with the
+    /// target's distance from the turret it had and that turret's reach.</summary>
+    public static string TurretLine(string bot, int level, PlayerBotAnimistStep step, string target, ConColor con,
+        int toTurret, int reach) =>
+        $"PLAYER_BOT_TURRET bot={bot} level={level} step={step.ToString().ToLowerInvariant()} target=\"{target}\" " +
+        $"con={con} toTurret={toTurret} reach={reach}";
 
     /// <summary>The nuke for this cast (#167 F9), chosen at each cast choice: the bolt when it is ready (a 20-s recast:
     /// a Shaman's Fungal Thistle, a Wizard's Flame Streak), else the best ready single-target spell (Better), else an area
@@ -4054,33 +4086,57 @@ public static class PlayerBotDriver
     // the target not on it, not a defence), at a spell's stop distance (spellStop). A new turret by the target: the old
     // one released (CommandNpcRelease, as a GameBot does, BotAnimistPolicy.cs:160-170) when the summon is ready and paid
     // for and the summon's gate (WantsPet) would pass, so SummonPet plants it at its feet at the next think, before the
-    // pull; else the old approach. A blocked walk: the old approach for UnreachableSkipMilliseconds. True when it acted.
+    // pull. #167 E CY3: else it holds the pull up to TurretWaitMilliseconds, then leaves the target for
+    // UnreachableSkipMilliseconds, as an unreachable one (F10b took the old approach then: the pull from its spell's
+    // reach that the turret didn't reach). A blocked walk: the old approach for UnreachableSkipMilliseconds. True when
+    // it acted.
     private static bool AnimistApproach(PlayerBotState state, GamePlayer player, GameLiving target, int spellStop, long now)
     {
         if (player.CharacterClass.ID != (int)eCharacterClass.Animist || state.Engaged || state.FromDefence ||
             IsAttacking(player, target) || now < state.NextAnimistStandTick ||
             player.ControlledBrain?.Body is not TurretPet turret || !turret.IsAlive || turret.CurrentRegion != player.CurrentRegion)
-            return false;
-        int reach = turret.TurretSpell is Spell spell ? turret.castingComponent.CalculateSpellRange(spell) : 1_000;
-        Vector3 here = new(player.X, player.Y, player.Z);
-        (Vector3 stand, bool replant) = AnimistStand(here, new(turret.X, turret.Y, turret.Z), new(target.X, target.Y, target.Z),
-            spellStop, reach);
-        if (replant && !CanReplant(state, player, now)) return false;
-        if (Vector3.Distance(here, stand) > AnimistStandMargin)
         {
-            player.attackComponent.StopAttack();
-            state.Activity = PlayerBotActivity.Hunting;
-            state.Walk = PlayerBotWalk.Hunt;                                            // #167 walk=
-            if (state.Mover.StepToward(stand, AnimistStandMargin - 50, now) is not PlayerBotStepResult.Blocked) return true;
-            ReportBlocked(state, player, "turret", stand, now);
-            state.NextAnimistStandTick = now + UnreachableSkipMilliseconds;
+            state.TurretWaitSince = 0;
             return false;
         }
-        if (!replant) return false;
-        state.Mover.Stop(now);
-        player.CommandNpcRelease();                                                     // the target is no pet of its:
-        state.NextSummonTick = 0;                                                       //   its main pet goes
-        return true;
+        int reach = turret.TurretSpell is Spell spell ? turret.castingComponent.CalculateSpellRange(spell) : 1_000;
+        Vector3 here = new(player.X, player.Y, player.Z), planted = new(turret.X, turret.Y, turret.Z),
+            goal = new(target.X, target.Y, target.Z);
+        (Vector3 stand, bool replant) = AnimistStand(here, planted, goal, spellStop, reach,
+            turret.TurretSpell?.SpellType is eSpellType.DirectDamage);                 // Arboreal's (world DB)
+        PlayerBotAnimistStep step = AnimistStepFor(Vector3.Distance(here, stand), replant,
+            replant && CanReplant(state, player, now), state.TurretWaitSince, now);
+        state.TurretWaitSince = step is PlayerBotAnimistStep.Wait ? (state.TurretWaitSince == 0 ? now : state.TurretWaitSince) : 0;
+        if (step is PlayerBotAnimistStep.Replant or PlayerBotAnimistStep.Skip && Log.IsInfoEnabled)
+            Log.Info(TurretLine(player.Name, player.Level, step, target.Name, ConLevels.GetConColor(player.GetConLevel(target)),
+                (int)Vector3.Distance(goal, planted), reach));
+        switch (step)
+        {
+            case PlayerBotAnimistStep.Pull:
+                return false;
+            case PlayerBotAnimistStep.Wait:                                             // the in-combat flag runs out
+                state.Mover.Stop(now);
+                player.attackComponent.StopAttack();
+                return true;
+            case PlayerBotAnimistStep.Skip:
+                state.Unreachable = target;
+                state.UnreachableUntil = now + UnreachableSkipMilliseconds;
+                state.Target = null;
+                return true;
+            case PlayerBotAnimistStep.Walk:
+                player.attackComponent.StopAttack();
+                state.Activity = PlayerBotActivity.Hunting;
+                state.Walk = PlayerBotWalk.Hunt;                                        // #167 walk=
+                if (state.Mover.StepToward(stand, AnimistStandMargin - 50, now) is not PlayerBotStepResult.Blocked) return true;
+                ReportBlocked(state, player, "turret", stand, now);
+                state.NextAnimistStandTick = now + UnreachableSkipMilliseconds;
+                return false;
+            default:                                                                    // Replant, at its stand
+                state.Mover.Stop(now);
+                player.CommandNpcRelease();                                             // the target is no pet of its:
+                state.NextSummonTick = 0;                                               //   its main pet goes
+                return true;
+        }
     }
 
     // The summon's gate with no pet (WantsPet), the summon ready and paid for: a released turret is planted again at once.

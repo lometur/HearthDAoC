@@ -4339,21 +4339,51 @@ public sealed class UT_PlayerBotDriver
             Is.EqualTo(new[] { "Survival of the Fittest" }), "a payload it cannot resolve is none");
     }
 
-    // Where an Animist stands to pull, with its turret planted (reach 1,000) and a spell stop of 1,420: by its turret
-    // while it can cast from there (the monster comes to it, into the turret's reach); else at its spell's reach toward
-    // the turret if the turret reaches that spot; else by the target, within the turret's reach of it less the margin
-    // (850), to plant a new turret there.
-    [Test]
-    public void An_animist_pulls_from_by_its_turret_or_plants_a_new_one_by_the_target()
+    // Where an Animist stands to pull, with its turret planted (reach 1,000) and a spell stop of 1,420. With a damage
+    // turret (Arboreal's): by its turret while both its spell and its turret reach the target from there, the turret
+    // less the margin (850); else by the target, within 850 of it, to plant a new turret there (#167 E CY3: F10b pulled
+    // while only the spell reached, and from its spell's reach toward the turret). A snare or taunt turret (Creeping's,
+    // Verdant's: reach 1,350) keeps F10b's stand: by it while its spell reaches the target, else at its spell's reach
+    // toward the turret if the turret reaches that spot (the turret wears the monster down or draws it on its way in).
+    [TestCase(50f, 800f, 1_000, true, 50f, false, TestName = "Animist stand: by its turret already")]
+    [TestCase(600f, 800f, 1_000, true, 0f, false, TestName = "Animist stand: back to its turret")]
+    [TestCase(50f, 1_000f, 1_000, true, 150f, true, TestName = "Animist stand: the turret's reach less the margin (today: by it)")]
+    [TestCase(600f, 1_000f, 1_000, true, 600f, true, TestName = "Animist stand: a new turret where it stands (today: back to it)")]
+    [TestCase(100f, 2_000f, 1_000, true, 1_150f, true, TestName = "Animist stand: not its spell's reach toward the turret (today: 580)")]
+    [TestCase(2_500f, 3_000f, 1_000, true, 2_500f, true, TestName = "Animist stand: near the target already")]
+    [TestCase(100f, 3_000f, 1_000, true, 2_150f, true, TestName = "Animist stand: a new turret 850 from the target")]
+    [TestCase(50f, 1_150f, 1_350, false, 50f, false, TestName = "Animist stand: a taunt turret reaches 1,200")]
+    [TestCase(50f, 1_000f, 1_000, false, 50f, false, TestName = "Animist stand: a snare turret, by it while its spell reaches")]
+    [TestCase(100f, 2_000f, 1_000, false, 580f, false, TestName = "Animist stand: a snare turret, its spell's reach toward it")]
+    [TestCase(100f, 3_000f, 1_000, false, 2_150f, true, TestName = "Animist stand: a snare turret, a new one 850 from the target")]
+    public void An_animist_pulls_from_by_its_turret_only_when_the_turret_reaches_the_target(float botX, float targetX,
+        int turretReach, bool damageTurret, float standX, bool replant)
     {
-        static (Vector3, bool) Stand(float botX, float targetX) =>
-            PlayerBotDriver.AnimistStand(new Vector3(botX, 0, 0), Vector3.Zero, new Vector3(targetX, 0, 0), 1_420, 1_000);
-        Assert.That(Stand(50, 1_000), Is.EqualTo((new Vector3(50, 0, 0), false)), "by its turret already");
-        Assert.That(Stand(600, 1_000), Is.EqualTo((Vector3.Zero, false)), "back to its turret");
-        Assert.That(Stand(100, 2_000), Is.EqualTo((new Vector3(580, 0, 0), false)), "its spell's reach, 580 from the turret");
-        Assert.That(Stand(2_500, 3_000), Is.EqualTo((new Vector3(2_500, 0, 0), true)), "a new turret where it stands");
-        Assert.That(Stand(100, 3_000), Is.EqualTo((new Vector3(2_150, 0, 0), true)), "a new turret 850 from the target");
+        (Vector3 stand, bool again) = PlayerBotDriver.AnimistStand(new Vector3(botX, 0, 0), Vector3.Zero,
+            new Vector3(targetX, 0, 0), 1_420, turretReach, damageTurret);
+        Assert.That(again, Is.EqualTo(replant));
+        Assert.That(stand.X, Is.EqualTo(standX).Within(0.01f));
+        Assert.That((stand.Y, stand.Z), Is.EqualTo((0f, 0f)));
     }
+
+    // #167 E CY3: with a new turret due and none it can plant (the in-combat flag after a fight, too little power), an
+    // Animist holds the pull 12 s, then leaves the target (F10b pulled it from its spell's reach, out of the turret's);
+    // else it walks to its stand, then plants or pulls.
+    [TestCase(0f, false, false, 0L, 1_000L, PlayerBotAnimistStep.Pull)]
+    [TestCase(400f, false, false, 0L, 1_000L, PlayerBotAnimistStep.Walk)]
+    [TestCase(400f, true, true, 0L, 1_000L, PlayerBotAnimistStep.Walk)]
+    [TestCase(100f, true, true, 0L, 1_000L, PlayerBotAnimistStep.Replant)]
+    [TestCase(100f, true, false, 0L, 1_000L, PlayerBotAnimistStep.Wait)]
+    [TestCase(400f, true, false, 1_000L, 12_999L, PlayerBotAnimistStep.Wait)]
+    [TestCase(100f, true, false, 1_000L, 13_000L, PlayerBotAnimistStep.Skip)]
+    public void An_animist_leaves_a_target_its_turret_cant_reach_when_it_cant_plant_a_new_one(float toStand, bool replant,
+        bool canReplant, long waitSince, long now, PlayerBotAnimistStep step) =>
+        Assert.That(PlayerBotDriver.AnimistStepFor(toStand, replant, canReplant, waitSince, now), Is.EqualTo(step));
+
+    [Test]
+    public void A_turret_line_gives_its_step_and_the_turrets_reach() =>
+        Assert.That(PlayerBotDriver.TurretLine("Pbothaaaj", 35, PlayerBotAnimistStep.Skip, "irewood", ConColor.GREEN, 1_419, 1_000),
+            Is.EqualTo("PLAYER_BOT_TURRET bot=Pbothaaaj level=35 step=skip target=\"irewood\" con=GREEN toTurret=1419 reach=1000"));
 
     // --- the healer's self-heal (DEATHS.md A6) ---
 
