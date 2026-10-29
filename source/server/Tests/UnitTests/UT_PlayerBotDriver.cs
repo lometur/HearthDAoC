@@ -602,6 +602,60 @@ public sealed class UT_PlayerBotDriver
         Assert.That(PlayerBotDriver.OpenFight(state, 30_000, 90, 60, 1_420, 100), Is.False, "the next one");
     }
 
+    // --- the release (#167 D7) ---
+
+    // Pbotaaacv stayed dead from its 15th death to the end of st-deathsB and st-deathsC. A keep guard lord's arrow lands
+    // from a timer (AttackAction.cs:364-365), in the timer phase the think runs in: the bot's first dead think can come
+    // before the reaper's ProcessDeath (ReaperService.cs:55), which stamps DeathTick (GamePlayer.cs:5953). Its DeathTick
+    // was the last death's, so the 10 s had long passed and the release went at once; ProcessDeath then killed the
+    // revived bot (Health = 0, GameLiving.cs:2066) and the one-shot release was spent, with no think alive to clear it:
+    // dead until the server's own 900-s release (GamePlayer.cs:1399, :5955). Now no release while the reaper has it, 10 s
+    // from the later of DeathTick and the bot's first dead think, and again 10 s after an ask that didn't revive it.
+    [Test]
+    public void No_release_while_the_reaper_has_the_bot_and_a_release_that_didnt_take_goes_again()
+    {
+        MethodInfo handleDeath = typeof(PlayerBotDriver).GetMethod("HandleDeath", BindingFlags.Static | BindingFlags.NonPublic)!;
+        FieldInfo deathTick = typeof(GamePlayer).GetField("<DeathTick>k__BackingField", Hidden)!,
+            reaped = typeof(GameLiving).GetField("_isBeingHandledByReaperService", Hidden)!;
+        GamePlayer bot = Player(null);                                                  // no character: Release returns
+        deathTick.SetValue(bot, 20_000L);                                               // the 14th death's
+        reaped.SetValue(bot, true);                                                     // Die, not yet reaped
+        var state = new PlayerBotState(bot) { AliveSince = 25_000 };
+        handleDeath.Invoke(null, [state, bot, 54_000L]);                                // its first dead think
+        Assert.That((state.ReleaseAskedAt, state.ReleaseTries), Is.EqualTo((0L, 0)),
+            "no release before the reaper has stamped this death");
+        (bool, long)[] asks = [(false, 60_000), (true, 64_000), (false, 70_000), (true, 74_000)];
+        deathTick.SetValue(bot, 54_000L);                                               // ProcessDeath, the same tick
+        reaped.SetValue(bot, false);
+        foreach ((bool asked, long now) in asks)
+        {
+            int tries = state.ReleaseTries;
+            handleDeath.Invoke(null, [state, bot, now]);
+            Assert.That(state.ReleaseTries - tries, Is.EqualTo(asked ? 1 : 0), $"at {now}");
+            if (asked) Assert.That(state.ReleaseAskedAt, Is.EqualTo(now));
+        }
+        Assert.That(state.ReleaseTries, Is.EqualTo(2), "still dead 10 s after the first ask: the second");
+    }
+
+    // The release's rule (ReleaseDue): not while the reaper has the bot (Die ran, ProcessDeath not yet); 10 s from the
+    // later of the server's DeathTick and the driver's first dead think (lastDeathTick: a think before ProcessDeath reads
+    // the last death's tick); and 10 s after an ask (askedAt, 0 for none) that didn't revive it.
+    [TestCase(20_000L, 5_000L, 5_000L, false, 0L, true)]
+    [TestCase(20_000L, 5_000L, 15_000L, false, 0L, false)]
+    [TestCase(20_000L, 15_000L, 15_000L, true, 0L, false)]
+    [TestCase(40_000L, 15_000L, 15_000L, false, 25_000L, true)]
+    [TestCase(30_000L, 15_000L, 15_000L, false, 25_000L, false)]
+    public void A_release_is_due_10_s_after_the_death_is_stamped_and_again_10_s_after_an_ask(long now, long deathTick,
+        long lastDeathTick, bool beingReaped, long askedAt, bool due) =>
+        Assert.That(PlayerBotDriver.ReleaseDue(now, deathTick, lastDeathTick, beingReaped, askedAt), Is.EqualTo(due));
+
+    // PLAYER_BOT_RELEASE (#167 D7): each ask, its try in this death and the milliseconds since the death (the later of
+    // DeathTick and the first dead think).
+    [Test]
+    public void A_release_line_gives_its_try_and_the_time_since_the_death() =>
+        Assert.That(PlayerBotDriverReport.FormatRelease("Pbotaaacv", 35, 2, 20_000),
+            Is.EqualTo("PLAYER_BOT_RELEASE bot=Pbotaaacv level=35 try=2 sinceDeath=20000"));
+
     // --- the break-off when losing to two (#167 C2) ---
 
     // It breaks off with 2 or more monsters on it, or right after a kill in a fight that had 2 or more on it with 1 still

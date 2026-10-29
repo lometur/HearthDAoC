@@ -120,7 +120,9 @@ public sealed class PlayerBotState
     public long LastExperience, UnreachableUntil, NextTargetRefreshTick, NextLootTick, NextLosTick, NextStyleTick,
         NextCombatChoiceTick, NextNeighbourCountTick, NextProgressCheckTick, LastProgressTick, ProgressExperience, ProgressMoney;
     public Vector3 ProgressPosition;
-    public bool DeathRecorded, ReleaseRequested;
+    public bool DeathRecorded;
+    public long ReleaseAskedAt;                                  // #167 D7: the last release asked for in this death (0:
+    public int ReleaseTries;                                     //   none; ReleaseDue) and the asks (PLAYER_BOT_RELEASE try=)
     public long EngagedSince;                                    // the deaths' diagnostics (levelmatch/DEATHS.md 2): the
     public byte EngageHealth, EngageMana;                        //   fight's first think in reach and the bot's health and
     public int FightAdds, Swings, NotVisible, FightCasts;        //   power then, its most attackers, swings and casts,
@@ -238,6 +240,7 @@ public static class PlayerBotDriver
     public const int ProgressCheckMilliseconds = 10_000;     // the pilot checked every tick (APP:585-604)
     public const int MeaningfulMoveDistance = 96;
     public const int DeathReleaseDelayMilliseconds = 10_000; // APP:29, :575-581
+    public const int ReleaseRetryMilliseconds = 10_000;      // #167 D7: an ask that didn't revive the bot goes again (inf.)
     public const int IdleLineMilliseconds = 5 * 60_000;
     public const int RelocateAfterMilliseconds = 2 * 60_000; // no target reached this long: the hunting ground is outgrown
     public const int RelocateCandidates = 5;                 // corridor checks per try
@@ -426,7 +429,7 @@ public static class PlayerBotDriver
         if (state.SitSince != 0 && !player.IsSitting)                                    //    stood by the server (a hit)
             EndRest(state, player, now, Attacker(state, player, now, anyHitter: true) != null ? "hit" : "other");
         state.DeathRecorded = false;
-        state.ReleaseRequested = false;
+        (state.ReleaseAskedAt, state.ReleaseTries) = (0, 0);                             //    #167 D7: alive, the release took
         state.Attackers = player.attackComponent.AttackerTracker.Count;                 //    Die clears it (GameLiving.cs:2050)
         if (state.Engaged) state.FightAdds = Math.Max(state.FightAdds, state.Attackers);   //    #167 D2: adds= on a think
                                                                                          //    Engage doesn't reach too
@@ -2931,12 +2934,28 @@ public static class PlayerBotDriver
             Remember(state.AvoidUntil, killer.Name, now);
             state.KillerAvoided = true;
         }
-        if (!state.ReleaseRequested && now - player.DeathTick >= DeathReleaseDelayMilliseconds)
+        if (ReleaseDue(now, player.DeathTick, state.LastDeathTick, player.IsBeingHandledByReaperService,   // #167 D7
+                state.ReleaseAskedAt))
         {
-            state.ReleaseRequested = true;
+            state.ReleaseAskedAt = now;
+            state.ReleaseTries++;
+            if (Log.IsInfoEnabled)
+                Log.Info(PlayerBotDriverReport.FormatRelease(player.Name, player.Level, state.ReleaseTries,
+                    now - Math.Max(player.DeathTick, state.LastDeathTick)));
             player.Release(eReleaseType.Normal, true);                                     // GP:1425
         }
     }
+
+    /// <summary>Whether HandleDeath asks the release now (#167 D7). Not while the reaper has the bot (beingReaped: Die ran,
+    /// ProcessDeath not yet, ReaperService.cs:55); DeathReleaseDelayMilliseconds from the later of the server's DeathTick,
+    /// which ProcessDeath stamps (GamePlayer.cs:5953), and the driver's first dead think (lastDeathTick); and again
+    /// ReleaseRetryMilliseconds after an ask (askedAt; 0, none) that didn't revive the bot. A bow's or a bolt's hit lands
+    /// from a timer (AttackAction.cs:364-365), in the think's phase: a think before ProcessDeath read the last death's
+    /// DeathTick and released at once; ProcessDeath then killed the revived bot (GameLiving.cs:2066) and the one-shot
+    /// release was spent with no think alive to clear it (Pbotaaacv's last 6 minutes in st-deathsB and st-deathsC).</summary>
+    public static bool ReleaseDue(long now, long deathTick, long lastDeathTick, bool beingReaped, long askedAt) =>
+        !beingReaped && now - Math.Max(deathTick, lastDeathTick) >= DeathReleaseDelayMilliseconds &&
+        (askedAt == 0 || now - askedAt >= ReleaseRetryMilliseconds);
 
     // The rerun of run 1 (76e41cf): from level 3 the bots died about once a minute with no trace of what killed them.
     // The target and its con, the attackers counted on the last think alive, and the time since the release or login.

@@ -121,6 +121,10 @@ Each bot thinks every 250 ms, a thin copy of the `/bot` pilot's think:
   it. A spot it was blocked on it never takes again in that run. Still chased after 30 s, or with nowhere to run, it
   turns and fights them out. Afterwards it takes no camp there and avoids those monsters for 15 minutes, and plans a
   new camp from where it ran to before it looks for a new target.
+- It releases 10 s after a death, counted from when the server has handled the death, never before: a bow's or a bolt's
+  killing hit lands in the bots' own phase of the game loop, and a release asked for then was undone by the server's
+  death handling later in the same tick, which left the bot dead for 15 minutes. A release that didn't revive it is
+  asked for again every 10 s.
 - After a release it first steps out of the reach of every monster round it that would aggro. Wherever it died (at its
   camp or on a walk), it then plans a new camp from where it died, one it can walk to from there, before it walks
   back. It plans once the release's 10-s immunity is over: until then a player can attack no monster, so a plan found
@@ -364,6 +368,8 @@ All start `PLAYER_BOT_`:
   nowhere to run) or `died`; then `rate=`, the health it lost a second over the 3 s before it broke off. The fight it
   dropped (`FIGHT result=dropped breakOff=1`) counts the monsters on the bot then in its `adds=` (never fewer than
   `attackers=`), and with 2 or more and no add seen before, its `addAt=` and `addHp=` are the break-off's;
+- `RELEASE`: each release the bot asks for, with `try=` (its count in this death: 2 or more means one didn't take) and
+  `sinceDeath=` (the milliseconds since the death);
 - `BACK`: at the first fight after a release, `sec=`, the seconds since the release, and of those `stepOut=` (the step
   out of reach), `hold=` (the back-off, the illness or the hold for the replan) and `walk=` (roaming, the walk back
   among it); then `replan=`: `moved` (a camp planned since), `none` (owed, none planned) or `notOwed`;

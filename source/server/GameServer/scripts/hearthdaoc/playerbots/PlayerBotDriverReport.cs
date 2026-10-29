@@ -221,6 +221,13 @@ public static class PlayerBotDriverReport
             $"PLAYER_BOT_BREAKOFF bot={bot} level={level} hp={hp} end={end} attackers={attackers} sec={seconds} outcome={outcome} " +
             $"rate={FormatRate(rate)}");
 
+    /// <summary>PLAYER_BOT_RELEASE (#167 D7), each release the driver asks for (PlayerBotDriver.ReleaseDue): its try in
+    /// this death (a release that didn't revive the bot goes again 10 s on) and the milliseconds since the death (the
+    /// later of the server's DeathTick and the bot's first dead think).</summary>
+    public static string FormatRelease(string bot, int level, int attempt, long sinceDeath) =>
+        string.Create(CultureInfo.InvariantCulture,
+            $"PLAYER_BOT_RELEASE bot={bot} level={level} try={attempt} sinceDeath={sinceDeath}");
+
     /// <summary>The fields PLAYER_BOT_DEATH appends after task= (the ones before stay as they were: legcheck.py reads them).</summary>
     public static string FormatDeathDetail(PlayerBotDeathDetail d) => string.Create(CultureInfo.InvariantCulture,
         $"activity={d.Activity} startHp={d.StartHp} fightSec={d.FightSeconds} targetHp={d.TargetHp} " +
