@@ -47,7 +47,9 @@ Two more settings are read only when bots are on:
 
 Each bot thinks every 250 ms, a thin copy of the `/bot` pilot's think:
 - It roams within 4,000 units of its start and hunts monsters within 5,400 that con at most yellow. Each death lowers
-  that con by one step, by two at most.
+  that con by one step, by two at most. For 15 minutes after a death it also hunts nothing that cons as high as its
+  killer did, down to green at the lowest, and takes no fallback camp that cons as high: a bot killed by a yellow
+  hunts blue at most.
 - It rests after each kill, and whenever below a GameBot's rest thresholds (70% health, 45% power, 35% endurance). A
   rest stops at full health, 60% endurance, and full power, or 90% power for a caster (Wizard, Sorcerer, Runemaster,
   Eldritch, Mentalist: under 50% power it regains power at half the rate, so a pull that ends below half costs more
@@ -371,7 +373,8 @@ All start `PLAYER_BOT_`:
   `BLOCKED`'s `walk=` is `target`, `roam`, `clear` (the step out after a release), `walkout`, `rest`, `kite`, `turret`
   or `breakoff`. `RELOCATE` after a death (`reason=died`) ends with `sinceRelease=`, the milliseconds since the release;
   after a break-off its `reason=` is `brokeoff`. Either ends with `barred=old` when the death or the break-off came on
-  the walk to the camp it had, which the plan then leaves out. A break-off drops its fight (`FIGHT result=dropped`);
+  the walk to the camp it had, which the plan then leaves out. Any `RELOCATE` then ends with `capKill=`, the lowest con
+  that killed the bot in the last 15 minutes, while there is one. A break-off drops its fight (`FIGHT result=dropped`);
 - `BREAKOFF`: one per break-off, when it ends: the bot's `hp=`, `end=` (endurance) and `attackers=` when it broke off,
   `sec=`, the seconds it ran, and `outcome=`: `shook` (none still after it), `fought` (still chased after 30 s, or
   nowhere to run) or `died`; then `rate=`, the health it lost a second over the 3 s before it broke off. The fight it

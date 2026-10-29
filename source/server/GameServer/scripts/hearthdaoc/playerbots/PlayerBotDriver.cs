@@ -101,6 +101,7 @@ public sealed class PlayerBotState
     public readonly List<(ushort Region, Vector3 At, long Until)> FailedCamps = new();   // camps, 15 minutes (PlanRelocation)
     public readonly Dictionary<string, long> AvoidUntil = new(StringComparer.OrdinalIgnoreCase);   // DEATHS.md A3: the
     public bool KillerAvoided;                                   //   names of deaths' killers and targets (IsAvoided)
+    public readonly List<(ConColor Con, long Until)> KillerCons = new();   // #167 D6: and the killers' cons, 15 minutes
     public long AliveSince;                                      // PLAYER_BOT_DEATH: the last release or login
     public int Attackers;                                        //   and the attackers on the last think alive
     public long NextBlockedLine;                                 // PLAYER_BOT_BLOCKED
@@ -1089,7 +1090,7 @@ public static class PlayerBotDriver
     // to the DRIVER line's kills.
     private static void SettleTarget(PlayerBotState state, GamePlayer player)
     {
-        if (state.Target == null || IsValidTarget(player, state.Target, Cap(state)) ||
+        if (state.Target == null || IsValidTarget(player, state.Target, Cap(state, GameLoop.GameLoopTime)) ||
             state.Target is GameNPC npc && FightsBotOrPet(npc.TargetObject, player, player.ControlledBrain?.Body) &&
             IsAttackable(player, npc))
             return;
@@ -1161,7 +1162,7 @@ public static class PlayerBotDriver
     {
         bool passedOver = false;
         ConColor? safestOver = null;
-        ConColor cap = Cap(state), natural = MaximumTargetCon(1, 0);
+        ConColor cap = Cap(state, now), natural = MaximumTargetCon(1, 0);
         bool leashed = Leashed(state, player);
         List<(GameNPC Npc, Vector3 At, int Score)> candidates = _candidates ??= new();
         List<(GameNPC Npc, Vector3 At, int AggroRange)> adds = _adds ??= new();
@@ -1308,9 +1309,49 @@ public static class PlayerBotDriver
         ConLevels.GetConColor(player.GetConLevel(target)) <= cap;
 
     // The bot's con cap: its death cap, or at a GameBot's fallback camp that camp's own con (AWBC:3446-3452), as
-    // AutonomousDeathRecoveryPolicy.EncounterMaximum gives a GameBot's pull filter.
-    private static ConColor Cap(PlayerBotState state) => AutonomousDeathRecoveryPolicy.EncounterMaximum(
-        MaximumTargetCon(1, state.DeathSafetySteps), MaximumTargetCon(1, 0), state.FallbackCap, false);
+    // AutonomousDeathRecoveryPolicy.EncounterMaximum gives a GameBot's pull filter; under the cons that killed it
+    // (CapAfterDeaths, #167 D6).
+    private static ConColor Cap(PlayerBotState state, long now) => CapAfterDeaths(
+        MaximumTargetCon(1, state.DeathSafetySteps), state.FallbackCap, LowestKillerCon(state.KillerCons, now));
+
+    /// <summary>#167 D6: the cap after deaths, EncounterMaximum's (the death cap deathCap, or the fallback camp's con),
+    /// under lowestKillerCon, the lowest con that killed the bot in the last 15 minutes (LowestKillerCon), never under
+    /// GREEN. HandleDeath steps the death cap down and clears FallbackCap, but a fallback plan set it to YELLOW again
+    /// and EncounterMaximum lifted the cap back to it: st-deathsC's release first fights at fallback=YELLOW camps were
+    /// fatal 32 of 42 (12 bots), at fit camps 4 of 76.</summary>
+    public static ConColor CapAfterDeaths(ConColor deathCap, ConColor? fallback, ConColor? lowestKillerCon)
+    {
+        ConColor cap = AutonomousDeathRecoveryPolicy.EncounterMaximum(deathCap, MaximumTargetCon(1, 0), fallback, false);
+        return lowestKillerCon is ConColor killer && cap >= killer
+            ? (ConColor)Math.Max((int)ConColor.GREEN, (int)killer - 1) : cap;
+    }
+
+    /// <summary>#167 D6: the plan's caps (RelocateIfOutgrown): its fit pass under the death cap and the killers' cons as
+    /// the pulls are (CapAfterDeaths with no fallback: the plan picks the next one), else it planned a camp the bot then
+    /// passed over and the capped clock moved it on; and the lowest killer's con, which the fallback stays under.</summary>
+    public static (ConColor Fit, ConColor? KillerCon) PlanCaps(PlayerBotState state, long now)
+    {
+        ConColor? killer = LowestKillerCon(state.KillerCons, now);
+        return (CapAfterDeaths(MaximumTargetCon(1, state.DeathSafetySteps), null, killer), killer);
+    }
+
+    /// <summary>#167 D6: a killer's con (con, against the bot's level then), kept for a GameBot's failure memory
+    /// (FailureMemoryMilliseconds, 15 minutes), each death's; those whose time is up go. A grey killer is none: no cap
+    /// goes under GREY, and every camp would fall under its fallback filter.</summary>
+    public static void RememberKillerCon(List<(ConColor Con, long Until)> cons, ConColor con, long now)
+    {
+        cons.RemoveAll(kept => kept.Until <= now);
+        if (con > ConColor.GREY) cons.Add((con, now + AutonomousDeathRecoveryPolicy.FailureMemoryMilliseconds));
+    }
+
+    /// <summary>The lowest con kept that killed the bot (RememberKillerCon), null with none (#167 D6).</summary>
+    public static ConColor? LowestKillerCon(IReadOnlyList<(ConColor Con, long Until)> cons, long now)
+    {
+        ConColor? lowest = null;
+        foreach ((ConColor con, long until) in cons)
+            if (now < until && (lowest == null || con < lowest)) lowest = con;
+        return lowest;
+    }
 
     private static bool IsAttackable(GamePlayer player, GameLiving target) =>
         target != null && target != player && target.IsAlive && target.ObjectState is GameObject.eObjectState.Active &&
@@ -1373,23 +1414,27 @@ public static class PlayerBotDriver
 
     /// <summary>PLAYER_BOT_RELOCATE for a move: its fields as they were (runs/legcheck.py reads bot= and to), then the
     /// reason (RelocateReason) and the fallback camp's con, - for none (the death cap holds, Cap); after a death, the
-    /// milliseconds since the release, and barred=old when the plan bars the anchor it had (RelocateSuffix, #167 D9).</summary>
+    /// milliseconds since the release, barred=old when the plan bars the anchor it had (#167 D9), and capKill= (#167 D6;
+    /// RelocateSuffix).</summary>
     public static string RelocateLine(string bot, int level, Vector3 from, Vector3 to, int distance, string monster,
-        int monsterLevel, ushort zone, string reason, ConColor? fallback, long sinceReleaseMs, bool barredOld) =>
+        int monsterLevel, ushort zone, string reason, ConColor? fallback, long sinceReleaseMs, bool barredOld,
+        ConColor? capKill) =>
         $"PLAYER_BOT_RELOCATE bot={bot} level={level} from=({from.X:0},{from.Y:0}) to=({to.X:0},{to.Y:0},{to.Z:0}) " +
         $"distance={distance} monster=\"{monster}\" monsterLevel={monsterLevel} zone={zone} reason={reason} " +
-        $"fallback={fallback?.ToString() ?? "-"}" + RelocateSuffix(reason, sinceReleaseMs, barredOld);
+        $"fallback={fallback?.ToString() ?? "-"}" + RelocateSuffix(reason, sinceReleaseMs, barredOld, capKill);
 
     /// <summary>PLAYER_BOT_RELOCATE when no camp checked had a corridor (or none was found): checked= of them.</summary>
     public static string RelocateNoneLine(string bot, int level, int candidates, ushort zone, string reason,
-        long sinceReleaseMs, bool barredOld) =>
+        long sinceReleaseMs, bool barredOld, ConColor? capKill) =>
         $"PLAYER_BOT_RELOCATE bot={bot} level={level} none checked={candidates} zone={zone} reason={reason}" +
-        RelocateSuffix(reason, sinceReleaseMs, barredOld);
+        RelocateSuffix(reason, sinceReleaseMs, barredOld, capKill);
 
     // #167 C1: RELOCATE sinceRelease= on a death's replan, last (the fields before it stay as they were); D9: then
-    // barred=old when the plan bars the anchor the bot had (BarOldAnchor).
-    private static string RelocateSuffix(string reason, long sinceReleaseMs, bool barredOld) =>
-        (reason == Died ? $" sinceRelease={sinceReleaseMs}" : "") + (barredOld ? " barred=old" : "");
+    // barred=old when the plan bars the anchor the bot had (BarOldAnchor); D6: then capKill=, the lowest con that killed
+    // the bot in the last 15 minutes, while it keeps one (PlanCaps).
+    private static string RelocateSuffix(string reason, long sinceReleaseMs, bool barredOld, ConColor? capKill) =>
+        (reason == Died ? $" sinceRelease={sinceReleaseMs}" : "") + (barredOld ? " barred=old" : "") +
+        (capKill is ConColor kill ? $" capKill={kill}" : "");
 
     /// <summary>The capped clock after a search of the wider ring (or one that found a target): set at the first that
     /// passed a monster over for the cap and found none, kept while that lasts, 0 once a search finds a target or
@@ -2092,9 +2137,10 @@ public static class PlayerBotDriver
     /// <summary>The cap a capped bot takes where it is when it cannot move its leash (a lever spot bot, one out of its
     /// anchor region or off the mesh, or no camp in its zone): the safest con it passed over, as a GameBot takes the
     /// safest camp there is rather than plan forever (AutonomousBotDecisionEngine.cs:287-313); the old rollback did so
-    /// at once. Null for an outgrown bot, and for one that passed over only names it avoids: they expire.</summary>
-    public static ConColor? FallbackInPlace(string reason, ConColor? safestPassedOver) =>
-        reason == Capped ? safestPassedOver : null;
+    /// at once. Null for an outgrown bot, and for one that passed over only names it avoids: they expire. #167 D6: null
+    /// too for a con at or over the lowest that killed the bot (lowestKillerCon, LowestKillerCon).</summary>
+    public static ConColor? FallbackInPlace(string reason, ConColor? safestPassedOver, ConColor? lowestKillerCon) =>
+        reason == Capped && (lowestKillerCon is not ConColor killer || safestPassedOver < killer) ? safestPassedOver : null;
 
     /// <summary>The relocation's spots (DEATHS.md A4), at most count, nearest first: monsters the bot would hunt
     /// (Huntable, not rejected for want of a corridor) that are its camps. A monster's camp is the non-grey monsters
@@ -2109,10 +2155,12 @@ public static class PlayerBotDriver
     /// PreferFreshTargets, AutonomousDeathRecoveryPolicy.cs:26-38; else Stale, and the bot hunts their names there as a
     /// GameBot hunts its camp's monster, AWBC:3087-3088), not one the bot died at in the last 15 minutes (within
     /// RoamRadius of a failedCamps spot; AWBC:3246, :3803-3804) while another is left, those with the safest median, and
-    /// that median as Fallback, the con the bot hunts there (AWBC:3446-3452).</summary>
+    /// that median as Fallback, the con the bot hunts there (AWBC:3446-3452). #167 D6: no fallback camp whose median is
+    /// at or over killerCon, the lowest con that killed the bot in the last 15 minutes (none: no camp).</summary>
     public static (T[] Spots, ConColor? Fallback, bool Stale) PlanRelocation<T>(
         IReadOnlyList<(T Npc, Vector3 At, ConColor Con, bool Huntable, bool Avoided)> monsters, Vector3 here, ConColor cap,
-        ConColor natural, IReadOnlyCollection<Vector3> failedCamps, ISet<T> rejected, int count) where T : class
+        ConColor natural, IReadOnlyCollection<Vector3> failedCamps, ISet<T> rejected, int count, ConColor? killerCon = null)
+        where T : class
     {
         Dictionary<(int, int), List<int>> grid = new();
         for (int i = 0; i < monsters.Count; i++)
@@ -2140,8 +2188,8 @@ public static class PlayerBotDriver
         foreach (int i in order)
         {
             (ConColor median, ConColor fresh) = CampCon(monsters, grid, i);
-            if (median <= natural)
-                safe.Add((i, median, fresh <= natural, Failed(i)));
+            if (median <= natural && (killerCon is not ConColor killer || median < killer))   // #167 D6: under the
+                safe.Add((i, median, fresh <= natural, Failed(i)));                          //   lowest con that killed it
         }
         if (safe.Count == 0) return (Array.Empty<T>(), null, false);
         bool stale = !safe.Any(c => c.Fresh);
@@ -2625,7 +2673,7 @@ public static class PlayerBotDriver
             (died ? WorldMgr.GetRegion(state.AnchorRegion)?.GetZone((int)state.DeathSpot.X, (int)state.DeathSpot.Y)
                 : player.CurrentZone) is not Zone zone)                            //   their spots
         {
-            FallBack(state, player, reason);
+            FallBack(state, player, reason, now);
             return;
         }
         state.NextRelocateTick = now + (reason == Outgrown ? RelocateAfterMilliseconds : CappedRelocateMilliseconds);
@@ -2633,8 +2681,8 @@ public static class PlayerBotDriver
         IPathfindingMgr nav = PathfindingProvider.Instance;
         if (nav.HasNavmesh(player.CurrentZone) && nav.GetClosestPoint(player.CurrentZone, here, 64, 64, 128, nav.DefaultFilters) == null)
         {
-            FallBack(state, player, reason);  // off the mesh here, every corridor fails (PlayerTravelPath.cs:48-50): blame
-            return;                           //   no monster for it
+            FallBack(state, player, reason, now);  // off the mesh here, every corridor fails (PlayerTravelPath.cs:48-50): blame
+            return;                                //   no monster for it
         }
         Vector3? corridorFrom = CorridorOrigin(reason, nav.HasNavmesh(zone), player.CurrentZone == zone, state.DeathSpot, here);
         if (corridorFrom is Vector3 start && player.CurrentZone != zone &&       // a death spot off the mesh fails every
@@ -2653,8 +2701,9 @@ public static class PlayerBotDriver
         }
         Vector3[] failed = FailedCamps(state.FailedCamps, state.AnchorRegion, now);
         bool barredOld = Array.IndexOf(failed, state.Anchor) >= 0;                 // #167 D9: RELOCATE barred=old
-        (GameNPC[] nearest, ConColor? fallback, bool stale) = PlanRelocation(monsters, from,
-            MaximumTargetCon(1, state.DeathSafetySteps), natural, failed, state.RelocateRejected, RelocateCandidates);
+        (ConColor fit, ConColor? killerCon) = PlanCaps(state, now);                 // #167 D6
+        (GameNPC[] nearest, ConColor? fallback, bool stale) = PlanRelocation(monsters, from, fit, natural, failed,
+            state.RelocateRejected, RelocateCandidates, killerCon);
         foreach (GameNPC npc in nearest)
         {
             Vector3 spot = new(npc.X, npc.Y, npc.Z);
@@ -2665,21 +2714,21 @@ public static class PlayerBotDriver
             }
             if (Log.IsInfoEnabled)
                 Log.Info(RelocateLine(player.Name, player.Level, state.Anchor, spot, (int)Vector3.Distance(here, spot), npc.Name,
-                    npc.EffectiveLevel, zone.ID, reason, fallback, now - state.ReleasedAt, barredOld));
+                    npc.EffectiveLevel, zone.ID, reason, fallback, now - state.ReleasedAt, barredOld, killerCon));
             PlanCamp(state, spot, fallback, stale, reason);                         // and BACK replan=moved (#167 C1)
             return;
         }
         if (Log.IsInfoEnabled)
             Log.Info(RelocateNoneLine(player.Name, player.Level, nearest.Length, zone.ID, reason, now - state.ReleasedAt,
-                barredOld));
-        if (nearest.Length == 0) FallBack(state, player, reason);   // no camp in the zone: none to try next time either
+                barredOld, killerCon));
+        if (nearest.Length == 0) FallBack(state, player, reason, now);   // no camp in the zone: none to try next time either
     }
 
     // A capped bot's FallBackInPlace; after a death (#167 F4) or a break-off (C2), the end of the relocation owed.
-    private static void FallBack(PlayerBotState state, GamePlayer player, string reason)
+    private static void FallBack(PlayerBotState state, GamePlayer player, string reason, long now)
     {
         if (reason is Died or BrokeOff) EndReplan(state, player);
-        else FallBackInPlace(state, reason);
+        else FallBackInPlace(state, reason, now);
     }
 
     // #167 F4: no camp planned after a death, at once or within MaxHoldMilliseconds: the bot hunts where it is, under its
@@ -2695,9 +2744,10 @@ public static class PlayerBotDriver
     }
 
     // FallbackInPlace's cap where the bot is; its next search finds the monster it passed over, and the hold ends.
-    private static void FallBackInPlace(PlayerBotState state, string reason)
+    private static void FallBackInPlace(PlayerBotState state, string reason, long now)
     {
-        if (FallbackInPlace(reason, state.SafestPassedOver) is not ConColor cap) return;
+        if (FallbackInPlace(reason, state.SafestPassedOver, LowestKillerCon(state.KillerCons, now)) is not ConColor cap)
+            return;
         state.FallbackCap = cap;
         state.CappedSince = 0;
     }
@@ -3114,8 +3164,9 @@ public static class PlayerBotDriver
             PlayerBotDriverReport.Death();
         }
         if (!state.KillerAvoided && state.Killer is GameNPC killer)                    // and its killer, once the reaper
-        {                                                                               //   names it (AwaitsDying)
-            Remember(state.AvoidUntil, killer.Name, now);
+        {                                                                               //   names it (AwaitsDying), and
+            Remember(state.AvoidUntil, killer.Name, now);                               //   its con (#167 D6)
+            RememberKillerCon(state.KillerCons, ConLevels.GetConColor(player.GetConLevel(killer)), now);
             state.KillerAvoided = true;
         }
         if (ReleaseDue(now, player.DeathTick, state.LastDeathTick, player.IsBeingHandledByReaperService,   // #167 D7
