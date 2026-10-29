@@ -563,6 +563,16 @@ public sealed class UT_PlayerBotDriver
         Assert.That(PlayerBotDriver.PlanCampChoice(yellowNear, yellowNear, bind, deathSpot, ConColor.GREEN, ConColor.YELLOW,
                 failed, new HashSet<string>(), 5, null, afterDeath: true),
             Is.EqualTo((new[] { "g1", "g2", "g3" }, (ConColor?)null, false, false)), "no near camp harder than blue");
+        var avoidedNear = new[]                                 // the killer's names: CampCon counts them PURPLE, stale
+        {
+            Monster("b1", 3_000, ConColor.BLUE, avoided: true), Monster("b2", 3_100, ConColor.BLUE, avoided: true),
+            Monster("b3", 3_200, ConColor.BLUE, avoided: true),
+            Monster("g1", 30_000, ConColor.GREEN), Monster("g2", 30_100, ConColor.GREEN), Monster("g3", 30_200, ConColor.GREEN),
+        };
+        Assert.That(PlayerBotDriver.PlanCampChoice(avoidedNear, avoidedNear, bind, deathSpot, ConColor.GREEN,
+                ConColor.YELLOW, failed, new HashSet<string>(), 5, null, afterDeath: true),
+            Is.EqualTo((new[] { "g1", "g2", "g3" }, (ConColor?)null, false, false)),
+            "a stale near camp (names it avoids) is no near pick: the far fit, not back to its killers");
     }
 
     // #167 E W1: a plan after a death is a died, brokeoff or capped one within 15 minutes of the last death (a GameBot's
@@ -1571,6 +1581,10 @@ public sealed class UT_PlayerBotDriver
             state.FightTargetHpAtReach = 100;
             state.Engaged = false;
             Assert.That(Fires(PlayerBotRole.Melee), Is.False, "not in its fight: no race");
+            (state.Engaged, state.Target) = (true, LiveMonster(0));                     // at a kill, an add at 100% on it
+            Assert.That(state.Target.IsAlive, Is.False);
+            Assert.That(PlayerBotDriver.BreakOffFires(state, PlayerBotRole.Melee, false, 35, [(100, 100, false)], 25_000,
+                () => false), Is.False, "its target dead: the race read since the first hit was the target's, not the add's");
         }
         finally
         {
@@ -1957,6 +1971,7 @@ public sealed class UT_PlayerBotDriver
     [TestCase(true, 450, 200, 40, null)] [TestCase(true, 625, 200, 40, false)] [TestCase(true, int.MaxValue, 0, 40, false)]
     [TestCase(false, 250, 191, 40, true)] [TestCase(false, 250, 191, 10, null)] [TestCase(false, 300, 191, 40, null)]
     [TestCase(false, 900, 191, 40, null)]
+    [TestCase(true, 200, 150, 40, null)]                     // a chaser slower than the run, in contact: no gain, 400 still
     public void A_break_offs_sprint_goes_off_once_clear_and_on_when_a_chaser_closes(bool sprinting, int nearestFree,
         int fastest, int endurance, bool? sprint) =>
         Assert.That(PlayerBotDriver.BreakOffSprint(sprinting, nearestFree, fastest, endurance), Is.EqualTo(sprint));
@@ -4136,6 +4151,7 @@ public sealed class UT_PlayerBotDriver
     [TestCase(true, true, 6_000L, 6_387L, true)] [TestCase(true, true, 8_000L, 6_387L, false)]
     [TestCase(false, false, 6_000L, 6_387L, false)] [TestCase(true, true, 6_000L, 0L, false)]
     [TestCase(true, false, 6_000L, 6_387L, false)]
+    [TestCase(true, true, 6_500L, 6_387L, true)]                               // within the walk and the margin
     public void The_mez_goes_before_a_stun_the_step_back_outlasts(bool hitsOnBot, bool soleHitter, long stunHoldMs,
         long walkMs, bool mezFirst) =>
         Assert.That(PlayerBotDriver.MezBeforeStun(hitsOnBot, soleHitter, stunHoldMs, walkMs), Is.EqualTo(mezFirst));
@@ -4161,6 +4177,9 @@ public sealed class UT_PlayerBotDriver
             Is.SameAs(PrismaticSheen), "8 s outlasts the walk");
         Assert.That(Choose(mentalist, true, true, s => s.SpellType is eSpellType.Stun ? 3_000 : s.Duration, _ => true),
             Is.SameAs(LockMind), "a second Shimmer, 3 s");
+        Assert.That(Choose([(PrismaticSheen, SunLine), (LockMind, MindMastery)], true, true,
+                s => s.SpellType is eSpellType.Stun ? s.Duration / 2 : s.Duration, _ => true),
+            Is.SameAs(LockMind), "a second Sheen, 4 s (its whole 8 s would keep the Sheen)");
         Assert.That(Choose([(PrismaticShimmer, SunLine)], true, true, s => s.Duration, _ => true), Is.SameAs(PrismaticShimmer),
             "no mez known");
     }
@@ -4936,6 +4955,32 @@ public sealed class UT_PlayerBotDriver
             Is.SameAs(LesserConflagration));
         Assert.That(PlayerBotDriver.ChooseNuke(wizard, spell => spell == ConcussiveBlast, false, _ => 1).Item1,
             Is.SameAs(ConcussiveBlast));
+    }
+
+    // #167 E C1: under a score a bolt ranks with the other single-target nukes by its value (the design: "Bolts are scored
+    // the same"; Light Eldritch cast an unspecced Void bolt first); with no score (every other role) it goes first, as
+    // before. A hit chance over 100 (87.5 + half the level gap + the level difference, about 102.5 on a GREEN) counts
+    // as 100: the server lands no more than every cast.
+    [Test]
+    public void A_bolt_is_scored_with_the_other_single_target_nukes()
+    {
+        (Spell, SpellLine)[] shaman = [(FungalThistle, Subterranean), (FungalOoze, Subterranean)];
+        Assert.That(PlayerBotDriver.ChooseNuke(shaman, _ => true, false, spell => spell == FungalThistle ? 0.01 : 0.05).Item1,
+            Is.SameAs(FungalOoze), "the bolt worth less");
+        Assert.That(PlayerBotDriver.ChooseNuke(shaman, _ => true, false, null).Item1, Is.SameAs(FungalThistle), "no score");
+        Assert.That(PlayerBotDriver.NukeValue(100, 110, 1, 3_000), Is.EqualTo(PlayerBotDriver.NukeValue(100, 100, 1, 3_000)));
+    }
+
+    // #167 E C1: OutclassedInLine keeps BotBrain's half-level rule across lines: a nuke under half the level of the best
+    // damage spell the caster has in any line, and 5 levels or more under it, is outclassed (a caster at 40 drops its
+    // level-15 nuke of another line; a dry caster cast such low nukes when its best weren't paid for).
+    [TestCase(15, true)] [TestCase(19, true)] [TestCase(20, false)]
+    public void A_casters_nuke_under_half_its_best_in_any_line_is_outclassed(int level, bool outclassed)
+    {
+        Spell low = DbNuke(9_015, "Low Nuke", "DirectDamage", level, 40, 2.5),
+            best = DbNuke(9_040, "Best Nuke", "DirectDamage", 40, 140, 2.6);
+        Assert.That(PlayerBotDriver.OutclassedInLine(low, Pyromancy, [(low, Pyromancy), (best, PathOfIce)], 40),
+            Is.EqualTo(outclassed));
     }
 
     // Pbotaaaaf (Fire 41): Ice Blast (Potent) 41 at Cold 6 outclassed Greater Conflagration 37 (BotBrain.cs:3413, any
@@ -6013,6 +6058,8 @@ public sealed class UT_PlayerBotDriver
     [TestCase((byte)39, (byte)60, 55, 100, null)] [TestCase((byte)35, (byte)50, 60, 70, 22)]
     [TestCase((byte)35, (byte)40, 60, 100, -44)] [TestCase((byte)39, (byte)100, 100, 100, 100)]
     [TestCase((byte)39, (byte)60, -1, -1, null)]
+    [TestCase((byte)80, (byte)60, 100, 100, -100)]                            // 20 lost: it reads
+    [TestCase((byte)50, (byte)90, 80, 80, 90)]                                // a healed target keeps its health
     public void The_race_projects_the_targets_health_at_the_bots_death(byte health, byte targetHealth, int hpAtReach,
         int targetHpAtReach, int? left) =>
         Assert.That(PlayerBotDriver.TargetLeftAtDeath(health, targetHealth, hpAtReach, targetHpAtReach), Is.EqualTo(left));
