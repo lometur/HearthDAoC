@@ -1205,7 +1205,7 @@ public sealed class UT_PlayerBotDriver
             LastWalk = PlayerBotWalk.Rest, FightWalk = PlayerBotWalk.Hunt, FightHeldMs = 3_000, FightCtlLanded = 2,
             FightCtlFailed = 1, FightHpAtReach = 50, FightTargetHpAtReach = 40, WouldBreakHp = 30,
             PendingControl = (Control(500, "root", "SpeedDecrease", 10, 99), Player(null), 8_000), FightBuffHitters = 2,
-            FightDots = 2, FightKillingQuickcast = true, FightTargetMezzes = 1 };
+            FightDots = 2, FightKillingQuickcast = true, FightTargetMezzes = 1, FightRaceLeft = 22 };
         Assert.That(PlayerBotDriver.OpenFight(state, 10_000, 90, 60, 1_420, 100), Is.True, "the first fight since a release");
         Assert.That((state.BackPending, state.KilledWithAdds, state.ControlTries, state.FightCasts, state.FightAdd),
             Is.EqualTo((false, false, 0, 0, (-1, -1))));
@@ -1222,6 +1222,7 @@ public sealed class UT_PlayerBotDriver
         Assert.That(state.FightDots, Is.Zero, "#167 E C1: dots= afresh");
         Assert.That(state.FightKillingQuickcast, Is.False, "#167 E C2b: qcKill= afresh");
         Assert.That(state.FightTargetMezzes, Is.Zero, "#167 E C4: ctlMez= afresh");
+        Assert.That(state.FightRaceLeft, Is.EqualTo(PlayerBotDriver.NoRace), "#167 E-L: raceLeft= afresh");
         Assert.That(PlayerBotDriver.OpenFight(state, 30_000, 90, 60, 1_420, 100), Is.False, "the next one");
     }
 
@@ -1371,19 +1372,27 @@ public sealed class UT_PlayerBotDriver
     // #167 D1: one monster breaks the bot off (OneMonsterCase) when it is a name the bot avoids (a death's or a
     // break-off's, DEATHS.md A3: name avoidance stopped the pull, not the monster that aggroed; 31 of st-deathsC's
     // deaths), unless the bot was sent to a camp of such names (huntAvoided); or the bot is a caster losing to it with
-    // the target above 25% (the caster trap, 41 deaths). Not while a hold on its target is ready (holdReady): the hold
-    // first.
-    [TestCase(PlayerBotRole.Melee, true, false, (byte)60, false, true)]
-    [TestCase(PlayerBotRole.Melee, true, true, (byte)60, false, false)]      // sent to a camp of names it avoids
-    [TestCase(PlayerBotRole.Melee, false, false, (byte)60, false, false)]
-    [TestCase(PlayerBotRole.Healer, false, false, (byte)90, false, false)]
-    [TestCase(PlayerBotRole.Caster, false, false, (byte)26, false, true)]
-    [TestCase(PlayerBotRole.Caster, false, false, (byte)25, false, false)]
-    [TestCase(PlayerBotRole.Caster, false, false, (byte)60, true, false)]    // the hold first
-    [TestCase(PlayerBotRole.Caster, true, false, (byte)20, true, false)]
-    public void One_monster_breaks_the_bot_off_for_a_name_it_avoids_or_a_caster_losing(PlayerBotRole role,
-        bool avoidedOnBot, bool huntAvoided, byte targetHealth, bool holdReady, bool oneMonster) =>
-        Assert.That(PlayerBotDriver.OneMonsterCase(role, avoidedOnBot, huntAvoided, targetHealth, holdReady),
+    // the target above 25% (the caster trap, 41 deaths); #167 E-L: or a bot that is no caster losing the race to it
+    // (losingRace; a caster's target at 25% or less is C2's killing nuke's). Not while a hold on its target is ready
+    // (holdReady): the hold first.
+    [TestCase(PlayerBotRole.Melee, true, false, (byte)60, false, false, true)]
+    [TestCase(PlayerBotRole.Melee, true, true, (byte)60, false, false, false)]      // sent to a camp of names it avoids
+    [TestCase(PlayerBotRole.Melee, false, false, (byte)60, false, false, false)]
+    [TestCase(PlayerBotRole.Healer, false, false, (byte)90, false, false, false)]
+    [TestCase(PlayerBotRole.Caster, false, false, (byte)26, false, false, true)]
+    [TestCase(PlayerBotRole.Caster, false, false, (byte)25, false, false, false)]
+    [TestCase(PlayerBotRole.Caster, false, false, (byte)60, true, false, false)]    // the hold first
+    [TestCase(PlayerBotRole.Caster, true, false, (byte)20, true, false, false)]
+    [TestCase(PlayerBotRole.Melee, false, false, (byte)60, false, true, true)]      // #167 E-L: the race lost
+    [TestCase(PlayerBotRole.Healer, false, false, (byte)60, false, true, true)]
+    [TestCase(PlayerBotRole.Pet, false, false, (byte)60, false, true, true)]
+    [TestCase(PlayerBotRole.Archer, false, false, (byte)20, false, true, true)]
+    [TestCase(PlayerBotRole.Caster, false, false, (byte)20, false, true, false)]    //   a caster's: C2's killing nuke instead
+    [TestCase(PlayerBotRole.Melee, false, false, (byte)60, true, true, false)]      //   the hold still first
+    [TestCase(PlayerBotRole.Melee, true, true, (byte)60, false, true, true)]        //   in a camp of avoided names too
+    public void One_monster_breaks_the_bot_off_for_a_name_it_avoids_a_caster_losing_or_a_race_lost(PlayerBotRole role,
+        bool avoidedOnBot, bool huntAvoided, byte targetHealth, bool holdReady, bool losingRace, bool oneMonster) =>
+        Assert.That(PlayerBotDriver.OneMonsterCase(role, avoidedOnBot, huntAvoided, targetHealth, holdReady, losingRace),
             Is.EqualTo(oneMonster));
 
     // #167 D1: a caster spent (CasterSpent): no damage spell it can pay for, its target held and above 25%. 2 of
@@ -1487,17 +1496,20 @@ public sealed class UT_PlayerBotDriver
     }
 
     // #167 D1: BREAKOFF why=, the rule that fired: spent, adds (2 or more on it), atkill (the second-monster case),
-    // followup (the fight after an add kill), avoided (one monster of a name it avoids) or caster (a caster losing to one).
-    [TestCase(true, 1, false, false, false, false, "spent")]
-    [TestCase(false, 2, true, true, true, false, "adds")]
-    [TestCase(false, 1, true, true, false, false, "atkill")]
-    [TestCase(false, 1, false, true, true, false, "followup")]
-    [TestCase(false, 1, false, false, true, false, "avoided")]
-    [TestCase(false, 1, false, false, true, true, "caster")]               // a camp of avoided names: the caster arm
-    [TestCase(false, 1, false, false, false, false, "caster")]
+    // followup (the fight after an add kill), avoided (one monster of a name it avoids), caster (a caster losing to one
+    // with its target above 25%) or (#167 E-L) race (a bot that is no caster losing the race to one).
+    [TestCase(true, 1, false, false, false, false, false, "spent")]
+    [TestCase(false, 2, true, true, true, false, true, "adds")]
+    [TestCase(false, 1, true, true, false, false, false, "atkill")]
+    [TestCase(false, 1, false, true, true, false, false, "followup")]
+    [TestCase(false, 1, false, false, true, false, true, "avoided")]
+    [TestCase(false, 1, false, false, true, true, true, "caster")]               // a camp of avoided names: the caster arm
+    [TestCase(false, 1, false, false, false, false, true, "caster")]
+    [TestCase(false, 1, false, false, false, false, false, "race")]              // #167 E-L
+    [TestCase(false, 1, false, false, true, true, false, "race")]                //   a camp of avoided names, no caster
     public void A_break_off_says_which_rule_fired(bool spent, int monstersOnBot, bool atKill, bool followUp,
-        bool avoidedOnBot, bool huntAvoided, string why) =>
-        Assert.That(PlayerBotDriver.BreakOffWhy(spent, monstersOnBot, atKill, followUp, avoidedOnBot, huntAvoided),
+        bool avoidedOnBot, bool huntAvoided, bool casterArm, string why) =>
+        Assert.That(PlayerBotDriver.BreakOffWhy(spent, monstersOnBot, atKill, followUp, avoidedOnBot, huntAvoided, casterArm),
             Is.EqualTo(why));
 
     // #167 D1 where StartsBreakOff applies it (BreakOffFires): one monster of a name the bot avoids, not in a camp of
@@ -1520,6 +1532,47 @@ public sealed class UT_PlayerBotDriver
             () => false), Is.False, "the hold first");
         Assert.That(PlayerBotDriver.BreakOffFires(state, PlayerBotRole.Caster, false, 39, [(25, 150, false)], 25_000,
             () => false), Is.False, "its target nearly down");
+    }
+
+    // #167 E-L where StartsBreakOff applies it (BreakOffFires, BreakOffStartWhy): one monster, a bot that is no caster,
+    // engaged with its target alive, losing the race read since the first hit on it; not with the target dying first,
+    // not before 20 health lost since that hit, not out of its fight, and not for a caster (its target at 25% or less is
+    // C2's killing nuke's; above, D1's caster arm).
+    [Test]
+    public void A_bot_losing_the_race_to_one_monster_breaks_off_unless_it_is_a_caster()
+    {
+        var calculators = (DOL.GS.PropertyCalc.IPropertyCalculator[])typeof(GameLiving)
+            .GetField("m_propertyCalc", BindingFlags.Static | BindingFlags.NonPublic)!.GetValue(null)!;
+        DOL.GS.PropertyCalc.IPropertyCalculator previous = calculators[(int)eProperty.MaxHealth];
+        calculators[(int)eProperty.MaxHealth] = new Fixed(100);                       // the target's HealthPercent
+        try
+        {
+            var state = new PlayerBotState(Player(null))
+                { Engaged = true, Target = LiveMonster(60), FightHpAtReach = 100, FightTargetHpAtReach = 100 };
+            bool Fires(PlayerBotRole role) =>
+                PlayerBotDriver.BreakOffFires(state, role, false, 39, [(60, 150, false)], 25_000, () => false);
+            Assert.That(Fires(PlayerBotRole.Melee), Is.True, "35 left at its death: the race lost");
+            Assert.That(Fires(PlayerBotRole.Healer), Is.True);
+            Assert.That(Fires(PlayerBotRole.Pet), Is.True);
+            Assert.That(PlayerBotDriver.BreakOffStartWhy(state, PlayerBotRole.Archer, false, 39, false, [(60, 150, false)],
+                25_000, () => false), Is.EqualTo(PlayerBotDriver.RaceLost));
+            state.FightHpAtReach = 55;
+            Assert.That(Fires(PlayerBotRole.Melee), Is.False, "16 lost since the first hit: no read yet");
+            state.FightHpAtReach = 100;
+            state.Target = LiveMonster(20);
+            Assert.That(Fires(PlayerBotRole.Melee), Is.False, "its target dies first: -31 left");
+            state.FightTargetHpAtReach = 25;
+            Assert.That(Fires(PlayerBotRole.Melee), Is.True, "20 and losing: 17 left at its death");
+            Assert.That(Fires(PlayerBotRole.Caster), Is.False, "a caster's target at 20: C2's killing nuke, no race");
+            state.Target = LiveMonster(60);
+            state.FightTargetHpAtReach = 100;
+            state.Engaged = false;
+            Assert.That(Fires(PlayerBotRole.Melee), Is.False, "not in its fight: no race");
+        }
+        finally
+        {
+            calculators[(int)eProperty.MaxHealth] = previous;
+        }
     }
 
     // The review of D (D1): StartsBreakOff's own rule. It scans the monsters on the bot under 40% health only, a spent
@@ -5407,7 +5460,8 @@ public sealed class UT_PlayerBotDriver
     // health when the projected break-off would have fired (ProjectedBreak; -1: never), and walk=, the walk on the think
     // before the fight's first; then (#167 D8) kiteNone=, (#167 E C1) dots=, its damage-over-time casts, and (#167 E
     // C2b) qcKill=, 1 when a cast went under Quickcast as the killing nuke, and (#167 E C4) ctlMez=, its mezzes at the
-    // target.
+    // target; then (#167 E-L) raceLeft=, the race's projection of its target's health at its death, at its first think
+    // under 40% with a read (-999: none).
     [Test]
     public void FightFormat()
     {
@@ -5415,19 +5469,21 @@ public sealed class UT_PlayerBotDriver
                 true, 100, 38, 100, 12, 21, 1, 9, 2, 4, 0, 0, Pet: true, Heals: 2, Quickcast: true, Buffs: 3, PetCasts: 2, Waits: 5,
                 Controls: 2, Kites: 1, CtlBroken: 1, AddControls: 1, AddAt: 6, AddHp: 71, BreakOff: true, EngageDistance: 1_450,
                 Crowd: 1, HeldSeconds: 7, CtlLanded: 1, CtlFailed: 1, HpAtReach: 92, TargetHpAtReach: 64, Rate: 4.26, WouldBreak: 38,
-                Walk: PlayerBotWalk.Hunt, KiteNone: (1, 0, 2, 3), Dots: 2, KillingQuickcast: true, TargetMezzes: 1)),
+                Walk: PlayerBotWalk.Hunt, KiteNone: (1, 0, 2, 3), Dots: 2, KillingQuickcast: true, TargetMezzes: 1,
+                RaceLeft: 22)),
             Is.EqualTo("PLAYER_BOT_FIGHT bot=Pbotaaaac level=40 target=\"widow claw\" targetLevel=40 con=YELLOW from=pull result=kill " +
                        "startHp=100 endHp=38 startMana=100 endMana=12 sec=21 adds=1 swings=9 notVisible=2 casts=4 lifeKills=0 rests=0 " +
                        "pet=alive heals=2 qc=1 buffs=3 petCasts=2 waits=5 ctl=2 kites=1 ctlBroken=1 addCtl=1 addAt=6 addHp=71 " +
                        "breakOff=1 engageDist=1450 crowd=1 heldSec=7 ctlLanded=1 ctlFailed=1 hpAtReach=92 tHpAtReach=64 rate=4.3 " +
-                       "wouldBreak=38 walk=hunt kiteNone=1:0:2:3 dots=2 qcKill=1 ctlMez=1"));
+                       "wouldBreak=38 walk=hunt kiteNone=1:0:2:3 dots=2 qcKill=1 ctlMez=1 raceLeft=22"));
         Assert.That(PlayerBotDriverReport.FormatFight(new PlayerBotFight("Pbothaaab", 43, "empyrean guardian", 36, ConColor.BLUE, true,
                 false, 64, 51, 100, 100, 7, 2, 3, 0, 0, 3, 1, Rate: -0.04, Walk: PlayerBotWalk.BreakOff)),
             Is.EqualTo("PLAYER_BOT_FIGHT bot=Pbothaaab level=43 target=\"empyrean guardian\" targetLevel=36 con=BLUE from=defence " +
                        "result=dropped startHp=64 endHp=51 startMana=100 endMana=100 sec=7 adds=2 swings=3 notVisible=0 casts=0 " +
                        "lifeKills=3 rests=1 pet=none heals=0 qc=0 buffs=0 petCasts=0 waits=0 ctl=0 kites=0 ctlBroken=0 addCtl=0 " +
                        "addAt=-1 addHp=-1 breakOff=0 engageDist=-1 crowd=-1 heldSec=0 ctlLanded=0 ctlFailed=0 hpAtReach=-1 " +
-                       "tHpAtReach=-1 rate=0.0 wouldBreak=-1 walk=breakoff kiteNone=0:0:0:0 dots=0 qcKill=0 ctlMez=0"),
+                       "tHpAtReach=-1 rate=0.0 wouldBreak=-1 walk=breakoff kiteNone=0:0:0:0 dots=0 qcKill=0 ctlMez=0 " +
+                       "raceLeft=-999"),
             "a gain under 0.05 a second: 0.0, not -0.0");
     }
 
@@ -5495,7 +5551,7 @@ public sealed class UT_PlayerBotDriver
     // then (st-deathsD's) FIGHT's heldSec=, ctlLanded=, ctlFailed=, hpAtReach=, tHpAtReach= and wouldBreak= (-1 out of a
     // fight), rate= at the death, walk=, the fight's (FIGHT's) or, out of a fight, the last think's alive, and end=, the
     // endurance; then (#167 D8) FIGHT's kiteNone=, (#167 E C1) dots=, (#167 E C2b) qcKill= and (#167 E C4) ctlMez= (-1
-    // out of a fight).
+    // out of a fight), and (#167 E-L) raceLeft= (-999 out of a fight).
     [Test]
     public void DeathDetailFormat()
     {
@@ -5504,12 +5560,12 @@ public sealed class UT_PlayerBotDriver
                 Controls: 2, Kites: 1, Casts: 4, Quickcast: 1, Waits: 3, CtlBroken: 1, AddControls: 1, AddAt: 6, AddHp: 71,
                 EngageDistance: 1_450, HeldSeconds: 5, CtlLanded: 1, CtlFailed: 0, HpAtReach: 88, TargetHpAtReach: 90, Rate: 12.5,
                 WouldBreak: 52, Walk: PlayerBotWalk.Anchor, Endurance: 64, KiteNone: (0, 2, 1, 0), Dots: 1, KillingQuickcast: 1,
-                TargetMezzes: 1)),
+                TargetMezzes: 1, RaceLeft: 35)),
             Is.EqualTo("activity=Fighting startHp=62 fightSec=14 targetHp=71 from=pull adds=2 lifeKills=3 rests=0 sinceKillSec=40 " +
                        "mana=100 swings=6 notVisible=1 killer=\"widow claw\" killerLevel=40 killerIsTarget=True fromBind=748 " +
                        "avoided=2 again=True sinceRelease=42 ill=True ctl=2 kites=1 casts=4 qc=1 waits=3 ctlBroken=1 addCtl=1 " +
                        "addAt=6 addHp=71 breakOff=0 engageDist=1450 heldSec=5 ctlLanded=1 ctlFailed=0 hpAtReach=88 tHpAtReach=90 " +
-                       "rate=12.5 wouldBreak=52 walk=anchor end=64 kiteNone=0:2:1:0 dots=1 qcKill=1 ctlMez=1"));
+                       "rate=12.5 wouldBreak=52 walk=anchor end=64 kiteNone=0:2:1:0 dots=1 qcKill=1 ctlMez=1 raceLeft=35"));
         // Out of a fight, no target, no kill this life, no killer named by the Dying event, the bind in another region.
         Assert.That(PlayerBotDriverReport.FormatDeathDetail(new PlayerBotDeathDetail(PlayerBotActivity.Hunting, -1, -1, -1, true,
                 -1, 0, 2, -1, 37, -1, -1, null, 0, false, -1, BreakOff: true, Rate: 3, Walk: PlayerBotWalk.Clear, Endurance: 100)),
@@ -5517,7 +5573,8 @@ public sealed class UT_PlayerBotDriver
                        "mana=37 swings=-1 notVisible=-1 killer=\"\" killerLevel=0 killerIsTarget=False fromBind=-1 avoided=0 " +
                        "again=False sinceRelease=-1 ill=False ctl=-1 kites=-1 casts=-1 qc=-1 waits=-1 ctlBroken=-1 addCtl=-1 " +
                        "addAt=-1 addHp=-1 breakOff=1 engageDist=-1 heldSec=-1 ctlLanded=-1 ctlFailed=-1 hpAtReach=-1 tHpAtReach=-1 " +
-                       "rate=3.0 wouldBreak=-1 walk=clear end=100 kiteNone=-1:-1:-1:-1 dots=-1 qcKill=-1 ctlMez=-1"),
+                       "rate=3.0 wouldBreak=-1 walk=clear end=100 kiteNone=-1:-1:-1:-1 dots=-1 qcKill=-1 ctlMez=-1 " +
+                       "raceLeft=-999"),
             "died on a break-off's run: out of a fight (the dropped one's FIGHT has it)");
     }
 
@@ -5554,7 +5611,7 @@ public sealed class UT_PlayerBotDriver
             "killerLevel=40 killerIsTarget=True fromBind=748 avoided=0 again=False sinceRelease=-1 ill=False ctl=-1 kites=-1 casts=-1 " +
             "qc=-1 waits=-1 ctlBroken=-1 addCtl=-1 addAt=-1 addHp=-1 breakOff=0 engageDist=-1 heldSec=-1 ctlLanded=-1 ctlFailed=-1 " +
             "hpAtReach=-1 tHpAtReach=-1 rate=0.0 wouldBreak=-1 walk=none end=-1 kiteNone=-1:-1:-1:-1 dots=-1 qcKill=-1 " +
-            "ctlMez=-1"));
+            "ctlMez=-1 raceLeft=-999"));
         Assert.That(PlayerBotDriver.DeathLine(head, detail, add, target),
             Does.Contain(" killer=\"a wolf\" killerLevel=38 killerIsTarget=False fromBind=748 avoided=0 again=False sinceRelease=-1 ill=False "));
         Assert.That(PlayerBotDriver.DeathLine(head, detail, null, null),
@@ -5591,6 +5648,25 @@ public sealed class UT_PlayerBotDriver
     [TestCase((byte)60, 10.0, false)] [TestCase((byte)94, 20.0, true)] [TestCase((byte)95, 20.0, false)]
     public void The_projected_break_off_keeps_6_seconds_of_the_loss_in_hand(byte health, double rate, bool fires) =>
         Assert.That(PlayerBotDriver.ProjectedBreak(health, rate), Is.EqualTo(fires));
+
+    // #167 E-L: the race since the first hit on the bot (hpAtReach, tHpAtReach): its target's health when it dies, at both
+    // sides' loss since; no read before 20 lost; a target that lost nothing keeps its health.
+    [TestCase((byte)39, (byte)60, 100, 100, 35)] [TestCase((byte)39, (byte)20, 100, 100, -31)]
+    [TestCase((byte)39, (byte)60, 55, 100, null)] [TestCase((byte)35, (byte)50, 60, 70, 22)]
+    [TestCase((byte)35, (byte)40, 60, 100, -44)] [TestCase((byte)39, (byte)100, 100, 100, 100)]
+    [TestCase((byte)39, (byte)60, -1, -1, null)]
+    public void The_race_projects_the_targets_health_at_the_bots_death(byte health, byte targetHealth, int hpAtReach,
+        int targetHpAtReach, int? left) =>
+        Assert.That(PlayerBotDriver.TargetLeftAtDeath(health, targetHealth, hpAtReach, targetHpAtReach), Is.EqualTo(left));
+
+    // #167 E-L: the race is lost with the target projected above 10 at the bot's death. The row (35, 40, 60, 100) is a
+    // hurt bot's defence it is winning, where the target is ahead (40 against 35) but falls faster: rest E1's "target
+    // ahead" rule would break it off, the race doesn't.
+    [TestCase((byte)20, (byte)28, 100, 100, false)] [TestCase((byte)20, (byte)29, 100, 100, true)]
+    [TestCase((byte)35, (byte)40, 60, 100, false)] [TestCase((byte)39, (byte)60, 55, 100, false)]
+    public void A_race_is_lost_with_the_target_above_10_at_the_bots_death(byte health, byte targetHealth, int hpAtReach,
+        int targetHpAtReach, bool losing) =>
+        Assert.That(PlayerBotDriver.LosingRace(health, targetHealth, hpAtReach, targetHpAtReach), Is.EqualTo(losing));
 
     // hpAtReach=: an attack on the bot (GameLiving.LastAttackedByEnemyTick, set on any attack that causes combat, a
     // miss, block, parry, evade or resisted spell too, GameLiving.cs:1515-1535) within the last second.
@@ -5632,8 +5708,12 @@ public sealed class UT_PlayerBotDriver
         PlayerBotDriver.TrackFight(state, 10_500, targetHeld: true, health: 47, targetHealth: 60, lastHit: 10_400);
         Assert.That((state.FightHeldMs, state.FightHpAtReach, state.FightTargetHpAtReach, state.WouldBreakHp),
             Is.EqualTo((500L, 85, 70, 47)), "53 in 3 s: 17.7 a second, 6 s of it is past 95");
+        Assert.That(state.FightRaceLeft, Is.EqualTo(PlayerBotDriver.NoRace), "#167 E-L raceLeft=: 47 is not under 40 yet");
         PlayerBotDriver.TrackFight(state, 10_750, targetHeld: false, health: 30, targetHealth: 50, lastHit: 10_700);
         Assert.That((state.FightHpAtReach, state.WouldBreakHp), Is.EqualTo((85, 47)), "the first ones stay");
+        Assert.That(state.FightRaceLeft, Is.EqualTo(40), "the race's first read under 40: 55 lost against 20, 50 - 30 x 20 / 55");
+        PlayerBotDriver.TrackFight(state, 11_000, targetHeld: false, health: 20, targetHealth: 50, lastHit: 10_950);
+        Assert.That(state.FightRaceLeft, Is.EqualTo(40), "the first read stays");
     }
 
     // A monster in the world, alive, with an effect list (UT_LongRunPetRecovery.cs:77-86); its effects by type.

@@ -154,10 +154,14 @@ Each bot thinks every 250 ms, a thin copy of the `/bot` pilot's think:
   blocked takes the next nearest such spot at once, 3 walks in all; then it sits where it is.
 - Losing, it breaks off: below 40% health with 2 or more monsters on it, or with 1 still on it after a kill in a fight
   that had 2 or more on it, within 3 s of that kill or in the whole fight it opens next. One monster breaks it off too
-  when it is one the bot avoids (unless it was sent to a camp of them), or when the bot is a caster and its target is
-  above 25%; not while a caster's control at that monster is under way, nor, when that monster is its target, while it
-  is held or the caster would cast a control at it now or once a resisted one may go again (a target held at range is no
-  hold on another monster hitting it). None of these while its target is down to 10% or less. A caster whose held target
+  when it is one the bot avoids (unless it was sent to a camp of them), when the bot is a caster and its target is above
+  25%, or, for a bot that isn't a caster, when the race since the monster's first hit on it says the bot dies first with
+  its target still above 10% (both sides' loss since that hit, read once the bot has lost 20% health since it, projects
+  the target's health when the bot's runs out; a heal counts as less lost; a caster whose target is at 25% or less
+  fights on for its killing nuke); not while a caster's control at that monster is under way, nor, when that monster is
+  its target, while it is held or the caster would cast a control at it now or once a resisted one may go again (a
+  target held at range is no hold on another monster hitting it). None of these while its target is down to 10% or less.
+  A caster whose held target
   is above 25% with no damage spell it can pay for breaks off at any health, then rests: it takes no camp or names to
   avoid from that one and doesn't move camp. Only from monsters it can outrun, and only with a sprint whose lead takes
   it out of the fastest one's 200-unit reach: none faster than its run (191), or none as fast as its sprint (248) when
@@ -440,8 +444,10 @@ All start `PLAYER_BOT_`:
   `range` (the bot already stood at its spell's reach), `clear` (no point out of the other monsters' reach), `mesh`
   (none on the navmesh) or `fit` (none within the stop once on the navmesh's height); -1 each out of a fight.
   Then `dots=`, its damage-over-time casts, `qcKill=`, 1 when a cast went under Quickcast as the killing nuke, and
-  `ctlMez=`, its mezzes at the target (-1
-  each out of a fight). `BLOCKED`'s `walk=` is `target`, `roam`, `clear` (the step out after a release), `walkout`,
+  `ctlMez=`, its mezzes at the target (-1 each out of a fight), then `raceLeft=`, the race's projection of the target's
+  health at the bot's death (the one-monster break-off's, with 20% lost since the first hit), at the first think under
+  40% with a read (-999: none, or out of a fight). `BLOCKED`'s `walk=` is `target`, `roam`, `clear` (the step out after
+  a release), `walkout`,
   `rest`, `kite`, `turret` or `breakoff`. `RELOCATE` after a death (`reason=died`) ends with `sinceRelease=`, the
   milliseconds since the release; after a break-off its `reason=` is `brokeoff`. Either ends with `barred=old` when the
   death or the break-off came on the walk to the camp it had, which the plan then leaves out. Any `RELOCATE` then ends
@@ -454,7 +460,8 @@ All start `PLAYER_BOT_`:
   `fought` (still chased after 45 s, caught with no control to cast, or nowhere to run) or `died`; then `rate=`, the
   health it lost a second over the 3 s before it broke off, and `why=`, the rule that fired: `adds` (2 or more on
   it), `atkill` (1 still on it within 3 s of a kill with adds), `followup` (the fight after that kill), `avoided` (one
-  it avoids), `caster` (a caster losing to one) or `spent` (a caster out of power with its target held). A break-off
+  it avoids), `caster` (a caster losing to one), `race` (a bot that isn't a caster losing the race to one) or `spent` (a
+  caster out of power with its target held). A break-off
   that would fire but doesn't logs once a fight as `outcome=refused` with `sec=0` and the bot's `hp=`, `end=`,
   `attackers=` and `rate=` then, and `why=`: `control` (an add's control comes first), `speed` (a chaser as fast as
   its sprint), `sprint` (its sprint too short for the fastest), `ranged` (a chaser that harms from range) or `point`

@@ -237,6 +237,7 @@ public sealed class PlayerBotState
     public (Spell Spell, GameLiving Target, long At) PendingControl;   //   (Hold); ctlLanded= and ctlFailed=, and the control
     public int FightHpAtReach = -1, FightTargetHpAtReach = -1;   //   cast awaited (SettleControl); hpAtReach= and
     public int WouldBreakHp = -1;                                //   tHpAtReach= (HitNow) and wouldBreak= (ProjectedBreak)
+    public int FightRaceLeft = PlayerBotDriver.NoRace;           // #167 E-L: FIGHT and DEATH raceLeft= (TrackFight)
     public int FightBuffHitters;                                 // #167 D12: the live monsters on the bot when the fight's
                                                                  //   buff was last weighed (FightBuffCheck)
 }
@@ -363,6 +364,14 @@ public static class PlayerBotDriver
     public const int HealthRateMilliseconds = 3_000;         // #167 rate=: the health lost a second over the last 3 s
     public const int ProjectedSeconds = 6;                   //   wouldBreak=: 6 s of that loss kept in hand (breakoff #5,
                                                              //   d-breakoff/projected.py's P6; logged only)
+    public const int RaceLossMargin = 10;                    // #167 E-L: one monster breaks a bot that is no caster off
+    public const int RaceReadLoss = 20;                      //   when the race since its first hit projects its target
+                                                             //   above this at the bot's death (TargetLeftAtDeath), read
+                                                             //   from 20 lost since that hit (a shorter read is a swing's
+                                                             //   noise). On st-deathsD2 and D2b: 113 such non-caster
+                                                             //   deaths, 105 with no break-off (e-design s3, s13)
+    public const int NoRace = -999;                          //   FIGHT and DEATH raceLeft= with no read
+    public const string RaceLost = "race";                   //   BREAKOFF why=
 
     private static readonly ConcurrentDictionary<GamePlayer, PlayerBotState> _states = new();
     [ThreadStatic] private static List<(GameNPC Npc, Vector3 At, int Score)> _candidates;      // FindWithin's, per timer
@@ -1748,6 +1757,7 @@ public static class PlayerBotDriver
         state.FightDots = 0;                                                        // #167 E C1 dots=
         state.FightKillingQuickcast = false;                                        // #167 E C2b qcKill=
         state.FightTargetMezzes = 0;                                                // #167 E C4 ctlMez=
+        state.FightRaceLeft = NoRace;                                               // #167 E-L raceLeft=
         state.TargetHeldBreaks = false;                                             // #167 C3
         state.FightAddControls = 0;                                                 // #167 C4
         (state.FightAdd, state.EngageDistance) = ((-1, -1), distance);              // #167 FIGHT addAt=, engageDist=
@@ -1798,6 +1808,35 @@ public static class PlayerBotDriver
     public static bool ProjectedBreak(byte health, double rate) =>
         health < Math.Max(BreakOffHealthPercent, Math.Min(95, rate * ProjectedSeconds));
 
+    /// <summary>The race since reach (#167 E-L): its target's health when the bot dies, at both sides' loss since the first
+    /// hit on the bot (hpAtReach, targetHpAtReach: FIGHT hpAtReach= and tHpAtReach=, TrackFight): targetHealth less what
+    /// the target loses while the bot loses the health it has left. A heal shows as less lost. Null with no hit yet or
+    /// under RaceReadLoss lost since; a target that lost nothing keeps its health.</summary>
+    public static int? TargetLeftAtDeath(byte health, byte targetHealth, int hpAtReach, int targetHpAtReach)
+    {
+        int botLost = hpAtReach - health, targetLost = targetHpAtReach - targetHealth;
+        if (hpAtReach < 0 || targetHpAtReach < 0 || botLost < RaceReadLoss) return null;
+        return targetHealth - health * Math.Max(0, targetLost) / botLost;
+    }
+
+    /// <summary>The race lost (#167 E-L, OneMonsterCase's losingRace): its target projected above RaceLossMargin when the
+    /// bot dies (TargetLeftAtDeath). On straight paths the projection holds from the read to the end, so it never fires
+    /// on a fight the bot wins (rest E1's "target ahead" rule gave up 23 wins, 8 of them defences); with hits in chunks
+    /// it reads high on some (the review's model: about 45 non-caster wins over two legs).</summary>
+    public static bool LosingRace(byte health, byte targetHealth, int hpAtReach, int targetHpAtReach) =>
+        TargetLeftAtDeath(health, targetHealth, hpAtReach, targetHpAtReach) > RaceLossMargin;
+
+    /// <summary>The fight's target health as the break-off reads it (#167 C2): its target's while it lives, else (at a kill)
+    /// the nearest hitter's (BreakOffFires, BreakOffStartWhy).</summary>
+    public static byte FightTargetHealth(GameLiving target, IReadOnlyList<(byte Health, int Distance, bool Avoided)> hitters)
+    {
+        if (target?.IsAlive == true) return target.HealthPercent;
+        byte health = 0;
+        for (int i = 0, nearest = int.MaxValue; i < hitters.Count; i++)
+            if (hitters[i].Distance < nearest) (health, nearest) = (hitters[i].Health, hitters[i].Distance);
+        return health;
+    }
+
     /// <summary>#167 hpAtReach=: an attack on the bot within the last second (lastHit:
     /// GameLiving.LastAttackedByEnemyTick, set on an attack that causes combat, GameLiving.cs:1515-1535: a miss, block,
     /// parry or evade too, AttackData.IsHit, AttackData.cs:44-53, and a resisted spell, SpellHandler.cs:2582-2594; 0,
@@ -1817,7 +1856,8 @@ public static class PlayerBotDriver
 
     /// <summary>A fight think (#167, st-deathsD's FIGHT and DEATH fields, Engage's WatchFight): heldSec= by think while its
     /// target is held (targetHeld: Hold), hpAtReach= and tHpAtReach= at the first think with a hit on the bot (HitNow),
-    /// and wouldBreak= at the first the projected break-off would fire (ProjectedBreak over HealthRate).</summary>
+    /// wouldBreak= at the first the projected break-off would fire (ProjectedBreak over HealthRate), and #167 E-L's
+    /// raceLeft= at the first think under BreakOffHealthPercent with a race read (TargetLeftAtDeath).</summary>
     public static void TrackFight(PlayerBotState state, long now, bool targetHeld, byte health, byte targetHealth, long lastHit)
     {
         if (targetHeld) state.FightHeldMs += TickMilliseconds;
@@ -1825,6 +1865,9 @@ public static class PlayerBotDriver
             (state.FightHpAtReach, state.FightTargetHpAtReach) = (health, targetHealth);
         if (state.WouldBreakHp < 0 && ProjectedBreak(health, HealthRate(state.HealthSamples, now, health)))
             state.WouldBreakHp = health;
+        if (state.FightRaceLeft == NoRace && health < BreakOffHealthPercent &&
+            TargetLeftAtDeath(health, targetHealth, state.FightHpAtReach, state.FightTargetHpAtReach) is int left)
+            state.FightRaceLeft = left;
     }
 
     /// <summary>PLAYER_BOT_BACK replan= (#167 C1): notOwed when the release owed no replan (OwesReplan); else moved once
@@ -1962,10 +2005,14 @@ public static class PlayerBotDriver
     /// one such monster was fatal in 31 of st-deathsC's deaths, 22 begun at 95% health or more), unless the bot was sent to
     /// a camp of such names (huntAvoided: then it hunts them); or when the bot is a caster losing to it with its target
     /// above CasterBreakOffTargetPercent (the caster trap: 41 deaths, the monster reached the bot, and at death the target
-    /// was above 25% in 33 of them). Not while a hold on its target is ready (holdReady, HoldReady): the hold first.</summary>
+    /// was above 25% in 33 of them); #167 E-L: or when a bot that is no caster is losing the race to it (losingRace,
+    /// LosingRace: 113 non-caster deaths on st-deathsD2 and D2b, 105 with no break-off). A caster keeps D1's arm: its
+    /// target at 25% or less is C2's killing nuke's, which the break-off (Think's step before Engage) would pre-empt. Not
+    /// while a hold on its target is ready (holdReady, HoldReady): the hold first.</summary>
     public static bool OneMonsterCase(PlayerBotRole role, bool avoidedOnBot, bool huntAvoided, byte targetHealth,
-        bool holdReady) =>
-        !holdReady && (avoidedOnBot && !huntAvoided || role == PlayerBotRole.Caster && targetHealth > CasterBreakOffTargetPercent);
+        bool holdReady, bool losingRace) =>
+        !holdReady && (avoidedOnBot && !huntAvoided || role == PlayerBotRole.Caster && targetHealth > CasterBreakOffTargetPercent ||
+                       role != PlayerBotRole.Caster && losingRace);
 
     /// <summary>A caster spent (#167 D1): no damage spell it can pay for (canNuke false), its target held (a root it would
     /// stand off while it waits for power: 2 of st-deathsC's out-of-power deaths waited 190 and 168 times) and above
@@ -2015,16 +2062,18 @@ public static class PlayerBotDriver
         bool avoidedOnBot = false;
         for (int i = 0; i < hitters.Count; i++) avoidedOnBot |= hitters[i].Avoided;
         return BreakOffWhy(spent, hitters.Count, SecondMonsterCase(state.KilledWithAdds, state.LastKillTick, now),
-            state.Engaged && state.FollowsAddKill, avoidedOnBot, state.HuntAvoided);
+            state.Engaged && state.FollowsAddKill, avoidedOnBot, state.HuntAvoided,
+            role == PlayerBotRole.Caster && FightTargetHealth(state.Target, hitters) > CasterBreakOffTargetPercent);
     }
 
     /// <summary>BREAKOFF why= (#167 D1): the rule that fired. Spent (CasterSpent); else 2 or more monsters on the bot (adds);
     /// the second-monster case at the kill (atkill) or in the fight after it (followup, D2's FollowsAddKill); one monster
-    /// of a name it avoids, not in a camp of them (avoided); else a caster losing to one (caster).</summary>
+    /// of a name it avoids, not in a camp of them (avoided); a caster losing to one with its target above 25% (caster,
+    /// casterArm); else #167 E-L's race lost to one (race).</summary>
     public static string BreakOffWhy(bool spent, int monstersOnBot, bool atKill, bool followUp, bool avoidedOnBot,
-        bool huntAvoided) =>
+        bool huntAvoided, bool casterArm) =>
         spent ? Spent : monstersOnBot >= 2 ? ByAdds : atKill ? AtKill : followUp ? FollowUp :
-        avoidedOnBot && !huntAvoided ? AvoidedName : CasterLosing;
+        avoidedOnBot && !huntAvoided ? AvoidedName : casterArm ? CasterLosing : RaceLost;
 
     /// <summary>The dropped FIGHT line's adds= at a break-off (#167 D2, StartsBreakOff): BreaksOffNow returns before Engage
     /// folds the attackers into FightAdds, so the monsters on the bot (onBot, BREAKOFF attackers=) fold in here; with 2 or
@@ -2042,22 +2091,21 @@ public static class PlayerBotDriver
 
     /// <summary>A break-off's first rule as StartsBreakOff applies it (#167 C2; then the chasers' speed, Outruns, and a
     /// point to run to): BreaksOff over the monsters on the bot (hitters: each one's health and distance, and #167 D1
-    /// whether its name is one the bot avoids), its target's health while it lives, else (at a kill) the nearest hitter's,
-    /// the second-monster case (SecondMonsterCase; #167 D2: or the fight after it, FollowsAddKill, while engaged), #167
-    /// D1's one-monster case (OneMonsterCase: role and holdReady passed in, the UT fixture has no CharacterClass) and C4's
-    /// add control (addControlReady, asked only once the rest holds: it scans).</summary>
+    /// whether its name is one the bot avoids), its target's health while it lives, else (at a kill) the nearest hitter's
+    /// (FightTargetHealth), the second-monster case (SecondMonsterCase; #167 D2: or the fight after it, FollowsAddKill,
+    /// while engaged), #167 D1's one-monster case (OneMonsterCase: role and holdReady passed in, the UT fixture has no
+    /// CharacterClass) with #167 E-L's race (LosingRace, engaged with its target alive: the race read since the first hit
+    /// is that target's) and C4's add control (addControlReady, asked only once the rest holds: it scans).</summary>
     public static bool BreakOffFires(PlayerBotState state, PlayerBotRole role, bool holdReady, byte health,
         IReadOnlyList<(byte Health, int Distance, bool Avoided)> hitters, long now, Func<bool> addControlReady)
     {
-        byte targetHealth = 0;
+        byte targetHealth = FightTargetHealth(state.Target, hitters);
         bool avoidedOnBot = false;
-        if (state.Target?.IsAlive == true) targetHealth = state.Target.HealthPercent;
-        else
-            for (int i = 0, nearest = int.MaxValue; i < hitters.Count; i++)
-                if (hitters[i].Distance < nearest) (targetHealth, nearest) = (hitters[i].Health, hitters[i].Distance);
         for (int i = 0; i < hitters.Count; i++) avoidedOnBot |= hitters[i].Avoided;
         bool addFight = SecondMonsterCase(state.KilledWithAdds, state.LastKillTick, now) || state.Engaged && state.FollowsAddKill;
-        bool oneMonster = OneMonsterCase(role, avoidedOnBot, state.HuntAvoided, targetHealth, holdReady);
+        bool losingRace = state.Engaged && state.Target?.IsAlive == true &&                                // #167 E-L
+            LosingRace(health, targetHealth, state.FightHpAtReach, state.FightTargetHpAtReach);
+        bool oneMonster = OneMonsterCase(role, avoidedOnBot, state.HuntAvoided, targetHealth, holdReady, losingRace);
         return BreaksOff(hitters.Count, addFight, oneMonster, health, targetHealth, addControlReady: false, outruns: true) &&
             BreaksOff(hitters.Count, addFight, oneMonster, health, targetHealth, addControlReady(), outruns: true);
     }
@@ -4382,7 +4430,8 @@ public static class PlayerBotDriver
             inFight ? state.FightKiteNone : null,                                         //   kiteNone=, FIGHT's;
             inFight ? state.FightDots : -1,                                               // #167 E C1 dots=,
             inFight ? (state.FightKillingQuickcast ? 1 : 0) : -1,                         // #167 E C2b qcKill=,
-            inFight ? state.FightTargetMezzes : -1);                                      // #167 E C4 ctlMez=
+            inFight ? state.FightTargetMezzes : -1,                                       // #167 E C4 ctlMez=,
+            inFight ? state.FightRaceLeft : NoRace);                                      // #167 E-L raceLeft=
         string head = $"PLAYER_BOT_DEATH bot={player.Name} level={player.Level} at=({player.X},{player.Y},{player.Z}) " +
                       $"zone={player.CurrentZone?.ID} {fight} attackers={state.Attackers} deathSteps={state.DeathSafetySteps} " +
                       $"aliveSec={(now - state.AliveSince) / 1000} task={state.Task != null}";
@@ -4456,7 +4505,7 @@ public static class PlayerBotDriver
             state.FightCtlFailed, state.FightHpAtReach, state.FightTargetHpAtReach,      // #167 st-deathsD's
             HealthRate(state.HealthSamples, now, player.HealthPercent), state.WouldBreakHp, state.FightWalk,
             state.FightKiteNone, state.FightDots, state.FightKillingQuickcast,          // #167 D8, E C1, E C2b,
-            state.FightTargetMezzes)));                                                 //   E C4
+            state.FightTargetMezzes, state.FightRaceLeft)));                            //   E C4, E-L
     }
 
     // APP:585-624, changed: every 10 s, no inventory count, no saves; after 15 minutes with no progress, back to the
