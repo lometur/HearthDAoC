@@ -5754,16 +5754,19 @@ public sealed class UT_PlayerBotDriver
     public void The_blind_clock_runs_while_the_target_is_out_of_sight(long since, bool inView, long now, long next) =>
         Assert.That(PlayerBotDriver.BlindClock(since, inView, now), Is.EqualTo(next));
 
-    // #167 E M2: out of sight 5 s, fighting neither the bot nor its pet: dropped. 15 stuck fights ended in a kill with
-    // the bot unhurt (another bot's or the pet's), the longest 250 s.
-    [TestCase(1_000L, 6_000L, false, false, true)]
-    [TestCase(1_000L, 5_999L, false, false, false)]
-    [TestCase(0L, 60_000L, false, false, false)]
-    [TestCase(1_000L, 6_000L, true, false, false)]
-    [TestCase(1_000L, 6_000L, false, true, false)]
+    // #167 E M2: out of sight 5 s, fighting neither the bot nor its pet, nor coming at it: dropped. 15 stuck fights
+    // ended in a kill with the bot unhurt (another bot's or the pet's), the longest 250 s. One with the bot as its
+    // target is kept (the review): Incoming took it back at the next think, and 5 s on it was dropped again, a FIGHT
+    // line each time; it is coming at the bot (round an obstacle) or fighting it.
+    [TestCase(1_000L, 6_000L, false, false, false, true)]
+    [TestCase(1_000L, 5_999L, false, false, false, false)]
+    [TestCase(0L, 60_000L, false, false, false, false)]
+    [TestCase(1_000L, 6_000L, true, false, false, false)]
+    [TestCase(1_000L, 6_000L, false, true, false, false)]
+    [TestCase(1_000L, 6_000L, false, false, true, false)]
     public void A_target_out_of_sight_5_s_that_fights_neither_bot_nor_pet_is_dropped(long blindSince, long now,
-        bool fightsBot, bool petOnTarget, bool drops) =>
-        Assert.That(PlayerBotDriver.DropsBlindTarget(blindSince, now, fightsBot, petOnTarget), Is.EqualTo(drops));
+        bool fightsBot, bool petOnTarget, bool targetsBot, bool drops) =>
+        Assert.That(PlayerBotDriver.DropsBlindTarget(blindSince, now, fightsBot, petOnTarget, targetsBot), Is.EqualTo(drops));
 
     // #167 E M2: a target dropped blind is passed over by the pick (FindWithin) for 30 s, and only by it: self-defence
     // (Attacker) and the monster coming at it (Incoming) still take it, so one that comes round and hits the bot is fought,

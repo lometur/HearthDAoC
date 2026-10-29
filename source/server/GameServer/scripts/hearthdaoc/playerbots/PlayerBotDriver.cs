@@ -749,7 +749,7 @@ public static class PlayerBotDriver
             player.TargetInView = SightInReach(los, distance, fightsBot);               //   ray says no; in contact,
             if (!los && player.TargetInView) state.FightSight++;                        //   FIGHT sight=
             state.BlindSince = BlindClock(state.BlindSince, player.TargetInView, now);
-            if (DropsBlindTarget(state.BlindSince, now, fightsBot, PetOn(player, target)))
+            if (DropsBlindTarget(state.BlindSince, now, fightsBot, PetOn(player, target), target.TargetObject == player))
             {
                 DropBlind(state, player, now);                                          //   FIGHT blind=1, the pick
                 return;                                                                 //   passes it over 30 s
@@ -876,8 +876,9 @@ public static class PlayerBotDriver
     private static bool PetOn(GamePlayer player, GameLiving target) =>
         player.ControlledBrain?.Body is GameNPC pet && pet.IsAlive && pet.TargetObject == target;
 
-    // #167 E M2: a target out of sight BlindDropMilliseconds that fights neither the bot nor its pet: its fight's line
-    // (FIGHT result=dropped blind=1), then the pick alone passes it over 30 s (MarkBlind; not Unreachable, the review).
+    // #167 E M2: a target out of sight BlindDropMilliseconds that fights neither the bot nor its pet, nor comes at it
+    // (DropsBlindTarget): its fight's line (FIGHT result=dropped blind=1), then the pick alone passes it over 30 s
+    // (MarkBlind; not Unreachable, the review).
     private static void DropBlind(PlayerBotState state, GamePlayer player, long now)
     {
         if (state.Engaged)
@@ -3223,10 +3224,12 @@ public static class PlayerBotDriver
     public static long BlindClock(long since, bool inView, long now) => inView ? 0 : since != 0 ? since : now;
 
     /// <summary>#167 E M2: a target out of sight BlindDropMilliseconds (blindSince, BlindClock) that fights neither the bot
-    /// (fightsBot) nor its pet (petOnTarget) is dropped. 49 stuck fights stood 2,390 s, 250 s at one cluricaun, swinging
-    /// at nothing.</summary>
-    public static bool DropsBlindTarget(long blindSince, long now, bool fightsBot, bool petOnTarget) =>
-        blindSince != 0 && now - blindSince >= BlindDropMilliseconds && !fightsBot && !petOnTarget;
+    /// (fightsBot) nor its pet (petOnTarget), nor comes at it (targetsBot: it has the bot as its target), is dropped. 49
+    /// stuck fights stood 2,390 s, 250 s at one cluricaun, swinging at nothing. One with the bot as its target is kept
+    /// (the review): Incoming, which BATCH-E leaves as it is, took it back at the next think and 5 s on it was dropped
+    /// again, a FIGHT line each time; it is a monster coming at the bot round an obstacle, or fighting it.</summary>
+    public static bool DropsBlindTarget(long blindSince, long now, bool fightsBot, bool petOnTarget, bool targetsBot) =>
+        blindSince != 0 && now - blindSince >= BlindDropMilliseconds && !fightsBot && !petOnTarget && !targetsBot;
 
     /// <summary>#167 E M2: a target dropped for want of sight (DropBlind), or one an Animist left for want of a turret in
     /// reach (CY3's skip, LeaveTurretTarget), is marked for the pick alone (BlindSkip, until UnreachableSkipMilliseconds
