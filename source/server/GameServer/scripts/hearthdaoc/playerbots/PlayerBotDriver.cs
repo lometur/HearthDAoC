@@ -183,6 +183,9 @@ public sealed class PlayerBotState
     public readonly List<GameNPC> SearchAdds = new();            //   (FindWithin), and the rest spot read from them once
     public bool RestSpotChecked;                                 //   per rest (RestSpot), walked to before the bot sits
     public Vector3? RestGoal;
+    public IReadOnlyList<Vector3> RestSpots = Array.Empty<Vector3>();   // #167 D10: that check's clear spots (RestSpots),
+    public int RestBlocked;                                      //   the walks to them blocked this rest, and the reaches it
+    public readonly List<(GameNPC Npc, Vector3 At, int AggroRange)> RestReach = new();   //   read (positions only, no monster)
     public bool KilledWithAdds;                                  // #167 C2: a kill with 2 or more on the bot (read for
     public long BreakOffSince, NextBreakOffTick;                 //   3 s, SecondMonsterCase); the break-off under way (0:
     public Vector3? BreakOffGoal;                                //   none) and the next one's earliest, its point, a step
@@ -212,6 +215,8 @@ public sealed class PlayerBotState
                                                                  //   crowding (crowd=, FindWithin's; -1 for another pick);
     public byte SitHealth, SitMana;                              //   REST hp= and mp= when it sat, and respawn=: the spawn
     public int RestRespawns;                                     //   spots the rest spot was read against (WalksToRestSpot)
+    public int SitBlocked;                                       // #167 D10: REST blocked= and inReach= as it sat (Rest)
+    public bool SitInReach;
     public PlayerBotWalk Walk, LastWalk, FightWalk;              // #167 st-deathsD's FIGHT and DEATH fields: walk=, this
     public readonly Queue<(long Tick, byte Health)> HealthSamples = new();   //   think's walk, the last think's (NextWalk) and the
     public long FightHeldMs;                                     //   fight's (OpenFight); rate=, the last 3 s of thinks'
@@ -279,6 +284,7 @@ public static class PlayerBotDriver
     public const int AnimistStandMargin = 150;                // #167 F10b: by its turret; the turret's reach less this
     public const int IncomingRadius = 2_000;                  // #167 F7: a monster this near with the bot as its target
     public static readonly int[] RestSpotRings = [300, 600, 900, 1_200];   // #167 F7: the rest spot's candidates (inf.)
+    public const int RestSpotTries = 3;                       // #167 D10: rest walks per rest, each blocked one the next (inf.)
     public const int RespawnWatchMilliseconds = 150_000;      // #167 C7: a kill's spawn spot counts this long (inf.: the
     public const int RecentKillCount = 3;                     //   usual respawn is 80 s), the last 3 kills'
     public static readonly long StuckMilliseconds = (long)AutonomousStuckWatchdog.StuckThreshold.TotalMilliseconds; // 15 min
@@ -505,6 +511,7 @@ public static class PlayerBotDriver
         }
         state.RestSpotChecked = false;                                                   //    the next rest reads its spot
         state.RestGoal = null;
+        (state.RestSpots, state.RestBlocked) = (Array.Empty<Vector3>(), 0);             //    #167 D10: and its spots afresh
         if (player.IsSitting)                                                            // 13. rested, or hit: stand
         {
             EndRest(state, player, now, RestStop(mayRest, incoming));
@@ -2112,6 +2119,28 @@ public static class PlayerBotDriver
         IReadOnlyList<(T Npc, Vector3 At, int AggroRange)> adds) where T : class =>
         InAddReach(here, adds) && ClearSpots(here, candidates, adds) is [Vector3 first, ..] ? first : here;
 
+    /// <summary>The spots a bot in a potential add's reach (InAddReach) may walk to before it sits (#167 D10): the clear
+    /// candidates nearest first (ClearSpots), RestSpot's the first; none when it stands clear. ClearSpotNear keeps
+    /// RestSpot's single spot (SpotOutOfReach).</summary>
+    public static List<Vector3> RestSpots<T>(Vector3 here, IEnumerable<Vector3> candidates,
+        IReadOnlyList<(T Npc, Vector3 At, int AggroRange)> adds) where T : class =>
+        InAddReach(here, adds) ? ClearSpots(here, candidates, adds) : new List<Vector3>();
+
+    /// <summary>The rest walk's goal after blocked walks (#167 D10): the next clear spot (clear: RestSpots', nearest first),
+    /// maxTries in all (RestSpotTries); then none, and the bot sits where it is.</summary>
+    public static Vector3? RestGoalAt(IReadOnlyList<Vector3> clear, int blocked, int maxTries) =>
+        blocked < Math.Min(clear.Count, maxTries) ? clear[blocked] : null;
+
+    /// <summary>The rest walk's goal and blocks after a step toward goal (#167 D10, WalksToRestSpot): blocked, the next spot
+    /// (RestGoalAt) and one block more; arrived, none (it sits there); walking or waiting, the same.</summary>
+    public static (Vector3? Goal, int Blocked) AfterRestStep(PlayerBotStepResult step, Vector3 goal,
+        IReadOnlyList<Vector3> spots, int blocked) => step switch
+    {
+        PlayerBotStepResult.Blocked => (RestGoalAt(spots, blocked + 1, RestSpotTries), blocked + 1),
+        PlayerBotStepResult.Arrived => (null, blocked),
+        _ => (goal, blocked),
+    };
+
     /// <summary>A monster coming at the bot (#167 F7): it may attack it (a live monster, IsAttackable), the bot is its
     /// target (a monster's aggro state sets it and its exit clears it, StandardMobState.cs:113) and it is within
     /// IncomingRadius. It counts as an attacker before its first hit: the bot stands, and engages it first.</summary>
@@ -3233,33 +3262,46 @@ public static class PlayerBotDriver
 
     // #167 F7: before it sits, a bot in a potential add's reach walks to the nearest clear spot on the rest rings, once
     // per rest; the adds are the last search's (FindWithin), where they are now, that would still aggro: no new scan;
-    // and the spawn spots of its kills of the last 150 s (RespawnSpots, #167 C7). A blocked walk, or none clear, and it
-    // sits where it is. True while it walks.
+    // and the spawn spots of its kills of the last 150 s (RespawnSpots, #167 C7). None clear, and it sits where it is.
+    // True while it walks. #167 D10: the clear spots nearest first (RestSpots); a blocked walk takes the next at once
+    // (AfterRestStep), RestSpotTries walks in all, then it sits where it is. The reaches it read stay as positions only
+    // (RestReach: no monster held), for REST inReach= (Rest).
     private static bool WalksToRestSpot(PlayerBotState state, GamePlayer player, long now)
     {
         if (!state.RestSpotChecked)
         {
             state.RestSpotChecked = true;
-            List<(GameNPC Npc, Vector3 At, int AggroRange)> adds = _reach ??= new();
+            List<(GameNPC Npc, Vector3 At, int AggroRange)> adds = state.RestReach;
             adds.Clear();
             foreach (GameNPC npc in state.SearchAdds)
                 if (AddReach(player, npc) is > 0 and int reach)
-                    adds.Add((npc, new(npc.X, npc.Y, npc.Z), reach));
+                    adds.Add((null, new(npc.X, npc.Y, npc.Z), reach));                  //   where it is now
             int searchAdds = adds.Count;
             foreach ((Vector3 at, int reach) in RespawnSpots(state.RecentKills, now))    // #167 C7: and its kills'
                 adds.Add((null, at, reach));                                             //   respawns (REST respawn=)
             state.RestRespawns = adds.Count - searchAdds;
-            state.RestGoal = SpotOutOfReach(player, RestSpotRings, adds);
-            adds.Clear();
+            state.RestSpots = RestSpotsNear(player, RestSpotRings, adds);               // #167 D10
+            state.RestBlocked = 0;
+            state.RestGoal = RestGoalAt(state.RestSpots, 0, RestSpotTries);
         }
         if (state.RestGoal is not Vector3 goal) return false;
         state.Activity = PlayerBotActivity.Resting;
         state.Walk = PlayerBotWalk.Rest;                                                // #167 walk=
         PlayerBotStepResult step = state.Mover.StepToward(goal, 20, now);
         if (step is PlayerBotStepResult.Blocked) ReportBlocked(state, player, "rest", goal, now);
-        if (step is not (PlayerBotStepResult.Blocked or PlayerBotStepResult.Arrived)) return true;
-        state.RestGoal = null;
-        return false;
+        (state.RestGoal, state.RestBlocked) = AfterRestStep(step, goal, state.RestSpots, state.RestBlocked);   // #167 D10
+        return state.RestGoal != null;
+    }
+
+    // #167 D10: RestSpots over the ring points on the navmesh, as SpotOutOfReach reads them (each one's nearest mesh point;
+    // with no navmesh, the points, looked up only when the bot stands in reach): the clear spots nearest first, none when
+    // it stands clear.
+    private static List<Vector3> RestSpotsNear(GamePlayer player, int[] rings,
+        List<(GameNPC Npc, Vector3 At, int AggroRange)> adds)
+    {
+        Vector3 here = new(player.X, player.Y, player.Z);
+        return RestSpots(here, RingPoints(here, rings, SpotDirections).Select(p => OnMesh(player, p))
+            .Where(p => p.HasValue).Select(p => p.Value), adds);
     }
 
     // #167 C2: losing to two (BreaksOff), the bot stops its fight, bars the camp and the names (BrokeOffFrom), sprints
@@ -4416,8 +4458,12 @@ public static class PlayerBotDriver
             player.Sit(true);
             state.LifeRests++;                                                             // FIGHT and DEATH rests=
             if (player.IsSitting)                                                          // REST sec= (#167), if it sat,
-                (state.SitSince, state.SitHealth, state.SitMana) =                         //   and hp= and mp=
-                    (now, player.HealthPercent, PowerPercent(player.MaxMana, player.ManaPercent));
+            {                                                                              //   and hp= and mp=; #167 D10:
+                (state.SitSince, state.SitHealth, state.SitMana) =                         //   blocked= and inReach=, by the
+                    (now, player.HealthPercent, PowerPercent(player.MaxMana, player.ManaPercent));   //   reaches its rest
+                (state.SitBlocked, state.SitInReach) =                                     //   check read (RestReach)
+                    (state.RestBlocked, InAddReach(new Vector3(player.X, player.Y, player.Z), state.RestReach));
+            }
         }
     }
 
@@ -4439,7 +4485,7 @@ public static class PlayerBotDriver
         if (state.SitSince == 0) return;
         if (Log.IsInfoEnabled)
             Log.Info(PlayerBotDriverReport.FormatRest(player.Name, player.Level, (now - state.SitSince) / 1000, why,
-                state.SitHealth, state.SitMana, state.RestRespawns));
+                state.SitHealth, state.SitMana, state.RestRespawns, state.SitBlocked, state.SitInReach));
         state.SitSince = 0;
     }
 

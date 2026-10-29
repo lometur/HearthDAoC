@@ -117,7 +117,8 @@ Each bot thinks every 250 ms, a thin copy of the `/bot` pilot's think:
 - A monster within 2,000 units that has the bot as its target counts as an attacker before its first hit, so the bot
   stands up and fights it first. Before it sits, a bot within reach of an aggressive monster from its last search,
   or of the spawn spot of one of its last 3 kills in the last 150 s (where that monster respawns, 80 s after the kill
-  in most of the world), walks to the nearest spot out of that reach, 1,200 units away at most.
+  in most of the world), walks to the nearest spot out of that reach, 1,200 units away at most. A walk there that is
+  blocked takes the next nearest such spot at once, 3 walks in all; then it sits where it is.
 - Losing, it breaks off: below 40% health with 2 or more monsters on it, or with 1 still on it after a kill in a
   fight that had 2 or more on it, within 3 s of that kill or in the whole fight it opens next. One monster breaks it
   off too when it is one the bot avoids (unless it was sent to a camp of them), or when the bot is a caster and its
@@ -412,8 +413,10 @@ All start `PLAYER_BOT_`:
   while the release's immunity lasted (the step out and the walk out);
 - `REST`: one per rest, when the bot stands: `sec=`, the seconds it sat, `why=`: `recovered`, `hit`, `incoming` (a
   monster coming at it), `heal`, `pet` or `buff` (a cast on itself before it had recovered; after, `recovered`),
-  `died`, or `other`; then `hp=` and `mp=`, its health and power when it sat (`mp=100` with no power pool), and
-  `respawn=`, the spawn spots of its recent kills its rest spot was chosen against;
+  `died`, or `other`; then `hp=` and `mp=`, its health and power when it sat (`mp=100` with no power pool),
+  `respawn=`, the spawn spots of its recent kills its rest spot was chosen against, `blocked=`, its walks to a rest spot
+  that were blocked before it sat (3 at most), and `inReach=` (1: it sat within an aggressive monster's reach, or a
+  recent kill's spawn spot's, as it read them before the walk);
 - `FLOOR_STEP`: a step onto the nearest floor, with where from and to and why;
 - `REPLAN`: a stalled walk planned again, with where, the goal, the count in that walk and the stall's first step;
 - `ERRAND`: the quest bot's steps;

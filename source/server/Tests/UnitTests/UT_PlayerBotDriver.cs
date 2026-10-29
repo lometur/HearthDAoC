@@ -669,6 +669,52 @@ public sealed class UT_PlayerBotDriver
         Assert.That(PlayerBotDriver.RestSpot(here, [new Vector3(600, 0, 0)], adds), Is.EqualTo(here));
     }
 
+    // #167 D10: the rest walk's spots on the same data (RestSpots): ClearSpots' order, the first RestSpot's; none from a
+    // spot out of every reach, where RestSpot gives here. ClearSpotNear's single spot (SpotOutOfReach) is unchanged.
+    [Test]
+    public void The_rest_walks_spots_are_the_clear_spots_nearest_first_the_first_the_rest_spot()
+    {
+        var adds = new List<(string, Vector3, int)> { ("a", new(0, 0, 0), 500), ("b", new(1_200, 0, 0), 500) };
+        Vector3 here = new(100, 0, 0);
+        Vector3[] candidates = [new(600, 0, 0), new(100, -1_500, 0), new(-900, 0, 0), new(100, 900, 0)];
+        List<Vector3> spots = PlayerBotDriver.RestSpots(here, candidates, adds);
+        Assert.That(spots, Is.EqualTo(PlayerBotDriver.ClearSpots(here, candidates, adds)));
+        Assert.That(spots[0], Is.EqualTo(PlayerBotDriver.RestSpot(here, candidates, adds)).And.EqualTo(new Vector3(100, 900, 0)));
+        Assert.That(PlayerBotDriver.RestSpots(new Vector3(100, 2_000, 0), candidates, adds), Is.Empty, "it stands clear");
+    }
+
+    // #167 D10: a blocked rest walk takes the next clear spot (RestGoalAt), RestSpotTries in all, then the bot sits where
+    // it is. BLOCKED walk=rest went from 3 to 36 lines in st-deathsC, each "no complete walkable path" at once, and the bot
+    // sat inside the reach it was leaving: a monster ended 5 of the 34 next rests (1% overall), and all 4 residual respawn
+    // stands and a death came after one.
+    [Test]
+    public void A_blocked_rest_walk_takes_the_next_clear_spot()
+    {
+        Vector3[] clear = [new(600, 0, 0), new(0, 600, 0), new(-600, 0, 0), new(0, -600, 0)];
+        Assert.That(Enumerable.Range(0, 4).Select(blocked => PlayerBotDriver.RestGoalAt(clear, blocked, 3)),
+            Is.EqualTo(new Vector3?[] { new(600, 0, 0), new(0, 600, 0), new(-600, 0, 0), null }), "3 tries, then it sits");
+        Assert.That(PlayerBotDriver.RestGoalAt([], 0, 3), Is.Null);
+        Assert.That(PlayerBotDriver.RestSpotTries, Is.EqualTo(3));
+    }
+
+    // #167 D10: the rest walk's goal after a step (WalksToRestSpot): blocked, the next spot and one block more; arrived,
+    // none (it sits there); walking or waiting, the same.
+    [Test]
+    public void The_rest_walk_goes_on_to_the_next_spot_after_a_block()
+    {
+        Vector3[] clear = [new(600, 0, 0), new(0, 600, 0), new(-600, 0, 0), new(0, -600, 0)];
+        Assert.That(PlayerBotDriver.AfterRestStep(PlayerBotStepResult.Blocked, clear[0], clear, 0),
+            Is.EqualTo(((Vector3?)new Vector3(0, 600, 0), 1)));
+        Assert.That(PlayerBotDriver.AfterRestStep(PlayerBotStepResult.Blocked, clear[2], clear, 2),
+            Is.EqualTo(((Vector3?)null, 3)), "the third block: it sits");
+        Assert.That(PlayerBotDriver.AfterRestStep(PlayerBotStepResult.Arrived, clear[1], clear, 1),
+            Is.EqualTo(((Vector3?)null, 1)));
+        Assert.That(PlayerBotDriver.AfterRestStep(PlayerBotStepResult.Moving, clear[1], clear, 1),
+            Is.EqualTo(((Vector3?)clear[1], 1)));
+        Assert.That(PlayerBotDriver.AfterRestStep(PlayerBotStepResult.Waiting, clear[0], clear, 0),
+            Is.EqualTo(((Vector3?)clear[0], 0)));
+    }
+
     // The candidates: directions points on each ring round the bot, at its height, the first along +X.
     [Test]
     public void The_candidate_spots_lie_on_rings_round_the_bot()
@@ -4545,12 +4591,16 @@ public sealed class UT_PlayerBotDriver
 
     // #167: one PLAYER_BOT_REST line per rest when the bot stands: the seconds it sat and why it stood (recovered, hit,
     // heal, pet or buff: a cast on itself, died, other); then (the next leg's) its health and power when it sat, hp= and
-    // mp=, and respawn=, the killed monsters' spawn spots its rest spot was read against (RespawnSpots, C7).
+    // mp=, and respawn=, the killed monsters' spawn spots its rest spot was read against (RespawnSpots, C7); then (#167
+    // D10) blocked=, its rest walks blocked before it sat (RestGoalAt's tries), and inReach=, 1 when it sat in a potential
+    // add's reach as the rest check read them (RestReach).
     [Test]
     public void RestFormat()
     {
-        Assert.That(PlayerBotDriverReport.FormatRest("Pbotaaaac", 40, 37, "recovered", 54, 12, 2),
-            Is.EqualTo("PLAYER_BOT_REST bot=Pbotaaaac level=40 sec=37 why=recovered hp=54 mp=12 respawn=2"));
+        Assert.That(PlayerBotDriverReport.FormatRest("Pbotaaaac", 40, 37, "recovered", 54, 12, 2, 0, false),
+            Is.EqualTo("PLAYER_BOT_REST bot=Pbotaaaac level=40 sec=37 why=recovered hp=54 mp=12 respawn=2 blocked=0 inReach=0"));
+        Assert.That(PlayerBotDriverReport.FormatRest("Pbotaaaac", 40, 12, "hit", 70, 40, 0, 3, true),
+            Is.EqualTo("PLAYER_BOT_REST bot=Pbotaaaac level=40 sec=12 why=hit hp=70 mp=40 respawn=0 blocked=3 inReach=1"));
     }
 
     [Test]

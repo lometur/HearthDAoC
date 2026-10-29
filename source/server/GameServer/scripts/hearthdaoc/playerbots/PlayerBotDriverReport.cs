@@ -205,10 +205,14 @@ public static class PlayerBotDriverReport
     private static string FormatKiteNone((int Range, int Clear, int Mesh, int Fit) k) => $"{k.Range}:{k.Clear}:{k.Mesh}:{k.Fit}";
 
     /// <summary>PLAYER_BOT_REST (#167), when a rest ends: the seconds the bot sat and why it stood (PlayerBotDriver.EndRest);
-    /// then its health and power when it sat, and the killed monsters' spawn spots its rest spot was read against (C7).</summary>
-    public static string FormatRest(string bot, int level, long seconds, string why, int hp, int mp, int respawn) =>
+    /// then its health and power when it sat, and the killed monsters' spawn spots its rest spot was read against (C7);
+    /// then (#167 D10) its rest walks blocked before it sat (PlayerBotDriver.RestGoalAt's tries), and inReach=1 when it
+    /// sat within a potential add's reach as its rest check read them.</summary>
+    public static string FormatRest(string bot, int level, long seconds, string why, int hp, int mp, int respawn,
+        int blocked, bool inReach) =>
         string.Create(CultureInfo.InvariantCulture,
-            $"PLAYER_BOT_REST bot={bot} level={level} sec={seconds} why={why} hp={hp} mp={mp} respawn={respawn}");
+            $"PLAYER_BOT_REST bot={bot} level={level} sec={seconds} why={why} hp={hp} mp={mp} respawn={respawn} " +
+            $"blocked={blocked} inReach={(inReach ? 1 : 0)}");
 
     /// <summary>PLAYER_BOT_BACK (#167 C1), at the first fight after a release (PlayerBotDriver.ReportBack): the seconds
     /// since the release, those stepping out of reach, held (the back-off, the illness, the replan's hold) and walking
