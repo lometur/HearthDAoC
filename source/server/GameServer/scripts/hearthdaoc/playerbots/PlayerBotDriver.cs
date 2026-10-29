@@ -154,6 +154,10 @@ public sealed class PlayerBotState
     public int ControlTries;                                     //   the point it steps back to (KiteStep)
     public Vector3? KiteGoal;
     public long NextKiteTick;
+    public Dictionary<Spell, DOL.GS.Spells.SpellHandler> NukeHandlers = new();   // #167 E C1: each nuke's own handler
+    public bool HasStun, HasRoot;                                // #167 E C1: a stun or a root among its controls (DotFits,
+                                                                 //   KeepsRootCastable), at NukesLevel
+    public int FightDots;                                        // #167 E C1: FIGHT and DEATH dots=, its DoT casts
     public long NextAnimistStandTick;                            // #167 F10b: after a blocked walk to its stand
     public long TurretWaitSince;                                 // #167 E CY3: a pull held for a turret it can't plant yet
     public int FightControls, FightKites;                        // #167 FIGHT ctl= and kites=
@@ -760,6 +764,7 @@ public static class PlayerBotDriver
             state.NextSpellChoiceTick = 0;                                              // the next due think chooses
             state.NextCombatChoiceTick = now + Math.Max(900, state.Spell.CastTime + 250);
             state.FightCasts++;
+            if (IsDamageOverTime(state.Spell)) state.FightDots++;                       // #167 E C1 dots=
             state.FightQuickcast |= quickcasting;
             state.Activity = PlayerBotActivity.Casting;
         }
@@ -1353,7 +1358,7 @@ public static class PlayerBotDriver
     {
         KnowSpells(state, player);
         (Spell nuke, _) = ChooseNuke(state.Nukes, spell => player.GetSkillDisabledDuration(spell) <= 0 &&
-            HasPowerFor(player.MaxMana, player.Mana, spell.Power), false);
+            HasPowerFor(player.MaxMana, player.Mana, spell.Power), false, null);
         return PullStopDistance(nuke, player.ManaPercent, player.attackComponent.AttackRange,
             nuke == null ? 0 : player.castingComponent.CalculateSpellRange(nuke));
     }
@@ -1726,6 +1731,7 @@ public static class PlayerBotDriver
         state.FightAdds = state.Swings = state.NotVisible = state.FightCasts = state.FightHeals = 0;
         state.FightPetCasts = state.FightWaits = state.FightControls = state.FightKites = state.FightCtlBroken = 0;
         state.FightKiteNone = default;                                              // #167 D8 kiteNone=
+        state.FightDots = 0;                                                        // #167 E C1 dots=
         state.TargetHeldBreaks = false;                                             // #167 C3
         state.FightAddControls = 0;                                                 // #167 C4
         (state.FightAdd, state.EngageDistance) = ((-1, -1), distance);              // #167 FIGHT addAt=, engageDist=
@@ -2518,7 +2524,10 @@ public static class PlayerBotDriver
 
     /// <summary>The nukes the target still needs (#167 C11), from what the fight's casts took off it so far (its health
     /// at the fight's first think, startHealth, less now, over nukesCast): ceil(health / ((startHealth - health) /
-    /// nukesCast)); nothing measured (no cast, or no health off it yet), int.MaxValue.</summary>
+    /// nukesCast)); nothing measured (no cast, or no health off it yet), int.MaxValue. #167 E C1: a DoT counts as one
+    /// cast. While its ticks are due it under-reads the cast (more nukes needed: the safe side); once they have landed it
+    /// over-reads the next direct nuke, as a bolt does (on the casters design's slot model, Mentalist slots with 1 needed
+    /// but 2 or more direct nukes short: 0 of 134 before, 5 of 80 with the DoTs; the review's r3).</summary>
     public static int NukesNeeded(int startHealth, int health, int nukesCast)
     {
         int taken = startHealth - health;
@@ -3047,17 +3056,40 @@ public static class PlayerBotDriver
     /// the range filter (checked at cast time), less the ranks a GameBot never casts (BotBrain.IsOutclassedDamageSpell,
     /// BotBrain.cs:3413): a lower rank of a kind it knows higher (Fungal Pin once it has Fungal Thistle), or one under half
     /// the level of its best. payload resolves a bomber's payload (NoDamageBomber); it has no default (the review of
-    /// 451121c: a caller that left it out brought back the root bomber as a nuke, and no test failed).</summary>
+    /// 451121c: a caller that left it out brought back the root bomber as a nuke, and no test failed). #167 E C1: perLine
+    /// (a caster's; no default) keeps a rank outclassed only by one of another line (OutclassedInLine): Greater
+    /// Conflagration 37 at Fire 41 beside Ice Blast (Potent) 41 at Cold 6, the score (NukeValue) choosing between them.
+    /// Bolts of two lines have two recast timers (SharedTimerGroup), so a Wizard, Eldritch or Runemaster with a bolt in
+    /// each now casts both in 20 s.</summary>
     public static List<(Spell Spell, SpellLine Line)> DamageSpells(IEnumerable<(Spell Spell, SpellLine Line)> usable, int level,
-        Func<int, Spell> payload)
+        Func<int, Spell> payload, bool perLine)
     {
         List<(Spell Spell, SpellLine Line)> all = usable.Where(pair => !NoDamageBomber(pair.Spell, payload)).ToList(), nukes = new();
         List<Spell> known = all.ConvertAll(pair => pair.Spell);
         foreach ((Spell spell, SpellLine line) in all)
             if (spell.IsHarmful && spell.Damage > 0 && spell.Range > 0 && !spell.NeedInstrument && spell.Level <= level &&
-                !BotBrain.IsOutclassedDamageSpell(spell, known, level))
+                !(perLine ? OutclassedInLine(spell, line, all, level) : BotBrain.IsOutclassedDamageSpell(spell, known, level)))
                 nukes.Add((spell, line));
         return nukes;
+    }
+
+    /// <summary>BotBrain.IsOutclassedDamageSpell (BotBrain.cs:3413-3429) with its same-kind rule within the spell's own line
+    /// (#167 E C1): a higher rank of the same type, target, area, instant-ness and PBAoE in that line outclasses it; one
+    /// under half the level of the best damage spell in any line, as before.</summary>
+    public static bool OutclassedInLine(Spell spell, SpellLine line, IEnumerable<(Spell Spell, SpellLine Line)> known, int level)
+    {
+        int best = 0;
+        foreach ((Spell other, SpellLine otherLine) in known)
+        {
+            if (other == null || other == spell || !other.IsHarmful || other.Level > level || !BotCasterPriority.IsDamage(other))
+                continue;
+            best = Math.Max(best, other.Level);
+            if (otherLine?.KeyName == line?.KeyName && other.Level > spell.Level && other.SpellType == spell.SpellType &&
+                other.Target == spell.Target && (other.Radius > 0) == (spell.Radius > 0) &&
+                (other.CastTime <= 0) == (spell.CastTime <= 0) && other.IsPBAoE == spell.IsPBAoE)
+                return true;
+        }
+        return best - spell.Level >= 5 && spell.Level * 2 < best;
     }
 
     // #167 F10b: an Animist's bomber does only its payload (BomberBrain.cs:32-34, its SubSpellID); the bomber's own
@@ -3117,20 +3149,26 @@ public static class PlayerBotDriver
     /// a Shaman's Fungal Thistle, a Wizard's Flame Streak), else the best ready single-target spell (Better), else an area
     /// one, but never one while an add stands in its radius (it would pull it). Ready: off its recast and paid for. None
     /// ready: none, and the bot swings until one is (the old choice kept the best spell, and its cast failed on the
-    /// recast).</summary>
+    /// recast). #167 E C1: with a score (value: a caster's NukeValues; no default), the bolt and the single-target spells
+    /// by it, the highest first (an exact tie: Better); the area ones still last, by Better. Without one (null: every other
+    /// role, the pull's stop, TRAIN's spell=), as before.</summary>
     public static (Spell, SpellLine) ChooseNuke(IEnumerable<(Spell Spell, SpellLine Line)> spells, Func<Spell, bool> ready,
-        bool addInRadius)
+        bool addInRadius, Func<Spell, double> value)
     {
         Spell best = null;
         SpellLine bestLine = null;
         int bestRank = int.MaxValue;
+        double bestValue = double.NegativeInfinity;
         foreach ((Spell spell, SpellLine line) in spells)
         {
             bool area = spell.Radius > 0;
             if (area && addInRadius || !ready(spell)) continue;
-            int rank = spell.SpellType is eSpellType.Bolt ? 0 : area ? 2 : 1;
-            if (best == null || rank < bestRank || rank == bestRank && Better(spell, best))
-                (best, bestLine, bestRank) = (spell, line, rank);
+            bool scored = value != null && !area;
+            int rank = area ? 2 : scored ? 1 : spell.SpellType is eSpellType.Bolt ? 0 : 1;
+            double v = scored ? value(spell) : 0;
+            if (best == null || rank < bestRank ||
+                rank == bestRank && (scored ? v > bestValue || v == bestValue && Better(spell, best) : Better(spell, best)))
+                (best, bestLine, bestRank, bestValue) = (spell, line, rank, v);
         }
         return (best, bestLine);
     }
@@ -3148,24 +3186,217 @@ public static class PlayerBotDriver
     private static bool IsDamageOverTime(Spell spell) =>
         spell.SpellType is eSpellType.DamageOverTime or eSpellType.DamageOverTimeNoVariance;
 
-    // PLAYER_BOT_TRAIN's spell=: the nuke it opens a fight with, everything ready and no add.
+    /// <summary>Engage's cast cycle (#167 E C1): the next cast choice comes Math.Max(900, cast + 250) ms after a cast
+    /// (Engage's NextCombatChoiceTick).</summary>
+    public static int CastCycleMs(int castMs) => Math.Max(900, castMs + 250);
+
+    /// <summary>The expected damage of one landed hit or tick (#167 E C1), from the server's own numbers: the handler's base
+    /// (damageBase: CalculateDamageBase, the spell's damage by stat and item spec, SpellHandler.cs:3002-3114), the mean of
+    /// its variance (CalculateDamageVariance's min and max: the spec's lower bound and the level offset, none for a DoT,
+    /// SpellHandler.cs:2912-2996), less the target's resist to its damage type (GetResist: an NPC's racial resist too,
+    /// :3221-3248). A bolt resists half and takes the other half x 2.5 L over the target's armour (boltArmorFactor,
+    /// BoltSpellHandler.cs:58-85; a block isn't counted).</summary>
+    public static double ExpectedHit(double damageBase, double varianceMin, double varianceMax, int resistPercent, bool bolt,
+        double boltArmorFactor)
+    {
+        double hit = damageBase * (varianceMin + varianceMax) / 2;
+        double kept = 1 - resistPercent * 0.01;
+        return bolt ? hit * (0.5 * kept + 0.5 * boltArmorFactor) : hit * kept;
+    }
+
+    /// <summary>A DoT's ticks (#167 E C1): one at its start (DamageOverTimeECSEffect.cs:9-18), then one every frequency
+    /// while before its expiry, which the pulse loop reads first (EffectService.cs:104-117): ceil(duration / frequency).
+    /// Mind Annihilation (24 s, 4 s) 6; Illusory Excrutiation (20 s, 5 s) 4.</summary>
+    public static int DotTicks(int durationMs, int frequencyMs) =>
+        frequencyMs <= 0 ? 1 : Math.Max(1, (durationMs + frequencyMs - 1) / frequencyMs);
+
+    /// <summary>The ticks a DoT lands before the target dies (#167 E C1): the first at once, one more each frequency of the
+    /// fight's horizon (horizonMs, KillHorizonMs), at most its ticks.</summary>
+    public static int RealizedTicks(int ticks, int frequencyMs, double horizonMs) =>
+        frequencyMs <= 0 ? Math.Min(ticks, 1) : (int)Math.Min(ticks, 1 + Math.Floor(Math.Max(0, horizonMs) / frequencyMs));
+
+    /// <summary>The fight's horizon for a new DoT (#167 E C1): the target's health (hit points) less its own DoTs' ticks
+    /// still due (pendingDot, DotTicksLeft), at the bot's best sustained direct damage per millisecond (bestDirectPerMs:
+    /// NukeValue's best non-bolt; none, no limit).</summary>
+    public static double KillHorizonMs(double health, double pendingDot, double bestDirectPerMs) =>
+        bestDirectPerMs <= 0 ? double.PositiveInfinity : Math.Max(0, health - pendingDot) / bestDirectPerMs;
+
+    /// <summary>The ticks a DoT on the target still lands (#167 E C1): one at its next tick (nextInMs) and each frequency
+    /// after, while before its expiry (expireInMs), the expiry read first (EffectService.cs:104-117).</summary>
+    public static int DotTicksLeft(long expireInMs, long nextInMs, int frequencyMs) =>
+        frequencyMs <= 0 || nextInMs >= expireInMs ? 0
+            : (int)((expireInMs - Math.Max(0, nextInMs) + frequencyMs - 1) / frequencyMs);
+
+    /// <summary>A nuke's expected damage per millisecond of its cast cycle (#167 E C1): the hit (ExpectedHit) times its land
+    /// chance (hitChancePercent: CalculateToHitChance; a resist takes the whole cast, SpellHandler.cs:2482-2500) times its
+    /// ticks (1 for a direct hit; a DoT's RealizedTicks), over CastCycleMs. Per cast-second, not per power: per power left
+    /// 86 of 323 Sorcerer wins unfinished in their own cast slots (the casters design's s6).</summary>
+    public static double NukeValue(double expectedHit, double hitChancePercent, int ticks, int castMs) =>
+        expectedHit * Math.Clamp(hitChancePercent, 0, 100) * 0.01 * ticks / CastCycleMs(castMs);
+
+    /// <summary>Whether a caster casts a DoT at its target (#167 E C1): its ticks are damage, which ends a root and a mez but
+    /// not a stun (GameLiving.HandleCrowdControlOnAttacked, GameLiving.cs:1749-1830): so a stun caster always, a root or mez
+    /// caster only where a control on the target isn't worth it (controlWorth: ControlWorth).</summary>
+    public static bool DotFits(bool hasStun, bool controlWorth) => hasStun || !controlWorth;
+
+    /// <summary>Whether a control holds the target while the bot's own DoT is on it (#167 E C1): a stun does; a root or a mez
+    /// ends at the next tick (GameLiving.cs:1749-1830).</summary>
+    public static bool HoldSurvivesDot(Spell control, bool ownDotOn) => !ownDotOn || control.SpellType is eSpellType.Stun;
+
+    /// <summary>Whether the score's nuke keeps a root caster's root castable (#167 E C1): the server lets no root replace a
+    /// damage-and-snare slow (RootTakes), so a caster with a root (rootWanted; the review: at any con, so no root caster is
+    /// newly moved onto one) isn't moved onto one the old order (Better's, oldChoice) didn't choose. Where the old order
+    /// chose one, the trade stays: forbidding it doubles a YELLOW kill's time and adds 75% power (the design's s11).</summary>
+    public static bool KeepsRootCastable(Spell scored, Spell oldChoice, bool rootWanted) =>
+        !rootWanted || scored?.SpellType is not eSpellType.DamageSpeedDecrease ||
+        oldChoice?.SpellType is eSpellType.DamageSpeedDecrease;
+
+    /// <summary>Nuke's ready test (#167 E C1, the review's seam): off its recast (offRecast) and paid for (paid,
+    /// HasPowerFor); with a score (scored: a caster's at a monster) a DoT (dot) only where it fits (dotFits, DotFits) and no
+    /// DoT it conflicts with is on the target (dotConflict, DotConflicts: its cast would only replace it). Unscored (every
+    /// other role), as before.</summary>
+    public static bool NukeReady(bool offRecast, bool paid, bool scored, bool dot, bool dotFits, bool dotConflict) =>
+        offRecast && paid && (!scored || !dot || dotFits && !dotConflict);
+
+    /// <summary>A caster's nuke by its score (#167 E C1, the review's seam): ChooseNuke with the score (value: NukeValues),
+    /// then, where a root may be wanted (rootWanted), not a damage-and-snare nuke the old order (no score) didn't choose
+    /// (KeepsRootCastable): the score's choice among the rest. No score (value null): ChooseNuke as before.</summary>
+    public static (Spell, SpellLine) ScoredNuke(IEnumerable<(Spell Spell, SpellLine Line)> spells, Func<Spell, bool> ready,
+        bool addInRadius, Func<Spell, double> value, bool rootWanted)
+    {
+        (Spell spell, SpellLine line) = ChooseNuke(spells, ready, addInRadius, value);
+        if (value != null && !KeepsRootCastable(spell, ChooseNuke(spells, ready, addInRadius, null).Item1, rootWanted))
+            (spell, line) = ChooseNuke(spells, s => ready(s) && s.SpellType is not eSpellType.DamageSpeedDecrease, addInRadius,
+                value);
+        return (spell, line);
+    }
+
+    // PLAYER_BOT_TRAIN's spell=: the nuke it opens a fight with, everything ready and no add. #167 E C1: a caster's
+    // damage spells by its own lines, in the old order (no score: there is no monster to score them at).
     public static string BestDamageSpellName(GamePlayer player) =>
-        ChooseNuke(DamageSpells(UsableSpells(player), player.Level, SkillBase.GetSpellByID), _ => true, false).Item1 is Spell s
+        ChooseNuke(DamageSpells(UsableSpells(player), player.Level, SkillBase.GetSpellByID,
+                player.CharacterClass is { } c && RoleOf(c.ID) == PlayerBotRole.Caster), _ => true, false, null).Item1 is Spell s
             ? FormattableString.Invariant($"{s.Name.Replace(' ', '_')}:{s.Level}") : "-";
 
     // #167 F9: the nuke at a cast choice, from the damage spells cached per level. An add in an area spell's radius is
     // looked for only when an area spell would be chosen: any other monster (IsExperienceTarget) within it of the target,
-    // but one already on the bot.
+    // but one already on the bot. #167 E C1: a caster's single-target nukes at a monster by their expected damage per
+    // cast-second (NukeValues); a DoT only where it fits (DotFits) and none it conflicts with is on the target
+    // (DotConflicts, read once before the passes); a caster with a root not moved onto a damage-and-snare nuke the old
+    // order didn't choose (ScoredNuke's KeepsRootCastable; the review: rootWanted at any con). NukeReady and ScoredNuke
+    // are the tested seams.
     private static (Spell, SpellLine) Nuke(PlayerBotState state, GamePlayer player, GameLiving target)
     {
         KnowSpells(state, player);
-        bool Ready(Spell spell) => player.GetSkillDisabledDuration(spell) <= 0 && HasPowerFor(player.MaxMana, player.Mana, spell.Power);
-        (Spell spell, SpellLine line) = ChooseNuke(state.Nukes, Ready, false);
+        bool scores = target is GameNPC && RoleOf(player.CharacterClass.ID) == PlayerBotRole.Caster;
+        bool dotFits = scores && DotFits(state.HasStun, ControlWorth(ConLevels.GetConColor(player.GetConLevel(target)),
+            player.HealthPercent, LiveHitters(player)));
+        Dictionary<Spell, double> values = scores ? NukeValues(state, player, target, GameLoop.GameLoopTime) : null;
+        HashSet<Spell> conflicts = scores && dotFits ? DotConflicts(state, target) : null;
+        bool Ready(Spell spell) => NukeReady(player.GetSkillDisabledDuration(spell) <= 0,
+            HasPowerFor(player.MaxMana, player.Mana, spell.Power), scores, IsDamageOverTime(spell), dotFits,
+            conflicts?.Contains(spell) == true);
+        Func<Spell, double> value = values == null ? null : spell => values.TryGetValue(spell, out double v) ? v : 0;
+        bool rootWanted = scores && state.HasRoot;
+        (Spell spell, SpellLine line) = ScoredNuke(state.Nukes, Ready, false, value, rootWanted);
         if (spell == null || spell.Radius <= 0 || target == null) return (spell, line);
         foreach (GameNPC npc in target.GetNPCsInRadius((ushort)spell.Radius))
             if (npc != target && npc.IsAlive && IsExperienceTarget(npc) && !(npc.IsAttacking && npc.TargetObject == player))
-                return ChooseNuke(state.Nukes, Ready, true);
+                return ScoredNuke(state.Nukes, Ready, true, value, rootWanted);
         return (spell, line);
+    }
+
+    // #167 E C1: each single-target nuke's expected damage per cast-second at the target (NukeValue), from its own handler
+    // (KnowSpells' NukeHandlers): the direct ones first, whose best sustained one (no bolt: its 20-s recast) sets the
+    // fight's horizon (KillHorizonMs) for the DoTs' ticks (RealizedTicks), less the ticks the bot's own DoTs still owe
+    // (PendingDotDamage). One pass per cast choice (at most one a second); the dictionary is reused. CalculateToHitChance
+    // copies the bot's effect list once per nuke: about 10 copies a cast choice, no world scan.
+    [ThreadStatic] private static Dictionary<Spell, double> _nukeValues;
+    private static Dictionary<Spell, double> NukeValues(PlayerBotState state, GamePlayer player, GameLiving target, long now)
+    {
+        Dictionary<Spell, double> values = _nukeValues ??= new();
+        values.Clear();
+        double bestDirect = 0;
+        foreach ((Spell spell, _) in state.Nukes)
+        {
+            if (spell.Radius > 0 || IsDamageOverTime(spell) ||
+                !state.NukeHandlers.TryGetValue(spell, out DOL.GS.Spells.SpellHandler handler))
+                continue;
+            double perMs = NukeValue(ExpectedHitOf(handler, spell, player, target), handler.CalculateToHitChance(target), 1,
+                spell.CastTime);
+            values[spell] = perMs;
+            if (spell.SpellType is not eSpellType.Bolt) bestDirect = Math.Max(bestDirect, perMs);
+        }
+        double horizon = double.NaN;
+        foreach ((Spell spell, _) in state.Nukes)
+        {
+            if (spell.Radius > 0 || !IsDamageOverTime(spell) ||
+                !state.NukeHandlers.TryGetValue(spell, out DOL.GS.Spells.SpellHandler handler))
+                continue;
+            if (double.IsNaN(horizon))                                                  // read once, with a DoT only
+                horizon = KillHorizonMs(target.Health, PendingDotDamage(state, player, target, now), bestDirect);
+            values[spell] = NukeValue(ExpectedHitOf(handler, spell, player, target), handler.CalculateToHitChance(target),
+                RealizedTicks(DotTicks(spell.Duration, spell.Frequency), spell.Frequency, horizon), spell.CastTime);
+        }
+        return values;
+    }
+
+    // #167 E C1: ExpectedHit from the nuke's handler (CalculateDamageBase, CalculateDamageVariance), the target's resist to
+    // its damage type (GetResist) and a bolt's armour factor (2.5 x the bot's level over the target's armour, as
+    // BoltSpellHandler.ModifyDamageWithTargetResist reads it; an NPC has no hit location).
+    private static double ExpectedHitOf(DOL.GS.Spells.SpellHandler handler, Spell spell, GamePlayer player, GameLiving target)
+    {
+        handler.CalculateDamageVariance(target, out double min, out double max);
+        bool bolt = spell.SpellType is eSpellType.Bolt;
+        return ExpectedHit(handler.CalculateDamageBase(target), min, max, target.GetResist(spell.DamageType), bolt,
+            bolt ? player.Level * 2.5 / Math.Max(1, AttackComponent.CalculateTargetArmor(target, eArmorSlot.NOTSET, out _, out _))
+                : 0);
+    }
+
+    // #167 E C1: the damage the bot's own DoTs on the target still owe (DotTicksLeft at each one's expected tick; a landed
+    // DoT rolls no resist again).
+    private static double PendingDotDamage(PlayerBotState state, GamePlayer player, GameLiving target, long now)
+    {
+        double pending = 0;
+        foreach (ECSGameSpellEffect effect in target.effectListComponent.GetSpellEffects(eEffect.DamageOverTime))
+            if (effect.SpellHandler?.Caster == player && effect.SpellHandler.Spell is Spell spell &&
+                state.NukeHandlers.TryGetValue(spell, out DOL.GS.Spells.SpellHandler handler))
+                pending += DotTicksLeft(effect.ExpireTick - now, effect.NextTick - now, spell.Frequency) *
+                    ExpectedHitOf(handler, spell, player, target);
+        return pending;
+    }
+
+    // #167 E C1: the bot's DoTs that conflict with one on the target (the server's own test,
+    // DoTSpellHandler.HasConflictingEffectWith, DoTSpellHandler.cs:43-57: the same effect group, or the same type and
+    // frequency; a Mentalist's Mana and Mentalism DoTs, 4 s and 5 s, stack): a cast would only replace it. The target's
+    // effect list read once per cast choice, before ScoredNuke's passes (the review); the set is reused.
+    [ThreadStatic] private static HashSet<Spell> _dotConflicts;
+    private static HashSet<Spell> DotConflicts(PlayerBotState state, GameLiving target)
+    {
+        HashSet<Spell> conflicts = _dotConflicts ??= new();
+        conflicts.Clear();
+        List<ECSGameSpellEffect> dots = target.effectListComponent.GetSpellEffects(eEffect.DamageOverTime);
+        if (dots.Count == 0) return conflicts;
+        foreach ((Spell spell, _) in state.Nukes)
+        {
+            if (!IsDamageOverTime(spell) || !state.NukeHandlers.TryGetValue(spell, out DOL.GS.Spells.SpellHandler handler))
+                continue;
+            foreach (ECSGameSpellEffect effect in dots)
+                if (effect.SpellHandler != null && handler.HasConflictingEffectWith(effect.SpellHandler))
+                {
+                    conflicts.Add(spell);
+                    break;
+                }
+        }
+        return conflicts;
+    }
+
+    // #167 E C1: a DoT of the bot's own on the target (HoldSurvivesDot).
+    private static bool OwnDotOn(GamePlayer player, GameLiving target)
+    {
+        foreach (ECSGameSpellEffect effect in target.effectListComponent.GetSpellEffects(eEffect.DamageOverTime))
+            if (effect.SpellHandler?.Caster == player) return true;
+        return false;
     }
 
     // APP:694-710 without the quickbar filter.
@@ -3861,7 +4092,8 @@ public static class PlayerBotDriver
     // uninterruptible control at once, else with Quickcast on, turned on first (the next think casts). Any control the
     // chaser takes (Takes), a root too: the bot runs on out of a rooted one's reach (the add step's ControlKeepsAddOff is
     // for a bot that stays). MaxControlTries casts that held nothing and it stops trying on that chaser (AddControlTries,
-    // the add step's). True when it acted: it stands for the cast, then runs on (BreaksOffNow).
+    // the add step's). True when it acted: it stands for the cast, then runs on (BreaksOffNow). #167 E C1: no root or mez
+    // on a chaser its own DoT ticks on (HoldSurvivesDot: the next tick would free it).
     private static bool CaughtControl(PlayerBotState state, GamePlayer player, GameNPC chaser, long now)
     {
         if (chaser == null || now < state.NextAddTick) return false;
@@ -3869,10 +4101,11 @@ public static class PlayerBotDriver
         if (state.Controls.Count == 0) return false;
         if (chaser != state.ControlledAdd) (state.ControlledAdd, state.AddControlTries) = (chaser, 0);
         if (state.AddControlTries >= MaxControlTries) return false;
+        bool dotOn = OwnDotOn(player, chaser);                                          // #167 E C1: read once
         (Spell control, SpellLine line) = ChooseControl(state.Controls, spell => player.GetSkillDisabledDuration(spell) <= 0 &&
                 HasPowerFor(player.MaxMana, player.Mana, spell.Power) &&
                 player.IsWithinRadius(chaser, player.castingComponent.CalculateSpellRange(spell)),
-            spell => Takes(player, chaser, spell), forAdd: true,
+            spell => Takes(player, chaser, spell) && HoldSurvivesDot(spell, dotOn), forAdd: true,
             petClass: RoleOf(player.CharacterClass.ID) == PlayerBotRole.Pet);
         if (control == null) return false;
         bool quickcasting = player.effectListComponent.ContainsEffectForEffectType(eEffect.QuickCast);
@@ -4052,7 +4285,8 @@ public static class PlayerBotDriver
             inFight ? state.FightTargetHpAtReach : -1,                                    //   the last think's alive out of
             HealthRate(state.HealthSamples, now, player.HealthPercent), inFight ? state.WouldBreakHp : -1,   //   a fight,
             inFight ? state.FightWalk : state.LastWalk, player.EndurancePercent,          //   and end=; #167 D8
-            inFight ? state.FightKiteNone : null);                                        //   kiteNone=, FIGHT's
+            inFight ? state.FightKiteNone : null,                                         //   kiteNone=, FIGHT's;
+            inFight ? state.FightDots : -1);                                              // #167 E C1 dots=
         string head = $"PLAYER_BOT_DEATH bot={player.Name} level={player.Level} at=({player.X},{player.Y},{player.Z}) " +
                       $"zone={player.CurrentZone?.ID} {fight} attackers={state.Attackers} deathSteps={state.DeathSafetySteps} " +
                       $"aliveSec={(now - state.AliveSince) / 1000} task={state.Task != null}";
@@ -4125,7 +4359,7 @@ public static class PlayerBotDriver
             state.FightAdd.Hp, brokeOff, state.EngageDistance, state.PickCrowd, state.FightHeldMs / 1000, state.FightCtlLanded,
             state.FightCtlFailed, state.FightHpAtReach, state.FightTargetHpAtReach,      // #167 st-deathsD's
             HealthRate(state.HealthSamples, now, player.HealthPercent), state.WouldBreakHp, state.FightWalk,
-            state.FightKiteNone)));                                                     // #167 D8
+            state.FightKiteNone, state.FightDots)));                                    // #167 D8, E C1
     }
 
     // APP:585-624, changed: every 10 s, no inventory count, no saves; after 15 minutes with no progress, back to the
@@ -4309,14 +4543,20 @@ public static class PlayerBotDriver
     // next control due and tries left, one the target takes (Takes) and a mez only as the escape (CasterControlAllowed),
     // in range, ready and paid for, the highest of ChooseControl's target order; none, default. #167 D11: CasterStep and
     // TargetFirst read it through WorthyTargetControl; the break-off's TargetHoldReady reads it as it is (it asks under 40%
-    // health or with the target held, where ControlWorth holds or isn't asked).
+    // health or with the target held, where ControlWorth holds or isn't asked). #167 E C1: no root or mez while its own
+    // DoT ticks on the target (HoldSurvivesDot): the next tick would end it; so neither is a hold ready for the
+    // one-monster break-off (TargetHoldReady) then.
     private static (Spell, SpellLine) TargetControl(PlayerBotState state, GamePlayer player, GameNPC npc, long contact,
-        long now) =>
-        now < state.NextControlTick || state.ControlTries >= MaxControlTries ? default :
-        ChooseControl(state.Controls, spell => player.GetSkillDisabledDuration(spell) <= 0 &&
+        long now)
+    {
+        if (now < state.NextControlTick || state.ControlTries >= MaxControlTries) return default;
+        bool dotOn = OwnDotOn(player, npc);
+        return ChooseControl(state.Controls, spell => player.GetSkillDisabledDuration(spell) <= 0 &&
                 HasPowerFor(player.MaxMana, player.Mana, spell.Power) &&
                 player.IsWithinRadius(npc, player.castingComponent.CalculateSpellRange(spell)),
-            spell => CasterControlAllowed(spell, Takes(player, npc, spell), contact), forAdd: false, petClass: false);
+            spell => CasterControlAllowed(spell, Takes(player, npc, spell), contact) && HoldSurvivesDot(spell, dotOn),
+            forAdd: false, petClass: false);
+    }
 
     // #167 D11: TargetControl when a control on the target is worth it (ControlWorth: its con, the bot's health and the
     // live monsters on it, LiveHitters), else none: CasterStep's control and TargetFirst's, one gate for both.
@@ -4775,14 +5015,24 @@ public static class PlayerBotDriver
     }
 
     // #167 F9, F1, F11: the damage spells, the pet summons a Theurgist casts at its target and the control spells, from one
-    // walk of the usable spells per level and after a training (ObserveXp clears NukesLevel).
+    // walk of the usable spells per level and after a training (ObserveXp clears NukesLevel). #167 E C1: a caster's damage
+    // spells by its own lines (DamageSpells' perLine) and each one's handler (NukeValues reads the server's own numbers
+    // through it; the constructor only stores the caster, spell and line), and whether its controls hold a stun or a root.
     private static void KnowSpells(PlayerBotState state, GamePlayer player)
     {
         if (state.NukesLevel == player.Level) return;
         List<(Spell Spell, SpellLine Line)> usable = UsableSpells(player).ToList();
-        state.Nukes = DamageSpells(usable, player.Level, SkillBase.GetSpellByID);    // #167 F10b: bombers' payloads
+        bool caster = RoleOf(player.CharacterClass.ID) == PlayerBotRole.Caster;
+        state.Nukes = DamageSpells(usable, player.Level, SkillBase.GetSpellByID, perLine: caster);   // #167 F10b: payloads
         state.CombatPets = usable.FindAll(pair => pair.Spell.SpellType is eSpellType.SummonTheurgistPet);
         state.Controls = usable.FindAll(pair => IsControlSpell(pair.Spell) && pair.Spell.Level <= player.Level);   // #167 F11
+        state.NukeHandlers = new();
+        if (caster)
+            foreach ((Spell spell, SpellLine line) in state.Nukes)
+                if (ScriptMgr.CreateSpellHandler(player, spell, line) is DOL.GS.Spells.SpellHandler handler)
+                    state.NukeHandlers[spell] = handler;
+        state.HasStun = state.Controls.Exists(pair => pair.Spell.SpellType is eSpellType.Stun);
+        state.HasRoot = state.Controls.Exists(pair => pair.Spell.SpellType is eSpellType.SpeedDecrease);
         state.NukesLevel = player.Level;
     }
 

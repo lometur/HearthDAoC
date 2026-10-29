@@ -1204,7 +1204,8 @@ public sealed class UT_PlayerBotDriver
             FollowsAddKill = true, BreakOffRefused = true, FightKiteNone = (1, 2, 3, 4),
             LastWalk = PlayerBotWalk.Rest, FightWalk = PlayerBotWalk.Hunt, FightHeldMs = 3_000, FightCtlLanded = 2,
             FightCtlFailed = 1, FightHpAtReach = 50, FightTargetHpAtReach = 40, WouldBreakHp = 30,
-            PendingControl = (Control(500, "root", "SpeedDecrease", 10, 99), Player(null), 8_000), FightBuffHitters = 2 };
+            PendingControl = (Control(500, "root", "SpeedDecrease", 10, 99), Player(null), 8_000), FightBuffHitters = 2,
+            FightDots = 2 };
         Assert.That(PlayerBotDriver.OpenFight(state, 10_000, 90, 60, 1_420, 100), Is.True, "the first fight since a release");
         Assert.That((state.BackPending, state.KilledWithAdds, state.ControlTries, state.FightCasts, state.FightAdd),
             Is.EqualTo((false, false, 0, 0, (-1, -1))));
@@ -1218,6 +1219,7 @@ public sealed class UT_PlayerBotDriver
             state.FightTargetHpAtReach, state.WouldBreakHp, state.PendingControl.Spell), Is.EqualTo((PlayerBotWalk.Rest, 0L, 0, 0,
             -1, -1, -1, (Spell)null)), "st-deathsD's fields afresh; walk=: the last think's walk");
         Assert.That(state.FightBuffHitters, Is.Zero, "#167 D12: no monster on the bot before the fight's first think");
+        Assert.That(state.FightDots, Is.Zero, "#167 E C1: dots= afresh");
         Assert.That(PlayerBotDriver.OpenFight(state, 30_000, 90, 60, 1_420, 100), Is.False, "the next one");
     }
 
@@ -4387,7 +4389,7 @@ public sealed class UT_PlayerBotDriver
         Pyromancy = new("Pyromancy", "Pyromancy", Specs.Fire_Magic, true);
 
     private static string NukeName(IEnumerable<Spell> spells, Func<Spell, bool> ready, bool addInRadius = false) =>
-        PlayerBotDriver.ChooseNuke(spells.Select(spell => (spell, Subterranean)), ready, addInRadius).Item1?.Name ?? "-";
+        PlayerBotDriver.ChooseNuke(spells.Select(spell => (spell, Subterranean)), ready, addInRadius, null).Item1?.Name ?? "-";
 
     [Test]
     public void A_bot_casts_its_bolt_when_it_is_ready_else_its_best_ready_nuke()
@@ -4419,10 +4421,198 @@ public sealed class UT_PlayerBotDriver
     {
         List<(Spell, SpellLine)> usable = [(FungalPin, Subterranean), (FungalThistle, Subterranean),
             (FungalOoze, Subterranean), (Damage("DirectDamage", 30, 90), Subterranean)];
-        Assert.That(PlayerBotDriver.DamageSpells(usable, 20, _ => null).Select(pair => pair.Spell.Name),
+        Assert.That(PlayerBotDriver.DamageSpells(usable, 20, _ => null, perLine: false).Select(pair => pair.Spell.Name),
             Is.EqualTo(new[] { "Fungal Thistle", "Fungal Ooze" }));                    // Pin: the Thistle outranks it; 30: above
-        Assert.That(PlayerBotDriver.DamageSpells(usable, 19, _ => null).Select(pair => pair.Spell.Name),
+        Assert.That(PlayerBotDriver.DamageSpells(usable, 19, _ => null, perLine: false).Select(pair => pair.Spell.Name),
             Is.EqualTo(new[] { "Fungal Pin" }));
+    }
+
+    // --- #167 E C1: the nuke by the server's expected damage per cast-second ---
+
+    // World-DB spells (Spell, LineXSpell).
+    private static Spell DbNuke(int id, string name, string type, int level, double damage, double castTime, int duration = 0,
+        int frequency = 0) =>
+        new(new DbSpell { SpellID = id, Name = name, Type = type, Target = "Enemy", Damage = damage, Range = 1500,
+            CastTime = castTime, Duration = duration, Frequency = frequency }, level);
+
+    private static readonly Spell AuroraRay = DbNuke(4110, "Aurora Ray", "DirectDamage", 41, 148, 2.6),
+        MindAnnihilation = DbNuke(4430, "Mind Annihilation", "DamageOverTime", 41, 73, 3.0, duration: 24, frequency: 40),
+        SignetOfDestruction = DbNuke(2918, "Signet of Destruction", "DirectDamage", 38, 140, 3.0),
+        MuninsClaw = DbNuke(2577, "Munin's Claw", "DirectDamageWithDebuff", 38, 139, 3.0, duration: 60),
+        GreaterConflagration = DbNuke(359, "Greater Conflagration", "DirectDamage", 37, 173, 2.8),
+        IceBlastPotent = DbNuke(160, "Ice Blast (Potent)", "DirectDamage", 41, 148, 2.6),
+        LesserConstrictingForce = DbNuke(635, "Lesser Constricting Force", "DamageSpeedDecrease", 31, 112, 3.0, duration: 30),
+        ConstrictingForce = DbNuke(636, "Constricting Force", "DamageSpeedDecrease", 40, 143, 3.0, duration: 30),
+        IncreasedEssenceConsumption = DbNuke(661, "Increased Essence Consumption", "Lifedrain", 35, 128, 2.5);
+
+    private static readonly SpellLine Holism = new("Holism", "Holism", Specs.Mana, false),
+        Runecarving = new("Runecarving", "Runecarving", Specs.Runecarving, true),
+        RunesOfDarkness = new("Runes of Darkness", "Runes of Darkness", Specs.Darkness, false),
+        PathOfIce = new("Path of Ice", "Path of Ice", Specs.Cold_Magic, false),
+        Telekinesis = new("Telekinesis", "Telekinesis", Specs.Matter_Magic, false);
+
+    // E1: a Mentalist at 43 (Mana 43, Light 3) against a level-41 monster (resist 0). Aurora Ray at Light 3: the server's
+    // lower bound 0.248 (CalculateLowerVarianceBound(3, 41): 94 steps) plus the level offset 0.0624 (2 levels x 3.12%), a
+    // mean of 0.686, 101.6 a hit; Mind Annihilation at Mana 43: 1.0 (a DoT has no offset), 73 a tick, 6 ticks (24 s at
+    // 4 s, the first at once). Both land 89.5% (87.5 + 2 levels). Per cast-second 0.0319 against 0.1206; with the kill 2
+    // ticks away 0.0402, 1 tick away 0.0201: then the direct hit. Better chose Aurora Ray every time.
+    [Test]
+    public void A_casters_nuke_is_its_most_expected_damage_per_cast_second()
+    {
+        double auroraRay = PlayerBotDriver.NukeValue(PlayerBotDriver.ExpectedHit(148, 0.248 + 0.0624, 1 + 0.0624, 0, false, 0),
+            89.5, 1, AuroraRay.CastTime);
+        double Annihilation(double horizonMs) => PlayerBotDriver.NukeValue(PlayerBotDriver.ExpectedHit(73, 1, 1, 0, false, 0),
+            89.5, PlayerBotDriver.RealizedTicks(PlayerBotDriver.DotTicks(MindAnnihilation.Duration, MindAnnihilation.Frequency),
+                MindAnnihilation.Frequency, horizonMs), MindAnnihilation.CastTime);
+        (Spell, SpellLine)[] mentalist = [(AuroraRay, SunLine), (MindAnnihilation, Holism)];
+        string Choose(Func<Spell, bool> ready, double horizonMs) => PlayerBotDriver.ChooseNuke(mentalist, ready, false,
+            spell => spell == AuroraRay ? auroraRay : Annihilation(horizonMs)).Item1?.Name ?? "-";
+        Assert.That(auroraRay, Is.EqualTo(0.0319).Within(0.0001));
+        Assert.That(Annihilation(double.PositiveInfinity), Is.EqualTo(0.1206).Within(0.0001));
+        Assert.That(Choose(_ => true, double.PositiveInfinity), Is.EqualTo("Mind Annihilation"), "Better: Aurora Ray");
+        Assert.That(Choose(spell => spell != MindAnnihilation, double.PositiveInfinity), Is.EqualTo("Aurora Ray"),
+            "its DoT already on the target");
+        Assert.That(Choose(_ => true, 4_702), Is.EqualTo("Mind Annihilation"), "2 ticks before the kill");
+        Assert.That(Choose(_ => true, 1_881), Is.EqualTo("Aurora Ray"), "1 tick: the direct hit kills sooner");
+        Assert.That(PlayerBotDriver.ChooseNuke(mentalist, _ => true, false, null).Item1, Is.SameAs(AuroraRay),
+            "no score (every other role): Better");
+    }
+
+    // The skeptic's row: a Runemaster at 40 (Darkness 41, Runecarving 1) against a level-38 monster. Signet of Destruction
+    // at Runecarving 1: 0.208 + 0.072 to 1.072, 94.6 a hit, lands 89.5%: 0.0261. Munin's Claw at Darkness 41: 1.072 (the
+    // bound clamps at 1, plus the offset), 149.0 a hit, lands 87.0% (dual-component: -2.5): 0.0399. Better took the
+    // Signet (the same level, 1 more damage).
+    [Test]
+    public void A_specced_rank_beats_an_unspecced_one_of_the_same_level()
+    {
+        double signet = PlayerBotDriver.NukeValue(PlayerBotDriver.ExpectedHit(140, 0.208 + 0.072, 1.072, 0, false, 0), 89.5, 1,
+            SignetOfDestruction.CastTime);
+        double claw = PlayerBotDriver.NukeValue(PlayerBotDriver.ExpectedHit(139, 1.072, 1.072, 0, false, 0), 87.0, 1,
+            MuninsClaw.CastTime);
+        (Spell, SpellLine)[] runemaster = [(SignetOfDestruction, Runecarving), (MuninsClaw, RunesOfDarkness)];
+        Assert.That(signet, Is.EqualTo(0.0261).Within(0.0001));
+        Assert.That(claw, Is.EqualTo(0.0399).Within(0.0001));
+        Assert.That(PlayerBotDriver.ChooseNuke(runemaster, _ => true, false, spell => spell == MuninsClaw ? claw : signet).Item1,
+            Is.SameAs(MuninsClaw));
+        Assert.That(PlayerBotDriver.ChooseNuke(runemaster, _ => true, false, null).Item1, Is.SameAs(SignetOfDestruction),
+            "Better, as before");
+    }
+
+    // The expected hit's resist and a bolt's armour: a 100 base at full variance, 20% resisted, 80; a bolt resists half,
+    // the other half x 2.5 L over the target's armour (0.5 here): 100 x (0.4 + 0.25) = 65. The area ones stay last, by
+    // Better, whatever the score.
+    [Test]
+    public void The_expected_hit_takes_the_resist_and_a_bolts_armour_and_the_area_ones_stay_last()
+    {
+        Assert.That(PlayerBotDriver.ExpectedHit(100, 1, 1, 20, false, 0), Is.EqualTo(80).Within(1e-9));
+        Assert.That(PlayerBotDriver.ExpectedHit(100, 1, 1, 20, true, 0.5), Is.EqualTo(65).Within(1e-9));
+        Assert.That(PlayerBotDriver.ExpectedHit(100, 0.5, 1, 0, false, 0), Is.EqualTo(75).Within(1e-9));
+        Assert.That(PlayerBotDriver.CastCycleMs(2_600), Is.EqualTo(2_850));
+        Assert.That(PlayerBotDriver.CastCycleMs(0), Is.EqualTo(900), "an instant: the next choice's 900 ms");
+        (Spell, SpellLine)[] wizard = [(ConcussiveBlast, Pyromancy), (LesserConflagration, Pyromancy)];
+        Assert.That(PlayerBotDriver.ChooseNuke(wizard, _ => true, false, spell => spell == ConcussiveBlast ? 1 : 0.01).Item1,
+            Is.SameAs(LesserConflagration));
+        Assert.That(PlayerBotDriver.ChooseNuke(wizard, spell => spell == ConcussiveBlast, false, _ => 1).Item1,
+            Is.SameAs(ConcussiveBlast));
+    }
+
+    // Pbotaaaaf (Fire 41): Ice Blast (Potent) 41 at Cold 6 outclassed Greater Conflagration 37 (BotBrain.cs:3413, any
+    // line's higher rank of the kind). A caster keeps both and its score chooses; a higher rank in its own line still
+    // outclasses a lower one.
+    [Test]
+    public void A_casters_damage_spells_drop_a_rank_only_for_a_higher_one_of_its_own_line()
+    {
+        List<(Spell, SpellLine)> usable = [(GreaterConflagration, Pyromancy), (IceBlastPotent, PathOfIce)];
+        Assert.That(PlayerBotDriver.DamageSpells(usable, 41, _ => null, perLine: false).Select(pair => pair.Spell.Name),
+            Is.EqualTo(new[] { "Ice Blast (Potent)" }), "the GameBot's rule");
+        Assert.That(PlayerBotDriver.DamageSpells(usable, 41, _ => null, perLine: true).Select(pair => pair.Spell.Name),
+            Is.EqualTo(new[] { "Greater Conflagration", "Ice Blast (Potent)" }));
+        List<(Spell, SpellLine)> pyromancy = [(LesserConflagration, Pyromancy), (GreaterConflagration, Pyromancy)];
+        Assert.That(PlayerBotDriver.DamageSpells(pyromancy, 41, _ => null, perLine: true).Select(pair => pair.Spell.Name),
+            Is.EqualTo(new[] { "Greater Conflagration" }), "its own line's higher rank");
+    }
+
+    // The server's DoT: a tick at the start, then every frequency while before the expiry (read first): Mind Annihilation
+    // 6, Illusory Excrutiation 4 (not 7 and 5). The ticks the fight sees, and those an earlier one still owes.
+    [TestCase(24_000, 4_000, 6)] [TestCase(20_000, 5_000, 4)] [TestCase(24_001, 4_000, 7)] [TestCase(0, 0, 1)]
+    public void A_dot_ticks_at_once_then_every_frequency_before_its_expiry(int durationMs, int frequencyMs, int ticks) =>
+        Assert.That(PlayerBotDriver.DotTicks(durationMs, frequencyMs), Is.EqualTo(ticks));
+
+    [Test]
+    public void A_dot_counts_the_ticks_before_the_kill_and_the_ticks_still_due()
+    {
+        Assert.That(PlayerBotDriver.RealizedTicks(6, 4_000, double.PositiveInfinity), Is.EqualTo(6));
+        Assert.That(PlayerBotDriver.RealizedTicks(6, 4_000, 7_999), Is.EqualTo(2));
+        Assert.That(PlayerBotDriver.RealizedTicks(6, 4_000, 8_000), Is.EqualTo(3));
+        Assert.That(PlayerBotDriver.RealizedTicks(6, 4_000, 0), Is.EqualTo(1), "the first lands at once");
+        Assert.That(PlayerBotDriver.KillHorizonMs(1_000, 400, 0.1), Is.EqualTo(6_000).Within(1e-6));
+        Assert.That(PlayerBotDriver.KillHorizonMs(300, 400, 0.1), Is.EqualTo(0), "its DoTs already kill it");
+        Assert.That(PlayerBotDriver.KillHorizonMs(1_000, 0, 0), Is.EqualTo(double.PositiveInfinity), "no direct nuke");
+        Assert.That(PlayerBotDriver.DotTicksLeft(24_000, 4_000, 4_000), Is.EqualTo(5));
+        Assert.That(PlayerBotDriver.DotTicksLeft(3_000, 2_000, 4_000), Is.EqualTo(1));
+        Assert.That(PlayerBotDriver.DotTicksLeft(2_000, 2_000, 4_000), Is.EqualTo(0), "the expiry first");
+    }
+
+    // A DoT's ticks end a root and a mez, not a stun (GameLiving.cs:1749-1830): a stun caster casts one wherever, a root
+    // caster only where no control is worth it; and no root or mez goes on while its own DoT ticks.
+    [TestCase(true, true, true)] [TestCase(false, true, false)] [TestCase(false, false, true)] [TestCase(true, false, true)]
+    public void A_dot_fits_a_stun_caster_or_a_fight_with_no_control_wanted(bool hasStun, bool controlWorth, bool fits) =>
+        Assert.That(PlayerBotDriver.DotFits(hasStun, controlWorth), Is.EqualTo(fits));
+
+    [Test]
+    public void No_root_or_mez_goes_on_while_the_bots_own_dot_ticks()
+    {
+        Assert.That(PlayerBotDriver.HoldSurvivesDot(PrismaticFlare, ownDotOn: true), Is.True, "a stun");
+        Assert.That(PlayerBotDriver.HoldSurvivesDot(Cripple, ownDotOn: true), Is.False, "a root");
+        Assert.That(PlayerBotDriver.HoldSurvivesDot(LesserMesmerization, ownDotOn: true), Is.False, "a mez");
+        Assert.That(PlayerBotDriver.HoldSurvivesDot(Cripple, ownDotOn: false), Is.True);
+    }
+
+    // A Matter Sorcerer at 37-39: Better took Increased Essence Consumption 35 over Lesser Constricting Force 31, and its
+    // root stayed castable (79 of 79 YELLOW pulls won, s5). The score would move it onto the snare nuke, whose slow no root
+    // replaces (RootTakes): not while it has a root (the review: at any con, so no root caster is newly moved onto one).
+    // At 40+ Better took Constricting Force: unchanged.
+    [Test]
+    public void A_root_caster_isnt_moved_onto_a_snare_nuke_it_didnt_take_before()
+    {
+        Assert.That(PlayerBotDriver.KeepsRootCastable(ConstrictingForce, IncreasedEssenceConsumption, rootWanted: true), Is.False);
+        Assert.That(PlayerBotDriver.KeepsRootCastable(ConstrictingForce, ConstrictingForce, rootWanted: true), Is.True,
+            "the old order chose it");
+        Assert.That(PlayerBotDriver.KeepsRootCastable(ConstrictingForce, IncreasedEssenceConsumption, rootWanted: false), Is.True,
+            "no root");
+        Assert.That(PlayerBotDriver.KeepsRootCastable(IncreasedEssenceConsumption, ConstrictingForce, rootWanted: true), Is.True);
+    }
+
+    // The review's seams for Nuke's composition (a wiring slip there failed no test): the ready filter and the scored
+    // choice with KeepsRootCastable applied. Ready: off its recast and paid for; a scored DoT only where it fits and none
+    // it conflicts with is on the target; unscored (every other role, the pull's stop), as before.
+    [TestCase(true, true, false, true, false, true, true)]                  // unscored: as before
+    [TestCase(true, true, true, false, false, true, true)]                  // a direct hit: no DoT test
+    [TestCase(true, true, true, true, true, false, true)]
+    [TestCase(true, true, true, true, false, false, false)]                 // a root caster's control wanted
+    [TestCase(true, true, true, true, true, true, false)]                   // its own or a conflicting DoT on it
+    [TestCase(false, true, true, false, true, false, false)]                // on its recast
+    [TestCase(true, false, true, false, true, false, false)]                // not paid for
+    public void A_nuke_is_ready_off_its_recast_paid_for_and_a_dot_only_where_it_fits(bool offRecast, bool paid, bool scored,
+        bool dot, bool dotFits, bool dotConflict, bool ready) =>
+        Assert.That(PlayerBotDriver.NukeReady(offRecast, paid, scored, dot, dotFits, dotConflict), Is.EqualTo(ready));
+
+    [Test]
+    public void A_scored_nuke_keeps_a_root_casters_root_castable()
+    {
+        (Spell, SpellLine)[] sorcerer = [(IncreasedEssenceConsumption, BodyLine), (LesserConstrictingForce, Telekinesis)];
+        double Value(Spell spell) => spell == LesserConstrictingForce ? 0.05 : 0.04;
+        Assert.That(PlayerBotDriver.ScoredNuke(sorcerer, _ => true, false, Value, rootWanted: true).Item1,
+            Is.SameAs(IncreasedEssenceConsumption), "the score's snare nuke, not taken before");
+        Assert.That(PlayerBotDriver.ScoredNuke(sorcerer, _ => true, false, Value, rootWanted: false).Item1,
+            Is.SameAs(LesserConstrictingForce), "no root: the score");
+        Assert.That(PlayerBotDriver.ScoredNuke(sorcerer, spell => spell != IncreasedEssenceConsumption, false, Value,
+            rootWanted: true).Item1, Is.SameAs(LesserConstrictingForce), "the old order's only one");
+        (Spell, SpellLine)[] at40 = [(IncreasedEssenceConsumption, BodyLine), (ConstrictingForce, Telekinesis)];
+        Assert.That(PlayerBotDriver.ScoredNuke(at40, _ => true, false, spell => spell == ConstrictingForce ? 0.05 : 0.04,
+            rootWanted: true).Item1, Is.SameAs(ConstrictingForce), "at 40+ Better took it: unchanged");
+        Assert.That(PlayerBotDriver.ScoredNuke(sorcerer, _ => true, false, null, rootWanted: true).Item1,
+            Is.SameAs(IncreasedEssenceConsumption), "no score: Better");
     }
 
     // --- Animists (#167 F10b) ---
@@ -4451,10 +4641,11 @@ public sealed class UT_PlayerBotDriver
     {
         List<(Spell, SpellLine)> usable = [(WispSpark, CreepingPath), (SpreadingVines, CreepingPath),
             (SurvivalOfTheFittest, CreepingPath)];
-        List<(Spell Spell, SpellLine Line)> nukes = PlayerBotDriver.DamageSpells(usable, 9, id => BomberPayloads.GetValueOrDefault(id));
+        List<(Spell Spell, SpellLine Line)> nukes = PlayerBotDriver.DamageSpells(usable, 9, id => BomberPayloads.GetValueOrDefault(id),
+            perLine: false);
         Assert.That(nukes.Select(pair => pair.Spell.Name), Is.EqualTo(new[] { "Wisp Spark", "Survival of the Fittest" }));
-        Assert.That(PlayerBotDriver.ChooseNuke(nukes, _ => true, false).Item1, Is.SameAs(SurvivalOfTheFittest));
-        Assert.That(PlayerBotDriver.DamageSpells(usable, 9, _ => null).Select(pair => pair.Spell.Name),
+        Assert.That(PlayerBotDriver.ChooseNuke(nukes, _ => true, false, null).Item1, Is.SameAs(SurvivalOfTheFittest));
+        Assert.That(PlayerBotDriver.DamageSpells(usable, 9, _ => null, perLine: false).Select(pair => pair.Spell.Name),
             Is.EqualTo(new[] { "Survival of the Fittest" }), "a payload it cannot resolve is none");
     }
 
@@ -5095,7 +5286,7 @@ public sealed class UT_PlayerBotDriver
     // that held or not (ControlLanded), hpAtReach= and tHpAtReach=, its and its target's health at the first hit on it
     // (-1: none), rate=, the health it lost a second over the last 3 s (HealthRate; a gain is negative), wouldBreak=, its
     // health when the projected break-off would have fired (ProjectedBreak; -1: never), and walk=, the walk on the think
-    // before the fight's first.
+    // before the fight's first; then (#167 D8) kiteNone=, and (#167 E C1) dots=, its damage-over-time casts.
     [Test]
     public void FightFormat()
     {
@@ -5103,19 +5294,20 @@ public sealed class UT_PlayerBotDriver
                 true, 100, 38, 100, 12, 21, 1, 9, 2, 4, 0, 0, Pet: true, Heals: 2, Quickcast: true, Buffs: 3, PetCasts: 2, Waits: 5,
                 Controls: 2, Kites: 1, CtlBroken: 1, AddControls: 1, AddAt: 6, AddHp: 71, BreakOff: true, EngageDistance: 1_450,
                 Crowd: 1, HeldSeconds: 7, CtlLanded: 1, CtlFailed: 1, HpAtReach: 92, TargetHpAtReach: 64, Rate: 4.26, WouldBreak: 38,
-                Walk: PlayerBotWalk.Hunt, KiteNone: (1, 0, 2, 3))),
+                Walk: PlayerBotWalk.Hunt, KiteNone: (1, 0, 2, 3), Dots: 2)),
             Is.EqualTo("PLAYER_BOT_FIGHT bot=Pbotaaaac level=40 target=\"widow claw\" targetLevel=40 con=YELLOW from=pull result=kill " +
                        "startHp=100 endHp=38 startMana=100 endMana=12 sec=21 adds=1 swings=9 notVisible=2 casts=4 lifeKills=0 rests=0 " +
                        "pet=alive heals=2 qc=1 buffs=3 petCasts=2 waits=5 ctl=2 kites=1 ctlBroken=1 addCtl=1 addAt=6 addHp=71 " +
                        "breakOff=1 engageDist=1450 crowd=1 heldSec=7 ctlLanded=1 ctlFailed=1 hpAtReach=92 tHpAtReach=64 rate=4.3 " +
-                       "wouldBreak=38 walk=hunt kiteNone=1:0:2:3"));
+                       "wouldBreak=38 walk=hunt kiteNone=1:0:2:3 dots=2"));
         Assert.That(PlayerBotDriverReport.FormatFight(new PlayerBotFight("Pbothaaab", 43, "empyrean guardian", 36, ConColor.BLUE, true,
                 false, 64, 51, 100, 100, 7, 2, 3, 0, 0, 3, 1, Rate: -0.04, Walk: PlayerBotWalk.BreakOff)),
             Is.EqualTo("PLAYER_BOT_FIGHT bot=Pbothaaab level=43 target=\"empyrean guardian\" targetLevel=36 con=BLUE from=defence " +
                        "result=dropped startHp=64 endHp=51 startMana=100 endMana=100 sec=7 adds=2 swings=3 notVisible=0 casts=0 " +
                        "lifeKills=3 rests=1 pet=none heals=0 qc=0 buffs=0 petCasts=0 waits=0 ctl=0 kites=0 ctlBroken=0 addCtl=0 " +
                        "addAt=-1 addHp=-1 breakOff=0 engageDist=-1 crowd=-1 heldSec=0 ctlLanded=0 ctlFailed=0 hpAtReach=-1 " +
-                       "tHpAtReach=-1 rate=0.0 wouldBreak=-1 walk=breakoff kiteNone=0:0:0:0"), "a gain under 0.05 a second: 0.0, not -0.0");
+                       "tHpAtReach=-1 rate=0.0 wouldBreak=-1 walk=breakoff kiteNone=0:0:0:0 dots=0"),
+            "a gain under 0.05 a second: 0.0, not -0.0");
     }
 
     // #167: one PLAYER_BOT_REST line per rest when the bot stands: the seconds it sat and why it stood (recovered, hit,
@@ -5181,7 +5373,7 @@ public sealed class UT_PlayerBotDriver
     // then FIGHT's addAt=, addHp= and engageDist= (-1 out of a fight too) and breakOff=, a death on a break-off's run;
     // then (st-deathsD's) FIGHT's heldSec=, ctlLanded=, ctlFailed=, hpAtReach=, tHpAtReach= and wouldBreak= (-1 out of a
     // fight), rate= at the death, walk=, the fight's (FIGHT's) or, out of a fight, the last think's alive, and end=, the
-    // endurance.
+    // endurance; then (#167 D8) FIGHT's kiteNone= and (#167 E C1) dots= (-1 out of a fight).
     [Test]
     public void DeathDetailFormat()
     {
@@ -5189,12 +5381,12 @@ public sealed class UT_PlayerBotDriver
                 2, 3, 0, 40, 100, 6, 1, "widow claw", 40, true, 748, Avoided: 2, Again: true, SinceRelease: 42, Ill: true,
                 Controls: 2, Kites: 1, Casts: 4, Quickcast: 1, Waits: 3, CtlBroken: 1, AddControls: 1, AddAt: 6, AddHp: 71,
                 EngageDistance: 1_450, HeldSeconds: 5, CtlLanded: 1, CtlFailed: 0, HpAtReach: 88, TargetHpAtReach: 90, Rate: 12.5,
-                WouldBreak: 52, Walk: PlayerBotWalk.Anchor, Endurance: 64, KiteNone: (0, 2, 1, 0))),
+                WouldBreak: 52, Walk: PlayerBotWalk.Anchor, Endurance: 64, KiteNone: (0, 2, 1, 0), Dots: 1)),
             Is.EqualTo("activity=Fighting startHp=62 fightSec=14 targetHp=71 from=pull adds=2 lifeKills=3 rests=0 sinceKillSec=40 " +
                        "mana=100 swings=6 notVisible=1 killer=\"widow claw\" killerLevel=40 killerIsTarget=True fromBind=748 " +
                        "avoided=2 again=True sinceRelease=42 ill=True ctl=2 kites=1 casts=4 qc=1 waits=3 ctlBroken=1 addCtl=1 " +
                        "addAt=6 addHp=71 breakOff=0 engageDist=1450 heldSec=5 ctlLanded=1 ctlFailed=0 hpAtReach=88 tHpAtReach=90 " +
-                       "rate=12.5 wouldBreak=52 walk=anchor end=64 kiteNone=0:2:1:0"));
+                       "rate=12.5 wouldBreak=52 walk=anchor end=64 kiteNone=0:2:1:0 dots=1"));
         // Out of a fight, no target, no kill this life, no killer named by the Dying event, the bind in another region.
         Assert.That(PlayerBotDriverReport.FormatDeathDetail(new PlayerBotDeathDetail(PlayerBotActivity.Hunting, -1, -1, -1, true,
                 -1, 0, 2, -1, 37, -1, -1, null, 0, false, -1, BreakOff: true, Rate: 3, Walk: PlayerBotWalk.Clear, Endurance: 100)),
@@ -5202,7 +5394,7 @@ public sealed class UT_PlayerBotDriver
                        "mana=37 swings=-1 notVisible=-1 killer=\"\" killerLevel=0 killerIsTarget=False fromBind=-1 avoided=0 " +
                        "again=False sinceRelease=-1 ill=False ctl=-1 kites=-1 casts=-1 qc=-1 waits=-1 ctlBroken=-1 addCtl=-1 " +
                        "addAt=-1 addHp=-1 breakOff=1 engageDist=-1 heldSec=-1 ctlLanded=-1 ctlFailed=-1 hpAtReach=-1 tHpAtReach=-1 " +
-                       "rate=3.0 wouldBreak=-1 walk=clear end=100 kiteNone=-1:-1:-1:-1"),
+                       "rate=3.0 wouldBreak=-1 walk=clear end=100 kiteNone=-1:-1:-1:-1 dots=-1"),
             "died on a break-off's run: out of a fight (the dropped one's FIGHT has it)");
     }
 
@@ -5238,7 +5430,7 @@ public sealed class UT_PlayerBotDriver
             "targetHp=71 from=pull adds=2 lifeKills=3 rests=0 sinceKillSec=40 mana=100 swings=6 notVisible=1 killer=\"widow claw\" " +
             "killerLevel=40 killerIsTarget=True fromBind=748 avoided=0 again=False sinceRelease=-1 ill=False ctl=-1 kites=-1 casts=-1 " +
             "qc=-1 waits=-1 ctlBroken=-1 addCtl=-1 addAt=-1 addHp=-1 breakOff=0 engageDist=-1 heldSec=-1 ctlLanded=-1 ctlFailed=-1 " +
-            "hpAtReach=-1 tHpAtReach=-1 rate=0.0 wouldBreak=-1 walk=none end=-1 kiteNone=-1:-1:-1:-1"));
+            "hpAtReach=-1 tHpAtReach=-1 rate=0.0 wouldBreak=-1 walk=none end=-1 kiteNone=-1:-1:-1:-1 dots=-1"));
         Assert.That(PlayerBotDriver.DeathLine(head, detail, add, target),
             Does.Contain(" killer=\"a wolf\" killerLevel=38 killerIsTarget=False fromBind=748 avoided=0 again=False sinceRelease=-1 ill=False "));
         Assert.That(PlayerBotDriver.DeathLine(head, detail, null, null),

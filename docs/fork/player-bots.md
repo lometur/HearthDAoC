@@ -89,11 +89,13 @@ Each bot thinks every 250 ms, a thin copy of the `/bot` pilot's think:
   own rules: a monster stunned or mezzed in the last minute takes the next one for half the time, then a quarter, and
   none under 1 s; and no root on a monster a slow holds that the root doesn't beat (the server refuses it: a
   damage-and-snare nuke's slow carries damage no root has), so it casts its next control, or none. A mez on its
-  target only as the last escape, the monster about to reach it, and only on a monster above 75% health. It casts its
-  damage spell while it can pay that spell's cost as the server charges it (a focus caster 80-120% by its focus,
-  double under Quickcast), keeping the cheapest of its controls' cost in hand while its target isn't held; with none
-  to keep, a Quickcast spell goes at any power, as the server lets it. Every other class stops casting under 18%
-  power.
+  target only as the last escape, the monster about to reach it, and only on a monster above 75% health. It puts no root
+  or mez on a monster its own damage-over-time spell is ticking on (the next tick would free it), and for the break-off
+  such a monster has no hold ready; so a root caster that put one on a green monster has no root for it for the spell's
+  20-24 s should the fight turn (the caster under 60% health, or an add). It casts its damage spell while it can pay
+  that spell's cost as the server charges it (a focus caster 80-120% by its focus, double under Quickcast), keeping the
+  cheapest of its controls' cost in hand while its target isn't held; with none to keep, a Quickcast spell goes at any
+  power, as the server lets it. Every other class stops casting under 18% power.
 - Any bot with a control spell (casters, healers, pet classes, a Skald or a Minstrel) also controls an add: the
   nearest other monster coming at it or hitting it that isn't held. A mez first, then a root, then a stun; no mez from
   a pet class (its pet would hit the add and free it), and no root on an add already in melee (it still hits from
@@ -113,9 +115,20 @@ Each bot thinks every 250 ms, a thin copy of the `/bot` pilot's think:
   it releases the turret and plants a new one near the target, if the summon is ready and it has the power. If it
   can't, it holds the pull up to 12 s and then leaves that monster for 30 s. Its bombers count as damage spells only
   when their payload does damage, so it no longer casts the root bombers (Spreading Vines and the like) as nukes.
-- Each cast it picks the damage spell ready now: its bolt when off its recast, else its best single-target spell,
-  else an area one, never an area one while another monster stands in its radius. It drops the low ranks a GameBot
-  drops. With none ready (a Shaman's two 20-s spells both on recast), it swings until one is.
+- Each cast it picks the damage spell ready now. A caster (Wizard, Sorcerer, Runemaster, Eldritch, Mentalist) takes the
+  single-target spell, its bolt included, that does the most damage per second of casting by the server's own numbers:
+  the bot's spec in the spell's line (an unspecced line does about 60% of a specced one), the monster's level and its
+  race's resist to the damage type, the land chance, and for a bolt the monster's armour. A damage-over-time spell
+  counts the ticks that land before the monster would die, and goes only where it doesn't free a held monster: a stun
+  caster's, or a fight with no control wanted (a green monster, the caster at 60% health or more and alone). It is never
+  cast while it, or one it would only replace, ticks on that monster. A caster with a root doesn't take up a
+  damage-and-snare spell its old order (below) didn't choose, since the server lets no root replace that slow. It drops
+  a lower rank of a kind only for a higher one in the same line, so a Wizard, Eldritch or Runemaster with a bolt in two
+  lines now casts both, each on its own 20-s recast, and a kept rank counts as a damage spell it can pay for (so it is
+  out of power for the break-off a little later). Every other class: its bolt when off its recast, else its best
+  single-target spell, else an area one; a caster's area ones come last too. Never an area one while another monster
+  stands in its radius. It drops the low ranks a GameBot drops. With none ready (a Shaman's two 20-s spells both on
+  recast), it swings until one is.
 - Out of a fight it keeps its class's own self-buffs up: armour factor, absorb, bladeturn, ablative, damage shield,
   damage add, stat buffs and regeneration buffs, and one chant that costs no power each pulse (so no resist chant: the
   Paladin's cost power each pulse): the first of those kinds, but from a kill to the end of its rest a regeneration
@@ -419,17 +432,17 @@ All start `PLAYER_BOT_`:
   `walk=` (the walk on the think before the fight began: `none`, `hunt`, `anchor`, `roam`, `clear`, `rest`, `kite`,
   `breakoff` or `walkout`, the walk out toward the camp planned under the release's immunity). Out of a fight `DEATH`
   gives -1 for the fight's fields, `rate=` at the death and the walk on its last think alive; it gives `end=`
-  (endurance). Both end with `kiteNone=range:clear:mesh:fit`, the fight's steps back that found no point, by why:
+  (endurance). Both then give `kiteNone=range:clear:mesh:fit`, the fight's steps back that found no point, by why:
   `range` (the bot already stood at its spell's reach), `clear` (no point out of the other monsters' reach), `mesh`
   (none on the navmesh) or `fit` (none within the stop once on the navmesh's height); -1 each out of a fight.
-  `BLOCKED`'s `walk=` is `target`, `roam`, `clear` (the step out after a release), `walkout`, `rest`, `kite`, `turret`
-  or `breakoff`. `RELOCATE` after a death (`reason=died`) ends with `sinceRelease=`, the milliseconds since the release;
-  after a break-off its `reason=` is `brokeoff`. Either ends with `barred=old` when the death or the break-off came on
-  the walk to the camp it had, which the plan then leaves out. Any `RELOCATE` then ends with `capKill=`, the lowest con
-  that killed the bot in the last 5 minutes, yellow or harder (a blue or green killer logs none), while there is one.
-  Then `recent=1` on a plan made within 15 minutes of a death (a died, break-off or capped one), and `near=1` when the
-  camp came from its near pass (within 10,000 units of where the bot stood). A break-off drops its fight (`FIGHT
-  result=dropped`);
+  Then `dots=`, its damage-over-time casts (-1 out of a fight). `BLOCKED`'s `walk=` is `target`, `roam`, `clear` (the
+  step out after a release), `walkout`, `rest`, `kite`, `turret` or `breakoff`. `RELOCATE` after a death (`reason=died`)
+  ends with `sinceRelease=`, the milliseconds since the release; after a break-off its `reason=` is `brokeoff`. Either
+  ends with `barred=old` when the death or the break-off came on the walk to the camp it had, which the plan then leaves
+  out. Any `RELOCATE` then ends with `capKill=`, the lowest con that killed the bot in the last 5 minutes, yellow or
+  harder (a blue or green killer logs none), while there is one. Then `recent=1` on a plan made within 15 minutes of a
+  death (a died, break-off or capped one), and `near=1` when the camp came from its near pass (within 10,000 units of
+  where the bot stood). A break-off drops its fight (`FIGHT result=dropped`);
 - `BREAKOFF`: one per break-off, when it ends: the bot's `hp=`, `end=` (endurance) and `attackers=` when it broke off,
   `sec=`, the seconds it ran, and `outcome=`: `shook` (none still after it, or from 30 s none within 1,500 units),
   `fought` (still chased after 45 s, caught with no control to cast, or nowhere to run) or `died`; then `rate=`, the
