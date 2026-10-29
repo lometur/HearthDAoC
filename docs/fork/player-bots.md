@@ -120,7 +120,8 @@ Each bot thinks every 250 ms, a thin copy of the `/bot` pilot's think:
   them to a spot clear of other aggressive monsters that it can walk to, on again from there while one still chases
   it. A spot it was blocked on it never takes again in that run. Still chased after 30 s, or with nowhere to run, it
   turns and fights them out. Afterwards it takes no camp there and avoids those monsters for 15 minutes, and plans a
-  new camp from where it ran to before it looks for a new target.
+  new camp from where it ran to before it looks for a new target. A break-off on the walk to its camp, more than
+  1,400 units short of it, bars that camp too for 15 minutes.
 - It releases 10 s after a death, counted from when the server has handled the death, never before: a bow's or a bolt's
   killing hit lands in the bots' own phase of the game loop, and a release asked for then was undone by the server's
   death handling later in the same tick, which left the bot dead for 15 minutes. A release that didn't revive it is
@@ -134,7 +135,8 @@ Each bot thinks every 250 ms, a thin copy of the `/bot` pilot's think:
   reach, each the one that leaves the least of the way, as far as the immunity left lets it get, and from a clear spot
   only to one nearer the camp. Its sprint goes off when that walk ends. It casts no self-buff and summons no pet until
   the immunity is over: it buffs where the walk ends. It takes no camp it died at in the last 15 minutes while another
-  camp that cons yellow or easier is left. From its third death with no XP in between it waits 30-120 s out there, as a
+  camp that cons yellow or easier is left, nor the camp it was walking to when it died more than 1,400 units short of
+  it. From its third death with no XP in between it waits 30-120 s out there, as a
   GameBot does, and it waits out the resurrection illness there too. It pulls nothing until then, but fights back. No
   hold for a camp lasts over 60 s: then it hunts where it is.
 - At login it also first steps out of the reach of every monster round it that would aggro, then hunts: no wait and
@@ -368,7 +370,8 @@ All start `PLAYER_BOT_`:
   `end=` (endurance).
   `BLOCKED`'s `walk=` is `target`, `roam`, `clear` (the step out after a release), `walkout`, `rest`, `kite`, `turret`
   or `breakoff`. `RELOCATE` after a death (`reason=died`) ends with `sinceRelease=`, the milliseconds since the release;
-  after a break-off its `reason=` is `brokeoff`. A break-off drops its fight (`FIGHT result=dropped`);
+  after a break-off its `reason=` is `brokeoff`. Either ends with `barred=old` when the death or the break-off came on
+  the walk to the camp it had, which the plan then leaves out. A break-off drops its fight (`FIGHT result=dropped`);
 - `BREAKOFF`: one per break-off, when it ends: the bot's `hp=`, `end=` (endurance) and `attackers=` when it broke off,
   `sec=`, the seconds it ran, and `outcome=`: `shook` (none still after it), `fought` (still chased after 30 s, or
   nowhere to run) or `died`; then `rate=`, the health it lost a second over the 3 s before it broke off. The fight it

@@ -1373,22 +1373,23 @@ public static class PlayerBotDriver
 
     /// <summary>PLAYER_BOT_RELOCATE for a move: its fields as they were (runs/legcheck.py reads bot= and to), then the
     /// reason (RelocateReason) and the fallback camp's con, - for none (the death cap holds, Cap); after a death, the
-    /// milliseconds since the release (RelocateSuffix).</summary>
+    /// milliseconds since the release, and barred=old when the plan bars the anchor it had (RelocateSuffix, #167 D9).</summary>
     public static string RelocateLine(string bot, int level, Vector3 from, Vector3 to, int distance, string monster,
-        int monsterLevel, ushort zone, string reason, ConColor? fallback, long sinceReleaseMs) =>
+        int monsterLevel, ushort zone, string reason, ConColor? fallback, long sinceReleaseMs, bool barredOld) =>
         $"PLAYER_BOT_RELOCATE bot={bot} level={level} from=({from.X:0},{from.Y:0}) to=({to.X:0},{to.Y:0},{to.Z:0}) " +
         $"distance={distance} monster=\"{monster}\" monsterLevel={monsterLevel} zone={zone} reason={reason} " +
-        $"fallback={fallback?.ToString() ?? "-"}" + RelocateSuffix(reason, sinceReleaseMs);
+        $"fallback={fallback?.ToString() ?? "-"}" + RelocateSuffix(reason, sinceReleaseMs, barredOld);
 
     /// <summary>PLAYER_BOT_RELOCATE when no camp checked had a corridor (or none was found): checked= of them.</summary>
     public static string RelocateNoneLine(string bot, int level, int candidates, ushort zone, string reason,
-        long sinceReleaseMs) =>
+        long sinceReleaseMs, bool barredOld) =>
         $"PLAYER_BOT_RELOCATE bot={bot} level={level} none checked={candidates} zone={zone} reason={reason}" +
-        RelocateSuffix(reason, sinceReleaseMs);
+        RelocateSuffix(reason, sinceReleaseMs, barredOld);
 
-    // #167 C1: RELOCATE sinceRelease= on a death's replan, last (the fields before it stay as they were).
-    private static string RelocateSuffix(string reason, long sinceReleaseMs) =>
-        reason == Died ? $" sinceRelease={sinceReleaseMs}" : "";
+    // #167 C1: RELOCATE sinceRelease= on a death's replan, last (the fields before it stay as they were); D9: then
+    // barred=old when the plan bars the anchor the bot had (BarOldAnchor).
+    private static string RelocateSuffix(string reason, long sinceReleaseMs, bool barredOld) =>
+        (reason == Died ? $" sinceRelease={sinceReleaseMs}" : "") + (barredOld ? " barred=old" : "");
 
     /// <summary>The capped clock after a search of the wider ring (or one that found a target): set at the first that
     /// passed a monster over for the cap and found none, kept while that lasts, 0 once a search finds a target or
@@ -1740,13 +1741,31 @@ public static class PlayerBotDriver
         chasers == 0 ? PlayerBotBreakOff.Done : sinceMs >= BreakOffMilliseconds ? PlayerBotBreakOff.Fight :
         arrived ? PlayerBotBreakOff.NextPoint : PlayerBotBreakOff.Run;
 
+    /// <summary>Whether a death or a break-off (reason) bars the anchor too (#167 D9): on the walk to it (walkingToAnchor,
+    /// RoamDestination the anchor, as the hold reads it) more than RoamRadius from it (fromAnchor), where the bar of the
+    /// spot it died at or ran from (RememberFailedCamp) leaves it a camp (PlanRelocation's Failed). In st-deathsC's 21 died
+    /// replans that kept the anchor (Pbotaaacv aside) the death lay over 1,500 from it, and the first fights there were
+    /// fatal 10 of 21, against 38 of 128 after a new camp; 6 of the 7 break-off relocations back to the old anchor came on
+    /// the walk to it.</summary>
+    public static bool BarsOldAnchor(string reason, bool walkingToAnchor, float fromAnchor) =>
+        (reason == Died || reason == BrokeOff) && walkingToAnchor && fromAnchor > RoamRadius;
+
+    /// <summary>The anchor's bar (BarsOldAnchor) for a death or a break-off at at, in the anchor's region, for a GameBot's
+    /// failure memory (RememberFailedCamp; #167 D9).</summary>
+    public static void BarOldAnchor(PlayerBotState state, string reason, Vector3 at, long now)
+    {
+        if (BarsOldAnchor(reason, state.RoamDestination == state.Anchor, Vector3.Distance(at, state.Anchor)))
+            RememberFailedCamp(state.FailedCamps, state.AnchorRegion, state.Anchor, now);
+    }
+
     /// <summary>A break-off's start (#167 C2): the camp it ran from and the names of its target and chasers, remembered as
     /// after a death (Remember, DEATHS.md A3; RememberFailedCamp, #167 F4), so it neither pulls them nor plans back
-    /// there.</summary>
+    /// there; on the walk to its anchor, that too (BarOldAnchor, #167 D9).</summary>
     public static void BrokeOffFrom(PlayerBotState state, ushort region, Vector3 at, IEnumerable<string> names, long now)
     {
         foreach (string name in names) Remember(state.AvoidUntil, name, now);
         RememberFailedCamp(state.FailedCamps, region, at, now);
+        BarOldAnchor(state, BrokeOff, at, now);                                    // #167 D9: and the anchor it walked to
     }
 
     /// <summary>A break-off's end (#167 C2): it owes a relocation (BrokeOff) when it would owe one after a death
@@ -2632,9 +2651,10 @@ public static class PlayerBotDriver
                     con <= natural && AutonomousPlayerPilot.IsEligibleExperienceTarget(con, npc.EffectiveLevel, player.Level, 1),
                     IsAvoided(state.AvoidUntil, npc.Name, now)));
         }
+        Vector3[] failed = FailedCamps(state.FailedCamps, state.AnchorRegion, now);
+        bool barredOld = Array.IndexOf(failed, state.Anchor) >= 0;                 // #167 D9: RELOCATE barred=old
         (GameNPC[] nearest, ConColor? fallback, bool stale) = PlanRelocation(monsters, from,
-            MaximumTargetCon(1, state.DeathSafetySteps), natural, FailedCamps(state.FailedCamps, state.AnchorRegion, now),
-            state.RelocateRejected, RelocateCandidates);
+            MaximumTargetCon(1, state.DeathSafetySteps), natural, failed, state.RelocateRejected, RelocateCandidates);
         foreach (GameNPC npc in nearest)
         {
             Vector3 spot = new(npc.X, npc.Y, npc.Z);
@@ -2645,12 +2665,13 @@ public static class PlayerBotDriver
             }
             if (Log.IsInfoEnabled)
                 Log.Info(RelocateLine(player.Name, player.Level, state.Anchor, spot, (int)Vector3.Distance(here, spot), npc.Name,
-                    npc.EffectiveLevel, zone.ID, reason, fallback, now - state.ReleasedAt));
+                    npc.EffectiveLevel, zone.ID, reason, fallback, now - state.ReleasedAt, barredOld));
             PlanCamp(state, spot, fallback, stale, reason);                         // and BACK replan=moved (#167 C1)
             return;
         }
         if (Log.IsInfoEnabled)
-            Log.Info(RelocateNoneLine(player.Name, player.Level, nearest.Length, zone.ID, reason, now - state.ReleasedAt));
+            Log.Info(RelocateNoneLine(player.Name, player.Level, nearest.Length, zone.ID, reason, now - state.ReleasedAt,
+                barredOld));
         if (nearest.Length == 0) FallBack(state, player, reason);   // no camp in the zone: none to try next time either
     }
 
@@ -3073,6 +3094,8 @@ public static class PlayerBotDriver
             state.HuntAvoided = false;                                                  //   only, and it fails here (AWBC:3801,
             state.DeathSpot = new(player.X, player.Y, player.Z);                        //   :3803-3804)
             RememberFailedCamp(state.FailedCamps, player.CurrentRegionID, state.DeathSpot, now);
+            BarOldAnchor(state, Died, state.DeathSpot, now);                            // #167 D9: the anchor it walked
+                                                                                        //   to (RoamDestination, cleared below)
             state.NoXpDeaths = AutonomousDeathRecoveryPolicy.NextNoExperienceDeathStreak(state.NoXpDeaths,   // #167 F4:
                 state.LastDeathTick, now, state.Gained > state.GainedAtDeath);          //   the back-off (AWBC:3778-3786)
             (state.LastDeathTick, state.GainedAtDeath) = (now, state.Gained);

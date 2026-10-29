@@ -361,22 +361,27 @@ public sealed class UT_PlayerBotDriver
 
     // PLAYER_BOT_RELOCATE's fields stay as they were (runs/legcheck.py reads bot= and to or none); its reason and, for a
     // move, the fallback camp's con (none: the death cap) come last; after a death, the milliseconds since the release
-    // (#167 C1: sinceRelease=, the replan waits out the immunity).
+    // (#167 C1: sinceRelease=), and barred=old when the plan bars the anchor it had (#167 D9).
     [Test]
     public void A_relocation_line_gives_its_reason_last()
     {
         Assert.That(PlayerBotDriver.RelocateLine("Pbotaaaaz", 34, new Vector3(572911.4f, 457576.6f, 2000), new Vector3(579794,
-                456080, 2216.6f), 7040, "silver oaken fellwood", 33, 51, PlayerBotDriver.Capped, ConColor.BLUE, 0),
+                456080, 2216.6f), 7040, "silver oaken fellwood", 33, 51, PlayerBotDriver.Capped, ConColor.BLUE, 0, false),
             Is.EqualTo("PLAYER_BOT_RELOCATE bot=Pbotaaaaz level=34 from=(572911,457577) to=(579794,456080,2217) distance=7040 " +
                        "monster=\"silver oaken fellwood\" monsterLevel=33 zone=51 reason=capped fallback=BLUE"));
         Assert.That(PlayerBotDriver.RelocateLine("Pbotaaaaz", 34, Vector3.Zero, Vector3.One, 1, "m", 30, 51,
-            PlayerBotDriver.Outgrown, null, 0), Does.EndWith(" zone=51 reason=outgrown fallback=-"));
-        Assert.That(PlayerBotDriver.RelocateNoneLine("Pbotaaaaz", 34, 3, 51, PlayerBotDriver.Capped, 0),
+            PlayerBotDriver.Outgrown, null, 0, false), Does.EndWith(" zone=51 reason=outgrown fallback=-"));
+        Assert.That(PlayerBotDriver.RelocateNoneLine("Pbotaaaaz", 34, 3, 51, PlayerBotDriver.Capped, 0, false),
             Is.EqualTo("PLAYER_BOT_RELOCATE bot=Pbotaaaaz level=34 none checked=3 zone=51 reason=capped"));
         Assert.That(PlayerBotDriver.RelocateLine("Pbotaaaaz", 34, Vector3.Zero, Vector3.One, 1, "m", 30, 51,
-            PlayerBotDriver.Died, null, 10_250), Does.EndWith(" zone=51 reason=died fallback=- sinceRelease=10250"));
-        Assert.That(PlayerBotDriver.RelocateNoneLine("Pbotaaaaz", 34, 0, 51, PlayerBotDriver.Died, 10_250),
+            PlayerBotDriver.Died, null, 10_250, false), Does.EndWith(" zone=51 reason=died fallback=- sinceRelease=10250"));
+        Assert.That(PlayerBotDriver.RelocateNoneLine("Pbotaaaaz", 34, 0, 51, PlayerBotDriver.Died, 10_250, false),
             Is.EqualTo("PLAYER_BOT_RELOCATE bot=Pbotaaaaz level=34 none checked=0 zone=51 reason=died sinceRelease=10250"));
+        // #167 D9: barred=old, last, when the plan bars the anchor the bot had (BarsOldAnchor)
+        Assert.That(PlayerBotDriver.RelocateLine("Pbotaaaaz", 34, Vector3.Zero, Vector3.One, 1, "m", 30, 51,
+            PlayerBotDriver.Died, null, 10_250, true), Does.EndWith(" reason=died fallback=- sinceRelease=10250 barred=old"));
+        Assert.That(PlayerBotDriver.RelocateNoneLine("Pbotaaaaz", 34, 2, 51, PlayerBotDriver.BrokeOff, 10_250, true),
+            Is.EqualTo("PLAYER_BOT_RELOCATE bot=Pbotaaaaz level=34 none checked=2 zone=51 reason=brokeoff barred=old"));
     }
 
     // --- the killer memory (DEATHS.md A3) ---
@@ -955,6 +960,71 @@ public sealed class UT_PlayerBotDriver
         var held = new PlayerBotState(Player(null));
         PlayerBotDriver.AfterBreakOff(held, false, 7_000);
         Assert.That((held.ReplanOwed, held.ReplanSince), Is.EqualTo(((string)null, 0L)));
+    }
+
+    // #167 D9: a death or a break-off on the walk to the anchor (RoamDestination is the anchor, as the hold reads it)
+    // more than RoamRadius from it bars the anchor too: the death spot's bar (RememberFailedCamp) covers RoamRadius round
+    // it (PlanRelocation's Failed), and st-deathsC's 21 died replans that kept the anchor (Pbotaaacv aside) all died over
+    // 1,500 from it, their first fights fatal 10 of 21 against 38 of 128 after a new camp; 6 of the 7 break-off
+    // relocations back to the old anchor came on the walk to it. A capped or outgrown bot bars nothing.
+    [TestCase(PlayerBotDriver.Died, true, 3_000f, true)]
+    [TestCase(PlayerBotDriver.Died, true, 1_000f, false)]                     // the death spot's bar covers it
+    [TestCase(PlayerBotDriver.Died, true, 1_400f, false)] [TestCase(PlayerBotDriver.Died, true, 1_401f, true)]
+    [TestCase(PlayerBotDriver.Died, false, 3_000f, false)]
+    [TestCase(PlayerBotDriver.BrokeOff, true, 3_000f, true)]
+    [TestCase(PlayerBotDriver.BrokeOff, false, 756f, false)]
+    [TestCase(PlayerBotDriver.Capped, true, 3_000f, false)] [TestCase(PlayerBotDriver.Outgrown, true, 3_000f, false)]
+    public void A_death_or_break_off_on_the_walk_to_the_anchor_bars_it(string reason, bool walkingToAnchor,
+        float fromAnchor, bool bars) =>
+        Assert.That(PlayerBotDriver.BarsOldAnchor(reason, walkingToAnchor, fromAnchor), Is.EqualTo(bars));
+
+    // The bar where it applies (#167 D9): at the break-off's start, from where it ran, in the anchor's region; off the
+    // walk to the anchor (a roam point) only the camp it ran from.
+    [Test]
+    public void A_break_off_on_the_walk_to_the_anchor_bars_the_anchor_too()
+    {
+        var walking = new PlayerBotState(Player(null)) { AnchorRegion = 51, Anchor = new(3_000, 0, 0) };
+        walking.RoamDestination = walking.Anchor;
+        PlayerBotDriver.BrokeOffFrom(walking, 51, new Vector3(1_000, 0, 0), ["wolf"], 2_000);
+        Assert.That(PlayerBotDriver.FailedCamps(walking.FailedCamps, 51, 2_001),
+            Is.EqualTo(new[] { new Vector3(1_000, 0, 0), new Vector3(3_000, 0, 0) }));
+        var roaming = new PlayerBotState(Player(null)) { AnchorRegion = 51, Anchor = new(3_000, 0, 0) };
+        roaming.RoamDestination = new Vector3(1_200, 0, 0);
+        PlayerBotDriver.BrokeOffFrom(roaming, 51, new Vector3(1_000, 0, 0), ["wolf"], 2_000);
+        Assert.That(PlayerBotDriver.FailedCamps(roaming.FailedCamps, 51, 2_001), Is.EqualTo(new[] { new Vector3(1_000, 0, 0) }));
+    }
+
+    // And at the death (HandleDeath), which reads the walk before it clears RoamDestination (back at the bind point, a
+    // fresh start): a bot that died (here at 0,0,0) 3,000 from the anchor it walked to bars both; one on a roam point, or
+    // within RoamRadius of the anchor, only the death spot.
+    [Test]
+    public void A_death_on_the_walk_to_the_anchor_bars_the_anchor_too()
+    {
+        MethodInfo handleDeath = typeof(PlayerBotDriver).GetMethod("HandleDeath", BindingFlags.Static | BindingFlags.NonPublic)!;
+        Vector3[] Barred(Vector3 anchor, Vector3? walk)
+        {
+            GamePlayer bot = Player(null);
+            var state = new PlayerBotState(bot) { Anchor = anchor };
+            state.RoamDestination = walk ?? state.Anchor;
+            handleDeath.Invoke(null, [state, bot, 54_000L]);
+            Assert.That(state.RoamDestination, Is.Null);
+            return PlayerBotDriver.FailedCamps(state.FailedCamps, state.AnchorRegion, 54_001);
+        }
+        Assert.That(Barred(new Vector3(3_000, 0, 0), null), Is.EqualTo(new[] { Vector3.Zero, new Vector3(3_000, 0, 0) }));
+        Assert.That(Barred(new Vector3(3_000, 0, 0), new Vector3(500, 0, 0)), Is.EqualTo(new[] { Vector3.Zero }));
+        Assert.That(Barred(new Vector3(1_000, 0, 0), null), Is.EqualTo(new[] { Vector3.Zero }));
+    }
+
+    // The plan then takes the next camp (the brief's plan check; it held before the bar, which puts the anchor among the
+    // failed camps): camps at 0 and 8,000, both fitting, from 3,000.
+    [Test]
+    public void A_barred_anchor_sends_the_plan_to_the_next_camp()
+    {
+        var monsters = new[] { Monster("a", 0, ConColor.GREEN), Monster("b", 8_000, ConColor.GREEN) };
+        Assert.That(PlayerBotDriver.PlanRelocation(monsters, new Vector3(3_000, 0, 0), ConColor.GREEN, ConColor.YELLOW, null,
+            new HashSet<string>(), 5).Spots, Is.EqualTo(new[] { "a", "b" }));
+        Assert.That(PlayerBotDriver.PlanRelocation(monsters, new Vector3(3_000, 0, 0), ConColor.GREEN, ConColor.YELLOW,
+            new[] { Vector3.Zero }, new HashSet<string>(), 5).Spots, Is.EqualTo(new[] { "b" }));
     }
 
     // The second-monster case's mark: a kill in a fight that had 2 or more monsters on the bot (FIGHT adds=), so the
