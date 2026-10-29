@@ -6039,6 +6039,26 @@ public sealed class UT_PlayerBotDriver
         int stepStop) =>
         Assert.That(PlayerBotDriver.BlindStepStop(inView, kept, distance, meleeStop), Is.EqualTo(stepStop));
 
+    // #167 E fix R1, its review: Engage's choice at a look (BlindLook) between a drop, a step in and keeping the target.
+    // Beyond contact, a step in (BlindStepStop), never a drop, however long out of sight; in contact, the drop after 5 s
+    // as before (DropsBlindTarget); a cast under way keeps the stop it had (begun in sight, it goes on; the step at the
+    // next look). A mutation run restored M2's drop from the 1,420 stand and the stop's reset to 0 with every test green:
+    // the largest E regression (657 blind drops, the Thanes' kills 66 -> 44) would come back unseen.
+    [TestCase(false, false, 1_420, 80, 1_000L, 7_000L, false, 0, false, 1_120)]     // 6 s out of sight at a spell stop
+    [TestCase(false, false, 1_420, 80, 5_000L, 7_000L, false, 0, false, 1_120)]     //   and 2 s: a step in
+    [TestCase(false, false, 200, 80, 1_000L, 7_000L, false, 0, true, 0)]            // in contact 6 s: dropped
+    [TestCase(false, false, 200, 80, 5_000L, 7_000L, false, 0, false, 0)]           //   2 s: not yet
+    [TestCase(false, false, 200, 80, 1_000L, 7_000L, true, 0, true, 0)]             //   a cast doesn't keep it
+    [TestCase(false, false, 1_420, 80, 1_000L, 7_000L, true, 0, false, 0)]          // casting: the stop it had
+    [TestCase(false, false, 1_420, 80, 1_000L, 7_000L, true, 1_120, false, 1_120)]
+    [TestCase(true, false, 1_420, 80, 0L, 7_000L, false, 1_120, false, 0)]          // in sight: no step
+    [TestCase(false, true, 1_420, 80, 1_000L, 7_000L, false, 0, false, 0)]          // kept: no step, no drop
+    [TestCase(false, true, 200, 80, 1_000L, 7_000L, false, 0, false, 0)]
+    public void At_a_look_out_of_sight_the_bot_steps_in_beyond_contact_and_drops_only_in_contact(bool inView, bool kept,
+        int distance, int meleeStop, long blindSince, long now, bool casting, int blindStop, bool drop, int nextStop) =>
+        Assert.That(PlayerBotDriver.BlindLook(inView, kept, distance, meleeStop, blindSince, now, casting, blindStop),
+            Is.EqualTo((drop, nextStop)));
+
     // #167: one PLAYER_BOT_REST line per rest when the bot stands: the seconds it sat and why it stood (recovered, hit,
     // heal, pet or buff: a cast on itself, died, other); then (the next leg's) its health and power when it sat, hp= and
     // mp=, and respawn=, the killed monsters' spawn spots its rest spot was read against (RespawnSpots, C7); then (#167

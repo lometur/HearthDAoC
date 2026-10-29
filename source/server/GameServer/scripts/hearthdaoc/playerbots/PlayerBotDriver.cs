@@ -762,23 +762,20 @@ public static class PlayerBotDriver
             if (!los && player.TargetInView) state.FightSight++;                        //   FIGHT sight=
             state.BlindSince = BlindClock(state.BlindSince, player.TargetInView, now);
             bool petOn = PetOn(player, target), targetsBot = target.TargetObject == player;
-            int step = BlindStepStop(player.TargetInView, fightsBot || petOn || targetsBot, distance,   // #167 E R1
-                MeleeStopDistance(player.attackComponent.AttackRange));
-            if (step == 0 && DropsBlindTarget(state.BlindSince, now, fightsBot, petOn, targetsBot))
+            // #167 E R1: out of sight beyond contact, a step in (BlindStepStop), not a drop, and a look again where it
+            // ends; a cast under way (begun in sight) goes on, the step at the next look. The choice is BlindLook's.
+            (bool drop, state.BlindStop) = BlindLook(player.TargetInView, fightsBot || petOn || targetsBot, distance,
+                MeleeStopDistance(player.attackComponent.AttackRange), state.BlindSince, now, player.IsCasting,
+                state.BlindStop);
+            if (drop)
             {
                 DropBlind(state, player, now);                                          //   FIGHT blind=1, the pick
                 return;                                                                 //   passes it over 30 s
             }
-            // #167 E R1: out of sight beyond contact, a step in (BlindStepStop), not a drop, and a look again where it
-            // ends; a cast under way (begun in sight) goes on, the step at the next look.
-            if (!player.IsCasting)
+            if (!player.IsCasting && state.BlindStop > 0)
             {
-                state.BlindStop = step;
-                if (step > 0)
-                {
-                    state.NextLosTick = 0;
-                    state.FightBlindSteps++;                                            //   FIGHT blindSteps=
-                }
+                state.NextLosTick = 0;
+                state.FightBlindSteps++;                                                //   FIGHT blindSteps=
             }
         }
         bool opening = !state.Engaged;
@@ -3363,6 +3360,18 @@ public static class PlayerBotDriver
     /// and 20 kills.</summary>
     public static int BlindStepStop(bool inView, bool kept, int distance, int meleeStop) =>
         inView || kept || distance <= CaughtReach ? 0 : Math.Max(Math.Min(meleeStop, CaughtReach), distance - BlindStepDistance);
+
+    /// <summary>#167 E R1, Engage's choice at a look (the fix's review: a seam its rows reach): a drop (Drop) only where no
+    /// step is (BlindStepStop 0: in contact, in sight or kept) and DropsBlindTarget drops it (kept: it fights the bot or
+    /// its pet, or comes at it); else the stop it steps in to (BlindStop: BlindStepStop's, 0 for none), or while a cast is
+    /// under way (casting, begun in sight) the stop it had (blindStop). On a drop, blindStop as it was.</summary>
+    public static (bool Drop, int BlindStop) BlindLook(bool inView, bool kept, int distance, int meleeStop,
+        long blindSince, long now, bool casting, int blindStop)
+    {
+        int step = BlindStepStop(inView, kept, distance, meleeStop);
+        if (step == 0 && DropsBlindTarget(blindSince, now, kept, false, false)) return (true, blindStop);
+        return (false, casting ? blindStop : step);
+    }
 
     /// <summary>The DEATH line's killer. ProcessDeath notifies Dying last (GameLiving.cs:2073), in ReaperService's phase of
     /// the tick the bot was killed in, so before its next think (GameLoop.cs:149, :159). Never throws: any sender but a
