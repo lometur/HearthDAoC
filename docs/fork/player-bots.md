@@ -188,7 +188,8 @@ Each bot thinks every 250 ms, a thin copy of the `/bot` pilot's think:
   chased at 45 s, it turns and fights them out. With nowhere to run it tries again each second, 800 units out too (never
   into another aggressive monster's reach), and holds where it stands meanwhile: it turns when a chaser that isn't held
   comes within 250 units or one hits it while it holds, and a caster or pet class that can still pay for a damage spell
-  turns at once, to open at range. Afterwards it takes no camp there and avoids those monsters for 15 minutes, and plans
+  turns at once, to open at range. While it holds it heals itself as it would have once the break-off ended, before the
+  chaser reaches it. Afterwards it takes no camp there and avoids those monsters for 15 minutes, and plans
   a new camp from where it ran to before it looks for a new target. A break-off on the walk to its camp, more than 1,400
   units short of it, bars that camp too for 15 minutes.
 - In a close fight (2 or more monsters on it now or earlier in the fight, a defence, the fight after a kill with adds,

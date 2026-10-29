@@ -1908,6 +1908,28 @@ public sealed class UT_PlayerBotDriver
     public void A_hit_while_it_holds_is_one_since_the_hold_began(long holdSince, long lastHit, long now, bool hit) =>
         Assert.That(PlayerBotDriver.HitWhileHolding(holdSince, lastHit, now), Is.EqualTo(hit));
 
+    // #167 E T1: a bot holding for want of a point heals itself there (SelfHeal, Think's step 11b, which the hold's think
+    // never reaches): before T1 no point ended the break-off and the heal began in the same think, the chaser still far
+    // off; held, a Healer-role bot cast nothing until it turned, then healed under melee. The heal's cast keeps it
+    // (Casting; WaitsForSelfCast then waits it out); with no heal it holds (Fighting).
+    [Test]
+    public void A_bot_holding_for_want_of_a_point_heals_itself_there()
+    {
+        var state = new PlayerBotState(Player(null));
+        bool asked = false;
+        PlayerBotDriver.HoldForPoint(state, 5_000, PlayerBotDriver.TurnNoPoint, tried: true, () =>
+        {
+            asked = true;
+            state.Activity = PlayerBotActivity.Casting;                         // CastOnSelf's
+            return true;
+        });
+        Assert.That((asked, state.Activity, state.Walk, state.BreakOffHoldSince, state.BreakOffHoldWhy, state.BreakOffHolds),
+            Is.EqualTo((true, PlayerBotActivity.Casting, PlayerBotWalk.BreakOff, 5_000L, PlayerBotDriver.TurnNoPoint, 1)));
+        PlayerBotDriver.HoldForPoint(state, 6_000, PlayerBotDriver.TurnBlocked, tried: false, () => false);
+        Assert.That((state.Activity, state.BreakOffHoldSince, state.BreakOffHoldWhy, state.BreakOffHolds),
+            Is.EqualTo((PlayerBotActivity.Fighting, 5_000L, PlayerBotDriver.TurnNoPoint, 1)), "no heal: it holds");
+    }
+
     // The break-off's step: it runs on; at its point with a chaser still after it, it takes the next point; with none
     // after it, it is done. #167 D2: caught (CaughtNow) it acts on the chaser (Caught); from 30 s, with the nearest chaser
     // beyond 1,500 it is done (a monster keeps its target 25 s after its last swing, StandardMobState.cs:122: at the old

@@ -4346,8 +4346,8 @@ public static class PlayerBotDriver
     // one add scan: GetNPCsInRadius of 3,200, up to 50 OnMesh calls and 8 corridor tests, only while a bot has no
     // point); none, it turns (NoPointTurns: a chaser not held in reach, a hit while it holds, or a caster or pet class with
     // power), BREAKOFF turn=why (the hold's first why: nopoint or blocked), else it holds where it stands for the chasers
-    // to give up (Done), catch it (Caught) or the cap (Fight). holds= counts the tries that found none while it held. True
-    // while the break-off goes on.
+    // to give up (Done), catch it (Caught) or the cap (Fight), and heals itself there (HoldForPoint). holds= counts the
+    // tries that found none while it held. True while the break-off goes on.
     private static bool GoalOrHold(PlayerBotState state, GamePlayer player, long now, int nearest, int freeDistance,
         string why)
     {
@@ -4369,12 +4369,23 @@ public static class PlayerBotDriver
             EndBreakOff(state, player, now, Fought);                                    // step 14 picks a hitter
             return false;
         }
+        state.Mover.Stop(now);
+        HoldForPoint(state, now, why, tried, () => SelfHeal(state, player, now));
+        return true;
+    }
+
+    /// <summary>#167 E T1: a hold for want of a point (GoalOrHold, the bot stopped): its first think's why and time,
+    /// holds= for a try that found none, and the self-heal (selfHeal: SelfHeal), Think's step 11b, which a think the
+    /// break-off holds never reaches. Before T1 no point ended the break-off and the heal began in that think, the
+    /// chaser still far off; held, a Healer-role bot (E-L's one-monster break-offs) cast nothing until it turned, then
+    /// healed under melee. A heal it casts keeps the cast's activity (CastOnSelf), and the next think's WaitsForSelfCast
+    /// waits it out; a hit meanwhile turns it after (HitWhileHolding).</summary>
+    public static void HoldForPoint(PlayerBotState state, long now, string why, bool tried, Func<bool> selfHeal)
+    {
         if (state.BreakOffHoldSince == 0) (state.BreakOffHoldSince, state.BreakOffHoldWhy) = (now, why);
         if (tried) state.BreakOffHolds++;
-        state.Mover.Stop(now);
-        state.Activity = PlayerBotActivity.Fighting;
         state.Walk = PlayerBotWalk.BreakOff;
-        return true;
+        if (!selfHeal()) state.Activity = PlayerBotActivity.Fighting;
     }
 
     // #167 E T1: a caster or pet class that broke off with power (not why=spent: breakoff E4's spent turn holds) and can
