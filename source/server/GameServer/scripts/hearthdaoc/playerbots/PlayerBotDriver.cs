@@ -1827,6 +1827,42 @@ public static class PlayerBotDriver
     public static bool HoldReady(bool held, bool hasControl, bool interrupted, bool quickcastReady, bool quickcastOn) =>
         held || hasControl && (!interrupted || quickcastReady || quickcastOn);
 
+    /// <summary>The one-monster case's holdReady (#167 D1; the review of D): a control cast at the one monster on the bot
+    /// still under way (controlCasting, ControlCastAt: TargetControl reads none while it casts, NextControlTick, so the
+    /// case fired mid-cast and the break-off's Disengage cancelled the root, CastingComponent.InterruptCasting); else, only
+    /// when that monster is the bot's target (itsTarget; at a kill, the one on it), the target's hold ready
+    /// (targetHoldReady, HoldReady; asked only then: it walks the spells). A target held at range beside another monster
+    /// hitting the bot is no hold on that one; an add's control to come is C4's (AddControlReady, BreakOffFires).</summary>
+    public static bool OneMonsterHold(bool controlCasting, bool itsTarget, Func<bool> targetHoldReady) =>
+        controlCasting || itsTarget && targetHoldReady();
+
+    /// <summary>A control cast at npc under way (#167 D1, the review of D): the bot's cast now (spell, at castTarget; none:
+    /// null) a control (IsControlSpell) at that monster, CasterStep's at its target or AddAct's at an add.</summary>
+    public static bool ControlCastAt(Spell spell, GameLiving castTarget, GameLiving npc) =>
+        spell != null && castTarget == npc && IsControlSpell(spell);
+
+    /// <summary>When the break-off reads the control CasterStep would cast (#167 D1, the review of D): at the end of the
+    /// last control's cast and margin (nextControlTick, ControlMarginMilliseconds) when that is later, so a resisted root's
+    /// margin before its next cast keeps the hold first; else now.</summary>
+    public static long ControlReadTick(long now, long nextControlTick) => Math.Max(now, nextControlTick);
+
+    /// <summary>Whether StartsBreakOff scans the monsters on the bot (#167 D1; the review of D pinned it): under
+    /// BreakOffHealthPercent, or a spent caster (CasterSpent, SpentNow) at any health. No scan above it.</summary>
+    public static bool BreakOffScans(bool spent, byte health) => spent || health < BreakOffHealthPercent;
+
+    /// <summary>A break-off's start once StartsBreakOff scanned (#167 D1; the review of D pinned it): BREAKOFF why= (BreakOffWhy)
+    /// for a spent caster at any health (spent), with no monster on it too, else when BreakOffFires holds over the monsters
+    /// on the bot (hitters) with the one-monster case's holdReady (HoldReadyNow); none, null.</summary>
+    public static string BreakOffStartWhy(PlayerBotState state, PlayerBotRole role, bool spent, byte health, bool holdReady,
+        IReadOnlyList<(byte Health, int Distance, bool Avoided)> hitters, long now, Func<bool> addControlReady)
+    {
+        if (!spent && !BreakOffFires(state, role, holdReady, health, hitters, now, addControlReady)) return null;
+        bool avoidedOnBot = false;
+        for (int i = 0; i < hitters.Count; i++) avoidedOnBot |= hitters[i].Avoided;
+        return BreakOffWhy(spent, hitters.Count, SecondMonsterCase(state.KilledWithAdds, state.LastKillTick, now),
+            state.Engaged && state.FollowsAddKill, avoidedOnBot, state.HuntAvoided);
+    }
+
     /// <summary>BREAKOFF why= (#167 D1): the rule that fired. Spent (CasterSpent); else 2 or more monsters on the bot (adds);
     /// the second-monster case at the kill (atkill) or in the fight after it (followup, D2's FollowsAddKill); one monster
     /// of a name it avoids, not in a camp of them (avoided); else a caster losing to one (caster).</summary>
@@ -3404,13 +3440,14 @@ public static class PlayerBotDriver
     // TargetRefreshMilliseconds, as Incoming's. #167 D1: one monster in the one-monster case (the hitters' names it avoids,
     // HoldReadyNow), and a spent caster at any health (SpentNow: an engaged caster's held target only, its cheap checks
     // first); BREAKOFF why= the rule (BreakOffWhy). #167 D2: one that would fire but doesn't logs why (ReportRefusal).
+    // The review of D: its start in seams (BreakOffScans, BreakOffStartWhy).
     private static bool StartsBreakOff(PlayerBotState state, GamePlayer player, long now)
     {
         if (now < state.NextBreakOffTick) return false;
         byte health = player.HealthPercent;
         PlayerBotRole role = RoleOf(player.CharacterClass.ID);
         bool spent = SpentNow(state, player, role);                                     // #167 D1
-        if (!spent && health >= BreakOffHealthPercent) return false;                   // no scan above it
+        if (!BreakOffScans(spent, health)) return false;                                // no scan above it
         List<GameNPC> chasers = state.BreakOffChasers;
         List<(byte Health, int Distance, bool Avoided)> hitters = _hitters ??= new();
         chasers.Clear();
@@ -3424,12 +3461,9 @@ public static class PlayerBotDriver
         }
         int onBot = chasers.Count;
         bool controlReady = false;
-        bool holdReady = onBot == 1 && HoldReadyNow(state, player, role,                // #167 D1: only one on it reads it
-            state.Target?.IsAlive == true ? state.Target as GameNPC : chasers[0], now);
-        bool fires = spent || BreakOffFires(state, role, holdReady, health, hitters, now,
-            () => controlReady = AddControlReady(state, player, now));
-        string why = fires ? BreakOffWhy(spent, onBot, SecondMonsterCase(state.KilledWithAdds, state.LastKillTick, now),
-            state.Engaged && state.FollowsAddKill, hitters.Exists(h => h.Avoided), state.HuntAvoided) : null;
+        string why = BreakOffStartWhy(state, role, spent, health, HoldReadyNow(state, player, role, chasers, now),
+            hitters, now, () => controlReady = AddControlReady(state, player, now));                       // #167 D1
+        bool fires = why != null;
         hitters.Clear();
         if (!fires)
         {
@@ -3538,18 +3572,30 @@ public static class PlayerBotDriver
             : FocusCostFactor(true, player.GetModified(focus), spell.Level, player.GetModifiedSpecLevel(line.Spec));
     }
 
-    // #167 D1: a caster's hold on the monster it fights (npc: its target, or at a kill the one on it) ready (HoldReady):
-    // held now (Hold), or the control CasterStep would cast at it now (TargetControl), with Quickcast while hits interrupt
-    // the bot. Not a caster: none.
-    private static bool HoldReadyNow(PlayerBotState state, GamePlayer player, PlayerBotRole role, GameNPC npc, long now)
+    // #167 D1: a caster's hold ready on the one monster on it (onBot: StartsBreakOff's; none or more, none), the
+    // one-monster case's (OneMonsterHold; the review of D): a control the bot casts at it now (ControlCastAt), else, when
+    // it is the bot's target (at a kill, the one on it), its target's hold (TargetHoldReady). Not a caster: none.
+    private static bool HoldReadyNow(PlayerBotState state, GamePlayer player, PlayerBotRole role, List<GameNPC> onBot,
+        long now)
     {
-        if (role != PlayerBotRole.Caster || npc?.IsAlive != true) return false;
+        if (role != PlayerBotRole.Caster || onBot.Count != 1 || onBot[0] is not { IsAlive: true } npc) return false;
+        var cast = player.castingComponent?.SpellHandler;
+        return OneMonsterHold(ControlCastAt(cast?.Spell, cast?.Target, npc),
+            state.Target?.IsAlive != true || state.Target == npc, () => TargetHoldReady(state, player, npc, now));
+    }
+
+    // #167 D1: a caster's hold on its target ready (HoldReady): held now (Hold), or the control CasterStep would cast at it
+    // (TargetControl, read at ControlReadTick: the review of D, a resisted root's margin), with Quickcast while hits
+    // interrupt the bot.
+    private static bool TargetHoldReady(PlayerBotState state, GamePlayer player, GameNPC npc, long now)
+    {
         if (Hold(npc).Held) return true;
         KnowSpells(state, player);
         bool quickcasting = player.effectListComponent.ContainsEffectForEffectType(eEffect.QuickCast);
         Ability quickcast = player.GetAbility(Abilities.Quickcast);
         return HoldReady(false,
-            TargetControl(state, player, npc, TimeToContact(player.GetDistanceTo(npc), npc.MaxSpeedBase), now).Item1 != null,
+            TargetControl(state, player, npc, TimeToContact(player.GetDistanceTo(npc), npc.MaxSpeedBase),
+                ControlReadTick(now, state.NextControlTick)).Item1 != null,
             player.IsBeingInterruptedByOther && !quickcasting,
             QuickcastReady(quickcast != null, quickcasting, quickcast == null ? 0 : player.GetSkillDisabledDuration(quickcast),
                 state.NextQuickcastTick, player.IsCasting, now), quickcasting);
@@ -4027,7 +4073,7 @@ public static class PlayerBotDriver
     // #167 F11, C8: the control CasterStep casts at its target now (TargetFirst reads it too, the review of 9aacd69): its
     // next control due and tries left, one the target takes (Takes) and a mez only as the escape (CasterControlAllowed),
     // in range, ready and paid for, the highest of ChooseControl's target order; none, default. #167 D11: CasterStep and
-    // TargetFirst read it through WorthyTargetControl; the break-off's HoldReadyNow reads it as it is (it asks under 40%
+    // TargetFirst read it through WorthyTargetControl; the break-off's TargetHoldReady reads it as it is (it asks under 40%
     // health or with the target held, where ControlWorth holds or isn't asked).
     private static (Spell, SpellLine) TargetControl(PlayerBotState state, GamePlayer player, GameNPC npc, long contact,
         long now) =>

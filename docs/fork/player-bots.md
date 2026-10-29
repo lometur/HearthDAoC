@@ -122,20 +122,21 @@ Each bot thinks every 250 ms, a thin copy of the `/bot` pilot's think:
   or of the spawn spot of one of its last 3 kills in the last 150 s (where that monster respawns, 80 s after the kill
   in most of the world), walks to the nearest spot out of that reach, 1,200 units away at most. A walk there that is
   blocked takes the next nearest such spot at once, 3 walks in all; then it sits where it is.
-- Losing, it breaks off: below 40% health with 2 or more monsters on it, or with 1 still on it after a kill in a
-  fight that had 2 or more on it, within 3 s of that kill or in the whole fight it opens next. One monster breaks it
-  off too when it is one the bot avoids (unless it was sent to a camp of them), or when the bot is a caster and its
-  target is above 25%; not while that monster is held, or while the caster would cast a control at it now. None of
-  these while its target is down to 10% or less. A caster whose held target is above 25% with no damage spell it can
-  pay for breaks off at any health, then rests: it takes no camp or names to avoid from that one and doesn't move
-  camp. Only from monsters it can outrun, and only with a sprint whose lead takes it out of the fastest one's
-  200-unit reach: none faster than its run (191), or none as fast as its sprint (248) when its endurance holds the
-  sprint long enough to keep the fastest off it for the 25 s a monster chases. Never from a monster with a snare,
-  stun, mez or damage spell of 1,000 units' range or more. It stops its fight, sprints, and runs 1,500-2,500 units
-  straight away from them to a spot clear of other aggressive monsters that it can walk to, or with none, to the
-  spot 1,500 units straight away from them if it can walk there; on again from there while one still chases it. A
-  spot it was blocked on it never takes again in that run. A mezzed, stunned or rooted monster still counts as after
-  it. One not held that stays within 250 units of it for 2 s has caught it: it stops, casts a control at it (as at
+- Losing, it breaks off: below 40% health with 2 or more monsters on it, or with 1 still on it after a kill in a fight
+  that had 2 or more on it, within 3 s of that kill or in the whole fight it opens next. One monster breaks it off too
+  when it is one the bot avoids (unless it was sent to a camp of them), or when the bot is a caster and its target is
+  above 25%; not while a caster's control at that monster is under way, nor, when that monster is its target, while it
+  is held or the caster would cast a control at it now or once a resisted one may go again (a target held at range is no
+  hold on another monster hitting it). None of these while its target is down to 10% or less. A caster whose held target
+  is above 25% with no damage spell it can pay for breaks off at any health, then rests: it takes no camp or names to
+  avoid from that one and doesn't move camp. Only from monsters it can outrun, and only with a sprint whose lead takes
+  it out of the fastest one's 200-unit reach: none faster than its run (191), or none as fast as its sprint (248) when
+  its endurance holds the sprint long enough to keep the fastest off it for the 25 s a monster chases. Never from a
+  monster with a snare, stun, mez or damage spell of 1,000 units' range or more. It stops its fight, sprints, and runs
+  1,500-2,500 units straight away from them to a spot clear of other aggressive monsters that it can walk to, or with
+  none, to the spot 1,500 units straight away from them if it can walk there; on again from there while one still chases
+  it. A spot it was blocked on it never takes again in that run. A mezzed, stunned or rooted monster still counts as
+  after it. One not held that stays within 250 units of it for 2 s has caught it: it stops, casts a control at it (as at
   an add, with Quickcast while hit), faces it until the cast is done and runs on; with no control to cast it turns on
   the weakest monster in reach. From 30 s it is done once none is within 1,500 units; still chased at 45 s, or with
   nowhere to run, it turns and fights them out. Afterwards it takes no camp there and avoids those monsters for 15

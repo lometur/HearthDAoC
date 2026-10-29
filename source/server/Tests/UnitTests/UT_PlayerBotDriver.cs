@@ -1118,6 +1118,86 @@ public sealed class UT_PlayerBotDriver
         bool interrupted, bool quickcastReady, bool quickcastOn, bool ready) =>
         Assert.That(PlayerBotDriver.HoldReady(held, hasControl, interrupted, quickcastReady, quickcastOn), Is.EqualTo(ready));
 
+    // The review of D (D1): the hold first while the control's own cast is under way. TargetControl reads none until the
+    // cast's margin is over (NextControlTick), so the one-monster case fired mid-cast and the break-off's Disengage
+    // cancelled the root (CastingComponent.InterruptCasting). The bot's cast now, a control at that monster
+    // (ControlCastAt), is its hold ready.
+    [Test]
+    public void A_control_cast_at_the_monster_is_one_under_way()
+    {
+        GameNPC monster = LiveMonster(), other = LiveMonster();
+        Assert.That(PlayerBotDriver.ControlCastAt(Cripple, monster, monster), Is.True);
+        Assert.That(PlayerBotDriver.ControlCastAt(Cripple, other, monster), Is.False, "at another monster");
+        Assert.That(PlayerBotDriver.ControlCastAt(Damage("DirectDamage", 10, 40), monster, monster), Is.False, "a nuke");
+        Assert.That(PlayerBotDriver.ControlCastAt(null, null, monster), Is.False, "no cast");
+    }
+
+    // The one-monster case's holdReady (OneMonsterHold): a control cast at the one monster on the bot under way; else,
+    // only when that monster is the bot's target (at a kill, the one on it), its target's hold ready (HoldReady, asked
+    // only then). The review of D: a held target beside another monster hitting the bot held the break-off back.
+    [TestCase(true, false, false, true)]                                     // the root under way
+    [TestCase(false, true, true, true)] [TestCase(false, true, false, false)]
+    [TestCase(false, false, true, false)]                                    // its held target isn't the one on it
+    public void The_one_monster_case_reads_the_hold_of_the_monster_on_the_bot(bool controlCasting, bool itsTarget,
+        bool targetHoldReady, bool ready) =>
+        Assert.That(PlayerBotDriver.OneMonsterHold(controlCasting, itsTarget, () => targetHoldReady), Is.EqualTo(ready));
+
+    // The target's hold walks the spells (TargetControl): not asked for another monster or with a control under way.
+    [Test]
+    public void The_target_hold_is_not_asked_for_another_monster_or_with_a_control_under_way()
+    {
+        static bool Asked() => throw new AssertionException("asked");
+        Assert.That(PlayerBotDriver.OneMonsterHold(true, true, Asked), Is.True);
+        Assert.That(PlayerBotDriver.OneMonsterHold(false, false, Asked), Is.False);
+    }
+
+    // A resisted root's margin before CasterStep casts it again (NextControlTick, ControlMarginMilliseconds): the control
+    // it would cast is read at the margin's end, so the hold stays first then too.
+    [TestCase(10_000L, 10_500L, 10_500L)] [TestCase(10_000L, 9_000L, 10_000L)] [TestCase(10_000L, 0L, 10_000L)]
+    public void The_control_to_come_is_read_at_the_end_of_the_casts_margin(long now, long nextControlTick, long at) =>
+        Assert.That(PlayerBotDriver.ControlReadTick(now, nextControlTick), Is.EqualTo(at));
+
+    private static bool HoldReadyNow(PlayerBotState state, GamePlayer bot, params GameNPC[] onBot) =>
+        (bool)typeof(PlayerBotDriver).GetMethod("HoldReadyNow", BindingFlags.Static | BindingFlags.NonPublic)!
+            .Invoke(null, [state, bot, PlayerBotRole.Caster, onBot.ToList(), 10_000L])!;
+
+    // A bot with a casting component, casting spell at target (none: not casting).
+    private static GamePlayer CastingBot(Spell spell = null, GameLiving target = null)
+    {
+        GamePlayer bot = Player(null);
+        bot.castingComponent = CastingComponent.Create(bot);
+        if (spell != null)
+            typeof(CastingComponent).GetProperty("SpellHandler")!.SetValue(bot.castingComponent,
+                new DOL.GS.Spells.SpellHandler(bot, spell, BodyLine) { Target = target });
+        return bot;
+    }
+
+    // Where StartsBreakOff reads it (HoldReadyNow), the review's case: a caster in melee, its target at 70% and not
+    // held, its root cast at it and not landed yet: the hold is ready, no break-off.
+    [Test]
+    public void A_casters_root_under_way_holds_the_one_monster_break_off_back()
+    {
+        GameNPC target = LiveMonster(70);
+        var state = new PlayerBotState(Player(null)) { Target = target };
+        Assert.That(HoldReadyNow(state, CastingBot(Cripple, target), target), Is.True);
+    }
+
+    // The review of D: a target rooted at range (no longer on the bot: AttackerTracker drops it after its attack
+    // interval) beside one add hitting the bot under 40%: the target's hold is no hold on the add, and the one-monster
+    // case still fires. The add's own control to come is C4's (AddControlReady); one cast at it under way is its hold.
+    [Test]
+    public void A_held_target_is_no_hold_on_another_monster_hitting_the_bot()
+    {
+        GameNPC target = LiveMonster(70), add = LiveMonster();
+        Effects(target)[eEffect.MovementSpeedDebuff] = [SpellEffect(target, Player(null), Cripple, 9_000)];
+        var state = new PlayerBotState(Player(null)) { Target = target };
+        Assert.That(HoldReadyNow(state, CastingBot(), add), Is.False, "an add on it, the target held at range");
+        Assert.That(HoldReadyNow(state, CastingBot(), target), Is.True, "its held target on it");
+        Assert.That(HoldReadyNow(state, CastingBot(Cripple, add), add), Is.True, "the add's root under way");
+        Assert.That(HoldReadyNow(state, CastingBot(Cripple, target), add), Is.False, "a root at the target, not the add");
+        Assert.That(HoldReadyNow(state, CastingBot(), target, add), Is.False, "two on it: no one-monster case");
+    }
+
     // #167 D1: BREAKOFF why=, the rule that fired: spent, adds (2 or more on it), atkill (the second-monster case),
     // followup (the fight after an add kill), avoided (one monster of a name it avoids) or caster (a caster losing to one).
     [TestCase(true, 1, false, false, false, false, "spent")]
@@ -1152,6 +1232,31 @@ public sealed class UT_PlayerBotDriver
             () => false), Is.False, "the hold first");
         Assert.That(PlayerBotDriver.BreakOffFires(state, PlayerBotRole.Caster, false, 39, [(25, 150, false)], 25_000,
             () => false), Is.False, "its target nearly down");
+    }
+
+    // The review of D (D1): StartsBreakOff's own rule. It scans the monsters on the bot under 40% health only, a spent
+    // caster at any health (BreakOffScans): with spent dropped from both of its arms no test failed, and a spent caster
+    // at full health never broke off.
+    [TestCase(true, (byte)100, true)] [TestCase(false, (byte)100, false)] [TestCase(false, (byte)39, true)]
+    [TestCase(false, (byte)40, false)] [TestCase(true, (byte)40, true)]
+    public void The_break_off_scans_under_40_percent_or_for_a_spent_caster(bool spent, byte health, bool scans) =>
+        Assert.That(PlayerBotDriver.BreakOffScans(spent, health), Is.EqualTo(scans));
+
+    // Once it scanned (BreakOffStartWhy): a spent caster breaks off at any health, why=spent, with no monster on it too;
+    // else the rule (BreakOffFires) with its why= (BreakOffWhy); none: null.
+    [Test]
+    public void A_spent_caster_at_full_health_breaks_off_and_says_spent()
+    {
+        var state = new PlayerBotState(Player(null)) { Engaged = true };
+        string Why(PlayerBotRole role, bool spent, byte health, bool holdReady, params (byte, int, bool)[] hitters) =>
+            PlayerBotDriver.BreakOffStartWhy(state, role, spent, health, holdReady, hitters, 25_000, () => false);
+        Assert.That(Why(PlayerBotRole.Caster, true, 100, false, (80, 150, false)), Is.EqualTo(PlayerBotDriver.Spent));
+        Assert.That(Why(PlayerBotRole.Caster, true, 100, false), Is.EqualTo(PlayerBotDriver.Spent), "its target held at range");
+        Assert.That(Why(PlayerBotRole.Caster, false, 100, false, (80, 150, false)), Is.Null, "not spent: the 40%");
+        Assert.That(Why(PlayerBotRole.Caster, false, 39, false, (80, 150, false)), Is.EqualTo("caster"));
+        Assert.That(Why(PlayerBotRole.Caster, false, 39, true, (80, 150, false)), Is.Null, "the hold first");
+        Assert.That(Why(PlayerBotRole.Melee, false, 39, false, (80, 150, true)), Is.EqualTo("avoided"));
+        Assert.That(Why(PlayerBotRole.Melee, false, 39, false, (80, 150, true), (80, 150, false)), Is.EqualTo("adds"));
     }
 
     // #167 D1: a spent caster's break-off runs, then rests: it bars no camp, avoids no name and owes no relocation (the
