@@ -89,10 +89,13 @@ public sealed class PlayerBotState
     public volatile bool Stopped;
     public volatile PlayerBotActivity Activity;      // read by the report thread
     public volatile int NearPlayerBots, NearGamebots;
-    public GameLiving Target, Unreachable;
+    public GameLiving Target;
     public readonly List<(GameLiving Npc, long Until)> BlindSkips = new();   // #167 E M2, R1: the targets dropped for want
                                                                  //   of sight (or CY3's skip), each passed over by the
                                                                  //   pick only until its own time (MarkBlind)
+    public readonly List<(GameLiving Npc, long Until)> Unreachables = new();   // #167 E U1: the monsters a walk found no
+                                                                 //   path to, each passed over by the pick and by
+                                                                 //   self-defence until its own time (LeaveUnreachable)
     public bool Engaged;
     public Spell Spell;
     public SpellLine SpellLine;
@@ -127,7 +130,7 @@ public sealed class PlayerBotState
     public int Kills, Deaths, CastFailures, Retrains;            // PLAYER_BOT_TALLY: this bot's own, since login,
     public long Gained, StartExperience;                         //   its experience gained, and at login
     public long NetExperience => Interlocked.Read(ref LastExperience) - StartExperience;   // REVIEW-FIXES 9: losses too
-    public long LastExperience, UnreachableUntil, NextTargetRefreshTick, NextLootTick, NextLosTick, NextStyleTick,
+    public long LastExperience, NextTargetRefreshTick, NextLootTick, NextLosTick, NextStyleTick,
         NextCombatChoiceTick, NextNeighbourCountTick, NextProgressCheckTick, LastProgressTick, ProgressExperience, ProgressMoney;
     public Vector3 ProgressPosition;
     public bool DeathRecorded;
@@ -743,9 +746,7 @@ public static class PlayerBotDriver
             if (state.Mover.StepToward(goal, walkStop, now) is PlayerBotStepResult.Blocked)
             {
                 ReportBlocked(state, player, "target", goal, now);
-                state.Unreachable = target;
-                state.UnreachableUntil = now + UnreachableSkipMilliseconds;
-                state.Target = null;
+                LeaveUnreachable(state, target, now);                                   // #167 E U1: its own 30 s
             }
             return;
         }
@@ -903,7 +904,7 @@ public static class PlayerBotDriver
 
     // #167 E M2: a target out of sight BlindDropMilliseconds that fights neither the bot nor its pet, nor comes at it
     // (DropsBlindTarget): its fight's line (FIGHT result=dropped blind=1), then the pick alone passes it over 30 s
-    // (MarkBlind; not Unreachable, the review).
+    // (MarkBlind; not LeaveUnreachable, the review).
     private static void DropBlind(PlayerBotState state, GamePlayer player, long now)
     {
         if (state.Engaged)
@@ -1446,8 +1447,7 @@ public static class PlayerBotDriver
             Vector3 at = new(npc.X, npc.Y, npc.Z);                                      //   a hostile keep guard as an
             if (AddReach(player, npc) is > 0 and int reach) adds.Add((npc, at, reach)); //   add, never a pick
             if (!experience || !player.IsWithinRadius(npc, radius) || !IsValidTarget(player, npc, natural) ||
-                npc == state.Unreachable && now < state.UnreachableUntil ||
-                BlindSkipped(state, npc, now))                                       // #167 E M2: the pick only
+                PickSkips(state, npc, now))                                          // #167 E M2, U1
                 continue;
             ConColor con = ConLevels.GetConColor(player.GetConLevel(npc));
             if (!AutonomousPlayerPilot.IsEligibleExperienceTarget(con, npc.EffectiveLevel, player.Level, 1) ||
@@ -1497,7 +1497,7 @@ public static class PlayerBotDriver
 
     // Self-defence: the nearest monster that is hitting the bot (its AttackerTracker, as BotGroupSupport.UnderAttack
     // reads it), whatever its con and wherever the leash is. The pilot's filter alone left the bot roaming or resting
-    // while an orange monster killed it, and each death lowered its con cap further. anyHitter: the one found unreachable
+    // while an orange monster killed it, and each death lowered its con cap further. anyHitter: the ones found unreachable
     // too, for the rest gate and the summon (SkipsHitter).
     private static GameNPC Attacker(PlayerBotState state, GamePlayer player, long now, bool anyHitter = false)
     {
@@ -1505,8 +1505,7 @@ public static class PlayerBotDriver
         int bestDistance = int.MaxValue;
         foreach (GameLiving living in player.attackComponent.AttackerTracker.Attackers)
         {
-            if (living is not GameNPC npc || !IsAttacking(player, npc) ||
-                SkipsHitter(npc == state.Unreachable, now, state.UnreachableUntil, anyHitter))
+            if (living is not GameNPC npc || !IsAttacking(player, npc) || SkipsHitter(state, npc, now, anyHitter))
                 continue;
             int distance = player.GetDistanceTo(npc);
             if (distance < bestDistance) { best = npc; bestDistance = distance; }
@@ -1514,13 +1513,13 @@ public static class PlayerBotDriver
         return best;
     }
 
-    /// <summary>Whether Attacker passes over a monster hitting the bot: the one Engage found unreachable, while
-    /// UnreachableUntil lasts, when it picks whom to fight back. Never for anyHitter (the rest gate, MayRest; the
-    /// summon): that monster still hits the bot, a sitting player takes double melee damage that never misses
-    /// (AttackAction.cs:236-238, AttackComponent.cs:2206-2208), and no hit stands it up. The old gate, InCombat, kept
-    /// such a bot standing.</summary>
-    public static bool SkipsHitter(bool unreachable, long now, long unreachableUntil, bool anyHitter) =>
-        !anyHitter && unreachable && now < unreachableUntil;
+    /// <summary>Whether Attacker passes over a monster hitting the bot: one Engage found unreachable, while its mark
+    /// lasts (UnreachableMarked; #167 E U1: each its own), when it picks whom to fight back. Never for anyHitter (the
+    /// rest gate, MayRest; the summon): that monster still hits the bot, a sitting player takes double melee damage that
+    /// never misses (AttackAction.cs:236-238, AttackComponent.cs:2206-2208), and no hit stands it up. The old gate,
+    /// InCombat, kept such a bot standing. A blind mark is the pick's alone (BlindSkipped).</summary>
+    public static bool SkipsHitter(PlayerBotState state, GameLiving npc, long now, bool anyHitter) =>
+        !anyHitter && UnreachableMarked(state, npc, now);
 
     /// <summary>Whether the search tick runs the rings (FindWithin; RefreshTarget's self-defence and Incoming run
     /// whatever): due, and not during the recovery after a release (#167 F4) or a login's step out (C6), nor while a
@@ -1540,7 +1539,7 @@ public static class PlayerBotDriver
         Attacker(state, player, now, anyHitter: true) ?? Incoming(state, player, now);
 
     // #167 F7: the nearest monster coming at the bot (IsIncoming), from a scan every TargetRefreshMilliseconds, the search
-    // tick's; between scans the one found while it still comes. The one Engage found unreachable is no threat, between
+    // tick's; between scans the one found while it still comes. The ones Engage found unreachable are no threat, between
     // scans too (the review of 9549283: the cached one was re-picked and walked to each think): it would keep the bot
     // from ever sitting. The errands' UnderAttack stays the hitters' (no detour for a monster on its way).
     private static GameNPC Incoming(PlayerBotState state, GamePlayer player, long now)
@@ -1548,7 +1547,7 @@ public static class PlayerBotDriver
         if (now < state.NextIncomingTick)
         {
             if (state.Incoming is GameNPC held && !IsIncoming(held.TargetObject == player, IsAttackable(player, held),
-                    player.GetDistanceTo(held), held == state.Unreachable && now < state.UnreachableUntil))
+                    player.GetDistanceTo(held), UnreachableMarked(state, held, now)))
                 state.Incoming = null;
             return state.Incoming;
         }
@@ -1559,8 +1558,7 @@ public static class PlayerBotDriver
         {
             int distance = player.GetDistanceTo(npc);
             if (distance >= bestDistance || !IsIncoming(npc.TargetObject == player,
-                    IsExperienceTarget(npc) && IsAttackable(player, npc), distance,
-                    npc == state.Unreachable && now < state.UnreachableUntil))
+                    IsExperienceTarget(npc) && IsAttackable(player, npc), distance, UnreachableMarked(state, npc, now)))
                 continue;
             best = npc;
             bestDistance = distance;
@@ -3096,7 +3094,7 @@ public static class PlayerBotDriver
     };
 
     /// <summary>A monster coming at the bot (#167 F7): it may attack it, it has the bot as its target and it is within
-    /// IncomingRadius; not the one Engage found unreachable while that lasts (unreachable), between scans too.</summary>
+    /// IncomingRadius; not one Engage found unreachable while its mark lasts (unreachable), between scans too.</summary>
     public static bool IsIncoming(bool targetsBot, bool attackable, int distance, bool unreachable) =>
         targetsBot && attackable && distance <= IncomingRadius && !unreachable;
 
@@ -3325,26 +3323,51 @@ public static class PlayerBotDriver
 
     /// <summary>#167 E M2: a target dropped for want of sight (DropBlind), or one an Animist left for want of a turret in
     /// reach (CY3's skip, LeaveTurretTarget), is marked for the pick alone (BlindSkips, until UnreachableSkipMilliseconds
-    /// on): the review, a blocked walk's Unreachable mark made self-defence (Attacker) and the monster coming at it
-    /// (Incoming) pass it over too, so one that came round and hit the bot was no hitter for 30 s, and it overwrote a
-    /// real unreachable mark. #167 E R1: each marked one keeps its own time (BlindSkips; marked again, from then): with
-    /// one mark, a second drop forgot the first and the pick went back to it (st-deathsE/Eb: 213 drops of a name dropped
-    /// again within 30 s with another between, A, B, A). The marks past their time go as a new one comes.</summary>
-    public static void MarkBlind(PlayerBotState state, GameLiving target, long now)
-    {
-        List<(GameLiving Npc, long Until)> skips = state.BlindSkips;
-        for (int i = skips.Count - 1; i >= 0; i--)
-            if (skips[i].Npc == target || now >= skips[i].Until) skips.RemoveAt(i);
-        skips.Add((target, now + UnreachableSkipMilliseconds));
-    }
+    /// on): the review, a blocked walk's unreachable mark (LeaveUnreachable) made self-defence (Attacker) and the
+    /// monster coming at it (Incoming) pass it over too, so one that came round and hit the bot was no hitter for 30 s,
+    /// and it overwrote a real unreachable mark. #167 E R1: each marked one keeps its own time (BlindSkips; marked again,
+    /// from then): with one mark, a second drop forgot the first and the pick went back to it (st-deathsE/Eb: 213 drops
+    /// of a name dropped again within 30 s with another between, A, B, A). The marks past their time go as a new one
+    /// comes.</summary>
+    public static void MarkBlind(PlayerBotState state, GameLiving target, long now) => Mark(state.BlindSkips, target, now);
 
     /// <summary>#167 E M2: whether the pick (FindWithin, and only it) passes over a monster: one MarkBlind marked, while
     /// its time lasts (#167 E R1: every one marked, BlindSkips).</summary>
-    public static bool BlindSkipped(PlayerBotState state, GameLiving npc, long now)
+    public static bool BlindSkipped(PlayerBotState state, GameLiving npc, long now) => Marked(state.BlindSkips, npc, now);
+
+    /// <summary>#167 E U1, Engage's blocked walk to its target (no corridor leads there): the target is left and marked
+    /// unreachable for its own UnreachableSkipMilliseconds (Unreachables; marked again, from then), as R1 made the blind
+    /// marks. One mark (Unreachable) kept only the last: st-deathsE2b, Pbotmaada stood on a pocket of the navmesh in
+    /// Muspelheim from which no corridor leads to its camp, and its picks every 2 s went A, B, A, each walk blocked, for
+    /// the last 3.5 minutes of the leg (two hitters out of reach would take turns at self-defence the same way, one each
+    /// think). The marks past their time go as a new one comes.</summary>
+    public static void LeaveUnreachable(PlayerBotState state, GameLiving target, long now)
     {
-        List<(GameLiving Npc, long Until)> skips = state.BlindSkips;
-        for (int i = 0; i < skips.Count; i++)
-            if (skips[i].Npc == npc && now < skips[i].Until) return true;
+        Mark(state.Unreachables, target, now);
+        state.Target = null;
+    }
+
+    /// <summary>#167 E U1: whether a monster is marked unreachable now (LeaveUnreachable): the pick (PickSkips),
+    /// self-defence (SkipsHitter) and the monster coming at the bot (Incoming) pass it over.</summary>
+    public static bool UnreachableMarked(PlayerBotState state, GameLiving npc, long now) => Marked(state.Unreachables, npc, now);
+
+    /// <summary>#167 E M2, U1: whether the pick (FindWithin) passes over a monster: marked unreachable, or blind (the
+    /// pick's alone).</summary>
+    public static bool PickSkips(PlayerBotState state, GameLiving npc, long now) =>
+        UnreachableMarked(state, npc, now) || BlindSkipped(state, npc, now);
+
+    // A mark of its own for 30 s (UnreachableSkipMilliseconds): the target's old one and those past their time go.
+    private static void Mark(List<(GameLiving Npc, long Until)> marks, GameLiving target, long now)
+    {
+        for (int i = marks.Count - 1; i >= 0; i--)
+            if (marks[i].Npc == target || now >= marks[i].Until) marks.RemoveAt(i);
+        marks.Add((target, now + UnreachableSkipMilliseconds));
+    }
+
+    private static bool Marked(List<(GameLiving Npc, long Until)> marks, GameLiving npc, long now)
+    {
+        for (int i = 0; i < marks.Count; i++)
+            if (marks[i].Npc == npc && now < marks[i].Until) return true;
         return false;
     }
 
@@ -3634,8 +3657,8 @@ public static class PlayerBotDriver
 
     /// <summary>#167 E CY3: the target an Animist leaves (AnimistStepFor's Skip) is out of a new turret's reach, not
     /// unreachable: the pick alone passes it over (MarkBlind, as M2's blind drop), so self-defence (Attacker) and the
-    /// monster coming at it (Incoming) still answer it if it aggroes, and a blocked walk's Unreachable mark is kept (the
-    /// review: Unreachable left a skipped monster that hit the bot unanswered 30 s).</summary>
+    /// monster coming at it (Incoming) still answer it if it aggroes, and the blocked walks' unreachable marks are kept
+    /// (the review: an unreachable mark left a skipped monster that hit the bot unanswered 30 s).</summary>
     public static void LeaveTurretTarget(PlayerBotState state, GameLiving target, long now)
     {
         MarkBlind(state, target, now);

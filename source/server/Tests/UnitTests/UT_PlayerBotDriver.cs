@@ -3066,12 +3066,17 @@ public sealed class UT_PlayerBotDriver
     // Self-defence passes over the monster it found unreachable while that lasts (Engage's blocked walk); the rest gate
     // never does (anyHitter): that monster still hits the bot, a sitting player takes double melee damage that never
     // misses (AttackAction.cs:236-238, AttackComponent.cs:2206-2208), and no hit stands it up. The old gate, InCombat,
-    // kept such a bot standing.
-    [TestCase(true, 1_000L, 2_000L, false, true)] [TestCase(true, 1_000L, 2_000L, true, false)]
-    [TestCase(true, 2_000L, 2_000L, false, false)] [TestCase(false, 1_000L, 2_000L, false, false)]
+    // kept such a bot standing. (#167 E U1: the hitter's own mark, here until 2_000.)
+    [TestCase(true, 1_000L, false, true)] [TestCase(true, 1_000L, true, false)]
+    [TestCase(true, 2_000L, false, false)] [TestCase(false, 1_000L, false, false)]
     public void Self_defence_passes_over_an_unreachable_hitter_and_the_rest_gate_does_not(bool unreachable, long now,
-        long until, bool anyHitter, bool skips) =>
-        Assert.That(PlayerBotDriver.SkipsHitter(unreachable, now, until, anyHitter), Is.EqualTo(skips));
+        bool anyHitter, bool skips)
+    {
+        GameNPC hitter = Mob(), other = Mob();
+        var state = new PlayerBotState(Player(null));
+        PlayerBotDriver.LeaveUnreachable(state, unreachable ? hitter : other, 2_000 - PlayerBotDriver.UnreachableSkipMilliseconds);
+        Assert.That(PlayerBotDriver.SkipsHitter(state, hitter, now, anyHitter), Is.EqualTo(skips));
+    }
 
     // A target over the con cap stays the bot's while it fights the bot or the bot's pet (SettleTarget): one that turned
     // on the pet was dropped, and the bot sat or pulled another while its pet fought on alone. No target is no fight,
@@ -5303,19 +5308,21 @@ public sealed class UT_PlayerBotDriver
 
     // #167 E CY3: the target an Animist leaves (Skip) is out of a new turret's reach, not unreachable: the pick alone
     // passes it over 30 s (MarkBlind, as M2's blind drop), so self-defence (Attacker) and the monster coming at it
-    // (Incoming) still answer it if it aggroes, and a blocked walk's Unreachable mark is kept.
+    // (Incoming) still answer it if it aggroes, and a blocked walk's unreachable mark is kept.
     [Test]
     public void A_target_an_animist_leaves_is_passed_over_by_the_pick_only()
     {
         GameNPC left = Mob(), blocked = Mob();
-        var state = new PlayerBotState(Player(null)) { Target = left, Unreachable = blocked, UnreachableUntil = 20_000 };
+        var state = new PlayerBotState(Player(null));
+        PlayerBotDriver.LeaveUnreachable(state, blocked, -10_000);   // marked until 20_000
+        state.Target = left;
         PlayerBotDriver.LeaveTurretTarget(state, left, 10_000);
         Assert.That((state.Target, PlayerBotDriver.BlindSkipped(state, left, 39_999),
                 PlayerBotDriver.BlindSkipped(state, left, 40_000)),
             Is.EqualTo(((GameLiving)null, true, false)), "the pick passes it over 30 s");
-        Assert.That((state.Unreachable == blocked, state.UnreachableUntil), Is.EqualTo((true, 20_000L)), "the unreachable one kept");
-        Assert.That(PlayerBotDriver.SkipsHitter(left == state.Unreachable, 39_999, state.UnreachableUntil, false), Is.False,
-            "self-defence still takes it");
+        Assert.That((PlayerBotDriver.UnreachableMarked(state, blocked, 19_999), PlayerBotDriver.UnreachableMarked(state, blocked, 20_000)),
+            Is.EqualTo((true, false)), "the unreachable one kept");
+        Assert.That(PlayerBotDriver.SkipsHitter(state, left, 39_999, false), Is.False, "self-defence still takes it");
     }
 
     [Test]
@@ -5983,20 +5990,20 @@ public sealed class UT_PlayerBotDriver
 
     // #167 E M2: a target dropped blind is passed over by the pick (FindWithin) for 30 s, and only by it: self-defence
     // (Attacker) and the monster coming at it (Incoming) still take it, so one that comes round and hits the bot is fought,
-    // and a blocked walk's Unreachable mark stays as it was (the review).
+    // and a blocked walk's unreachable mark stays as it was (the review).
     [Test]
     public void A_target_dropped_blind_is_passed_over_by_the_pick_only()
     {
         GameNPC blind = Mob(), blocked = Mob();
-        var state = new PlayerBotState(Player(null)) { Unreachable = blocked, UnreachableUntil = 20_000 };
+        var state = new PlayerBotState(Player(null));
+        PlayerBotDriver.LeaveUnreachable(state, blocked, -10_000);   // marked until 20_000
         PlayerBotDriver.MarkBlind(state, blind, 10_000);
-        Assert.That((state.Unreachable == blocked, state.UnreachableUntil), Is.EqualTo((true, 20_000L)),
-            "the unreachable one kept");
+        Assert.That((PlayerBotDriver.UnreachableMarked(state, blocked, 19_999), PlayerBotDriver.UnreachableMarked(state, blocked, 20_000)),
+            Is.EqualTo((true, false)), "the unreachable one kept");
         Assert.That(PlayerBotDriver.BlindSkipped(state, blind, 39_999), Is.True, "the pick passes it over");
         Assert.That(PlayerBotDriver.BlindSkipped(state, blind, 40_000), Is.False, "30 s on");
         Assert.That(PlayerBotDriver.BlindSkipped(state, blocked, 39_999), Is.False, "another monster");
-        Assert.That(PlayerBotDriver.SkipsHitter(blind == state.Unreachable, 39_999, state.UnreachableUntil, false), Is.False,
-            "self-defence still takes it");
+        Assert.That(PlayerBotDriver.SkipsHitter(state, blind, 39_999, false), Is.False, "self-defence still takes it");
     }
 
     // #167 E R1: every monster dropped blind is passed over by the pick, each for its own 30 s. With one mark, a second
@@ -6016,6 +6023,50 @@ public sealed class UT_PlayerBotDriver
         PlayerBotDriver.MarkBlind(state, first, 41_000);
         Assert.That((PlayerBotDriver.BlindSkipped(state, first, 70_999), PlayerBotDriver.BlindSkipped(state, second, 44_999)),
             Is.EqualTo((true, true)), "dropped again: 30 s from then, the other's mark kept");
+    }
+
+    // #167 E fix U1: every monster Engage's walk found no path to (LeaveUnreachable, the blocked walk) is passed over for
+    // its own 30 s, as R1 made the blind drops' marks. With one mark, the second block forgot the first and the next pick
+    // went back to it: st-deathsE2b, Pbotmaada stood on a pocket of the navmesh in Muspelheim with no corridor down to its
+    // camp, and its picks every 2 s went A, B, A (a fire-eater and a crackler 3,394 units off, then the crackler at its
+    // camp and the fire-eater), each walk blocked, for the last 3.5 minutes of the leg.
+    [Test]
+    public void Monsters_found_unreachable_are_each_passed_over_for_their_own_30_s()
+    {
+        GameNPC first = Mob(), second = Mob();
+        var state = new PlayerBotState(Player(null)) { Target = first };
+        PlayerBotDriver.LeaveUnreachable(state, first, 10_000);
+        Assert.That(state.Target, Is.Null, "the walk's target left");
+        state.Target = second;
+        PlayerBotDriver.LeaveUnreachable(state, second, 12_000);
+        Assert.That((PlayerBotDriver.PickSkips(state, first, 20_000), PlayerBotDriver.PickSkips(state, second, 20_000)),
+            Is.EqualTo((true, true)), "the first still passed over after the second's block");
+        Assert.That((PlayerBotDriver.PickSkips(state, first, 40_000), PlayerBotDriver.PickSkips(state, second, 40_000)),
+            Is.EqualTo((false, true)), "each its own 30 s");
+        PlayerBotDriver.LeaveUnreachable(state, first, 41_000);
+        Assert.That((PlayerBotDriver.PickSkips(state, first, 70_999), PlayerBotDriver.PickSkips(state, second, 41_999)),
+            Is.EqualTo((true, true)), "blocked again: 30 s from then, the other's mark kept");
+    }
+
+    // #167 E fix U1: self-defence (Attacker) passes over each hitter found unreachable while its mark lasts, as it did the
+    // one; the rest gate and the summon (anyHitter) pass over none, and a blind mark is the pick's alone. With one mark,
+    // two hitters out of reach took turns, one walked to and blocked each think.
+    [Test]
+    public void Self_defence_passes_over_each_unreachable_hitter_and_the_rest_gate_over_none()
+    {
+        GameNPC first = Mob(), second = Mob(), blind = Mob(), other = Mob();
+        var state = new PlayerBotState(Player(null));
+        PlayerBotDriver.LeaveUnreachable(state, first, 10_000);
+        PlayerBotDriver.LeaveUnreachable(state, second, 11_000);
+        PlayerBotDriver.MarkBlind(state, blind, 11_000);
+        GameNPC[] all = { first, second, blind, other };
+        Assert.That(all.Select(npc => PlayerBotDriver.SkipsHitter(state, npc, 20_000, false)),
+            Is.EqualTo(new[] { true, true, false, false }), "self-defence");
+        Assert.That(all.Select(npc => PlayerBotDriver.SkipsHitter(state, npc, 20_000, true)),
+            Is.EqualTo(new[] { false, false, false, false }), "the rest gate");
+        Assert.That(all.Select(npc => PlayerBotDriver.PickSkips(state, npc, 20_000)),
+            Is.EqualTo(new[] { true, true, true, false }), "the pick");
+        Assert.That(PlayerBotDriver.SkipsHitter(state, first, 40_000, false), Is.False, "its 30 s over");
     }
 
     // #167 E R1: a bot out of sight of a target it would drop (fighting neither it nor its pet, nor coming at it: kept is

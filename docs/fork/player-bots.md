@@ -158,6 +158,8 @@ Each bot thinks every 250 ms, a thin copy of the `/bot` pilot's think:
   units at a time from where the bot stands (a caster's spell range round a cave's bend, say) until it is in sight or
   in contact. In contact, out of sight 5 s, it is dropped, and the bot's picks pass it over for 30 s, each such monster
   for its own 30 s (it still fights it back if it comes on and hits it).
+- A monster its walk finds no path to it leaves, and for 30 s, each such monster for its own 30 s, neither its picks
+  nor its fighting back take it (a hitter still keeps it from sitting).
 - A monster within 2,000 units that has the bot as its target counts as an attacker before its first hit, so the bot
   stands up and fights it first. Before it sits, a bot within reach of an aggressive monster from its last search,
   or of the spawn spot of one of its last 3 kills in the last 150 s (where that monster respawns, 80 s after the kill
@@ -427,8 +429,10 @@ Known gaps:
   to a target with no path (next gap), which `main`'s code finds no path to either, and 9 lost the walkable surface and
   stepped back onto a floor, 4 of them one bot by Tir na Nog's stacked floors, as in every run.
 - **Unreachable targets come back.** A bot skips a target it found no path to for 30 seconds, then may pick it again:
-  in one run a bot tried the same monster 51 times between its fights. A GameBot's target and camp choice is part of
-  the parity work (#167).
+  in one run a bot tried the same monster 51 times between its fights. Each such monster has its own 30 s: with one
+  for all, a Thane on a pocket of Muspelheim's navmesh above its camp, with no path down, took two monsters in turn
+  every 2 s for its last 3.5 minutes, four blocked walks a second. How it got onto the pocket is open (likely a short
+  direct step there). A GameBot's target and camp choice is part of the parity work (#167).
 - A Tir na Nog bot stalled at one spot (21263, 35215) in most runs, though the same step replayed offline walks on
   (same navmesh, same Detour library). It is likely the polygon-edge case above: the log rounds the spot, and starts a
   few hundredths of a unit apart can differ there. In the last four runs none stalled there; one stalled once beside
