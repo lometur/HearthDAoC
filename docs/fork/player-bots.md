@@ -51,8 +51,11 @@ Two more settings are read only when bots are on:
 ## What they do
 
 Each bot thinks every 250 ms, a thin copy of the `/bot` pilot's think:
-- It roams within 4,000 units of its start and hunts monsters within 5,400 that con at most yellow. Each death lowers
-  that con by one step, by two at most. For 5 minutes after a death to a yellow or harder monster it also hunts
+- It roams within 4,000 units of its start and hunts monsters within 5,400 that con at most yellow. A Bard, Ranger,
+  Healer, Mercenary, Nightshade, Blademaster or Mentalist hunts blue at most alone, as other bots do after a death:
+  their yellow pulls were fatal one time in five or more (for them a first death leaves it at blue). With no blue camp
+  in its zone it takes a yellow one as its fallback, as after a death. Each death lowers that con by one step, by two
+  at most. For 5 minutes after a death to a yellow or harder monster it also hunts
   nothing that cons as high as its killer did, and takes no fallback camp that cons as high: a bot killed by a yellow
   hunts blue at most. A blue or green killer changes neither (the death's own step lowers the con), and once the 5
   minutes are up a bot with only yellow camps round it takes one as its fallback again.

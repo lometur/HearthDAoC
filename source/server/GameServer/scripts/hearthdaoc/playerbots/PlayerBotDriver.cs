@@ -78,6 +78,7 @@ public sealed class PlayerBotState
         LastLevel = player.Level;
         LastExperience = player.Experience;
         StartExperience = LastExperience;
+        SoloSteps = player.CharacterClass is ICharacterClass cls ? PlayerBotDriver.SoloSteps(cls.ID) : 0;   // #167 E CY4
     }
     public GamePlayer Player { get; }
     public PlayerBotPathMover Mover { get; }
@@ -95,6 +96,7 @@ public sealed class PlayerBotState
     public Vector3? RoamDestination;
     public ushort LastRegion;
     public int LastLevel, DeathSafetySteps, ErrorsLogged;
+    public int SoloSteps;                                        // #167 E CY4: the class's floor under the death steps
     public long RoamingSince, NextIdleLine, NextRelocateTick; // no target reached since: PLAYER_BOT_IDLE, PLAYER_BOT_RELOCATE
     public readonly HashSet<GameNPC> RelocateRejected = new(); // no corridor to them: not checked again
     public long CappedSince;                                     // DEATHS.md A4: the first search that passed monsters over
@@ -467,6 +469,7 @@ public static class PlayerBotDriver
         }
         if (!player.IsAlive) { HandleDeath(state, player, now); return; }               // 6
         StartLife(state, now, RoleOf(player.CharacterClass.ID));                         //    a new life
+        state.SoloSteps = SoloSteps(player.CharacterClass.ID);                           //    #167 E CY4: the cap's floor
         SampleHealth(state.HealthSamples, now, player.HealthPercent);                    //    #167 rate=
         if (state.SitSince != 0 && !player.IsSitting)                                    //    stood by the server (a hit)
             EndRest(state, player, now, Attacker(state, player, now, anyHitter: true) != null ? "hit" : "other");
@@ -1437,11 +1440,12 @@ public static class PlayerBotDriver
         IsAttackable(player, target) && !player.IsObjectGreyCon(target) &&
         ConLevels.GetConColor(player.GetConLevel(target)) <= cap;
 
-    // The bot's con cap: its death cap, or at a GameBot's fallback camp that camp's own con (AWBC:3446-3452), as
-    // AutonomousDeathRecoveryPolicy.EncounterMaximum gives a GameBot's pull filter; under the cons that killed it
-    // (CapAfterDeaths, #167 D6).
+    // The bot's con cap: its death cap (never under its class's solo cap, CapSteps, #167 E CY4), or at a GameBot's
+    // fallback camp that camp's own con (AWBC:3446-3452), as AutonomousDeathRecoveryPolicy.EncounterMaximum gives a
+    // GameBot's pull filter; under the cons that killed it (CapAfterDeaths, #167 D6).
     private static ConColor Cap(PlayerBotState state, long now) => CapAfterDeaths(
-        MaximumTargetCon(1, state.DeathSafetySteps), state.FallbackCap, LowestKillerCon(state.KillerCons, now));
+        MaximumTargetCon(1, CapSteps(state.DeathSafetySteps, state.SoloSteps)), state.FallbackCap,
+        LowestKillerCon(state.KillerCons, now));
 
     /// <summary>#167 D6: the cap after deaths, EncounterMaximum's (the death cap deathCap, or the fallback camp's con),
     /// under lowestKillerCon, the lowest con that killed the bot in the last 5 minutes (LowestKillerCon), never under
@@ -1471,13 +1475,14 @@ public static class PlayerBotDriver
     /// GREEN.</summary>
     public static ConColor UnderKillerCon(ConColor killer) => (ConColor)Math.Max((int)ConColor.GREEN, (int)killer - 1);
 
-    /// <summary>#167 D6: the plan's caps (RelocateIfOutgrown): its fit pass under the death cap and the killers' cons as
-    /// the pulls are (CapAfterDeaths with no fallback: the plan picks the next one), else it planned a camp the bot then
-    /// passed over and the capped clock moved it on; and the lowest killer's con, which the fallback stays under.</summary>
+    /// <summary>#167 D6: the plan's caps (RelocateIfOutgrown): its fit pass under the death cap (never under the class's
+    /// solo cap, CapSteps, #167 E CY4) and the killers' cons as the pulls are (CapAfterDeaths with no fallback: the plan
+    /// picks the next one), else it planned a camp the bot then passed over and the capped clock moved it on; and the
+    /// lowest killer's con, which the fallback stays under.</summary>
     public static (ConColor Fit, ConColor? KillerCon) PlanCaps(PlayerBotState state, long now)
     {
         ConColor? killer = LowestKillerCon(state.KillerCons, now);
-        return (CapAfterDeaths(MaximumTargetCon(1, state.DeathSafetySteps), null, killer), killer);
+        return (CapAfterDeaths(MaximumTargetCon(1, CapSteps(state.DeathSafetySteps, state.SoloSteps)), null, killer), killer);
     }
 
     /// <summary>#167 D6: a killer's con (con, against the bot's level then), each death's, for a killer that counts
@@ -1574,6 +1579,23 @@ public static class PlayerBotDriver
     public static bool IsTrainingPropName(string name) =>
         name != null && (name.EndsWith(" dummy", StringComparison.OrdinalIgnoreCase) ||
             name.Contains(" dummy ", StringComparison.OrdinalIgnoreCase));
+
+    /// <summary>#167 E (CY4): the classes that take no YELLOW monster solo: one step under it (BLUE) from the start, as
+    /// any bot after one death (CapSteps). Their YELLOW one-monster pulls were fatal 20% or more on st-deathsD2 and D2b
+    /// and 15% or more on st-hearth11 and 11b, with 2 or more deaths on each pair: Bard 16 of 36 (14 of 44), Ranger 6 of
+    /// 21 (7 of 21), Healer 4 of 20 (4 of 18), Mercenary 2 of 9 (2 of 10), Nightshade 4 of 5 (3 of 14), Blademaster 3 of
+    /// 4 (2 of 5), Mentalist 4 of 8 (6 of 7). It covers at most 36 deaths on the D legs (3 came after a death, at a BLUE
+    /// cap already), about 29 net, for about 46 YELLOW wins (about 20 same-level kills of XP). A GameBot's YELLOW cap
+    /// (MaximumTargetCon) rests on monster-formula armour and 10%/s regeneration. Wardens and Savages are left to their
+    /// kits (PlayerBotKit.PlayerChoice, PlayerBotKitGear.FitsHand): their YELLOW deaths were the broken kits'.</summary>
+    public static int SoloSteps(int classId) => (eCharacterClass)classId is eCharacterClass.Bard or eCharacterClass.Ranger or
+        eCharacterClass.Healer or eCharacterClass.Mercenary or eCharacterClass.Nightshade or eCharacterClass.Blademaster or
+        eCharacterClass.Mentalist ? 1 : 0;
+
+    /// <summary>#167 E (CY4): the steps the cap reads (Cap, PlanCaps, the IDLE line): the death steps, never under the
+    /// class's solo steps (SoloSteps). So a listed class's first death leaves it at BLUE and its second takes it to GREEN,
+    /// as any bot's second does; the DEATH line's deathSteps= stays the deaths'.</summary>
+    public static int CapSteps(int deathSteps, int soloSteps) => Math.Max(deathSteps, soloSteps);
 
     // = APP:549-559 = AWBC:3834-3846: YELLOW solo, one step lower per death, never below GREEN.
     public static ConColor MaximumTargetCon(int groupSize, int deathSteps)
@@ -3162,7 +3184,7 @@ public static class PlayerBotDriver
         }
         if (Log.IsInfoEnabled)
             Log.Info($"PLAYER_BOT_IDLE bot={player.Name} level={player.Level} minutes={(now - state.RoamingSince) / 60_000} " +
-                     $"deathSteps={state.DeathSafetySteps} cap={MaximumTargetCon(1, state.DeathSafetySteps)} " +
+                     $"deathSteps={state.DeathSafetySteps} cap={MaximumTargetCon(1, CapSteps(state.DeathSafetySteps, state.SoloSteps))} " +
                      $"fromAnchor={(int)Vector3.Distance(new(player.X, player.Y, player.Z), state.Anchor)} " +
                      $"grey/green/blue/yellow/orange/red/purple={string.Join('/', byCon)} outsideLeash={outsideLeash}");
     }

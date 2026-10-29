@@ -661,6 +661,53 @@ public sealed class UT_PlayerBotDriver
         Assert.That(PlayerBotDriver.PlanCaps(state, 2_000), Is.EqualTo((ConColor.GREEN, (ConColor?)ConColor.YELLOW)));
     }
 
+    // #167 E (CY4): Bards, Rangers, Healers, Mercenaries, Nightshades, Blademasters and Mentalists take no YELLOW solo
+    // (their YELLOW pulls were fatal 20% or more on both pairs of legs); every other class keeps YELLOW.
+    [TestCase(eCharacterClass.Bard, 1)] [TestCase(eCharacterClass.Ranger, 1)] [TestCase(eCharacterClass.Healer, 1)]
+    [TestCase(eCharacterClass.Mercenary, 1)] [TestCase(eCharacterClass.Nightshade, 1)] [TestCase(eCharacterClass.Blademaster, 1)]
+    [TestCase(eCharacterClass.Mentalist, 1)] [TestCase(eCharacterClass.Warden, 0)] [TestCase(eCharacterClass.Savage, 0)]
+    [TestCase(eCharacterClass.Infiltrator, 0)] [TestCase(eCharacterClass.Eldritch, 0)] [TestCase(eCharacterClass.Scout, 0)]
+    [TestCase(eCharacterClass.Warrior, 0)]
+    public void Some_classes_take_no_yellow_solo(eCharacterClass cls, int steps) =>
+        Assert.That(PlayerBotDriver.SoloSteps((int)cls), Is.EqualTo(steps));
+
+    // A floor under the death steps: a listed class starts at BLUE, its first death leaves it there and its second
+    // takes it to GREEN; another class as before.
+    [TestCase(0, 1, ConColor.BLUE)] [TestCase(1, 1, ConColor.BLUE)] [TestCase(2, 1, ConColor.GREEN)]
+    [TestCase(0, 0, ConColor.YELLOW)] [TestCase(1, 0, ConColor.BLUE)]
+    public void The_solo_steps_are_a_floor_under_the_death_steps(int deathSteps, int soloSteps, ConColor cap) =>
+        Assert.That(PlayerBotDriver.MaximumTargetCon(1, PlayerBotDriver.CapSteps(deathSteps, soloSteps)), Is.EqualTo(cap));
+
+    // The pull cap and the plan's fit pass both read them (else the plan sends the bot to a YELLOW camp it then passes
+    // over, and the capped clock moves it on); a YELLOW fallback camp still lifts the pull cap, as after one death.
+    [Test]
+    public void The_pull_cap_and_the_plan_read_the_solo_steps()
+    {
+        MethodInfo cap = typeof(PlayerBotDriver).GetMethod("Cap", BindingFlags.Static | BindingFlags.NonPublic)!;
+        var state = new PlayerBotState(Player(null)) { SoloSteps = 1 };
+        Assert.That(cap.Invoke(null, [state, 1_000L]), Is.EqualTo(ConColor.BLUE));
+        Assert.That(PlayerBotDriver.PlanCaps(state, 1_000), Is.EqualTo((ConColor.BLUE, (ConColor?)null)));
+        state.FallbackCap = ConColor.YELLOW;
+        Assert.That(cap.Invoke(null, [state, 1_000L]), Is.EqualTo(ConColor.YELLOW));
+        state.SoloSteps = 0;
+        state.FallbackCap = null;
+        Assert.That(cap.Invoke(null, [state, 1_000L]), Is.EqualTo(ConColor.YELLOW));
+    }
+
+    // The review of CY4: a bot's state reads its class's solo steps when it is made (Think reads them again each life),
+    // so a listed class's cap is BLUE from its first think; a player with no class yet has none.
+    [Test]
+    public void A_bots_state_takes_its_classs_solo_steps()
+    {
+        GamePlayer bard = Player(null);
+        typeof(GamePlayer).GetField("m_characterClass", Hidden)!.SetValue(bard, new DOL.GS.PlayerClass.ClassBard());
+        Assert.That(new PlayerBotState(bard).SoloSteps, Is.EqualTo(1));
+        GamePlayer warrior = Player(null);
+        typeof(GamePlayer).GetField("m_characterClass", Hidden)!.SetValue(warrior, new DOL.GS.PlayerClass.ClassWarrior());
+        Assert.That(new PlayerBotState(warrior).SoloSteps, Is.EqualTo(0));
+        Assert.That(new PlayerBotState(Player(null)).SoloSteps, Is.EqualTo(0), "no class yet");
+    }
+
     // With no camp that fits, the fallback takes no camp whose median is at or over the lowest con that killed the bot:
     // none at all rather than one (EndReplan: it hunts where it is, under its cap). Before the failed camps' preference:
     // the failed BLUE camp, the only one left, before a YELLOW one after a YELLOW death. A BLUE killer leaves it alone
