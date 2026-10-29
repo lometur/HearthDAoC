@@ -48,10 +48,20 @@ public static class PlayerBotKit
 
     public static PlayerBotKitPlan Plan(PlayerBotBuild build, long seed)
     {
-        eSpecType choice = BotSpec.ChoosePersistentSpecialization(build.Class, seed);   // BotSpec.cs:120-131
+        eSpecType choice = PlayerChoice(build.Class,
+            BotSpec.ChoosePersistentSpecialization(build.Class, seed));                 // BotSpec.cs:120-131
         BotSpec spec = BotSpec.GetSpec(build.Class, choice);                            // BotSpec.cs:28-77; weapon rolls are Util.Random
         return spec == null ? null : new(build, choice, spec);
     }
+
+    /// <summary>The player bots' own choice among a class's GameBot plans (Plan). #167 E (CY2): a Warden plays the
+    /// Battle Warden plan (Warden.cs:44-50: its weapon line at 0.7, Nurture 0.9, Regrowth 0.3, Parry 0.1). The Regrowth
+    /// plan has no weapon line (Warden.cs:52-56) and a Nurture plan's case 1 has it at 0.3 (:36-42): over st-deathsD2
+    /// and D2b those Wardens died 15 times in 1.50 bot-hours (YELLOW pulls 0 won, 6 lost), the Battle Wardens 3 in
+    /// 2.93. A solo Warden's heals seldom land in melee (a monster's hits keep interrupting a 3-s cast), so the lower
+    /// Regrowth costs it little.</summary>
+    public static eSpecType PlayerChoice(eCharacterClass cls, eSpecType choice) =>
+        cls == eCharacterClass.Warden ? eSpecType.BattleWarden : choice;
 
     /// <summary>The player bots' own changes to a GameBot plan's lines; the GameBot's plan stays as it is. #167 F13: a
     /// Suppression Spiritmaster's main line, Suppression to 49, has ratio 0 (Spiritmaster.cs:41-44, cases 4 and 5), so

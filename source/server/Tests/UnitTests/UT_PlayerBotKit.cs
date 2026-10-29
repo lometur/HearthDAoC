@@ -224,6 +224,25 @@ public sealed class UT_PlayerBotKit
         Assert.That(PlayerBotKit.PlayerLines(eSpecType.DarkSpirit, dark), Is.EqualTo(dark));   // a minor line keeps its 0
     }
 
+    // #167 E (CY2): every Warden plays the Battle Warden plan, its weapon line at 0.7 (Warden.cs:44-50), whatever the
+    // GameBot's choice for the seed (ChoosePersistentSpecialization); other classes keep theirs.
+    [Test]
+    public void A_warden_plays_the_battle_warden_plan()
+    {
+        int other = 0;
+        for (long seed = 1; seed <= 60; seed++)
+        {
+            if (BotSpec.ChoosePersistentSpecialization(eCharacterClass.Warden, seed) != eSpecType.BattleWarden) other++;
+            PlayerBotKitPlan kit = PlayerBotKit.Plan(new PlayerBotBuild(33, eCharacterClass.Warden, eRace.Celt), seed);
+            Assert.That((kit.Choice, kit.Spec.SpecType), Is.EqualTo((eSpecType.BattleWarden, eSpecType.BattleWarden)), $"seed {seed}");
+            BotSpecLine weapon = kit.Lines.Single(l => l.Spec == SkillBase.ObjectTypeToSpec(kit.Spec.WeaponOneType));
+            Assert.That((weapon.SpecCap, weapon.levelRatio), Is.EqualTo((39u, 0.7f)), $"seed {seed}");
+        }
+        Assert.That(other, Is.GreaterThan(0), "a seed the GameBot gives another Warden plan");
+        Assert.That(PlayerBotKit.PlayerChoice(eCharacterClass.Druid, eSpecType.NurtureDruid), Is.EqualTo(eSpecType.NurtureDruid));
+        Assert.That(PlayerBotKit.PlayerChoice(eCharacterClass.Warden, eSpecType.RegrowthWarden), Is.EqualTo(eSpecType.BattleWarden));
+    }
+
     // At 47 the half levels' points (#167 F13) raise Cold to 16 (it was 1, nothing left over).
     [TestCase(30, 30, 1, 0)] [TestCase(47, 47, 16, 14)]
     public void A_fire_wizard_spends_as_a_gamebot_trained_level_by_level(int level, int fire, int cold, int unspent)
