@@ -77,7 +77,10 @@ Each bot thinks every 250 ms, a thin copy of the `/bot` pilot's think:
   damage-and-snare nuke's). Only single-target spells the bot has, that the monster isn't immune to by the server's
   own rules: a monster stunned or mezzed in the last minute takes the next one for half the time, then a quarter, and
   none under 1 s. A mez on its target only as the last escape, the monster about to reach it, and only on a monster
-  above 75% health.
+  above 75% health. It casts its damage spell while it can pay that spell's cost as the server charges it (a focus
+  caster 80-120% by its focus, double under Quickcast), keeping the cheapest of its controls' cost in hand while its
+  target isn't held; with none to keep, a Quickcast spell goes at any power, as the server lets it. Every other class
+  stops casting under 18% power.
 - Any bot with a control spell (casters, healers, pet classes, a Skald or a Minstrel) also controls an add: the
   nearest other monster coming at it or hitting it that isn't held. A mez first, then a root, then a stun; no mez
   from a pet class (its pet would hit the add and free it), and no root on an add already in melee (it still hits
@@ -151,7 +154,8 @@ Each bot thinks every 250 ms, a thin copy of the `/bot` pilot's think:
   GameBot does, and it waits out the resurrection illness there too. It pulls nothing until then, but fights back. No
   hold for a camp lasts over 60 s: then it hunts where it is.
 - At login it also first steps out of the reach of every monster round it that would aggro, then hunts: no wait and
-  no new camp.
+  no new camp. A caster rests first, after its login buffs, as after a kill; a life after a release needs no such rest
+  (the release restores full power).
 - It walks on the navmesh. A bot made at a level from a spots line also trains on each level-up.
 - In a run of 3 bots or fewer, `hdbot-alb-01` also does quest 20206 (Immediate Resolution) and its class promotion.
 

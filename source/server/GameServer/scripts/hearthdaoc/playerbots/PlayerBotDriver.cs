@@ -446,7 +446,7 @@ public static class PlayerBotDriver
             if (Log.IsInfoEnabled) Log.Info(DeathLine(held.Head, held.Detail, state.Killer, held.Target));
         }
         if (!player.IsAlive) { HandleDeath(state, player, now); return; }               // 6
-        StartLife(state, now);                                                           //    a new life
+        StartLife(state, now, RoleOf(player.CharacterClass.ID));                         //    a new life
         SampleHealth(state.HealthSamples, now, player.HealthPercent);                    //    #167 rate=
         if (state.SitSince != 0 && !player.IsSitting)                                    //    stood by the server (a hit)
             EndRest(state, player, now, Attacker(state, player, now, anyHitter: true) != null ? "hit" : "other");
@@ -532,20 +532,29 @@ public static class PlayerBotDriver
     }
 
     /// <summary>Step 6, a new life (after a release, or the login's first): the recovery LifeStart gives (StartRecovery),
-    /// this life's counts afresh. The release restores it all and ends its buffs: the self-buffs scan at once.</summary>
-    public static void StartLife(PlayerBotState state, long now)
+    /// this life's counts afresh. The release restores it all and ends its buffs: the self-buffs scan at once. #167 D3: a
+    /// caster's login life owes a rest (OpensLifeRested; role: Think's RoleOf, the UT fixture has no CharacterClass).
+    /// </summary>
+    public static void StartLife(PlayerBotState state, long now, PlayerBotRole role)
     {
         if (!state.DeathRecorded && state.AliveSince != 0) return;
         (bool stepOut, bool backOff) = LifeStart(state.DeathRecorded, state.AliveSince == 0);
         if (stepOut) StartRecovery(state, now, backOff);                                // #167 F4, C6
+        state.RecoverBeforePull = OpensLifeRested(role, state.DeathRecorded);           // #167 D3
         state.AliveSince = now;
         state.HealthSamples.Clear();                                                     // #167 rate=: no gain from the release
         state.LifeKills = state.LifeRests = 0;
         state.Killer = null;
         state.KillerAvoided = false;
-        state.RecoverBeforePull = false;
         state.NextSelfBuffTick = 0;
     }
+
+    /// <summary>Whether a new life opens with a rest owed (#167 D3, StartLife's RecoverBeforePull): a caster's login life
+    /// only. Its login buffs drain power and the rest came only under 45% (NeedsRest): 13 of st-deathsC's 53 caster login
+    /// first fights with no rest were fatal, 7 of the 12 that died in the fight at 16% power or less. A release restores
+    /// full power already (afterRelease; GamePlayer.cs:1723-1725), and a rest after every one would add about 70 rests.
+    /// </summary>
+    public static bool OpensLifeRested(PlayerBotRole role, bool afterRelease) => role == PlayerBotRole.Caster && !afterRelease;
 
     /// <summary>The recovery a new life starts (#167 F4, C6): (stepOut, backOff). After a release (afterDeath), all of it:
     /// the step out of reach, the back-off and the replan owed (AfterReleaseStep). The login's first life (firstLife) only
@@ -588,13 +597,16 @@ public static class PlayerBotDriver
         }
         bool interruptible = state.Spell != null && Interruptible(state.Spell);
         Ability quickcast = player.GetAbility(Abilities.Quickcast);
-        bool canCast = ShouldCast(state.Spell != null, player.ManaPercent, now, state.SpellBlockedUntil);
         bool interrupted = player.IsBeingInterruptedByOther && !quickcasting;           // a quickcast one goes (SpellHandler.cs:581)
         bool quickcastReady = QuickcastReady(quickcast != null, quickcasting,
             quickcast == null ? 0 : player.GetSkillDisabledDuration(quickcast), state.NextQuickcastTick, player.IsCasting, now);
-        PlayerBotRole role = RoleOf(player.CharacterClass.ID);
+        PlayerBotRole role = RoleOf(player.CharacterClass.ID);                          // #167 D3: before the cast gate
         (bool held, bool breaksOnHit) = role == PlayerBotRole.Caster ? Hold(target) : default;   // #167 C3: a caster's hold
         bool otherHitting = held && OtherHitting(player, target);                                //   on its target, alone
+        bool canCast = ShouldCastFor(role, state.Spell != null, player.ManaPercent,      // #167 D3: a caster's gate is its
+            role == PlayerBotRole.Caster && CasterCanPay(state, player, state.Spell, state.SpellLine, held,   //   spell's
+                quickcasting || interrupted && interruptible && quickcastReady),          //   cost, doubled when the cast
+            now, state.SpellBlockedUntil);                                                //   goes under Quickcast
         if (state.Engaged) WatchFight(state, player, target, role, held, now);           // #167 heldSec= and on, walk in or not
         long selfInterrupt = quickcasting ? 0 : Math.Max(0, player.SelfInterruptTime - now);
         int spellRange = StopSpellRange(state.Spell, state.Nukes, player.castingComponent.CalculateSpellRange);
@@ -744,6 +756,60 @@ public static class PlayerBotDriver
     /// CombatAction's.</summary>
     public static bool ShouldCast(bool hasSpell, byte manaPercent, long now, long blockedUntil) =>
         hasSpell && manaPercent >= 18 && now >= blockedUntil;
+
+    /// <summary>The cast gate by role (#167 D3, Engage's canCast): a caster's is the cost of its spell (casterCanCast,
+    /// CasterCanCast), every other role keeps ShouldCast's 18%; the cast watch's block for either.</summary>
+    public static bool ShouldCastFor(PlayerBotRole role, bool hasSpell, byte manaPercent, bool casterCanCast, long now,
+        long blockedUntil) =>
+        role == PlayerBotRole.Caster ? hasSpell && now >= blockedUntil && casterCanCast
+            : ShouldCast(hasSpell, manaPercent, now, blockedUntil);
+
+    /// <summary>Whether a caster can pay for its spell now (#167 D3): its power less reserve (ControlReserve) covers the
+    /// spell's cost as the server charges it (PowerCost: the pool maxMana for a percent cost, focusFactor, Quickcast's
+    /// double for a spell with a cast time). Under 18% ShouldCast's gate had it swing with a nuke of about 9% still paid
+    /// for: 14 of st-deathsC's 20 deaths under 25% power waited 0. Under Quickcast the server checks no cost
+    /// (SpellHandler.cs:774-775, :978), only some power left for a fixed one (:967-973): with no reserve to keep, it
+    /// casts.</summary>
+    public static bool CasterCanCast(int maxMana, int mana, int power, int reserve, double focusFactor, bool quickcast,
+        int castTime) =>
+        quickcast && reserve == 0 && (mana > 0 || power <= 0) ||
+        mana - reserve >= PowerCost(maxMana, power, focusFactor, quickcast, castTime);
+
+    /// <summary>A spell's power as the server charges it (#167 D3; SpellHandler.PowerCost, SpellHandler.cs:1181-1240,
+    /// is a handler's, with random free casts and the Quickcast read at the cast's start, so not called from here): a
+    /// negative power is that percent of percentBase (:1206-1212), times a focus caster's factor (FocusCostFactor,
+    /// :1214-1233), doubled under Quickcast for a spell with a cast time (:1237-1239), truncated as the server does.</summary>
+    public static int PowerCost(int percentBase, int power, double focusFactor, bool quickcast, int castTime)
+    {
+        double cost = power < 0 ? percentBase * (double)power * -0.01 : power;
+        cost *= focusFactor;
+        if (quickcast && castTime > 0) cost *= 2;
+        return (int)cost;
+    }
+
+    /// <summary>A focus caster's cost factor (#167 D3, SpellHandler.cs:1214-1233): 1.2 less its focus bonus, the focus
+    /// level (focusLevel) x 0.4 over the spell's level, 0 to 0.4, scaled by its spec over the spell's level up to 1: 120%
+    /// with no focus down to 80%. Not a focus caster (or a line with no focus: the caller's), 1.</summary>
+    public static double FocusCostFactor(bool focusCaster, int focusLevel, int spellLevel, int specLevel)
+    {
+        if (!focusCaster) return 1;
+        double bonus = focusLevel * 0.4;
+        if (spellLevel > 0) bonus /= spellLevel;
+        bonus = Math.Clamp(bonus, 0, 0.4);
+        if (spellLevel > 0) bonus *= Math.Min(1, specLevel / (double)spellLevel);
+        return 1.2 - bonus;
+    }
+
+    /// <summary>The power a caster keeps for the escape (#167 D3, CasterCanCast's reserve): the cheapest known control's
+    /// cost (controlCosts) while its target isn't held, else none. With one root kept, a caster whose nukes ran its power
+    /// down can still hold the monster that reaches it.</summary>
+    public static int ControlReserve(IEnumerable<int> controlCosts, bool held)
+    {
+        if (held) return 0;
+        int least = int.MaxValue;
+        foreach (int cost in controlCosts) least = Math.Min(least, cost);
+        return least == int.MaxValue ? 0 : least;
+    }
 
     /// <summary>What the bot does in reach of its target (#167 F6). With no spell it may cast (ShouldCast), it swings. An
     /// instant or uninterruptible spell goes whatever the interrupts, when the cast choice is due (between casts the bot
@@ -3272,12 +3338,51 @@ public static class PlayerBotDriver
     }
 
     // #167 D1: a damage spell the bot can pay for now, on its recast or not (power is what a spent caster lacks); the
-    // area spells' add scan (Nuke) isn't needed for that.
+    // area spells' add scan (Nuke) isn't needed for that. #167 D3: at its real cost (CasterCanCast; no reserve, the
+    // target is held).
     private static bool CanNuke(PlayerBotState state, GamePlayer player)
     {
-        foreach ((Spell spell, _) in state.Nukes)
-            if (HasPowerFor(player.MaxMana, player.Mana, spell.Power)) return true;
+        bool quickcasting = player.effectListComponent.ContainsEffectForEffectType(eEffect.QuickCast);
+        foreach ((Spell spell, SpellLine line) in state.Nukes)
+            if (CasterCanCast(PercentPowerBase(player), player.Mana, spell.Power, 0, FocusFactor(player, spell, line),
+                    quickcasting, spell.CastTime))
+                return true;
         return false;
+    }
+
+    // #167 D3: Engage's CasterCanCast for the bot's spell (none: false), with the cheapest known control's cost kept in
+    // reserve while its target isn't held (ControlReserve; Controls cached per level, KnowSpells) and quickcast when the
+    // cast goes under Quickcast.
+    private static bool CasterCanPay(PlayerBotState state, GamePlayer player, Spell spell, SpellLine line, bool held,
+        bool quickcast)
+    {
+        if (spell == null) return false;
+        KnowSpells(state, player);
+        return CasterCanCast(PercentPowerBase(player), player.Mana, spell.Power, ControlReserve(ControlCosts(state, player), held),
+            FocusFactor(player, spell, line), quickcast, spell.CastTime);
+    }
+
+    // #167 D3: each known control's cost (PowerCost), not under Quickcast.
+    private static IEnumerable<int> ControlCosts(PlayerBotState state, GamePlayer player)
+    {
+        foreach ((Spell spell, SpellLine line) in state.Controls)
+            yield return PowerCost(PercentPowerBase(player), spell.Power, FocusFactor(player, spell, line), false, spell.CastTime);
+    }
+
+    // #167 D3: the pool a percent cost reads (SpellHandler.cs:1206-1212): the class's max power at the bot's level and
+    // base stat, else its max power.
+    private static int PercentPowerBase(GamePlayer player) =>
+        player.CharacterClass.ManaStat is not eStat.UNDEFINED
+            ? player.CalculateMaxMana(player.Level, player.GetBaseStat(player.CharacterClass.ManaStat)) : player.MaxMana;
+
+    // #167 D3: the spell's focus factor (FocusCostFactor, SpellHandler.cs:1214-1233): a focus caster's on a line with a
+    // focus (SkillBase.SpecToFocus), from its focus level and its spec.
+    private static double FocusFactor(GamePlayer player, Spell spell, SpellLine line)
+    {
+        if (!player.CharacterClass.IsFocusCaster || line == null) return 1;
+        eProperty focus = SkillBase.SpecToFocus(line.Spec);
+        return focus is eProperty.Undefined ? 1
+            : FocusCostFactor(true, player.GetModified(focus), spell.Level, player.GetModifiedSpecLevel(line.Spec));
     }
 
     // #167 D1: a caster's hold on the monster it fights (npc: its target, or at a kill the one on it) ready (HoldReady):

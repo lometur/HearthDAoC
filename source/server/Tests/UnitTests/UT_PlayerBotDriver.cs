@@ -773,11 +773,11 @@ public sealed class UT_PlayerBotDriver
             ServerProperties.Properties.TIMER_KILLED_BY_MOB = 10;
             var released = new PlayerBotState(Player(null)) { AliveSince = 1_000, DeathRecorded = true, ReleaseAskedAt = 8_750,
                 WalkOutGoal = Vector3.One, WalkOutOver = true, WalkOutSprint = true, BackImmuneMs = 2_000, BackSame = true };
-            PlayerBotDriver.StartLife(released, 9_000);
+            PlayerBotDriver.StartLife(released, 9_000, PlayerBotRole.Melee);
             Assert.That((released.ImmuneUntil, released.WalkOutGoal, released.WalkOutOver, released.WalkOutSprint,
                 released.BackImmuneMs, released.BackSame), Is.EqualTo((18_750L, (Vector3?)null, false, false, 0L, false)));
             var login = new PlayerBotState(Player(null));
-            PlayerBotDriver.StartLife(login, 5_000);
+            PlayerBotDriver.StartLife(login, 5_000, PlayerBotRole.Melee);
             Assert.That(login.ImmuneUntil, Is.Zero, "no release, no walk out");
         }
         finally
@@ -801,17 +801,40 @@ public sealed class UT_PlayerBotDriver
     public void A_new_life_starts_the_step_out_at_login_and_the_whole_recovery_after_a_release()
     {
         var login = new PlayerBotState(Player(null));
-        PlayerBotDriver.StartLife(login, 5_000);
+        PlayerBotDriver.StartLife(login, 5_000, PlayerBotRole.Melee);
         Assert.That((login.AfterRelease, login.RecoverUntil, login.ReleasedAt, login.ReplanSince, login.AliveSince),
             Is.EqualTo((true, 5_000L, 0L, 0L, 5_000L)));
         var released = new PlayerBotState(Player(null)) { AliveSince = 1_000, DeathRecorded = true,
             ReplanOwed = PlayerBotDriver.Died, NoXpDeaths = 3 };
-        PlayerBotDriver.StartLife(released, 9_000);
+        PlayerBotDriver.StartLife(released, 9_000, PlayerBotRole.Melee);
         Assert.That((released.AfterRelease, released.RecoverUntil, released.ReleasedAt, released.ReplanSince,
             released.AliveSince), Is.EqualTo((true, 39_000L, 9_000L, 9_000L, 9_000L)), "the third death with no XP: 30 s");
         var later = new PlayerBotState(Player(null)) { AliveSince = 1_000 };
-        PlayerBotDriver.StartLife(later, 9_000);
+        PlayerBotDriver.StartLife(later, 9_000, PlayerBotRole.Melee);
         Assert.That((later.AfterRelease, later.AliveSince), Is.EqualTo((false, 1_000L)), "no new life");
+    }
+
+    // #167 D3: a caster's login life opens rested (RecoverBeforePull): its login buffs drain power, and 13 of st-deathsC's
+    // 53 caster login first fights with no rest were fatal, 7 of the 12 that died in the fight at 16% power or less. A
+    // release restores full power already (GamePlayer.cs:1723-1725), so not after one; nor any other role.
+    [TestCase(PlayerBotRole.Caster, false, true)] [TestCase(PlayerBotRole.Caster, true, false)]
+    [TestCase(PlayerBotRole.Melee, false, false)] [TestCase(PlayerBotRole.Pet, false, false)]
+    [TestCase(PlayerBotRole.Healer, false, false)] [TestCase(PlayerBotRole.Archer, false, false)]
+    public void A_casters_login_life_opens_rested(PlayerBotRole role, bool afterRelease, bool rested) =>
+        Assert.That(PlayerBotDriver.OpensLifeRested(role, afterRelease), Is.EqualTo(rested));
+
+    [Test]
+    public void A_casters_login_owes_a_rest_and_its_release_does_not()
+    {
+        var login = new PlayerBotState(Player(null));
+        PlayerBotDriver.StartLife(login, 5_000, PlayerBotRole.Caster);
+        Assert.That(login.RecoverBeforePull, Is.True);
+        var released = new PlayerBotState(Player(null)) { AliveSince = 1_000, DeathRecorded = true, RecoverBeforePull = true };
+        PlayerBotDriver.StartLife(released, 9_000, PlayerBotRole.Caster);
+        Assert.That(released.RecoverBeforePull, Is.False);
+        var melee = new PlayerBotState(Player(null));
+        PlayerBotDriver.StartLife(melee, 5_000, PlayerBotRole.Melee);
+        Assert.That(melee.RecoverBeforePull, Is.False);
     }
 
     // PLAYER_BOT_BACK (#167 C1, the verifier's logging): from a release to the first fight, the seconds in all and those
@@ -848,11 +871,11 @@ public sealed class UT_PlayerBotDriver
     {
         var released = new PlayerBotState(Player(null)) { AliveSince = 1_000, DeathRecorded = true,
             ReplanOwed = PlayerBotDriver.Died, BackMoved = true, BackStepOutMs = 5_000, BackHoldMs = 250, BackWalkMs = 500 };
-        PlayerBotDriver.StartLife(released, 9_000);
+        PlayerBotDriver.StartLife(released, 9_000, PlayerBotRole.Melee);
         Assert.That((released.BackPending, released.BackOwed, released.BackMoved, released.BackStepOutMs,
             released.BackHoldMs, released.BackWalkMs), Is.EqualTo((true, true, false, 0L, 0L, 0L)));
         var login = new PlayerBotState(Player(null));
-        PlayerBotDriver.StartLife(login, 5_000);
+        PlayerBotDriver.StartLife(login, 5_000, PlayerBotRole.Melee);
         Assert.That(login.BackPending, Is.False);
     }
 
@@ -3047,6 +3070,75 @@ public sealed class UT_PlayerBotDriver
             interruptible, PlayerBotDriver.QuickcastReady(hasQuickcast, quickcastOn, disabled, nextTry, casting, 1_000),
             due: true, heldBreaksOnHit: false) == PlayerBotCombatAction.Quickcast, Is.EqualTo(uses));
 
+    // #167 D3: a caster casts by its damage spell's cost, not 18% (below it canCast was false and it swung: 14 of
+    // st-deathsC's 20 deaths under 25% power waited 0, with a nuke of about 9% still paid for). While its target isn't
+    // held it keeps a control's cost in reserve (reserve, ControlReserve) for the escape. The cost is the server's
+    // (PowerCost): a negative power a percent of the pool, a focus caster's factor (FocusCostFactor), doubled under
+    // Quickcast for a spell with a cast time; and under Quickcast the server checks no cost, only some power left.
+    [TestCase(290, 30, 25, 0, 1.0, false, 3_000, true)] [TestCase(290, 20, 25, 0, 1.0, false, 3_000, false)]
+    [TestCase(290, 45, 25, 20, 1.0, false, 3_000, true)] [TestCase(290, 44, 25, 20, 1.0, false, 3_000, false)]
+    [TestCase(300, 30, -10, 0, 1.0, false, 3_000, true)] [TestCase(300, 29, -10, 0, 1.0, false, 3_000, false)]
+    [TestCase(290, 30, 25, 0, 1.2, false, 3_000, true)] [TestCase(290, 29, 25, 0, 1.2, false, 3_000, false)]  // no focus
+    [TestCase(290, 20, 25, 0, 0.8, false, 3_000, true)] [TestCase(290, 19, 25, 0, 0.8, false, 3_000, false)]  // its focus
+    [TestCase(290, 70, 25, 20, 1.0, true, 3_000, true)] [TestCase(290, 69, 25, 20, 1.0, true, 3_000, false)]  // Quickcast
+    [TestCase(290, 45, 25, 20, 1.0, true, 0, true)] [TestCase(290, 44, 25, 20, 1.0, true, 0, false)]          // instant
+    [TestCase(290, 5, 25, 0, 1.0, true, 3_000, true)]                       // no reserve: Quickcast casts at any power
+    [TestCase(290, 0, 25, 0, 1.0, true, 3_000, false)]                      //   but none (SpellHandler.cs:967-973)
+    public void A_caster_casts_by_the_spells_cost_and_keeps_a_control_in_reserve(int maxMana, int mana, int power,
+        int reserve, double focusFactor, bool quickcast, int castTime, bool casts) =>
+        Assert.That(PlayerBotDriver.CasterCanCast(maxMana, mana, power, reserve, focusFactor, quickcast, castTime),
+            Is.EqualTo(casts));
+
+    // The server's cost (SpellHandler.cs:1181-1240), its own truncation too: 15 at the full focus factor (1.2 - 0.4 is
+    // just under 0.8 in doubles) is 11, not 12.
+    [TestCase(290, 25, 1.0, false, 3_000, 25)] [TestCase(300, -10, 1.0, false, 3_000, 30)]
+    [TestCase(290, 25, 1.2, false, 3_000, 30)] [TestCase(290, 25, 1.2, true, 3_000, 60)] [TestCase(290, 25, 1.2, true, 0, 30)]
+    [TestCase(290, 15, 1.2 - 0.4, false, 3_000, 11)]
+    public void A_spells_power_cost_is_the_servers(int percentBase, int power, double focusFactor, bool quickcast,
+        int castTime, int cost) =>
+        Assert.That(PlayerBotDriver.PowerCost(percentBase, power, focusFactor, quickcast, castTime), Is.EqualTo(cost));
+
+    // A focus caster pays 120% with no focus, down to 80% (SpellHandler.cs:1214-1233): the focus level x 0.4 over the
+    // spell's level, at most 0.4, scaled by its spec over the spell's level up to 1. Anyone else, or a line with no focus,
+    // pays 100%.
+    [TestCase(false, 50, 20, 20, 1.0)] [TestCase(true, 0, 20, 20, 1.2)] [TestCase(true, 50, 20, 20, 0.8)]
+    [TestCase(true, 10, 20, 20, 1.0)] [TestCase(true, 50, 20, 10, 1.0)] [TestCase(true, 50, 20, 40, 0.8)]
+    public void A_focus_casters_cost_runs_from_120_to_80_percent(bool focusCaster, int focusLevel, int spellLevel,
+        int specLevel, double factor) =>
+        Assert.That(PlayerBotDriver.FocusCostFactor(focusCaster, focusLevel, spellLevel, specLevel),
+            Is.EqualTo(factor).Within(1e-9));
+
+    // The reserve: the cheapest known control's cost while the target isn't held, else none (one root stays for the
+    // escape).
+    [TestCase(new[] { 20, 12 }, false, 12)] [TestCase(new[] { 20, 12 }, true, 0)] [TestCase(new int[0], false, 0)]
+    public void A_caster_keeps_its_cheapest_control_in_reserve_while_its_target_is_free(int[] costs, bool held,
+        int reserve) =>
+        Assert.That(PlayerBotDriver.ControlReserve(costs, held), Is.EqualTo(reserve));
+
+    // The cast gate by role: a caster's is its cost (CasterCanCast), every other role keeps 18% (ShouldCast's rows hold
+    // for them), and the cast watch blocks either.
+    [TestCase(PlayerBotRole.Caster, true, (byte)10, true, 0L, true)]
+    [TestCase(PlayerBotRole.Caster, true, (byte)6, false, 0L, false)]
+    [TestCase(PlayerBotRole.Healer, true, (byte)10, true, 0L, false)]
+    [TestCase(PlayerBotRole.Caster, true, (byte)100, true, 5_000L, false)]                   // the cast watch
+    [TestCase(PlayerBotRole.Caster, false, (byte)100, true, 0L, false)]
+    [TestCase(PlayerBotRole.Caster, true, (byte)100, false, 0L, false)]                      // its cost, not 18%
+    public void A_casters_cast_gate_is_its_spells_cost(PlayerBotRole role, bool hasSpell, byte mana, bool casterCanCast,
+        long blockedUntil, bool casts) =>
+        Assert.That(PlayerBotDriver.ShouldCastFor(role, hasSpell, mana, casterCanCast, 0, blockedUntil), Is.EqualTo(casts));
+
+    [Test]
+    public void Every_other_role_keeps_the_18_percent_gate()
+    {
+        foreach (PlayerBotRole role in new[] { PlayerBotRole.Melee, PlayerBotRole.Healer, PlayerBotRole.Pet, PlayerBotRole.Archer })
+        foreach (bool hasSpell in new[] { false, true })
+        foreach (byte mana in new byte[] { 0, 17, 18, 100 })
+        foreach (long blockedUntil in new[] { 0L, 1_000L, 1_001L })
+        foreach (bool casterCanCast in new[] { false, true })
+            Assert.That(PlayerBotDriver.ShouldCastFor(role, hasSpell, mana, casterCanCast, 1_000, blockedUntil),
+                Is.EqualTo(PlayerBotDriver.ShouldCast(hasSpell, mana, 1_000, blockedUntil)), $"{role} {hasSpell} {mana} {blockedUntil}");
+    }
+
     // #167 F6: the bot's own swing must not block its next cast. A swing interrupts the swinger for 3 s
     // (StartInterruptTimer, GameLiving.cs:686-693; InterruptRemainingDuration, :736), and a player then gets "must wait"
     // (SpellHandler.cs:570-590): with a spell it can cast and no monster interrupting it, the bot stops swinging and waits
@@ -4584,7 +4676,7 @@ public sealed class UT_PlayerBotDriver
     {
         var state = new PlayerBotState(Player(null)) { DeathRecorded = true, AliveSince = 1_000 };
         PlayerBotDriver.SampleHealth(state.HealthSamples, 5_000, 10);
-        PlayerBotDriver.StartLife(state, 20_000);
+        PlayerBotDriver.StartLife(state, 20_000, PlayerBotRole.Melee);
         Assert.That(state.HealthSamples, Is.Empty);
     }
 
