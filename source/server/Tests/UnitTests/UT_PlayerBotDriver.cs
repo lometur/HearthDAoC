@@ -950,7 +950,7 @@ public sealed class UT_PlayerBotDriver
             FollowsAddKill = true, BreakOffRefused = true, FightKiteNone = (1, 2, 3, 4),
             LastWalk = PlayerBotWalk.Rest, FightWalk = PlayerBotWalk.Hunt, FightHeldMs = 3_000, FightCtlLanded = 2,
             FightCtlFailed = 1, FightHpAtReach = 50, FightTargetHpAtReach = 40, WouldBreakHp = 30,
-            PendingControl = (Control(500, "root", "SpeedDecrease", 10, 99), Player(null), 8_000) };
+            PendingControl = (Control(500, "root", "SpeedDecrease", 10, 99), Player(null), 8_000), FightBuffHitters = 2 };
         Assert.That(PlayerBotDriver.OpenFight(state, 10_000, 90, 60, 1_420, 100), Is.True, "the first fight since a release");
         Assert.That((state.BackPending, state.KilledWithAdds, state.ControlTries, state.FightCasts, state.FightAdd),
             Is.EqualTo((false, false, 0, 0, (-1, -1))));
@@ -963,6 +963,7 @@ public sealed class UT_PlayerBotDriver
         Assert.That((state.FightWalk, state.FightHeldMs, state.FightCtlLanded, state.FightCtlFailed, state.FightHpAtReach,
             state.FightTargetHpAtReach, state.WouldBreakHp, state.PendingControl.Spell), Is.EqualTo((PlayerBotWalk.Rest, 0L, 0, 0,
             -1, -1, -1, (Spell)null)), "st-deathsD's fields afresh; walk=: the last think's walk");
+        Assert.That(state.FightBuffHitters, Is.Zero, "#167 D12: no monster on the bot before the fight's first think");
         Assert.That(PlayerBotDriver.OpenFight(state, 30_000, 90, 60, 1_420, 100), Is.False, "the next one");
     }
 
@@ -4416,6 +4417,29 @@ public sealed class UT_PlayerBotDriver
         Assert.That((PlayerBotDriver.OpensFight(Benison.Item1), PlayerBotDriver.OpensFight(FriggsCure.Item1),
             PlayerBotDriver.OpensFight(DiamondShield.Item1), PlayerBotDriver.OpensFight(ChantOfTheWar.Item1)),
             Is.EqualTo((false, false, false, false)));
+    }
+
+    // #167 D12: the fight's own buff (C9's Surge) only in a hard fight: a YELLOW or harder at the fight's first think, or
+    // a second live monster arriving on the bot. With a Surge at every fight's start a Reaver's power per won fight went
+    // from 12.7 to 27.0 in st-deathsC; 101 of its 193 rests were bound by power, and a Surge costs about 23 s of rest to
+    // save 2.5 s or less in a GREEN fight.
+    [TestCase(true, ConColor.GREEN, 1, 0, false)] [TestCase(true, ConColor.BLUE, 1, 0, false)]
+    [TestCase(true, ConColor.YELLOW, 1, 0, true)] [TestCase(true, ConColor.ORANGE, 0, 0, true)]
+    [TestCase(false, ConColor.GREEN, 2, 1, true)] [TestCase(false, ConColor.GREEN, 2, 2, false)]
+    [TestCase(false, ConColor.BLUE, 1, 1, false)] [TestCase(true, ConColor.GREEN, 2, 0, true)]
+    public void The_fights_buff_goes_only_in_a_hard_fight(bool opening, ConColor con, int attackers, int before, bool due) =>
+        Assert.That(PlayerBotDriver.FightBuffDue(opening, con, attackers, before), Is.EqualTo(due));
+
+    // #167 D12, the verifier's correction: the monsters before are those of the last think the check ran on, never one the
+    // bot casts on (Engage skips the buff then): an add that arrives while the bot casts brings the buff on the next think.
+    [Test]
+    public void An_add_arriving_while_the_bot_casts_brings_the_fights_buff_on_the_next_think()
+    {
+        Assert.That(PlayerBotDriver.FightBuffCheck(casting: true, opening: false, ConColor.GREEN, 2, 1), Is.EqualTo((false, 1)));
+        Assert.That(PlayerBotDriver.FightBuffCheck(casting: false, opening: false, ConColor.GREEN, 2, 1), Is.EqualTo((true, 2)));
+        Assert.That(PlayerBotDriver.FightBuffCheck(casting: false, opening: false, ConColor.GREEN, 2, 2), Is.EqualTo((false, 2)));
+        Assert.That(PlayerBotDriver.FightBuffCheck(casting: true, opening: true, ConColor.YELLOW, 1, 0), Is.EqualTo((false, 0)),
+            "a fight opened mid-cast: no buff, as before");
     }
 
     // After a kill the self-buffs scan at once, in the window before the rest, and back to back (the verifier's correction:

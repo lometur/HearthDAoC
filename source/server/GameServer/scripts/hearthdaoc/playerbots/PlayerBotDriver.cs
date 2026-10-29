@@ -224,6 +224,8 @@ public sealed class PlayerBotState
     public (Spell Spell, GameLiving Target, long At) PendingControl;   //   (Hold); ctlLanded= and ctlFailed=, and the control
     public int FightHpAtReach = -1, FightTargetHpAtReach = -1;   //   cast awaited (SettleControl); hpAtReach= and
     public int WouldBreakHp = -1;                                //   tHpAtReach= (HitNow) and wouldBreak= (ProjectedBreak)
+    public int FightBuffHitters;                                 // #167 D12: the live monsters on the bot when the fight's
+                                                                 //   buff was last weighed (FightBuffCheck)
 }
 
 // HearthDAoC player bots (#137): a thin copy of the /bot pilot's think (bots/autonomous/AutonomousPlayerPilot.cs:229-374) for a
@@ -685,7 +687,10 @@ public static class PlayerBotDriver
         CountSwing(state, player.attackComponent.attackAction.LastAttackData);
         if (BrokeHold(state.TargetHeldBreaks, held && breaksOnHit, state.Swings > swings)) state.FightCtlBroken++;   // #167 C3
         state.TargetHeldBreaks = held && breaksOnHit;
-        if (opening && !player.IsCasting && FightBuff(state, player, now)) return;     // #167 C9: a Surge first
+        (bool buffDue, state.FightBuffHitters) = FightBuffCheck(player.IsCasting, opening,   // #167 D12: a hard fight's
+            opening ? ConLevels.GetConColor(player.GetConLevel(target)) : ConColor.GREY,      //   only (the con read at the
+            player.IsCasting ? 0 : LiveHitters(player), state.FightBuffHitters);              //   opening only, its one use)
+        if (buffDue && FightBuff(state, player, now)) return;                           // #167 C9: a Surge first
         GameNPC pet = player.ControlledBrain?.Body;
         bool petLeads = !player.IsCasting && action is not PlayerBotCombatAction.Swing && PetLeads(pet?.IsAlive == true,
             pet != null && target.TargetObject == pet, target.TargetObject == player,
@@ -1151,6 +1156,20 @@ public static class PlayerBotDriver
     public static bool OpensFight(Spell spell) =>
         spell.IsInstantCast && !spell.IsPulsing && spell.Duration > 0 && spell.Duration < ShortBuffMilliseconds;
 
+    /// <summary>Whether the fight's own buff (OpensFight's: a Reaver's Surge) goes now (#167 D12): only in a hard fight, a
+    /// YELLOW or harder at its first think (opening), or a second live monster on the bot (attackers: LiveHitters) that
+    /// wasn't there when it was last weighed (attackersBefore, FightBuffCheck). C9 cast it at every fight's first think:
+    /// a Reaver's power per won fight went from 12.7 to 27.0 in st-deathsC, and a Surge costs about 23 s of rest to save
+    /// 2.5 s or less in a GREEN fight.</summary>
+    public static bool FightBuffDue(bool opening, ConColor con, int attackers, int attackersBefore) =>
+        opening && con >= ConColor.YELLOW || attackers >= 2 && attackersBefore < 2;
+
+    /// <summary>Engage's weighing of the fight's buff (#167 D12): never while it casts (no cast over a cast, as C9's
+    /// opening), and then the monsters before stay those of the last think it was weighed on (the verifier's correction:
+    /// an add that arrives on a think the bot casts brings the buff on the next one). (due, the monsters to keep).</summary>
+    public static (bool Due, int Before) FightBuffCheck(bool casting, bool opening, ConColor con, int hitters, int before) =>
+        casting ? (false, before) : (FightBuffDue(opening, con, hitters, before), hitters);
+
     /// <summary>A Necromancer in shade form cannot swing (AttackComponent.cs:511-516): its servant fights for it.</summary>
     public static bool CanSwing(GameNPC pet) => pet is not NecromancerPet;
 
@@ -1594,8 +1613,8 @@ public static class PlayerBotDriver
     /// health and power (mana: PowerPercent), its distance and the target's health then (#167 FIGHT engageDist=, C11's
     /// NukesNeeded), a fresh add scan (ScanComing), no control tried (F11) or step back due, the kill's second-monster case
     /// over (C2; #167 D2: kept for the whole fight when it opens within SecondMonsterMilliseconds of that kill,
-    /// FollowsAddKill, and no break-off refusal logged yet), the pet's lead from now (F10c), and the walk on the think
-    /// before (#167 walk=, LastWalk). True for the
+    /// FollowsAddKill, and no break-off refusal logged yet), the pet's lead from now (F10c), the walk on the think before
+    /// (#167 walk=, LastWalk), and no monster on the bot yet for the fight's buff (#167 D12, FightBuffCheck). True for the
     /// first fight since a release (BackPending, cleared): PLAYER_BOT_BACK then (#167 C1; the review of 9aacd69: with
     /// Engage's ReportBack dropped no test failed).</summary>
     public static bool OpenFight(PlayerBotState state, long now, byte health, byte mana, int distance, byte targetHealth)
@@ -1616,6 +1635,7 @@ public static class PlayerBotDriver
         state.FollowsAddKill = SecondMonsterCase(state.KilledWithAdds, state.LastKillTick, now);   // #167 D2: kept
         state.KilledWithAdds = false;                                               // #167 C2: the kill's case over
         state.BreakOffRefused = false;                                              // #167 D2: a refusal's line afresh
+        state.FightBuffHitters = 0;                                                 // #167 D12: none on it before
         state.FightQuickcast = false;
         state.PetOrderTick = now;                                                   // #167 F10c
         state.FightWalk = state.LastWalk;                                           // #167 st-deathsD's fields: walk=,
@@ -4394,7 +4414,8 @@ public static class PlayerBotDriver
     }
 
     // #167 C9: at a fight's first think in reach, an instant short self-buff (OpensFight: a Reaver's Surge), as SelfBuff
-    // picks one, cast on itself before the fight's first swing or spell. True when it cast.
+    // picks one, cast on itself before the fight's first swing or spell. #167 D12: only in a hard fight (FightBuffDue: a
+    // YELLOW or harder then, or later the think a second live monster is on the bot). True when it cast.
     private static bool FightBuff(PlayerBotState state, GamePlayer player, long now)
     {
         (Spell buff, SpellLine line) = NextSelfBuff(UsableSpells(player), ActiveSpellTypes(player), null, null, player.Level,

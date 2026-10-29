@@ -110,9 +110,9 @@ Each bot thinks every 250 ms, a thin copy of the `/bot` pilot's think:
   It looks every 5 s, and at once after a kill, before it sits, casting the missing
   ones back to back; never while it sits, until its rest is done. It uses the buffs' real power, concentration and
   recast; the server's own checks decide the rest. A buff under 2 minutes it no longer keeps up between fights: an
-  instant one (a Reaver's Surge) goes up at a fight's start instead, one with a cast time (a Spiritmaster's Benison)
-  not at all yet, and a regeneration one (a Shaman's Frigg's Cure) only while what it regenerates is short of where
-  the rest stops.
+  instant one (a Reaver's Surge) goes up in a hard fight instead, at the start of one against a yellow or harder
+  monster, or when a second monster comes on it; one with a cast time (a Spiritmaster's Benison) not at all yet, and a
+  regeneration one (a Shaman's Frigg's Cure) only while what it regenerates is short of where the rest stops.
 - It picks a monster with no aggressive neighbours, none within reach of the target, of its walk in, or of the spot
   it would fight from (its spell's range for a caster, else melee). After deaths it moves to an easier camp. It avoids
   what killed it for 15 minutes.
