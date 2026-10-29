@@ -1310,6 +1310,16 @@ public static class PlayerBotDriver
         target.CurrentRegion == player.CurrentRegion && GameServer.ServerRules.IsAllowedToAttack(player, target, true) &&
         (target is not GameNPC npc || (npc.Flags & (GameNPC.eFlags.PEACE | GameNPC.eFlags.CANTTARGET)) == 0);
 
+    /// <summary>#167 D4: a monster the plan (RelocateIfOutgrown) counts in a camp: one the bot would hunt, alive, in its
+    /// region; IsAttackable without the server's IsAllowedToAttack. For a monster of no realm (IsExperienceTarget) that
+    /// test adds only the player's immunity: the release starts TIMER_KILLED_BY_MOB's 10 s (AbstractServerRules.cs:258-262,
+    /// :280-285; ServerProperties.cs:1273-1274), and while it lasts a player may attack no monster
+    /// (AbstractServerRules.cs:385-392; NormalServerRules.cs:28 calls the base). So the plan found no camp then (279 of
+    /// st-deathsB's 312 died replans: none checked=0), and C1 held it until the immunity was over. The immunity only
+    /// delays the bot's first swing, not where its camp is: it plans at once now.</summary>
+    public static bool IsPlannable(GamePlayer player, GameNPC npc) =>
+        IsExperienceTarget(npc) && npc.IsAlive && npc.CurrentRegion == player.CurrentRegion;
+
     /// <summary>#167 D7: a monster the step out (ClearSpotNear) and the adds rule (FindWithin's adds: the pick's
     /// crowding, the rest spot's and the step back's) keep clear of: an experience target, or a keep guard of another
     /// realm or of none (Pbotaaacv's realm-less "Renegade" guards at its battleground bind killed it in all 14 of its
@@ -1346,13 +1356,10 @@ public static class PlayerBotDriver
     /// before it walks back, #167 F4: the GameBot replans 2.5-4 s after a solo death, AWBC:3780-3816; BrokeOff after a
     /// break-off, #167 C2, so it doesn't walk back into the camp); Capped when its searches have found monsters in
     /// reach but none under its cap for CappedRelocateMilliseconds (DEATHS.md A4), Outgrown when it has reached no target
-    /// for RelocateAfterMilliseconds. None while the bot is immune (#167 C1): the release starts a 10-s immunity
-    /// (TIMER_KILLED_BY_MOB, AbstractServerRules.cs:258-262, :280-285; ServerProperties.cs:1273-1274), during which a
-    /// player may attack no monster (AbstractServerRules.cs:385-392; GST_Normal calls the base, NormalServerRules.cs:28),
-    /// so IsAttackable dropped every monster from the plan and a death's replan found none (279 of 312 in st-deathsB);
-    /// its anchor fell back to the bind. immune has no default: a caller that left it out would bring that back.</summary>
-    public static string RelocateReason(long roamingSince, long cappedSince, long now, string owed, bool immune) =>
-        immune ? null :
+    /// for RelocateAfterMilliseconds. #167 D4: also while the release's immunity lasts. C1 held the reason then, as the
+    /// plan's IsAttackable found no monster while the bot was immune (AbstractServerRules.cs:385-392); the plan reads
+    /// IsPlannable now, so the bot plans at once.</summary>
+    public static string RelocateReason(long roamingSince, long cappedSince, long now, string owed) =>
         owed ??
         (cappedSince != 0 && now - cappedSince >= CappedRelocateMilliseconds ? Capped :
          roamingSince != 0 && now - roamingSince >= RelocateAfterMilliseconds ? Outgrown : null);
@@ -2518,14 +2525,11 @@ public static class PlayerBotDriver
     // after a death (PlanRelocation). A capped bot that cannot move takes the safest con in reach (FallbackInPlace).
     // After a death (#167 F4, C1b) it plans before it walks back, from where it died, in its anchor's region and
     // the zone it died in (the bind may lie elsewhere; then the corridors start at the death spot, CorridorOrigin), the
-    // failed camps barred; with no camp it hunts where it is. Not while the release's immunity lasts (RelocateReason,
-    // #167 C1): it returns before NextRelocateTick, so the next think tries again, and the replan's hold (ReplanSince,
-    // HoldsForRelocation) keeps the bot out of the camp meanwhile. The immunity hides monsters from a plan only: a bot
-    // that cannot plan (CanRelocate) falls back as before, and a lever spot bot reads no player here.
+    // failed camps barred; with no camp it hunts where it is. #167 D4: while the release's immunity lasts too, its
+    // monsters read by IsPlannable (C1 held the plan until it was over: IsAttackable found none then).
     private static void RelocateIfOutgrown(PlayerBotState state, GamePlayer player, long now)
     {
-        string reason = RelocateReason(state.RoamingSince, state.CappedSince, now, state.ReplanOwed,
-            CanRelocate(state, player) && player.IsInvulnerableToAttack);       // GamePlayer.cs:12284-12287
+        string reason = RelocateReason(state.RoamingSince, state.CappedSince, now, state.ReplanOwed);
         if (reason == null || now < state.NextRelocateTick) return;
         bool died = reason == Died;
         if (!CanRelocate(state, player) ||                                         // the lever test keeps its bots on
@@ -2551,7 +2555,7 @@ public static class PlayerBotDriver
         List<(GameNPC Npc, Vector3 At, ConColor Con, bool Huntable, bool Avoided)> monsters = new();
         foreach (GameNPC npc in WorldMgr.GetNPCsFromRegion(state.AnchorRegion))   // CanRelocate: the bot's region too
         {
-            if (npc.CurrentZone != zone || !IsExperienceTarget(npc) || !IsAttackable(player, npc)) continue;
+            if (npc.CurrentZone != zone || !IsPlannable(player, npc)) continue;
             ConColor con = ConLevels.GetConColor(player.GetConLevel(npc));
             if (con > ConColor.GREY)
                 monsters.Add((npc, new(npc.X, npc.Y, npc.Z), con,
@@ -3547,7 +3551,8 @@ public static class PlayerBotDriver
     // SummonAnimistPet.cs:20-41).
     private static bool SummonPet(PlayerBotState state, GamePlayer player, long now)
     {
-        if (player.Level == state.NoPetSpellLevel ||
+        if (CastsAfterWalkOut(state, player) ||                                         // #167 D4, step 11b
+            player.Level == state.NoPetSpellLevel ||
             !WantsPet(player.ControlledBrain != null, Attacker(state, player, now, anyHitter: true) != null, player.InCombat,
                 player.ManaPercent, player.IsCasting, now, state.NextSummonTick))
             return false;
@@ -3563,6 +3568,12 @@ public static class PlayerBotDriver
         return CastOnSelf(state, player, now, summon, line, "pet");
     }
 
+    // #167 D4, step 11b: after a release, while its immunity lasts (GamePlayer.cs:12284-12287), no self-buff and no pet:
+    // the bot plans first (step 15) and casts them after. A cast returns the think before the plan, and stands the bot
+    // (CastOnSelf). Its heal is moot then: the release restores its health (GamePlayer.cs:1723).
+    private static bool CastsAfterWalkOut(PlayerBotState state, GamePlayer player) =>
+        state.AfterRelease && player.IsInvulnerableToAttack;
+
     // #167 F8: the class's own self-buffs (NextSelfBuff), one cast at a time, scanned every SelfBuffScanMilliseconds out of
     // a fight (MayRest's view), before a rest as a player buffs and then sits. A release ends them all: the new life
     // scans at once (Think). #167 C9: never mid-rest (BuffScanAllowed), a kill scans at once (SettleTarget) and each buff
@@ -3571,7 +3582,8 @@ public static class PlayerBotDriver
     // scan allowed again) its combat one back.
     private static bool SelfBuff(PlayerBotState state, GamePlayer player, long now)
     {
-        if (!SelfBuffScanDue(now, state.NextSelfBuffTick, player.IsCasting, state.Engaged && state.Target?.IsAlive == true,
+        if (CastsAfterWalkOut(state, player) ||                                         // #167 D4, step 11b
+            !SelfBuffScanDue(now, state.NextSelfBuffTick, player.IsCasting, state.Engaged && state.Target?.IsAlive == true,
                 player.IsSitting, Recovered(player)) ||                                 // #167 C9
             Threat(state, player, now) != null)                                         // MayRest's view, and one coming
             return false;                                                               //   at it (#167 F7)

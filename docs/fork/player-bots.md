@@ -128,8 +128,9 @@ Each bot thinks every 250 ms, a thin copy of the `/bot` pilot's think:
 - After a release it first steps out of the reach of every monster round it that would aggro, a keep guard of another
   realm or of none too. Such a guard also counts as an add when it picks a target and a spot to rest, but it never
   pulls one. Wherever it died (at its camp or on a walk), it then plans a new camp from where it died, one it can walk
-  to from there, before it walks back. It plans once the release's 10-s immunity is over: until then a player can
-  attack no monster, so a plan found none. It takes no camp it died at in the last 15 minutes while another camp that
+  to from there, before it walks back. It plans at once, while the release's 10-s immunity lasts: the plan counts the
+  monsters it may not attack until then. It casts no self-buff and summons no pet until the immunity is over, so
+  nothing holds the plan back. It takes no camp it died at in the last 15 minutes while another camp that
   cons yellow or easier is left. From its third death with no XP in between it waits 30-120 s out there, as a GameBot
   does, and it waits out the resurrection illness there too. It pulls nothing until then, but fights back. No hold for
   a camp lasts over 60 s: then it hunts where it is.

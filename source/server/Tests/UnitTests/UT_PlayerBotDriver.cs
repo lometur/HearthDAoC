@@ -145,21 +145,18 @@ public sealed class UT_PlayerBotDriver
 
     // DEATHS.md A4: a bot whose searches find monsters in reach but none under its cap takes none and, 30 s on, moves to
     // a camp that fits; one that has reached no target for 2 minutes has outgrown its ground. The cap's reason wins.
-    // A death (#167 F4; anywhere, C1b) owes a relocation at once, before the capped and outgrown clocks. None while the
-    // release's immunity lasts (#167 C1): every monster then fails IsAttackable (AbstractServerRules.cs:385-392), and the
-    // death's replan found none (279 of 312 st-deathsB died replans: none checked=0, all 10-19 s after the death). A
+    // A death (#167 F4; anywhere, C1b) owes a relocation at once, before the capped and outgrown clocks, while the
+    // release's immunity lasts too (#167 D4: the plan reads IsPlannable; C1's immune rows went with its gate). A
     // break-off (#167 C2) owes one too, as brokeoff.
-    [TestCase(0L, 0L, 1_000_000L, null, false, null)]
-    [TestCase(10_000L, 0L, 129_999L, null, false, null)] [TestCase(10_000L, 0L, 130_000L, null, false, "outgrown")]
-    [TestCase(0L, 100_000L, 129_999L, null, false, null)] [TestCase(0L, 100_000L, 130_000L, null, false, "capped")]
-    [TestCase(10_000L, 100_000L, 130_000L, null, false, "capped")]
-    [TestCase(0L, 0L, 1_000_000L, "died", false, "died")] [TestCase(10_000L, 100_000L, 130_000L, "died", false, "died")]
-    [TestCase(0L, 0L, 1_000_000L, "died", true, null)] [TestCase(10_000L, 100_000L, 130_000L, "died", true, null)]
-    [TestCase(0L, 100_000L, 130_000L, null, true, null)]
-    [TestCase(0L, 0L, 1_000_000L, "brokeoff", false, "brokeoff")] [TestCase(10_000L, 100_000L, 130_000L, "brokeoff", false, "brokeoff")]
+    [TestCase(0L, 0L, 1_000_000L, null, null)]
+    [TestCase(10_000L, 0L, 129_999L, null, null)] [TestCase(10_000L, 0L, 130_000L, null, "outgrown")]
+    [TestCase(0L, 100_000L, 129_999L, null, null)] [TestCase(0L, 100_000L, 130_000L, null, "capped")]
+    [TestCase(10_000L, 100_000L, 130_000L, null, "capped")]
+    [TestCase(0L, 0L, 1_000_000L, "died", "died")] [TestCase(10_000L, 100_000L, 130_000L, "died", "died")]
+    [TestCase(0L, 0L, 1_000_000L, "brokeoff", "brokeoff")] [TestCase(10_000L, 100_000L, 130_000L, "brokeoff", "brokeoff")]
     public void A_capped_bot_relocates_after_30_s_and_an_outgrown_one_after_2_minutes(long roamingSince, long cappedSince,
-        long now, string owed, bool immune, string reason) =>
-        Assert.That(PlayerBotDriver.RelocateReason(roamingSince, cappedSince, now, owed, immune), Is.EqualTo(reason));
+        long now, string owed, string reason) =>
+        Assert.That(PlayerBotDriver.RelocateReason(roamingSince, cappedSince, now, owed), Is.EqualTo(reason));
 
     // A player the server holds immune (GamePlayer.cs:12284-12287): the release's 10 s.
     private sealed class ImmunePlayer : GamePlayer
@@ -168,17 +165,55 @@ public sealed class UT_PlayerBotDriver
         public override bool IsInvulnerableToAttack => true;
     }
 
-    // The replan reads the bot's own immunity where it runs (RelocateIfOutgrown; the review of 9aacd69: with that term put
-    // back to false no test failed, the rows above call RelocateReason alone): a bot still immune after its release
-    // keeps its death's replan owed and plans nothing yet; it no longer falls back to the bind (ReplanOwed none).
-    [Test]
-    public void A_bot_still_immune_after_its_release_keeps_its_replan_for_after()
+    // An immune bot, alive in the world (a released one).
+    private static ImmunePlayer LiveImmunePlayer()
     {
         var player = (ImmunePlayer)RuntimeHelpers.GetUninitializedObject(typeof(ImmunePlayer));
-        var state = new PlayerBotState(Player(null)) { ReplanOwed = PlayerBotDriver.Died };
+        player.ObjectState = GameObject.eObjectState.Active;
+        typeof(GameObject).GetField("m_health", Hidden)!.SetValue(player, 100);
+        return player;
+    }
+
+    // #167 D4: the replan no longer waits out the release's immunity. Its old gate (RelocateReason's immune, C1) held
+    // the plan, because the plan's IsAttackable dropped every monster while the bot was immune; the plan reads
+    // IsPlannable now. A bot still immune after its release runs its death's replan at once: here, in a world with no
+    // region, it finds no zone and hunts where it is (EndReplan), as it does then after the immunity.
+    [Test]
+    public void A_bot_still_immune_after_its_release_replans_at_once()
+    {
+        ImmunePlayer player = LiveImmunePlayer();
+        var state = new PlayerBotState(Player(null)) { ReplanOwed = PlayerBotDriver.Died, ReplanSince = 9_000 };
         typeof(PlayerBotDriver).GetMethod("RelocateIfOutgrown", BindingFlags.Static | BindingFlags.NonPublic)!
             .Invoke(null, [state, player, 20_000L]);
-        Assert.That((state.ReplanOwed, state.NextRelocateTick), Is.EqualTo((PlayerBotDriver.Died, 0L)));
+        Assert.That((state.ReplanOwed, state.ReplanSince), Is.EqualTo(((string)null, 0L)));
+    }
+
+    // #167 D4: the plan's monsters (IsPlannable): a monster the bot would hunt, alive, in its region, whether or not the
+    // bot may attack it now. While the release's immunity lasts a player may attack no monster
+    // (AbstractServerRules.cs:385-392), so the old filter (IsAttackable) found no camp: st-deathsB's 279 of 312 none
+    // checked=0 replans, and C1's gate that held the plan for 10 s since.
+    [Test]
+    public void The_plan_counts_a_camp_while_the_bot_is_immune()
+    {
+        ImmunePlayer player = LiveImmunePlayer();
+        GameNPC monster = LiveMonster();
+        typeof(GameNPC).GetField("m_ownBrain", Hidden)!.SetValue(monster, new DOL.AI.Brain.StandardMobBrain());
+        Assert.That(PlayerBotDriver.IsPlannable(player, monster), Is.True, "a monster it can't attack until the immunity ends");
+        typeof(GameObject).GetField("m_health", Hidden)!.SetValue(monster, 0);
+        Assert.That(PlayerBotDriver.IsPlannable(player, monster), Is.False, "a dead one");
+    }
+
+    // #167 D4, step 11b: after a release, while the immunity lasts, no self-buff and no pet: the bot plans first (a buff
+    // cast returned the think before the plan, and a cast stands the bot).
+    [Test]
+    public void No_buff_or_pet_while_immune_after_a_release()
+    {
+        ImmunePlayer player = LiveImmunePlayer();
+        var state = new PlayerBotState(Player(null)) { AfterRelease = true, NoPetSpellLevel = 99 };
+        foreach (string cast in new[] { "SelfBuff", "SummonPet" })
+            Assert.That(typeof(PlayerBotDriver).GetMethod(cast, BindingFlags.Static | BindingFlags.NonPublic)!
+                .Invoke(null, [state, player, 20_000L]), Is.False, cast);
+        Assert.That((state.NextSelfBuffTick, state.NextSummonTick), Is.EqualTo((0L, 0L)), "not even a scan");
     }
 
     // The capped clock: it starts at the first search that passed a monster over for the cap and found nothing, keeps
