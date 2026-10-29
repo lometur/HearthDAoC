@@ -199,9 +199,13 @@ Each bot thinks every 250 ms, a thin copy of the `/bot` pilot's think:
   or a fight the race since the first hit on it projects it to end under 30% health) a bot keeps the endurance a sprint
   away from the fastest monster on it would need, plus 5: 31 against a monster no faster than its run, up to 41 against
   one of speed 204. Its styles, and for a class that isn't a caster or pet class its damage spells (5 endurance a cast),
-  wait while they would take it under that; a cheaper style that leaves it goes instead. Heals don't wait. Against a
-  monster of speed 205 or more it keeps none, since no sprint it could keep would outrun it. Out of a close fight it
-  styles as before.
+  wait while they would take it under that; a cheaper style that leaves it goes instead. Heals don't wait, nor does a
+  lifetap (a Reaver's Siphons, a Valewalker's Cycle of Life): it heals the bot too. Against a monster of speed 205 or
+  more it keeps none, since no sprint it could keep would outrun it. It waits only while waiting can still buy a run:
+  not once its endurance is under what that sprint needs (21 against a monster of speed 148-181, 26 against 182-197, 31
+  against 198-202), since endurance doesn't come back in a fight, and not while its target, the only monster on it, is
+  at 10% health or less, since a bot never breaks off from a target that low. With another monster on it, it keeps
+  waiting there, for the run from that one at the kill. Out of a close fight it styles as before.
 - It releases 10 s after a death, counted from when the server has handled the death, never before: a bow's or a bolt's
   killing hit lands in the bots' own phase of the game loop, and a release asked for then was undone by the server's
   death handling later in the same tick, which left the bot dead for 15 minutes. A release that didn't revive it is

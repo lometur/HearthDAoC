@@ -260,6 +260,9 @@ public sealed class PlayerBotState
     public long NextReserveTick;                                 //   (ReserveNow, read once a StyleMilliseconds); FIGHT
     public byte EngageEndurance;                                 //   endStart= (Engage's opening), styleHeld= and castHeld=
     public int FightStylesHeld, FightCastsHeld;                  //   (the style choices and the thinks it held one back)
+    public int RunNeed;                                          // #167 E fix R2: read with the reserve, the run's need
+    public bool TargetAlone;                                     //   (EscapeEndurance) and no monster on the bot but its
+                                                                 //   target (HoldingReserve)
     public int FightBuffHitters;                                 // #167 D12: the live monsters on the bot when the fight's
                                                                  //   buff was last weighed (FightBuffCheck)
 }
@@ -709,8 +712,9 @@ public static class PlayerBotDriver
                 state.KillingQuickcast),                                                  //   no reserve to kill (#167 E C2b)
             now, state.SpellBlockedUntil);
         if (canCast && role is not (PlayerBotRole.Caster or PlayerBotRole.Pet) &&      // #167 E-R: a hybrid's damage cast
-            HoldsCast(role, player.Endurance, ReserveNow(state, player, target, now)))   //   keeps a run's reserve too (5 a
-        {                                                                                //   cast, SpellHandler.cs:1442-1445):
+            HoldsCast(role, player.Endurance, ReserveNow(state, player, target, now),    //   keeps a run's reserve too (5 a
+                HealsCaster(state.Spell.SpellType, state.Spell.LifeDrainReturn)))       //   cast, SpellHandler.cs:1442-1445),
+        {                                                                                //   never a lifetap (#167 E fix R2):
             canCast = false;                                                             //   it swings instead; FIGHT
             state.FightCastsHeld++;                                                      //   castHeld=, by think
         }
@@ -2327,9 +2331,34 @@ public static class PlayerBotDriver
 
     /// <summary>Whether a hybrid's damage cast waits for the reserve (#167 E-R, Engage's cast gate): a reserve kept, the
     /// cast's 5 would take the bot under it, and the bot is no caster or pet class (their spells are their fight, and
-    /// they style little). A heal is never held: it is SelfHeal's, not this gate's.</summary>
-    public static bool HoldsCast(PlayerBotRole role, int endurance, int reserve) =>
-        reserve > 0 && role is not (PlayerBotRole.Caster or PlayerBotRole.Pet) && endurance - SpellEnduranceCost < reserve;
+    /// they style little). A heal is never held: it is SelfHeal's, not this gate's. #167 E fix R2: nor a cast that heals
+    /// its caster (healsCaster, HealsCaster: a lifetap). Reaver deaths rose from 3 on st-deathsD2 and D2b to 11 on
+    /// st-deathsE and Eb, 7 of them with the Siphon held (7-117 thinks, 5 of them 78-117, down to 0 endurance).</summary>
+    public static bool HoldsCast(PlayerBotRole role, int endurance, int reserve, bool healsCaster) =>
+        !healsCaster && reserve > 0 && role is not (PlayerBotRole.Caster or PlayerBotRole.Pet) &&
+        endurance - SpellEnduranceCost < reserve;
+
+    /// <summary>A cast that returns health to its caster (#167 E fix R2, HoldsCast's healsCaster): a lifedrain's StealLife
+    /// (LifedrainSpellHandler.cs; LifedrainNoVariance's is the same), an omni-lifedrain's (OmniLifedrainSpellHandler.cs)
+    /// and a damage snare's with a return (DamageSpeedDecrease.cs:32-33, its NoVariance kind), at a LifeDrainReturn above
+    /// 0: the Reaver's Siphons (60-70) and the Valewalker's Cycle of Life, Cycle of Death and Force of Nature (40-50). A
+    /// drain to power (DamageToPower) returns no health.</summary>
+    public static bool HealsCaster(eSpellType type, int lifeDrainReturn) =>
+        lifeDrainReturn > 0 && type is eSpellType.Lifedrain or eSpellType.LifedrainNoVariance or eSpellType.OmniLifedrain or
+            eSpellType.DamageSpeedDecrease or eSpellType.DamageSpeedDecreaseNoVariance;
+
+    /// <summary>The reserve a hold keeps now (#167 E fix R2): the close fight's (reserve, ReserveNow's read) only while
+    /// holding can still buy a run, else 0 (no hold: the style and cast as before). Not under the run's need against the
+    /// fastest monster (runNeed, EscapeEndurance): endurance comes back neither in a fight nor moving
+    /// (ClassicRestRegeneration.cs), so no hold buys a run from under it (26 of st-deathsE and Eb's 31 held in-fight deaths
+    /// were under it at death, 15 in the fight after a caught run). Not while its target, the only monster on the bot
+    /// (targetAlone), is at BreakOffTargetPercent or less: no break-off fires from it then (BreaksOff) and none is left to
+    /// run from at the kill (2 held deaths alone with the target at 1-3%; no run on the E legs could have needed it). With
+    /// another monster on the bot it holds on: the run at the kill (why=atkill, followup) needs it (21 such runs after a
+    /// held kill, 18 alive). The threshold: 10 changes those 2 deaths and no run; 15 adds 1 death and puts race runs from
+    /// a bot near death at risk (fires at targets of 13-15); 20 to 30 change no death more.</summary>
+    public static int HoldingReserve(int reserve, int runNeed, int endurance, byte targetHealth, bool targetAlone) =>
+        reserve > 0 && endurance >= runNeed && !(targetAlone && targetHealth <= BreakOffTargetPercent) ? reserve : 0;
 
     /// <summary>The bot's health at its target's death on the race since the first hit on it (#167 E-R, CloseFight):
     /// health less what it loses while its target loses the health it has left, both at their loss since that hit
@@ -3898,24 +3927,34 @@ public static class PlayerBotDriver
     // more monsters attacking it now (AttackerTracker's few, IsAttacking: no world scan) or in this fight (FightAdds), a
     // defence or the fight after an add kill, or the race since the first hit on it projecting it under
     // CloseRacePercent at its target's death (HealthLeftAtKill); else 0. Against the fastest of them and its target.
-    // Read at most once a StyleMilliseconds (Reserve, NextReserveTick), the style choice's own pace.
+    // Read at most once a StyleMilliseconds (Reserve, NextReserveTick), the style choice's own pace. #167 E fix R2: held
+    // only while holding can still buy a run (HoldingReserve), on every call against the endurance and the target's health
+    // now, on the read's need (RunNeed: EscapeEndurance against that fastest monster) and whether its target is the only
+    // monster on the bot (TargetAlone).
     private static int ReserveNow(PlayerBotState state, GamePlayer player, GameLiving target, long now)
     {
         if (!state.Engaged) return 0;
-        if (now < state.NextReserveTick) return state.Reserve;
-        state.NextReserveTick = now + StyleMilliseconds;
         bool targetAlive = target?.IsAlive == true;
-        int onBot = 0, fastest = targetAlive ? target.MaxSpeed : 0;
-        foreach (GameLiving living in player.attackComponent.AttackerTracker.Attackers)
-            if (living is GameNPC npc && IsAttacking(player, npc))
-                (onBot, fastest) = (onBot + 1, Math.Max(fastest, (int)npc.MaxSpeed));
-        int? left = targetAlive
-            ? HealthLeftAtKill(player.HealthPercent, target.HealthPercent, state.FightHpAtReach, state.FightTargetHpAtReach)
-            : null;
-        return state.Reserve = CloseFight(onBot, state.FightAdds, state.FromDefence || state.FollowsAddKill, left)
-            ? EscapeReserve(fastest, player.GetModified(eProperty.EnduranceRegenerationAmount),
-                player.GetModified(eProperty.FatigueConsumption), LongWindCost(player))
-            : 0;
+        if (now >= state.NextReserveTick)
+        {
+            state.NextReserveTick = now + StyleMilliseconds;
+            int onBot = 0, others = 0, fastest = targetAlive ? target.MaxSpeed : 0;
+            foreach (GameLiving living in player.attackComponent.AttackerTracker.Attackers)
+                if (living is GameNPC npc && IsAttacking(player, npc))
+                    (onBot, others, fastest) =
+                        (onBot + 1, npc == target ? others : others + 1, Math.Max(fastest, (int)npc.MaxSpeed));
+            int? left = targetAlive ? HealthLeftAtKill(player.HealthPercent, target.HealthPercent, state.FightHpAtReach,
+                state.FightTargetHpAtReach) : null;
+            int regeneration = player.GetModified(eProperty.EnduranceRegenerationAmount),
+                fatigue = player.GetModified(eProperty.FatigueConsumption), longWind = LongWindCost(player);
+            state.Reserve = CloseFight(onBot, state.FightAdds, state.FromDefence || state.FollowsAddKill, left)
+                ? EscapeReserve(fastest, regeneration, fatigue, longWind)
+                : 0;
+            (state.RunNeed, state.TargetAlone) =
+                (state.Reserve > 0 ? EscapeEndurance(fastest, regeneration, fatigue, longWind) : 0, others == 0);
+        }
+        return HoldingReserve(state.Reserve, state.RunNeed, player.Endurance, targetAlive ? target.HealthPercent : (byte)100,
+            state.TargetAlone);
     }
 
     // APP:474-500, plus the leash.

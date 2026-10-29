@@ -1740,13 +1740,48 @@ public sealed class UT_PlayerBotDriver
         Assert.That(PlayerBotDriver.StyleWithin(costs, endurance, reserve), Is.EqualTo((index, held)));
 
     // #167 E-R: a hybrid's damage cast (5 endurance, SpellHandler.cs:1442-1445) waits when it would take the bot under the
-    // reserve; a caster's or a pet class's never does, nor any with no reserve kept.
-    [TestCase(PlayerBotRole.Melee, 41, 36, false)] [TestCase(PlayerBotRole.Melee, 40, 36, true)]
-    [TestCase(PlayerBotRole.Healer, 40, 36, true)] [TestCase(PlayerBotRole.Archer, 40, 36, true)]
-    [TestCase(PlayerBotRole.Caster, 10, 36, false)] [TestCase(PlayerBotRole.Pet, 10, 36, false)]
-    [TestCase(PlayerBotRole.Melee, 3, 0, false)]
-    public void A_hybrids_damage_cast_keeps_the_reserve(PlayerBotRole role, int endurance, int reserve, bool holds) =>
-        Assert.That(PlayerBotDriver.HoldsCast(role, endurance, reserve), Is.EqualTo(holds));
+    // reserve; a caster's or a pet class's never does, nor any with no reserve kept. #167 E fix R2: nor a lifetap, which
+    // heals the caster as a heal does (healsCaster, HealsCaster): the Reavers' held Siphons (78-117 thinks, end=0) were
+    // in 7 of their 11 in-fight deaths on st-deathsE and Eb.
+    [TestCase(PlayerBotRole.Melee, 41, 36, false, false)] [TestCase(PlayerBotRole.Melee, 40, 36, false, true)]
+    [TestCase(PlayerBotRole.Healer, 40, 36, false, true)] [TestCase(PlayerBotRole.Archer, 40, 36, false, true)]
+    [TestCase(PlayerBotRole.Caster, 10, 36, false, false)] [TestCase(PlayerBotRole.Pet, 10, 36, false, false)]
+    [TestCase(PlayerBotRole.Melee, 3, 0, false, false)]
+    [TestCase(PlayerBotRole.Melee, 40, 36, true, false)] [TestCase(PlayerBotRole.Melee, 0, 31, true, false)]
+    public void A_hybrids_damage_cast_keeps_the_reserve(PlayerBotRole role, int endurance, int reserve, bool healsCaster,
+        bool holds) =>
+        Assert.That(PlayerBotDriver.HoldsCast(role, endurance, reserve, healsCaster), Is.EqualTo(holds));
+
+    // #167 E fix R2: a cast that returns health to its caster, as the server's handlers do it: a lifedrain's StealLife
+    // (LifedrainSpellHandler.cs, its NoVariance kind), an omni-lifedrain's, and a damage snare's with a return
+    // (DamageSpeedDecrease.cs:32-33), each at a LifeDrainReturn above 0: the Reaver's Siphons (60-70) and the
+    // Valewalker's Cycle of Life, Cycle of Death and Force of Nature (40-50). A drain to power (DamageToPower) heals none;
+    // the Minstrel's, Bard's, Skald's, Champion's and Nightshade's damage spells return none.
+    [TestCase(eSpellType.Lifedrain, 60, true)] [TestCase(eSpellType.Lifedrain, 40, true)]
+    [TestCase(eSpellType.LifedrainNoVariance, 50, true)] [TestCase(eSpellType.OmniLifedrain, 50, true)]
+    [TestCase(eSpellType.DamageSpeedDecrease, 40, true)] [TestCase(eSpellType.DamageSpeedDecreaseNoVariance, 40, true)]
+    [TestCase(eSpellType.DamageSpeedDecrease, 0, false)] [TestCase(eSpellType.Lifedrain, 0, false)]
+    [TestCase(eSpellType.DamageToPower, 50, false)] [TestCase(eSpellType.DirectDamage, 0, false)]
+    [TestCase(eSpellType.NightshadeNuke, 0, false)]
+    public void A_lifetap_heals_its_caster(eSpellType type, int lifeDrainReturn, bool heals) =>
+        Assert.That(PlayerBotDriver.HealsCaster(type, lifeDrainReturn), Is.EqualTo(heals));
+
+    // #167 E fix R2: the reserve holds only while holding can still buy a run. Endurance comes back neither in a fight nor
+    // moving (ClassicRestRegeneration.cs), so under the run's need against the fastest monster (runNeed, EscapeEndurance)
+    // no hold buys one: 26 of the 31 held in-fight deaths on st-deathsE and Eb were under it at death (end=0 after a
+    // caught run). Nor while its target, the only monster on the bot (targetAlone), is at BreakOffTargetPercent or less:
+    // no break-off fires from it then (BreaksOff) and none is left to run from at the kill; Pbothaaep held its nuke 157
+    // thinks and died with its target at 1%. With another monster on the bot the reserve stays for the run at the kill
+    // (why=atkill, followup: 21 such runs after a held kill, 18 alive). Else, none (0): the style and cast as before.
+    [TestCase(36, 31, 40, (byte)50, true, 36)] [TestCase(36, 31, 31, (byte)50, true, 36)]     // the run still bought
+    [TestCase(36, 31, 30, (byte)50, true, 0)] [TestCase(31, 26, 0, (byte)50, false, 0)]       // under its need
+    [TestCase(31, 21, 23, (byte)50, true, 31)]                                                // a 150 chaser: 21 runs
+    [TestCase(31, 26, 40, (byte)10, true, 0)] [TestCase(31, 26, 40, (byte)1, true, 0)]        // its target about to die
+    [TestCase(31, 26, 40, (byte)11, true, 31)] [TestCase(31, 26, 40, (byte)5, false, 31)]     //   above it, or an add on
+    [TestCase(0, 26, 40, (byte)50, true, 0)]                                                  // no close fight
+    public void A_hold_keeps_the_reserve_only_while_it_can_still_buy_a_run(int reserve, int runNeed, int endurance,
+        byte targetHealth, bool targetAlone, int held) =>
+        Assert.That(PlayerBotDriver.HoldingReserve(reserve, runNeed, endurance, targetHealth, targetAlone), Is.EqualTo(held));
 
     // #167 E-R: the bot's health at its target's death on the race since the first hit on it; no read under 20 lost; a
     // target that lost nothing, never.
@@ -1778,6 +1813,40 @@ public sealed class UT_PlayerBotDriver
         Assert.That(state.Reserve, Is.EqualTo(31), "and no read kept");
         state.Engaged = true;
         Assert.That(reserveNow.Invoke(null, [state, Player(null), null, 10_000L]), Is.EqualTo(31), "the last read's");
+    }
+
+    // #167 E fix R2: the hold's gate (HoldingReserve) is read on every call against the bot's endurance and its target's
+    // health now, on the last read's need and monsters: a style or cast that takes it under the need ends the hold at the
+    // next think, not a second later.
+    [Test]
+    public void The_hold_reads_the_endurance_and_the_target_on_every_call()
+    {
+        var calculators = (DOL.GS.PropertyCalc.IPropertyCalculator[])typeof(GameLiving)
+            .GetField("m_propertyCalc", BindingFlags.Static | BindingFlags.NonPublic)!.GetValue(null)!;
+        DOL.GS.PropertyCalc.IPropertyCalculator previous = calculators[(int)eProperty.MaxHealth];
+        calculators[(int)eProperty.MaxHealth] = new Fixed(100);                       // the target's HealthPercent
+        try
+        {
+            MethodInfo reserveNow = typeof(PlayerBotDriver).GetMethod("ReserveNow", BindingFlags.Static | BindingFlags.NonPublic)!;
+            GamePlayer bot = Player(null);
+            FieldInfo endurance = typeof(GameLiving).GetField("m_endurance", Hidden)!;
+            var state = new PlayerBotState(bot)
+                { Engaged = true, Reserve = 31, RunNeed = 26, TargetAlone = true, NextReserveTick = 10_500 };
+            GameNPC target = LiveMonster(60);
+            endurance.SetValue(bot, 30);
+            Assert.That(reserveNow.Invoke(null, [state, bot, target, 10_000L]), Is.EqualTo(31), "the run still bought");
+            endurance.SetValue(bot, 25);
+            Assert.That(reserveNow.Invoke(null, [state, bot, target, 10_250L]), Is.Zero, "under the need: no hold");
+            endurance.SetValue(bot, 30);
+            Assert.That(reserveNow.Invoke(null, [state, bot, LiveMonster(8), 10_250L]), Is.Zero, "its target at 8, alone");
+            state.TargetAlone = false;
+            Assert.That(reserveNow.Invoke(null, [state, bot, LiveMonster(8), 10_250L]), Is.EqualTo(31), "an add on it too");
+            Assert.That(state.Reserve, Is.EqualTo(31), "the read itself is kept for its second");
+        }
+        finally
+        {
+            calculators[(int)eProperty.MaxHealth] = previous;
+        }
     }
 
     // Where it runs: ahead of straight away from its chasers (a dot product above 0, so never square to them), out of
