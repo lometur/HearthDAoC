@@ -175,31 +175,31 @@ What they don't do yet is under [Known shortcomings](#known-shortcomings).
 Against the GameBots (#167), and between them and a live world. Each line goes when its fix lands.
 
 Playing:
-- **Deaths:** on `st-deathsC` (15 minutes, 390 level-matched bots, before the changes marked below) they die 2.1
-  times per bot-hour, against about 1 for the PvE GameBots: melee 1.6, casters 5.2, healers 1.9, pet classes 0.9,
-  archers 2.5. 30 of those bots never killed anything: the test's spots put them where they can't hunt (by a
-  battleground keep, in a dungeon), and they hold 56 of the 195 deaths, 27 of the casters' 71; without them casters
-  die about 3.5 times per bot-hour. On v0.37b-hearth.9 (`st-layers5`) it was 9.5. Still open:
-  - Casters die most. One that pulls from spell range keeps nuking while the monster closes, and its own swing still
-    ends a root or mez in 8% of its controls. Out-of-power caster deaths doubled (9 to 18). Changed since
-    `st-deathsC`, to be measured: a caster losing to one monster, or out of power with its target held, breaks off;
-    it casts by its spell's real cost and rests after its login buffs; it casts no root the server refuses over a
-    snare nuke's slow; it tries every step-back spot.
-  - A caster controls the add in only 1 add fight in 6: its Quickcast has usually gone on the target before the add
-    comes. Changed since `st-deathsC`, to be measured: a green gets no control while the caster is healthy and alone.
-  - After a release, a bot dies again before its next kill as often as before (43%): the new camp's first fight is no
-    safer. Changed since `st-deathsC`, to be measured: it plans its camp and walks out under the release's immunity,
-    takes neither the camp it died on the way to nor, for 5 minutes, one that cons as high as a yellow or harder
-    monster that killed it, sees a hostile keep guard, and asks again for a release that didn't take.
-  - A break-off often comes late (half the deaths on the run come in its first 4 s), and a bot caught on the run
-    usually dies (10 of 13). Changed since `st-deathsC`, to be measured: a caught bot controls the chaser or turns on
-    the weakest, a held chaser still counts, and it runs from no monster with a long-range spell. The late start
-    stays: `wouldBreak=` only logs a projected break-off.
+- **Deaths:** on `st-deathsD2` (15 minutes, 390 level-matched bots on the `spots-lm3` test spots) they die 1.6 times
+  per bot-hour, against about 1 for the PvE GameBots: melee 1.4, casters 1.6, healers 2.2, pet classes 0.9, archers
+  3.0. v0.37b-hearth.11 on the same spots (`st-hearth11`) died 1.8 times, casters 3.8. The older spot list put 30 bots
+  where they couldn't hunt (by a battleground keep, in a dungeon); `spots-lm3` moves the 26 whose spot was the cause,
+  so legs before `st-hearth11` (2.1 on `st-deathsC`, 9.5 on v0.37b-hearth.9's `st-layers5`) don't compare one for
+  one. Still open:
+  - Break-offs that fail. A bot with too little endurance to sprint doesn't break off: 81 refusals on `st-deathsD2`,
+    followed by 39 deaths within a minute, among them 19 of the 21 deaths to a second monster. A bot caught on the
+    run, or with nowhere further to run, turns and fights and usually dies (18 of 24 within a minute). Deaths within
+    a minute of a break-off are 32% of break-offs, as on `st-hearth11` (36%). The late start stays: `wouldBreak=`
+    only logs a projected break-off.
+  - Casters: their holds now last (their own swing ends 1% of controls, 13% on `st-hearth11`), and deaths of a caster
+    stuck in melee with one monster fell from 32 to 6. A long held fight still runs their power low, and the log can't
+    tell a control the server refused from one the monster resisted. A caster seldom controls the add: its Quickcast
+    has usually gone on the target before the add comes.
+  - After a release a bot dies again before its next kill 23% of the time (37% on `st-hearth11`). A died plan bars
+    the old camp, not the route to the new one, so a bot whose route passes the monster that killed it can die on
+    the same stretch again.
+  - For 5 minutes after a yellow or harder monster kills it, a bot takes no camp that cons as high. Where its level
+    has no other camp (3 bots on `st-deathsD2`), it waits at its bind, and a bind inside an aggressive camp is
+    attacked.
+  - A camp of training dummies counts as a camp: a bot sent there fights nothing.
   - Walks don't look ahead for monsters on the route.
-- **Resting:** 49% of their time on `st-deathsC`. Rest per kill fell 2%; the share rose because they die less and
-  kill 5% more per hour. Most of it is the real cost of player regeneration. Changed since `st-deathsC`, to be
-  measured: a Reaver's Surge only in a hard fight, a green's control left out, a caster's rest after its login buffs,
-  and a blocked walk to a rest spot tries the next.
+- **Resting:** 52% of their time on `st-deathsD2`, as on `st-hearth11`. Most of it is the real cost of player
+  regeneration.
 - **Not done at all:** they don't group, buff others, take part in RvR or battlegrounds, stealth, use realm abilities
   or ride horses (#152, #167).
 - **Ranged and songs:** they can't shoot or play. Archers fight in melee, and Bards and Minstrels have no songs: theirs
@@ -259,9 +259,9 @@ Read these with their caveats:
   of what the live GameBots cost on our PC.
 - **PvE hunting only.** About 37% of the live GameBots were in RvR or battlegrounds, which isn't modelled and may cost
   more.
-- **They are not yet GameBot-like.** They die 2.1 times per bot-hour (`st-deathsC`); the live PvE GameBots die about
-  once, and casters are worst (5.2, about 3.5 without the 30 bots that test's spots put where they can't hunt). They
-  spend about half their time resting (49%). Sitting is cheap, so the ratios are more likely low than high.
+- **They are not yet GameBot-like.** They die 1.6 times per bot-hour (`st-deathsD2`); the live PvE GameBots die about
+  once, and archers are worst (3.0). They spend about half their time resting (52%). Sitting is cheap, so the ratios
+  are more likely low than high.
 - A GameBot is a monster to the game: its armour comes from a monster formula, and it regains at least 10% a second once
   2 seconds out of a fight. Player bots use player rules for both, on purpose.
 
