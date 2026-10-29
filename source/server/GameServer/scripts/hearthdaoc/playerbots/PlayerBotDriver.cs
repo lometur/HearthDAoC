@@ -1531,6 +1531,12 @@ public static class PlayerBotDriver
     public static bool IsThreat(GameNPC npc, eRealm botRealm) =>
         CountsAsThreat(IsExperienceTarget(npc), npc is GameKeepGuard, npc.Realm, botRealm);
 
+    /// <summary>A monster the break-off's run keeps clear of (BreakOffGoal's adds, #167 C2): a threat (IsThreat; the review
+    /// of D: a hostile keep guard too, as the step out and the walk out keep clear of it, ThreatsWithin), not one with the
+    /// bot as its target (on it already: a chaser).</summary>
+    public static bool IsBreakOffAdd(GameNPC npc, GameObject bot, eRealm botRealm) =>
+        npc.TargetObject != bot && IsThreat(npc, botRealm);
+
     // A copy of AutonomousWorldBotController.IsExperienceMonster (AWBC:4855-4861, private there).
     public static bool IsExperienceTarget(GameNPC npc) =>
         npc?.ObjectState is GameObject.eObjectState.Active && npc.Realm == eRealm.None && npc.Brain != null &&
@@ -3728,15 +3734,16 @@ public static class PlayerBotDriver
 
     // The next break-off point (NextBreakOffPoint) from where the bot is: the ring points (BreakOffRings, SpotDirections
     // round it) on the navmesh, away from its chasers, out of the reach of every other monster round it that would
-    // aggro (AddReach; not one with the bot as its target: it is on it already), not one it was blocked on, and one it
-    // has a corridor to (PlayerTravelPath.TryBuildCorridor, as RelocateIfOutgrown's; with no navmesh, any); #167 D2: none,
-    // the point straight away from them under the same tests, one try (StraightAwayGoal); none, null.
+    // aggro (AddReach; not one with the bot as its target: it is on it already; a hostile keep guard too, #167 D7 and the
+    // review of D: IsBreakOffAdd), not one it was blocked on, and one it has a corridor to (PlayerTravelPath.TryBuildCorridor,
+    // as RelocateIfOutgrown's; with no navmesh, any); #167 D2: none, the point straight away from them under the same
+    // tests, one try (StraightAwayGoal); none, null.
     private static Vector3? BreakOffGoal(PlayerBotState state, GamePlayer player)
     {
         List<(GameNPC Npc, Vector3 At, int AggroRange)> adds = _reach ??= new();
         adds.Clear();
         foreach (GameNPC npc in player.GetNPCsInRadius((ushort)(BreakOffRings[^1] + AddScanMargin)))
-            if (npc.TargetObject != player && IsExperienceTarget(npc) && AddReach(player, npc) is > 0 and int reach)
+            if (IsBreakOffAdd(npc, player, player.Realm) && AddReach(player, npc) is > 0 and int reach)   // #167 D7
                 adds.Add((npc, new(npc.X, npc.Y, npc.Z), reach));
         Vector3 here = new(player.X, player.Y, player.Z);
         IPathfindingMgr nav = PathfindingProvider.Instance;

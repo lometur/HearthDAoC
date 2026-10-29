@@ -1124,17 +1124,47 @@ public sealed class UT_PlayerBotDriver
     [Test]
     public void The_scans_see_a_realmless_keep_guard_and_still_pull_none()
     {
-        var lord = (DOL.GS.Keeps.GuardLord)RuntimeHelpers.GetUninitializedObject(typeof(DOL.GS.Keeps.GuardLord));
-        lord.ObjectState = GameObject.eObjectState.Active;
-        typeof(GameNPC).GetField("m_brains", Hidden)!.SetValue(lord, new System.Collections.ArrayList());
-        typeof(GameNPC).GetField("m_ownBrain", Hidden)!.SetValue(lord, new DOL.AI.Brain.KeepGuardBrain());
-        GameNPC monster = LiveMonster();
-        typeof(GameNPC).GetField("m_ownBrain", Hidden)!.SetValue(monster, new DOL.AI.Brain.StandardMobBrain());
+        DOL.GS.Keeps.GuardLord lord = RealmlessLord();
+        GameNPC monster = Mob();
         Assert.That((PlayerBotDriver.IsExperienceTarget(lord), PlayerBotDriver.IsThreat(lord, eRealm.Albion)),
             Is.EqualTo((false, true)), "no pull or plan, but a threat");
         Assert.That(PlayerBotDriver.IsThreat(monster, eRealm.Albion), Is.True, "a monster, as before");
         lord.Realm = eRealm.Albion;
         Assert.That(PlayerBotDriver.IsThreat(lord, eRealm.Albion), Is.False, "its own realm's");
+    }
+
+    // A keep guard lord of no realm, active, with its brain.
+    private static DOL.GS.Keeps.GuardLord RealmlessLord()
+    {
+        var lord = (DOL.GS.Keeps.GuardLord)RuntimeHelpers.GetUninitializedObject(typeof(DOL.GS.Keeps.GuardLord));
+        lord.ObjectState = GameObject.eObjectState.Active;
+        typeof(GameNPC).GetField("m_brains", Hidden)!.SetValue(lord, new System.Collections.ArrayList());
+        typeof(GameNPC).GetField("m_ownBrain", Hidden)!.SetValue(lord, new DOL.AI.Brain.KeepGuardBrain());
+        return lord;
+    }
+
+    // A live monster with a mob's brain.
+    private static GameNPC Mob()
+    {
+        GameNPC monster = LiveMonster();
+        typeof(GameNPC).GetField("m_ownBrain", Hidden)!.SetValue(monster, new DOL.AI.Brain.StandardMobBrain());
+        return monster;
+    }
+
+    // The review of D (D7): the break-off's run point keeps clear of a hostile keep guard too (IsBreakOffAdd, BreakOffGoal's
+    // adds), as the step out and the walk out do (ThreatsWithin): at Pbotaaacv's bind the run could end in the aggro of a
+    // realm-less guard not on it yet. One with the bot as its target is on it already, no add.
+    [Test]
+    public void A_break_off_runs_clear_of_a_realmless_keep_guard()
+    {
+        DOL.GS.Keeps.GuardLord lord = RealmlessLord();
+        GamePlayer bot = Player(null);
+        Assert.That(PlayerBotDriver.IsBreakOffAdd(lord, bot, eRealm.Albion), Is.True, "a realm-less guard");
+        Assert.That(PlayerBotDriver.IsBreakOffAdd(Mob(), bot, eRealm.Albion), Is.True, "a monster, as before");
+        lord.TargetObject = bot;
+        Assert.That(PlayerBotDriver.IsBreakOffAdd(lord, bot, eRealm.Albion), Is.False, "on the bot already");
+        (lord.TargetObject, lord.Realm) = (null, eRealm.Albion);
+        Assert.That(PlayerBotDriver.IsBreakOffAdd(lord, bot, eRealm.Albion), Is.False, "its own realm's");
     }
 
     // --- the break-off when losing to two (#167 C2) ---

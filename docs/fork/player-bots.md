@@ -147,8 +147,8 @@ Each bot thinks every 250 ms, a thin copy of the `/bot` pilot's think:
   death handling later in the same tick, which left the bot dead for 15 minutes. A release that didn't revive it is
   asked for again every 10 s.
 - After a release it first steps out of the reach of every monster round it that would aggro, a keep guard of another
-  realm or of none too. Such a guard also counts as an add when it picks a target and a spot to rest, but it never
-  pulls one. Wherever it died (at its camp or on a walk), it then plans a new camp from where it died, one it can walk
+  realm or of none too. Such a guard also counts as an add when it picks a target, a spot to rest and where to run in
+  a break-off, but it never pulls one. Wherever it died (at its camp or on a walk), it then plans a new camp from where it died, one it can walk
   to from there, before it walks back. It plans at once, while the release's 10-s immunity lasts: the plan counts the
   monsters it may not attack until then. With a camp planned and the immunity still on, no monster may attack it, so
   it walks out toward the camp instead of standing: sprinting, from spot to spot out of every aggressive monster's
