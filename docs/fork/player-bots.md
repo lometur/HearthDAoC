@@ -68,11 +68,12 @@ Each bot thinks every 250 ms, a thin copy of the `/bot` pilot's think:
   nukes kill the monster before it arrives, at the rate the fight's nukes have taken its health so far (one nuke more
   with Quickcast ready, which then goes to that nuke), if it has 60% health or more and no other monster on it. A
   rooted or mezzed monster near it would break free at the next nuke, so it first steps back to range, on a spot clear
-  of other aggressive monsters, within its spell's range; so it does from a stunned one while hits interrupt it. In
-  melee with no clear spot it steps back 400 units straight away anyway, and never to a spot nearer the target than
-  it stands. While its target is held it keeps its spell's range, even with hits blocking its spells or too little
-  power (then its longest damage spell's range), and it never swings at a rooted or mezzed monster (its hit, or a
-  miss, would free it): it waits instead. Not while another monster that isn't held hits it, and not for 5 s after a
+  of other aggressive monsters, within its spell's range; so it does from a stunned one while hits interrupt it. It
+  tries each such spot in turn (straight away, then turned 30, 60 and 90 degrees either way), and one the navmesh puts
+  too far above or below the target it tries once nearer in; in melee, if none works, it steps back 400 units straight
+  away anyway, and never to a spot nearer the target than it stands. While its target is held it keeps its spell's
+  range, even with hits blocking its spells or too little power (then its longest damage spell's range), and it never
+  swings at a rooted or mezzed monster (its hit, or a miss, would free it): it waits instead. Not while another monster that isn't held hits it, and not for 5 s after a
   blocked step back: then it fights as before. A root counts as a hold even under a snare that landed before it (a
   damage-and-snare nuke's). Only single-target spells the bot has, that the monster isn't immune to by the server's
   own rules: a monster stunned or mezzed in the last minute takes the next one for half the time, then a quarter, and
@@ -381,8 +382,10 @@ All start `PLAYER_BOT_`:
   rate would have fired, under 40% or under 6 s of the loss; logged only, -1 if never) and `walk=` (the walk on the
   think before the fight began: `none`, `hunt`, `anchor`, `roam`, `clear`, `rest`, `kite`, `breakoff` or `walkout`, the
   walk out toward the camp planned under the release's immunity). Out of a
-  fight `DEATH` gives -1 for the fight's fields, `rate=` at the death and the walk on its last think alive; it ends with
-  `end=` (endurance).
+  fight `DEATH` gives -1 for the fight's fields, `rate=` at the death and the walk on its last think alive; it gives
+  `end=` (endurance). Both end with `kiteNone=range:clear:mesh:fit`, the fight's steps back that found no point, by
+  why: `range` (the bot already stood at its spell's reach), `clear` (no point out of the other monsters' reach),
+  `mesh` (none on the navmesh) or `fit` (none within the stop once on the navmesh's height); -1 each out of a fight.
   `BLOCKED`'s `walk=` is `target`, `roam`, `clear` (the step out after a release), `walkout`, `rest`, `kite`, `turret`
   or `breakoff`. `RELOCATE` after a death (`reason=died`) ends with `sinceRelease=`, the milliseconds since the release;
   after a break-off its `reason=` is `brokeoff`. Either ends with `barred=old` when the death or the break-off came on

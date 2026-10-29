@@ -152,6 +152,7 @@ public sealed class PlayerBotState
     public long NextAnimistStandTick;                            // #167 F10b: after a blocked walk to its stand
     public int FightControls, FightKites;                        // #167 FIGHT ctl= and kites=
     public int FightCtlBroken;                                   // #167 C3: FIGHT ctlBroken=, from the target's root or mez
+    public (int Range, int Clear, int Mesh, int Fit) FightKiteNone;   // #167 D8: FIGHT kiteNone=, step backs with no point
     public bool TargetHeldBreaks;                                //   at the last think (BrokeHold)
     public GameLiving AddCastTarget;                             // #167 C4: the add a cast under way is at (FacesWhom),
     public readonly List<GameNPC> AddScan = new();               //   the monsters coming at the bot (ScanComing), its next
@@ -271,6 +272,9 @@ public static class PlayerBotDriver
     public const int KiteArriveDistance = 20;                 //   the step back ends this near its point, this short of the
     public const int KiteStopMargin = 50;                     //   stop (KiteRange)
     public static readonly int[] KiteTurns = [0, 30, -30, 60, -60, 90, -90];   // degrees off straight away from the target
+    public const int KiteMeshCalls = 8;                       // #167 D8: a step back's navmesh calls a think, at most (inf.);
+    public const string KiteMissRange = "range", KiteMissClear = "clear",   //   kiteNone='s whys (KiteWalk, KiteNoneCounted)
+        KiteMissMesh = "mesh", KiteMissFit = "fit";
     public const byte KillFirstHealthPercent = 60;            // #167 C11: the nukes before the control from this health
     public const int AnimistStandMargin = 150;                // #167 F10b: by its turret; the turret's reach less this
     public const int IncomingRadius = 2_000;                  // #167 F7: a monster this near with the bot as its target
@@ -1594,6 +1598,7 @@ public static class PlayerBotDriver
         state.EngageMana = mana;
         state.FightAdds = state.Swings = state.NotVisible = state.FightCasts = state.FightHeals = 0;
         state.FightPetCasts = state.FightWaits = state.FightControls = state.FightKites = state.FightCtlBroken = 0;
+        state.FightKiteNone = default;                                              // #167 D8 kiteNone=
         state.TargetHeldBreaks = false;                                             // #167 C3
         state.FightAddControls = 0;                                                 // #167 C4
         (state.FightAdd, state.EngageDistance) = ((-1, -1), distance);              // #167 FIGHT addAt=, engageDist=
@@ -2310,15 +2315,28 @@ public static class PlayerBotDriver
         return null;
     }
 
-    /// <summary>The step back's point (#167 C3): KiteStep's, clear of the adds (Clear); with none clear and the bot in
-    /// melee (inMelee), the point straight away from the target KiteFallbackDistance out, adds or not (inf.: a null left it
-    /// in the held monster's reach, where its hits stopped every cast); else null, as before. The caller puts it on the
-    /// navmesh and checks a clear one's place there against the adds again.</summary>
-    public static (Vector3 Point, bool Clear)? KiteTarget<T>(Vector3 bot, Vector3 target, int range,
+    /// <summary>The step back's points in turn (#167 C3, D8): KiteStep's, each turn (KiteTurns) out of every potential
+    /// add's reach (Clear), not only the first; then, the bot in melee (inMelee), the point straight away from the target
+    /// KiteFallbackDistance out, adds or not (inf.: a null left it in the held monster's reach, where its hits stopped
+    /// every cast), which C3 took only with none clear. Out of melee with none clear, none, as before. The caller
+    /// (KiteWalk) puts each on the navmesh and checks a clear one's place there against the adds again. With one
+    /// monster, a swing at a held target needs a blocked step back (stepBackBlocked, set only when KitePoint found
+    /// none): 24 of st-deathsC's 43 ctlBroken fights had one monster, no step back and no break-off, and a clear point
+    /// existed at 97-99% of the death spots (inf.: the database's spawn spots).</summary>
+    public static List<(Vector3 Point, bool Clear)> KiteCandidates<T>(Vector3 bot, Vector3 target, int range,
         IReadOnlyList<(T Npc, Vector3 At, int AggroRange)> adds, bool inMelee) where T : class
     {
-        if (KiteStep(bot, target, range, adds) is Vector3 clear) return (clear, true);
-        return inMelee ? (KiteStep(bot, target, KiteFallbackDistance, Array.Empty<(T, Vector3, int)>()).Value, false) : null;
+        List<(Vector3 Point, bool Clear)> points = new(KiteTurns.Length + 1);
+        Vector2 away = new(bot.X - target.X, bot.Y - target.Y);
+        double heading = away.LengthSquared() < 1 ? 0 : Math.Atan2(away.Y, away.X);
+        foreach (int turn in KiteTurns)
+        {
+            double angle = heading + turn * Math.PI / 180;
+            Vector3 point = new(target.X + (float)(Math.Cos(angle) * range), target.Y + (float)(Math.Sin(angle) * range), bot.Z);
+            if (!InAddReach(point, adds)) points.Add((point, true));
+        }
+        if (inMelee) points.Add((KiteStep(bot, target, KiteFallbackDistance, Array.Empty<(T, Vector3, int)>()).Value, false));
+        return points;
     }
 
     /// <summary>Whether a step back's point on the navmesh keeps the bot within Engage's stop of its target (the review
@@ -2332,6 +2350,66 @@ public static class PlayerBotDriver
     /// farther out than the bot stands (distance); else none (the review of 9aacd69: with a stop of 145 the "step back"
     /// went 95 units from a target the bot stood 145 from).</summary>
     public static int? KiteRange(int stop, int distance) => stop - KiteStopMargin > distance ? stop - KiteStopMargin : null;
+
+    /// <summary>A step back's flat range for a point the navmesh put dz above or below the target (#167 D8): the flat
+    /// distance that keeps it within the reach KiteRange keeps (the stop less KiteStopMargin) in 3D, rounded up (KiteFits
+    /// leaves KiteStopMargin - KiteArriveDistance of slack), only when that is farther out than the bot stands
+    /// (distance); else none. KiteFits's 30 units of 3D slack rule out a point about 287 units above or below the target at
+    /// 1,370 out: KiteWalk pulls such a one in once to this.</summary>
+    public static int? KiteRangeFor(int stop, int dz, int distance)
+    {
+        double reach = stop - KiteStopMargin, flat = reach * reach - (double)dz * dz;
+        if (flat <= 0) return null;
+        int range = (int)Math.Ceiling(Math.Sqrt(flat));
+        return range > distance ? range : null;
+    }
+
+    /// <summary>The step back's point as KitePoint takes it (#167 D8): each candidate in turn (KiteCandidates) on the
+    /// navmesh (onMesh), a clear one's place there out of the adds' reach again (InAddReach), then within the stop in 3D
+    /// (KiteFits); one that misses on the height is pulled in once (KiteRangeFor, toward the target from the candidate,
+    /// distance: the bot's from the target) and tried again. At most KiteMeshCalls navmesh calls. None: why, its nearest
+    /// miss: fit (one on the mesh, clear, but too high or low), else clear (the mesh moved it into an add's reach, or no
+    /// candidate at all), else mesh (none on the mesh).</summary>
+    public static (Vector3? Point, string Why) KiteWalk<T>(IReadOnlyList<(Vector3 Point, bool Clear)> candidates, Vector3 target,
+        int stop, int distance, Func<Vector3, Vector3?> onMesh, IReadOnlyList<(T Npc, Vector3 At, int AggroRange)> adds)
+        where T : class
+    {
+        int calls = 0, miss = candidates.Count == 0 ? 1 : 0;                           // 0 mesh, 1 clear, 2 fit
+        foreach ((Vector3 candidate, bool clear) in candidates)
+        {
+            Vector3 point = candidate;
+            for (bool pulled = false; calls < KiteMeshCalls; pulled = true)
+            {
+                calls++;
+                if (onMesh(point) is not Vector3 m) break;
+                if (clear && InAddReach(m, adds))
+                {
+                    miss = Math.Max(miss, 1);
+                    break;
+                }
+                if (KiteFits(m, target, stop)) return (m, null);
+                miss = 2;
+                Vector2 flat = new(candidate.X - target.X, candidate.Y - target.Y);
+                if (pulled || KiteRangeFor(stop, (int)(m.Z - target.Z), distance) is not int range || range >= flat.Length())
+                    break;
+                flat = Vector2.Normalize(flat) * range;                                 // pulled in toward the target
+                point = new(target.X + flat.X, target.Y + flat.Y, candidate.Z);
+            }
+            if (calls >= KiteMeshCalls) break;
+        }
+        return (null, miss switch { 2 => KiteMissFit, 1 => KiteMissClear, _ => KiteMissMesh });
+    }
+
+    /// <summary>FIGHT and DEATH kiteNone= (#167 D8): a step back that found no point, counted by why (KiteMissRange:
+    /// KiteRange had none; else KiteWalk's).</summary>
+    public static (int Range, int Clear, int Mesh, int Fit) KiteNoneCounted((int Range, int Clear, int Mesh, int Fit) counts,
+        string why) => why switch
+    {
+        KiteMissRange => counts with { Range = counts.Range + 1 },
+        KiteMissClear => counts with { Clear = counts.Clear + 1 },
+        KiteMissMesh => counts with { Mesh = counts.Mesh + 1 },
+        _ => counts with { Fit = counts.Fit + 1 },
+    };
 
     /// <summary>A monster coming at the bot (#167 F7): it may attack it, it has the bot as its target and it is within
     /// IncomingRadius; not the one Engage found unreachable while that lasts (unreachable), between scans too.</summary>
@@ -3641,7 +3719,8 @@ public static class PlayerBotDriver
             inFight ? state.FightCtlFailed : -1, inFight ? state.FightHpAtReach : -1,     //   rate= at the death, walk=
             inFight ? state.FightTargetHpAtReach : -1,                                    //   the last think's alive out of
             HealthRate(state.HealthSamples, now, player.HealthPercent), inFight ? state.WouldBreakHp : -1,   //   a fight,
-            inFight ? state.FightWalk : state.LastWalk, player.EndurancePercent);         //   and end=
+            inFight ? state.FightWalk : state.LastWalk, player.EndurancePercent,          //   and end=; #167 D8
+            inFight ? state.FightKiteNone : null);                                        //   kiteNone=, FIGHT's
         string head = $"PLAYER_BOT_DEATH bot={player.Name} level={player.Level} at=({player.X},{player.Y},{player.Z}) " +
                       $"zone={player.CurrentZone?.ID} {fight} attackers={state.Attackers} deathSteps={state.DeathSafetySteps} " +
                       $"aliveSec={(now - state.AliveSince) / 1000} task={state.Task != null}";
@@ -3713,7 +3792,8 @@ public static class PlayerBotDriver
             state.FightControls, state.FightKites, state.FightCtlBroken, state.FightAddControls, state.FightAdd.At,
             state.FightAdd.Hp, brokeOff, state.EngageDistance, state.PickCrowd, state.FightHeldMs / 1000, state.FightCtlLanded,
             state.FightCtlFailed, state.FightHpAtReach, state.FightTargetHpAtReach,      // #167 st-deathsD's
-            HealthRate(state.HealthSamples, now, player.HealthPercent), state.WouldBreakHp, state.FightWalk)));
+            HealthRate(state.HealthSamples, now, player.HealthPercent), state.WouldBreakHp, state.FightWalk,
+            state.FightKiteNone)));                                                     // #167 D8
     }
 
     // APP:585-624, changed: every 10 s, no inventory count, no saves; after 15 minutes with no progress, back to the
@@ -3839,9 +3919,10 @@ public static class PlayerBotDriver
         {
             case PlayerBotCasterAction.StepBack:
                 if (!casterHold || now < state.NextKiteTick) return false;
-                if (KitePoint(state, player, npc, stop, distance, distance <= ContactDistance) is not Vector3 goal)
+                if (KitePoint(state, player, npc, stop, distance, distance <= ContactDistance, out string why) is not Vector3 goal)
                 {
                     state.NextKiteTick = now + KitePauseMilliseconds;                   // none: as a blocked one (C3)
+                    state.FightKiteNone = KiteNoneCounted(state.FightKiteNone, why);    // #167 D8 kiteNone=
                     return false;
                 }
                 state.KiteGoal = goal;
@@ -4072,13 +4153,15 @@ public static class PlayerBotDriver
         return false;
     }
 
-    // The step back's point (KiteTarget) on the navmesh, short of Engage's stop (the spell's, SpellStopDistance) so Engage
-    // doesn't walk it back in, in 3D too (KiteFits: on a slope or after OnMesh a flat range lay past it), and farther out
-    // than the bot stands (KiteRange); none, null. In melee (inMelee) with no point clear of the adds, the straight-away
-    // one (#167 C3). The adds are the last search's (FindWithin), where they are now, the target not one.
+    // The step back's point (KiteCandidates, KiteWalk) on the navmesh, short of Engage's stop (the spell's,
+    // SpellStopDistance) so Engage doesn't walk it back in, in 3D too (KiteFits: on a slope or after OnMesh a flat range
+    // lay past it; #167 D8: pulled in once, KiteRangeFor), and farther out than the bot stands (KiteRange); none, null,
+    // and why (KiteMissRange, or KiteWalk's). In melee (inMelee) the straight-away one last (#167 C3). The adds are the
+    // last search's (FindWithin), where they are now, the target not one.
     private static Vector3? KitePoint(PlayerBotState state, GamePlayer player, GameNPC target, int stop, int distance,
-        bool inMelee)
+        bool inMelee, out string why)
     {
+        why = KiteMissRange;
         if (KiteRange(stop, distance) is not int range) return null;
         List<(GameNPC Npc, Vector3 At, int AggroRange)> adds = _reach ??= new();
         adds.Clear();
@@ -4086,11 +4169,10 @@ public static class PlayerBotDriver
             if (npc != target && AddReach(player, npc) is > 0 and int reach)
                 adds.Add((npc, new(npc.X, npc.Y, npc.Z), reach));
         Vector3 at = new(target.X, target.Y, target.Z);
-        (Vector3 Point, bool Clear)? kite = KiteTarget(new Vector3(player.X, player.Y, player.Z), at, range, adds, inMelee);
-        Vector3? onMesh = kite is { } k ? OnMesh(player, k.Point) : null;
-        if (onMesh is Vector3 m && (kite.Value.Clear && InAddReach(m, adds) || !KiteFits(m, at, stop))) onMesh = null;
+        (Vector3? point, why) = KiteWalk(KiteCandidates(new Vector3(player.X, player.Y, player.Z), at, range, adds, inMelee), at,
+            stop, distance, p => OnMesh(player, p), adds);
         adds.Clear();
-        return onMesh;
+        return point;
     }
 
     // #167 C3's guard (CasterHolds): another monster hitting the bot (Attacker's: in its attacker list, the bot its

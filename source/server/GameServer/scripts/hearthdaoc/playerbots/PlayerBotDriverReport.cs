@@ -26,14 +26,16 @@ public readonly record struct PlayerBotDriverWindow(
 /// then (#167, st-deathsD's) the whole seconds its target was held (Hold), its control casts that held or not
 /// (ControlLanded), its and its target's health at the first hit on it (-1: none), the health it lost a second over the
 /// last 3 s (HealthRate; a gain is negative), its health when the projected break-off would have fired (ProjectedBreak,
-/// logged only; -1: never), and the walk on the think before the fight's first (F12d's field).</summary>
+/// logged only; -1: never), and the walk on the think before the fight's first (F12d's field); then (#167 D8) the step
+/// backs that found no point, by why (KiteNone: range, clear, mesh, fit; none given, 0 each).</summary>
 public readonly record struct PlayerBotFight(
     string Bot, int Level, string Target, int TargetLevel, ConColor Con, bool FromDefence, bool Killed,
     byte StartHp, byte EndHp, byte StartMana, byte EndMana, long Seconds, int Adds, int Swings, int NotVisible, int Casts,
     int LifeKills, int Rests, bool Pet = false, int Heals = 0, bool Quickcast = false, int Buffs = 0, int PetCasts = 0,
     int Waits = 0, int Controls = 0, int Kites = 0, int CtlBroken = 0, int AddControls = 0, int AddAt = -1, int AddHp = -1,
     bool BreakOff = false, int EngageDistance = -1, int Crowd = -1, long HeldSeconds = 0, int CtlLanded = 0, int CtlFailed = 0,
-    int HpAtReach = -1, int TargetHpAtReach = -1, double Rate = 0, int WouldBreak = -1, PlayerBotWalk Walk = PlayerBotWalk.None);
+    int HpAtReach = -1, int TargetHpAtReach = -1, double Rate = 0, int WouldBreak = -1, PlayerBotWalk Walk = PlayerBotWalk.None,
+    (int Range, int Clear, int Mesh, int Fit)? KiteNone = null);
 
 /// <summary>What a PLAYER_BOT_DEATH line adds after its first fields (levelmatch/DEATHS.md 2); -1 for none: the fight's
 /// fields (startHp, fightSec, adds, swings, notVisible) out of a fight, targetHp with no target, sinceKillSec with no kill
@@ -44,7 +46,8 @@ public readonly record struct PlayerBotFight(
 /// FIGHT's AddAt, AddHp and EngageDistance (-1 out of a fight too), and BreakOff: the bot died on a break-off's run (C2;
 /// out of a fight then, as the break-off dropped it). Then (#167, st-deathsD's) FIGHT's HeldSeconds, CtlLanded,
 /// CtlFailed, HpAtReach, TargetHpAtReach and WouldBreak (-1 out of a fight), Rate at the death, Walk: the fight's, or out
-/// of a fight the last think's alive, and Endurance.</summary>
+/// of a fight the last think's alive, and Endurance; then (#167 D8) FIGHT's KiteNone (none: out of a fight, -1 each).
+/// </summary>
 public readonly record struct PlayerBotDeathDetail(
     PlayerBotActivity Activity, int StartHp, long FightSeconds, int TargetHp, bool FromDefence, int Adds, int LifeKills,
     int Rests, long SinceKillSeconds, byte Mana, int Swings, int NotVisible, string Killer, int KillerLevel,
@@ -52,7 +55,7 @@ public readonly record struct PlayerBotDeathDetail(
     int Controls = -1, int Kites = -1, int Casts = -1, int Quickcast = -1, int Waits = -1, int CtlBroken = -1,
     int AddControls = -1, int AddAt = -1, int AddHp = -1, bool BreakOff = false, int EngageDistance = -1, long HeldSeconds = -1,
     int CtlLanded = -1, int CtlFailed = -1, int HpAtReach = -1, int TargetHpAtReach = -1, double Rate = 0, int WouldBreak = -1,
-    PlayerBotWalk Walk = PlayerBotWalk.None, int Endurance = -1);
+    PlayerBotWalk Walk = PlayerBotWalk.None, int Endurance = -1, (int Range, int Clear, int Mesh, int Fit)? KiteNone = null);
 
 // HearthDAoC player bots (#137): one PLAYER_BOT_DRIVER line a minute, then the lever's PLAYER_BOT_WAKE line, from a thread-pool
 // timer off the game loop, and every TallyEveryWindows windows a PLAYER_BOT_TALLY line per bot (the level-matched run).
@@ -189,7 +192,7 @@ public static class PlayerBotDriverReport
         $"ctlBroken={f.CtlBroken} addCtl={f.AddControls} addAt={f.AddAt} addHp={f.AddHp} breakOff={(f.BreakOff ? 1 : 0)} " +
         $"engageDist={f.EngageDistance} crowd={f.Crowd} heldSec={f.HeldSeconds} ctlLanded={f.CtlLanded} ctlFailed={f.CtlFailed} " +
         $"hpAtReach={f.HpAtReach} tHpAtReach={f.TargetHpAtReach} rate={FormatRate(f.Rate)} wouldBreak={f.WouldBreak} " +
-        $"walk={FormatWalk(f.Walk)}");
+        $"walk={FormatWalk(f.Walk)} kiteNone={FormatKiteNone(f.KiteNone ?? default)}");
 
     /// <summary>#167 rate=: one decimal, a loss under 0.05 a second (either way) as 0.0, not -0.0.</summary>
     private static string FormatRate(double rate) =>
@@ -197,6 +200,9 @@ public static class PlayerBotDriverReport
 
     /// <summary>#167 walk=: none, hunt, anchor, roam, clear, rest, kite or breakoff.</summary>
     private static string FormatWalk(PlayerBotWalk walk) => walk.ToString().ToLowerInvariant();
+
+    /// <summary>#167 D8 kiteNone=range:clear:mesh:fit, the step backs that found no point by why (PlayerBotDriver.KiteWalk).</summary>
+    private static string FormatKiteNone((int Range, int Clear, int Mesh, int Fit) k) => $"{k.Range}:{k.Clear}:{k.Mesh}:{k.Fit}";
 
     /// <summary>PLAYER_BOT_REST (#167), when a rest ends: the seconds the bot sat and why it stood (PlayerBotDriver.EndRest);
     /// then its health and power when it sat, and the killed monsters' spawn spots its rest spot was read against (C7).</summary>
@@ -244,7 +250,7 @@ public static class PlayerBotDriverReport
         $"qc={d.Quickcast} waits={d.Waits} ctlBroken={d.CtlBroken} addCtl={d.AddControls} addAt={d.AddAt} addHp={d.AddHp} " +
         $"breakOff={(d.BreakOff ? 1 : 0)} engageDist={d.EngageDistance} heldSec={d.HeldSeconds} ctlLanded={d.CtlLanded} " +
         $"ctlFailed={d.CtlFailed} hpAtReach={d.HpAtReach} tHpAtReach={d.TargetHpAtReach} rate={FormatRate(d.Rate)} " +
-        $"wouldBreak={d.WouldBreak} walk={FormatWalk(d.Walk)} end={d.Endurance}");
+        $"wouldBreak={d.WouldBreak} walk={FormatWalk(d.Walk)} end={d.Endurance} kiteNone={FormatKiteNone(d.KiteNone ?? (-1, -1, -1, -1))}");
 
     public static string Format(PlayerBotDriverWindow w)
     {

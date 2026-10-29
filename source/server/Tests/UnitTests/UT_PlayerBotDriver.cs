@@ -901,7 +901,7 @@ public sealed class UT_PlayerBotDriver
     {
         var state = new PlayerBotState(Player(null)) { BackPending = true, KilledWithAdds = true, ControlTries = 3,
             FightCasts = 4, FightAdd = (2, 50), NextAddScanTick = 9_000, NextKiteTick = 9_000, TargetHeldBreaks = true,
-            FollowsAddKill = true, BreakOffRefused = true,
+            FollowsAddKill = true, BreakOffRefused = true, FightKiteNone = (1, 2, 3, 4),
             LastWalk = PlayerBotWalk.Rest, FightWalk = PlayerBotWalk.Hunt, FightHeldMs = 3_000, FightCtlLanded = 2,
             FightCtlFailed = 1, FightHpAtReach = 50, FightTargetHpAtReach = 40, WouldBreakHp = 30,
             PendingControl = (Control(500, "root", "SpeedDecrease", 10, 99), Player(null), 8_000) };
@@ -913,6 +913,7 @@ public sealed class UT_PlayerBotDriver
         Assert.That((state.NextAddScanTick, state.NextKiteTick, state.TargetHeldBreaks), Is.EqualTo((0L, 0L, false)));
         Assert.That((state.FollowsAddKill, state.BreakOffRefused), Is.EqualTo((false, false)),
             "#167 D2: no add kill 3 s before (the mark's tick is 0), no refusal logged in this fight");
+        Assert.That(state.FightKiteNone, Is.EqualTo((0, 0, 0, 0)), "#167 D8: kiteNone= afresh");
         Assert.That((state.FightWalk, state.FightHeldMs, state.FightCtlLanded, state.FightCtlFailed, state.FightHpAtReach,
             state.FightTargetHpAtReach, state.WouldBreakHp, state.PendingControl.Spell), Is.EqualTo((PlayerBotWalk.Rest, 0L, 0, 0,
             -1, -1, -1, (Spell)null)), "st-deathsD's fields afresh; walk=: the last think's walk");
@@ -3514,17 +3515,122 @@ public sealed class UT_PlayerBotDriver
 
     // #167 C3 (inf.): with no point clear of the adds, a bot in melee steps back anyway, straight away to 400 units from
     // its target: a null left it in the held monster's reach. Out of melee, none, as before. A clear point is Clear: its
-    // place on the navmesh is checked against the adds again, the fallback's is not.
+    // place on the navmesh is checked against the adds again, the fallback's is not. #167 D8: every clear point in turn
+    // (KiteCandidates), and in melee the fallback last: KitePoint took only KiteStep's first clear point, and the fallback
+    // only with none clear.
     [Test]
     public void A_caster_in_melee_with_no_clear_point_steps_back_straight_away_anyway()
     {
         var round = new List<(string, Vector3, int)> { ("add", Vector3.Zero, 1_500) };
-        Assert.That(PlayerBotDriver.KiteTarget(new Vector3(100, 0, 0), Vector3.Zero, 1_370, round, inMelee: true),
-            Is.EqualTo((new Vector3(400, 0, 0), false)));
-        Assert.That(PlayerBotDriver.KiteTarget(new Vector3(600, 0, 0), Vector3.Zero, 1_370, round, inMelee: false), Is.Null);
+        Assert.That(PlayerBotDriver.KiteCandidates(new Vector3(100, 0, 0), Vector3.Zero, 1_370, round, inMelee: true),
+            Is.EqualTo(new[] { (new Vector3(400, 0, 0), false) }));
+        Assert.That(PlayerBotDriver.KiteCandidates(new Vector3(600, 0, 0), Vector3.Zero, 1_370, round, inMelee: false), Is.Empty);
+    }
+
+    [Test]
+    public void The_step_back_tries_every_clear_point_then_in_melee_the_straight_away_one()
+    {
         var none = new List<(string, Vector3, int)>();
-        Assert.That(PlayerBotDriver.KiteTarget(new Vector3(100, 0, 0), Vector3.Zero, 1_370, none, inMelee: true),
-            Is.EqualTo((new Vector3(1_370, 0, 0), true)));
+        List<(Vector3 Point, bool Clear)> melee = PlayerBotDriver.KiteCandidates(new Vector3(300, 0, 0), Vector3.Zero, 1_370, none,
+            inMelee: true);
+        Assert.That(melee, Has.Count.EqualTo(8));
+        Assert.That((melee[0], melee[^1]), Is.EqualTo(((new Vector3(1_370, 0, 0), true), (new Vector3(400, 0, 0), false))));
+        Assert.That(melee.Take(7).All(c => c.Clear), "the turned points are clear");
+        Assert.That(PlayerBotDriver.KiteCandidates(new Vector3(300, 0, 0), Vector3.Zero, 1_370, none, inMelee: false),
+            Has.Count.EqualTo(7));
+        var behind = new List<(string, Vector3, int)> { ("add", new(1_370, 0, 0), 300) };
+        List<(Vector3 Point, bool Clear)> turned = PlayerBotDriver.KiteCandidates(new Vector3(300, 0, 0), Vector3.Zero, 1_370,
+            behind, inMelee: false);
+        Assert.That(Vector3.Distance(turned[0].Point, new Vector3(1_186.4f, 685f, 0)), Is.LessThan(0.1f), $"{turned[0]}");
+    }
+
+    // #167 D8: a point the height rules out (KiteFits leaves 30 units of 3D slack, so about 287 units above or below the
+    // target fails at 1,370) is pulled in once to the flat range that fits at that height (KiteRangeFor), still farther
+    // out than the bot stands; none past the reach (stop less KiteStopMargin).
+    [TestCase(1_420, 0, 145, 1_370)] [TestCase(1_420, 300, 145, 1_337)] [TestCase(1_420, 400, 145, 1_311)]
+    [TestCase(1_420, -400, 145, 1_311)] [TestCase(1_420, 600, 1_300, null)] [TestCase(1_420, 1_400, 145, null)]
+    public void A_step_back_point_too_high_or_low_pulls_in_to_fit(int stop, int dz, int distance, int? range) =>
+        Assert.That(PlayerBotDriver.KiteRangeFor(stop, dz, distance), Is.EqualTo(range));
+
+    [Test]
+    public void The_pulled_in_point_fits() =>
+        Assert.That(PlayerBotDriver.KiteFits(new Vector3(1_311, 0, 400), Vector3.Zero, 1_420), Is.True);
+
+    // #167 D8: KitePoint's walk (KiteWalk): each candidate on the navmesh, a clear one's place there against the adds
+    // again, then KiteFits, a miss pulled in once (KiteRangeFor); at most KiteMeshCalls navmesh calls a think. None:
+    // why, the nearest miss (fit, then clear, then mesh; no candidate: clear), for FIGHT and DEATH kiteNone=.
+    private static readonly List<(string, Vector3, int)> NoAdds = new();
+
+    [Test]
+    public void The_step_back_takes_the_first_candidate_that_fits_on_the_mesh()
+    {
+        var candidates = new List<(Vector3, bool)> { (new(1_370, 0, 0), true), (new(1_186.4f, 685, 0), true) };
+        Assert.That(PlayerBotDriver.KiteWalk(candidates, Vector3.Zero, 1_420, 145, p => p, NoAdds),
+            Is.EqualTo(((Vector3?)new Vector3(1_370, 0, 0), (string)null)));
+        Assert.That(PlayerBotDriver.KiteWalk(candidates, Vector3.Zero, 1_420, 145, p => p.Y == 0 ? null : p, NoAdds),
+            Is.EqualTo(((Vector3?)new Vector3(1_186.4f, 685, 0), (string)null)), "off the mesh: the next");
+    }
+
+    [Test]
+    public void A_step_back_point_the_height_rules_out_is_pulled_in_once()
+    {
+        var candidates = new List<(Vector3, bool)> { (new(1_370, 0, 0), true) };
+        (Vector3? point, string why) = PlayerBotDriver.KiteWalk(candidates, Vector3.Zero, 1_420, 145,
+            p => new Vector3(p.X, p.Y, 400), NoAdds);
+        Assert.That((point, why), Is.EqualTo(((Vector3?)new Vector3(1_311, 0, 400), (string)null)));
+        // Straight away the mesh lies 400 up at 1,370 and 600 up nearer in: its pull-in (1,311) misses too, and it is not
+        // pulled in again; the next point (30 degrees) misses at 600 up and its own pull-in (1,232) fits.
+        var two = new List<(Vector3, bool)> { (new(1_370, 0, 0), true), (new(1_186.4f, 685, 0), true) };
+        int calls = 0;
+        (point, why) = PlayerBotDriver.KiteWalk(two, Vector3.Zero, 1_420, 145, p =>
+        {
+            calls++;
+            return new Vector3(p.X, p.Y, Math.Abs(p.X - 1_370) < 0.5f && Math.Abs(p.Y) < 0.5f ? 400 : 600);
+        }, NoAdds);
+        Assert.That(point, Is.Not.Null);
+        Assert.That(Vector3.Distance(point!.Value, new Vector3(1_066.9f, 616, 600)), Is.LessThan(1f), $"{point}");
+        Assert.That((why, calls), Is.EqualTo(((string)null, 4)));
+    }
+
+    [Test]
+    public void The_step_back_asks_the_mesh_at_most_8_times_a_think()
+    {
+        var candidates = Enumerable.Range(0, 10).Select(i => (new Vector3(1_370, i * 10, 0), true)).ToList();
+        int calls = 0;
+        Assert.That(PlayerBotDriver.KiteWalk(candidates, Vector3.Zero, 1_420, 145, p => { calls++; return null; }, NoAdds),
+            Is.EqualTo(((Vector3?)null, "mesh")));
+        Assert.That(calls, Is.EqualTo(PlayerBotDriver.KiteMeshCalls).And.EqualTo(8));
+    }
+
+    [Test]
+    public void A_step_back_that_finds_none_says_its_nearest_miss()
+    {
+        var clear = new List<(Vector3, bool)> { (new(1_370, 0, 0), true) };
+        var near = new List<(string, Vector3, int)> { ("add", new(1_370, 300, 0), 300) };
+        Assert.That(PlayerBotDriver.KiteWalk(clear, Vector3.Zero, 1_420, 145, p => p + new Vector3(0, 100, 0), near),
+            Is.EqualTo(((Vector3?)null, "clear")), "the mesh moved it into an add's reach");
+        Assert.That(PlayerBotDriver.KiteWalk(new List<(Vector3, bool)> { (new(400, 0, 0), false) }, Vector3.Zero, 1_420, 145,
+            p => p + new Vector3(0, 100, 0), near), Is.EqualTo(((Vector3?)new Vector3(400, 100, 0), (string)null)),
+            "the fallback isn't checked against the adds");
+        Assert.That(PlayerBotDriver.KiteWalk(clear, Vector3.Zero, 1_420, 145, p => new Vector3(p.X, p.Y, 1_400), NoAdds),
+            Is.EqualTo(((Vector3?)null, "fit")), "no flat range fits 1,400 up");
+        var both = new List<(Vector3, bool)> { (new(1_370, 0, 0), true), (new(1_186.4f, 685, 0), true) };
+        Assert.That(PlayerBotDriver.KiteWalk(both, Vector3.Zero, 1_420, 145,
+                p => p.Y == 0 ? new Vector3(p.X, p.Y, 1_400) : null, NoAdds),
+            Is.EqualTo(((Vector3?)null, "fit")), "the nearest miss: one on the mesh that didn't fit");
+        Assert.That(PlayerBotDriver.KiteWalk(new List<(Vector3, bool)>(), Vector3.Zero, 1_420, 145, p => p, NoAdds),
+            Is.EqualTo(((Vector3?)null, "clear")), "no candidate: none clear");
+    }
+
+    // FIGHT and DEATH kiteNone=range:clear:mesh:fit: each step back that found no point, by why (range: KiteRange had
+    // none, the bot already at its reach).
+    [Test]
+    public void A_step_back_with_no_point_counts_why()
+    {
+        var counts = (Range: 0, Clear: 0, Mesh: 0, Fit: 0);
+        foreach (string why in new[] { "range", "clear", "mesh", "mesh", "fit", "fit", "fit" })
+            counts = PlayerBotDriver.KiteNoneCounted(counts, why);
+        Assert.That(counts, Is.EqualTo((1, 1, 2, 3)));
     }
 
     // --- no control when the nukes kill first (#167 C11) ---
@@ -4422,19 +4528,19 @@ public sealed class UT_PlayerBotDriver
                 true, 100, 38, 100, 12, 21, 1, 9, 2, 4, 0, 0, Pet: true, Heals: 2, Quickcast: true, Buffs: 3, PetCasts: 2, Waits: 5,
                 Controls: 2, Kites: 1, CtlBroken: 1, AddControls: 1, AddAt: 6, AddHp: 71, BreakOff: true, EngageDistance: 1_450,
                 Crowd: 1, HeldSeconds: 7, CtlLanded: 1, CtlFailed: 1, HpAtReach: 92, TargetHpAtReach: 64, Rate: 4.26, WouldBreak: 38,
-                Walk: PlayerBotWalk.Hunt)),
+                Walk: PlayerBotWalk.Hunt, KiteNone: (1, 0, 2, 3))),
             Is.EqualTo("PLAYER_BOT_FIGHT bot=Pbotaaaac level=40 target=\"widow claw\" targetLevel=40 con=YELLOW from=pull result=kill " +
                        "startHp=100 endHp=38 startMana=100 endMana=12 sec=21 adds=1 swings=9 notVisible=2 casts=4 lifeKills=0 rests=0 " +
                        "pet=alive heals=2 qc=1 buffs=3 petCasts=2 waits=5 ctl=2 kites=1 ctlBroken=1 addCtl=1 addAt=6 addHp=71 " +
                        "breakOff=1 engageDist=1450 crowd=1 heldSec=7 ctlLanded=1 ctlFailed=1 hpAtReach=92 tHpAtReach=64 rate=4.3 " +
-                       "wouldBreak=38 walk=hunt"));
+                       "wouldBreak=38 walk=hunt kiteNone=1:0:2:3"));
         Assert.That(PlayerBotDriverReport.FormatFight(new PlayerBotFight("Pbothaaab", 43, "empyrean guardian", 36, ConColor.BLUE, true,
                 false, 64, 51, 100, 100, 7, 2, 3, 0, 0, 3, 1, Rate: -0.04, Walk: PlayerBotWalk.BreakOff)),
             Is.EqualTo("PLAYER_BOT_FIGHT bot=Pbothaaab level=43 target=\"empyrean guardian\" targetLevel=36 con=BLUE from=defence " +
                        "result=dropped startHp=64 endHp=51 startMana=100 endMana=100 sec=7 adds=2 swings=3 notVisible=0 casts=0 " +
                        "lifeKills=3 rests=1 pet=none heals=0 qc=0 buffs=0 petCasts=0 waits=0 ctl=0 kites=0 ctlBroken=0 addCtl=0 " +
                        "addAt=-1 addHp=-1 breakOff=0 engageDist=-1 crowd=-1 heldSec=0 ctlLanded=0 ctlFailed=0 hpAtReach=-1 " +
-                       "tHpAtReach=-1 rate=0.0 wouldBreak=-1 walk=breakoff"), "a gain under 0.05 a second: 0.0, not -0.0");
+                       "tHpAtReach=-1 rate=0.0 wouldBreak=-1 walk=breakoff kiteNone=0:0:0:0"), "a gain under 0.05 a second: 0.0, not -0.0");
     }
 
     // #167: one PLAYER_BOT_REST line per rest when the bot stands: the seconds it sat and why it stood (recovered, hit,
@@ -4488,12 +4594,12 @@ public sealed class UT_PlayerBotDriver
                 2, 3, 0, 40, 100, 6, 1, "widow claw", 40, true, 748, Avoided: 2, Again: true, SinceRelease: 42, Ill: true,
                 Controls: 2, Kites: 1, Casts: 4, Quickcast: 1, Waits: 3, CtlBroken: 1, AddControls: 1, AddAt: 6, AddHp: 71,
                 EngageDistance: 1_450, HeldSeconds: 5, CtlLanded: 1, CtlFailed: 0, HpAtReach: 88, TargetHpAtReach: 90, Rate: 12.5,
-                WouldBreak: 52, Walk: PlayerBotWalk.Anchor, Endurance: 64)),
+                WouldBreak: 52, Walk: PlayerBotWalk.Anchor, Endurance: 64, KiteNone: (0, 2, 1, 0))),
             Is.EqualTo("activity=Fighting startHp=62 fightSec=14 targetHp=71 from=pull adds=2 lifeKills=3 rests=0 sinceKillSec=40 " +
                        "mana=100 swings=6 notVisible=1 killer=\"widow claw\" killerLevel=40 killerIsTarget=True fromBind=748 " +
                        "avoided=2 again=True sinceRelease=42 ill=True ctl=2 kites=1 casts=4 qc=1 waits=3 ctlBroken=1 addCtl=1 " +
                        "addAt=6 addHp=71 breakOff=0 engageDist=1450 heldSec=5 ctlLanded=1 ctlFailed=0 hpAtReach=88 tHpAtReach=90 " +
-                       "rate=12.5 wouldBreak=52 walk=anchor end=64"));
+                       "rate=12.5 wouldBreak=52 walk=anchor end=64 kiteNone=0:2:1:0"));
         // Out of a fight, no target, no kill this life, no killer named by the Dying event, the bind in another region.
         Assert.That(PlayerBotDriverReport.FormatDeathDetail(new PlayerBotDeathDetail(PlayerBotActivity.Hunting, -1, -1, -1, true,
                 -1, 0, 2, -1, 37, -1, -1, null, 0, false, -1, BreakOff: true, Rate: 3, Walk: PlayerBotWalk.Clear, Endurance: 100)),
@@ -4501,7 +4607,7 @@ public sealed class UT_PlayerBotDriver
                        "mana=37 swings=-1 notVisible=-1 killer=\"\" killerLevel=0 killerIsTarget=False fromBind=-1 avoided=0 " +
                        "again=False sinceRelease=-1 ill=False ctl=-1 kites=-1 casts=-1 qc=-1 waits=-1 ctlBroken=-1 addCtl=-1 " +
                        "addAt=-1 addHp=-1 breakOff=1 engageDist=-1 heldSec=-1 ctlLanded=-1 ctlFailed=-1 hpAtReach=-1 tHpAtReach=-1 " +
-                       "rate=3.0 wouldBreak=-1 walk=clear end=100"),
+                       "rate=3.0 wouldBreak=-1 walk=clear end=100 kiteNone=-1:-1:-1:-1"),
             "died on a break-off's run: out of a fight (the dropped one's FIGHT has it)");
     }
 
@@ -4537,7 +4643,7 @@ public sealed class UT_PlayerBotDriver
             "targetHp=71 from=pull adds=2 lifeKills=3 rests=0 sinceKillSec=40 mana=100 swings=6 notVisible=1 killer=\"widow claw\" " +
             "killerLevel=40 killerIsTarget=True fromBind=748 avoided=0 again=False sinceRelease=-1 ill=False ctl=-1 kites=-1 casts=-1 " +
             "qc=-1 waits=-1 ctlBroken=-1 addCtl=-1 addAt=-1 addHp=-1 breakOff=0 engageDist=-1 heldSec=-1 ctlLanded=-1 ctlFailed=-1 " +
-            "hpAtReach=-1 tHpAtReach=-1 rate=0.0 wouldBreak=-1 walk=none end=-1"));
+            "hpAtReach=-1 tHpAtReach=-1 rate=0.0 wouldBreak=-1 walk=none end=-1 kiteNone=-1:-1:-1:-1"));
         Assert.That(PlayerBotDriver.DeathLine(head, detail, add, target),
             Does.Contain(" killer=\"a wolf\" killerLevel=38 killerIsTarget=False fromBind=748 avoided=0 again=False sinceRelease=-1 ill=False "));
         Assert.That(PlayerBotDriver.DeathLine(head, detail, null, null),
