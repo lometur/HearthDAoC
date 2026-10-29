@@ -470,6 +470,27 @@ public sealed class UT_PlayerBotKit
         Assert.That(PlayerBotKitGear.FitsClass(Item("i", 30, Slot.TORSO, eObjectType.Plate, requirement: 35), 2, 30), Is.False);
     }
 
+    // #167 E (CY1): a hand-to-hand claw (left-hand capable, Hand 2, as Midgard's 240 claws are) fits the right hand
+    // too, as a GameBot Savage wears one (SavageBotWeaponPolicy); any other Hand-2 item, or a Hand-1 one, still
+    // doesn't. With claws only, a Hand-to-Hand Savage's plan finds a weapon for both hands at every level.
+    [Test]
+    public void A_savage_wears_a_claw_in_its_right_hand()
+    {
+        var R = eInventorySlot.RightHandWeapon; var L = eInventorySlot.LeftHandWeapon;
+        Assert.That(PlayerBotKitGear.FitsHand(Item("claw", 30, Slot.LEFTHAND, eObjectType.HandToHand, hand: 2), R, 0), Is.True);
+        Assert.That(PlayerBotKitGear.FitsHand(Item("axe", 30, Slot.LEFTHAND, eObjectType.LeftAxe, hand: 2), R, 0), Is.False);
+        Assert.That(PlayerBotKitGear.FitsHand(Item("greave", 30, Slot.LEFTHAND, eObjectType.HandToHand, hand: 1), R, 0), Is.False);
+        IReadOnlyList<PlayerBotWeapon> plan = PlayerBotKitGear.WeaponPlan(Spec(eSpecType.DualWield, eObjectType.HandToHand),
+            eCharacterClass.Savage, eClassType.PureTank);
+        Assert.That(plan, Is.EqualTo(new[] { new PlayerBotWeapon(eObjectType.HandToHand, R), new PlayerBotWeapon(eObjectType.HandToHand, L) }));
+        DbItemTemplate[] claws = Enumerable.Range(1, 50)
+            .Select(l => Item("claw" + l, l, Slot.LEFTHAND, eObjectType.HandToHand, hand: 2)).ToArray();
+        for (int level = 20; level <= 50; level++)
+            foreach (PlayerBotWeapon w in plan)
+                Assert.That(PlayerBotKitGear.Pick(claws.Where(c => PlayerBotKitGear.FitsHand(c, w.Slot, w.Damage)), level, 7, (int)w.Slot),
+                    Is.Not.Null, $"level {level} {w.Slot}");
+    }
+
     private static BotSpec Spec(eSpecType type, eObjectType w1, eObjectType w2 = 0, bool twoHanded = false, eWeaponDamageType damage = 0) =>
         new() { SpecType = type, WeaponOneType = w1, WeaponTwoType = w2, Is2H = twoHanded, DamageType = damage };
 
