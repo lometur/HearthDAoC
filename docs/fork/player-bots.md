@@ -171,8 +171,10 @@ Each bot thinks every 250 ms, a thin copy of the `/bot` pilot's think:
   monster with a snare, stun, mez or damage spell of 1,000 units' range or more. It stops its fight, sprints, and runs
   1,500-2,500 units straight away from them to a spot clear of other aggressive monsters that it can walk to, or with
   none, to the spot 1,500 units straight away from them if it can walk there; on again from there while one still chases
-  it. A spot it was blocked on it never takes again in that run. A mezzed, stunned or rooted monster still counts as
-  after it. From 3 s into the run (time for its sprint to gain on one that started in contact), one not held that stays
+  it. Once the nearest chaser that isn't held is 400 units behind (more for one faster than its run: 25 s of what it
+  gains), its sprint goes off, and on again when one comes within 300 units with its endurance over 10%. A spot it was
+  blocked on it never takes again in that run. A mezzed, stunned or rooted monster still counts as after it. From 3 s
+  into the run (time for its sprint to gain on one that started in contact), one not held that stays
   within 250 units of it for 2 s, attacking it in the last 2 s (a miss, block, parry or evade counts too), has caught
   it: it stops, casts a control at it (as at an add, with Quickcast while hit), faces it until the cast is done and runs
   on; with no control to cast it turns on the weakest monster in reach. From 30 s it is done once none is within 1,500
@@ -472,11 +474,13 @@ All start `PLAYER_BOT_`:
   health it lost a second over the 3 s before it broke off, and `why=`, the rule that fired: `adds` (2 or more on
   it), `atkill` (1 still on it within 3 s of a kill with adds), `followup` (the fight after that kill), `avoided` (one
   it avoids), `caster` (a caster losing to one), `race` (a bot that isn't a caster losing the race to one) or `spent` (a
-  caster out of power with its target held). A break-off
-  that would fire but doesn't logs once a fight as `outcome=refused` with `sec=0` and the bot's `hp=`, `end=`,
+  caster out of power with its target held); then `sprintOff=`, the seconds into the run its sprint first went off (-1:
+  never), and `endLeft=`, its endurance when the run ended. A break-off that would fire but doesn't logs once a fight as
+  `outcome=refused` with `sec=0` and the bot's `hp=`, `end=`,
   `attackers=` and `rate=` then, and `why=`: `control` (an add's control comes first), `speed` (a chaser as fast as
   its sprint), `sprint` (its sprint too short for the fastest), `ranged` (a chaser that harms from range) or `point`
-  (nowhere to run); it is no break-off, so leave it out of break-off counts. The fight it dropped (`FIGHT
+  (nowhere to run), with `sprintOff=-1` and `endLeft=` its endurance then; it is no break-off, so leave it out of
+  break-off counts. The fight it dropped (`FIGHT
   result=dropped breakOff=1`) counts the monsters on the bot then in its `adds=` (never fewer than `attackers=`), and
   with 2 or more and no add seen before, its `addAt=` and `addHp=` are the break-off's;
 - `TURRET`: an Animist's new turret by its target (`step=replant`) or a monster it left because it couldn't plant

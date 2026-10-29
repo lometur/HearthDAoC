@@ -1868,6 +1868,18 @@ public sealed class UT_PlayerBotDriver
         long sinceMs, int nearestChaser, bool caught, PlayerBotBreakOff step) =>
         Assert.That(PlayerBotDriver.BreakOffStep(arrived, chasers, sinceMs, nearestChaser, caught), Is.EqualTo(step));
 
+    // #167 E-S: a break-off's sprint goes off once the nearest chaser not held is far enough behind that it can't close to
+    // its reach in the 25 s it chases at the run's 191 (400, and 25 x its speed over 191 more), and on again when one
+    // comes within 300 with the endurance to start one (GamePlayer.cs:8633). Left on, the run ended near 5% endurance and
+    // the next fight's break-off was refused (breakoff E3: 15 deaths).
+    [TestCase(true, 900, 191, 40, false)] [TestCase(true, 400, 191, 40, false)] [TestCase(true, 399, 191, 40, null)]
+    [TestCase(true, 450, 200, 40, null)] [TestCase(true, 625, 200, 40, false)] [TestCase(true, int.MaxValue, 0, 40, false)]
+    [TestCase(false, 250, 191, 40, true)] [TestCase(false, 250, 191, 10, null)] [TestCase(false, 300, 191, 40, null)]
+    [TestCase(false, 900, 191, 40, null)]
+    public void A_break_offs_sprint_goes_off_once_clear_and_on_when_a_chaser_closes(bool sprinting, int nearestFree,
+        int fastest, int endurance, bool? sprint) =>
+        Assert.That(PlayerBotDriver.BreakOffSprint(sprinting, nearestFree, fastest, endurance), Is.EqualTo(sprint));
+
     // #167 D2: caught on the run, a chaser (not held) within 250 (ChaserReach and 50) for 2 s. st-deathsD: the clock started
     // with the chaser still in contact and fired 2 s into the run, before the sprint could gain on it (57 a second at
     // most on a 191 chaser): 89 of 98 break-offs ended fought at sec=2, and health fell during only 31 of 87 runs. Now
@@ -2118,16 +2130,18 @@ public sealed class UT_PlayerBotDriver
 
     // PLAYER_BOT_BREAKOFF: the bot's health, endurance and attackers when it broke off, the seconds it ran and how it ended;
     // then (#167, st-deathsD's) rate=, the health it lost a second over the 3 s before it broke off (HealthRate), and
-    // (#167 D1, D2) why=: the rule that fired (BreakOffWhy), or on a refused one (outcome=refused, sec=0) why it wasn't.
+    // (#167 D1, D2) why=: the rule that fired (BreakOffWhy), or on a refused one (outcome=refused, sec=0) why it wasn't;
+    // then (#167 E-S) sprintOff=, the seconds into the run its sprint first went off (-1: never), and endLeft=, its
+    // endurance at the run's end (a refused one's: then).
     [Test]
     public void A_break_off_line_gives_its_start_and_outcome()
     {
-        Assert.That(PlayerBotDriverReport.FormatBreakOff("Pbotaaaaz", 34, 38, 72, 2, 26, "shook", 6.26, "adds"),
+        Assert.That(PlayerBotDriverReport.FormatBreakOff("Pbotaaaaz", 34, 38, 72, 2, 26, "shook", 6.26, "adds", 9, 41),
             Is.EqualTo("PLAYER_BOT_BREAKOFF bot=Pbotaaaaz level=34 hp=38 end=72 attackers=2 sec=26 outcome=shook rate=6.3 " +
-                "why=adds"));
-        Assert.That(PlayerBotDriverReport.FormatBreakOff("Pbotaaaaz", 34, 38, 72, 1, 0, "refused", 3.0, "speed"),
+                "why=adds sprintOff=9 endLeft=41"));
+        Assert.That(PlayerBotDriverReport.FormatBreakOff("Pbotaaaaz", 34, 38, 72, 1, 0, "refused", 3.0, "speed", -1, 72),
             Is.EqualTo("PLAYER_BOT_BREAKOFF bot=Pbotaaaaz level=34 hp=38 end=72 attackers=1 sec=0 outcome=refused rate=3.0 " +
-                "why=speed"));
+                "why=speed sprintOff=-1 endLeft=72"));
     }
 
     // The dropped FIGHT line's adds= (#167 D2): BreaksOffNow returns before Engage folds the attackers in, so the monsters

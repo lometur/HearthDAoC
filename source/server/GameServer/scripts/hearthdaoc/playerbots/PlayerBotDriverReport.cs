@@ -244,12 +244,14 @@ public static class PlayerBotDriverReport
     /// second over the 3 s before it broke off (PlayerBotDriver.HealthRate), and (#167 D1) why=, the rule that fired
     /// (PlayerBotDriver.BreakOffWhy). #167 D2: one that would fire but doesn't, once a fight (PlayerBotDriver.ReportRefusal):
     /// outcome=refused, sec=0, the bot's health, endurance and monsters on it then, and why= why not
-    /// (PlayerBotDriver.BreakOffRefusal).</summary>
+    /// (PlayerBotDriver.BreakOffRefusal). Then (#167 E-S) sprintOff=, the seconds into the run its sprint first went off
+    /// (PlayerBotDriver.BreakOffSprint; -1: never, or none given), and endLeft=, its endurance at the run's end (a refused
+    /// one's: then).</summary>
     public static string FormatBreakOff(string bot, int level, int hp, int end, int attackers, long seconds, string outcome,
-        double rate, string why) =>
+        double rate, string why, long sprintOff = -1, int endLeft = -1) =>
         string.Create(CultureInfo.InvariantCulture,
             $"PLAYER_BOT_BREAKOFF bot={bot} level={level} hp={hp} end={end} attackers={attackers} sec={seconds} outcome={outcome} " +
-            $"rate={FormatRate(rate)} why={why}");
+            $"rate={FormatRate(rate)} why={why} sprintOff={sprintOff} endLeft={endLeft}");
 
     /// <summary>PLAYER_BOT_RELEASE (#167 D7), each release the driver asks for (PlayerBotDriver.ReleaseDue): its try in
     /// this death (a release that didn't revive the bot goes again 10 s on) and the milliseconds since the death (the

@@ -207,6 +207,7 @@ public sealed class PlayerBotState
     public readonly List<Vector3> BreakOffBlocked = new();       //   (NextBreakOffPoint), and its start's health,
     public byte BreakOffHealth, BreakOffEndurance;               //   endurance and attackers (BREAKOFF)
     public int BreakOffAttackers;
+    public long BreakOffSprintOffAt = -1;                        // #167 E-S: BREAKOFF sprintOff=, ms into the run (-1: none)
     public double BreakOffRate;                                  // #167 BREAKOFF rate=: its loss rate then (HealthRate)
     public string BreakOffWhy;                                   // #167 D1: BREAKOFF why= (BreakOffWhy), Spent's end
     public bool FollowsAddKill;                                  // #167 D2: the fight after an add kill (OpenFight), the
@@ -392,6 +393,10 @@ public static class PlayerBotDriver
                                                              //   race projecting the bot under 30 at its target's death
                                                              //   is close (HealthLeftAtKill). A cast costs 5
                                                              //   (SpellHandler.cs:1244-1250, :1442-1445)
+    public const int SprintOffGap = 400, SprintOnGap = 300;  // #167 E-S: a break-off's sprint goes off with the nearest
+                                                             //   free chaser this far behind and 25 s of its speed over the
+                                                             //   run's more (it can't close to its reach while it chases),
+                                                             //   and on again when one comes within 300 (inf.)
 
     private static readonly ConcurrentDictionary<GamePlayer, PlayerBotState> _states = new();
     [ThreadStatic] private static List<(GameNPC Npc, Vector3 At, int Score)> _candidates;      // FindWithin's, per timer
@@ -2351,6 +2356,15 @@ public static class PlayerBotDriver
         sinceMs >= BreakOffMaxMilliseconds ? PlayerBotBreakOff.Fight :
         arrived ? PlayerBotBreakOff.NextPoint : PlayerBotBreakOff.Run;
 
+    /// <summary>A break-off's sprint on its run (#167 E-S): off while sprinting with the nearest chaser not held
+    /// (nearestFree; none, int.MaxValue) at least SprintOffGap behind and the ground the fastest chaser gains on the run's
+    /// 191 in the ChaseSeconds it chases (fastest); on again with one within SprintOnGap and the endurance to start one
+    /// (over SprintStartEndurance, GamePlayer.cs:8633). Null: no change. Left on to the run's end, a run ended near 5%
+    /// and the next fight's break-off was refused why=sprint (breakoff E3: 15 deaths).</summary>
+    public static bool? BreakOffSprint(bool sprinting, int nearestFree, int fastest, int endurance) =>
+        sprinting ? (nearestFree >= SprintOffGap + (long)ChaseSeconds * Math.Max(0, fastest - RunSpeed) ? false : null)
+            : nearestFree < SprintOnGap && endurance > SprintStartEndurance ? true : null;
+
     /// <summary>Caught on a break-off's run (#167 D2): a chaser not held within CaughtReach (nearestChaser) since
     /// inReachSince (InReachSince; 0: none) for CaughtMilliseconds. Health fell in 9 of st-deathsC's 12 caught runs, and
     /// 10 of the 13 died within 60 s, 6 within 6 s. st-deathsD's fix round: the clock started with the chaser still in
@@ -4144,6 +4158,11 @@ public static class PlayerBotDriver
             if (turnOn != null) TurnOn(state, player, turnOn, now);                    // #167 D2: caught, no control
             return false;                                                               // Fight: step 14 picks a hitter
         }
+        if (BreakOffSprint(player.IsSprinting, freeDistance, FastestChaser(state), player.Endurance) is bool sprint)
+        {                                                                               // #167 E-S: off once clear, on
+            player.Sprint(sprint);                                                      //   when a chaser closes
+            if (!sprint && state.BreakOffSprintOffAt < 0) state.BreakOffSprintOffAt = now - state.BreakOffSince;   // sprintOff=
+        }
         state.Activity = PlayerBotActivity.Fighting;
         state.Walk = PlayerBotWalk.BreakOff;                                            // #167 walk=
         Vector3 goal = state.BreakOffGoal.Value;
@@ -4224,7 +4243,7 @@ public static class PlayerBotDriver
             ReportRefusal(state, player, now, onBot, refusal);                         // #167 D2
             return false;
         }
-        (state.BreakOffSince, state.BreakOffGoal, state.BreakOffArrived) = (now, goal, false);
+        (state.BreakOffSince, state.BreakOffGoal, state.BreakOffArrived, state.BreakOffSprintOffAt) = (now, goal, false, -1);
         (state.BreakOffHealth, state.BreakOffEndurance, state.BreakOffAttackers) = (health, player.EndurancePercent, onBot);
         state.BreakOffRate = HealthRate(state.HealthSamples, now, health);              // #167 BREAKOFF rate=
         (state.BreakOffWhy, state.CaughtSince) = (why, 0);                              // #167 D1 why= (BrokeOffFrom reads it)
@@ -4340,7 +4359,8 @@ public static class PlayerBotDriver
         state.BreakOffRefused = true;
         if (Log.IsInfoEnabled)
             Log.Info(PlayerBotDriverReport.FormatBreakOff(player.Name, player.Level, player.HealthPercent,
-                player.EndurancePercent, onBot, 0, Refused, HealthRate(state.HealthSamples, now, player.HealthPercent), why));
+                player.EndurancePercent, onBot, 0, Refused, HealthRate(state.HealthSamples, now, player.HealthPercent), why,
+                -1, player.EndurancePercent));                                              // #167 E-S: no run
     }
 
     // A sprint's cost a second before the regeneration (GamePlayer.cs:2396-2405): LongWind, less Long Wind's 20-100%.
@@ -4376,6 +4396,14 @@ public static class PlayerBotDriver
             if (distance < freeDistance && !Hold(npc).Held) (free, freeDistance) = (npc, distance);
         }
         return (nearest, free, freeDistance);
+    }
+
+    // #167 E-S: the fastest monster still after a break-off's bot (KeepChasers' list; no scan).
+    private static int FastestChaser(PlayerBotState state)
+    {
+        int fastest = 0;
+        foreach (GameNPC npc in state.BreakOffChasers) fastest = Math.Max(fastest, npc.MaxSpeed);
+        return fastest;
     }
 
     // #167 D2: caught on the run (CaughtNow), a control at the chaser (free: the nearest not held) as at an add: AddAction's
@@ -4469,7 +4497,8 @@ public static class PlayerBotDriver
         if (Log.IsInfoEnabled)
             Log.Info(PlayerBotDriverReport.FormatBreakOff(player.Name, player.Level, state.BreakOffHealth,
                 state.BreakOffEndurance, state.BreakOffAttackers, (now - state.BreakOffSince) / 1000, outcome, state.BreakOffRate,
-                state.BreakOffWhy));
+                state.BreakOffWhy, state.BreakOffSprintOffAt < 0 ? -1 : state.BreakOffSprintOffAt / 1000,   // #167 E-S
+                player.EndurancePercent));
         FinishBreakOff(state, outcome, OwesReplan(state.Task != null, CanRelocate(state, player)), now);
         if (outcome == Died) return;
         player.Sprint(false);
