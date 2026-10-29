@@ -153,9 +153,11 @@ Each bot thinks every 250 ms, a thin copy of the `/bot` pilot's think:
   it would fight from (its spell's range for a caster, else melee). After deaths it moves to an easier camp. It avoids
   what killed it for 15 minutes. Training dummies are no monsters: it neither plans camps at them nor pulls them.
 - It swings and casts only at a target in sight, by the navmesh's line; a target hitting it in contact (within 250
-  units) counts as in sight though that line says not, as a player sees what hits it. A target out of sight 5 s that
-  fights neither it nor its pet, nor has the bot as its target (coming at it round an obstacle), is dropped, and its
-  picks pass it over for 30 s (it still fights it back if it comes on and hits it).
+  units) counts as in sight though that line says not, as a player sees what hits it. A target out of sight that
+  fights neither it nor its pet, nor has the bot as its target (coming at it round an obstacle), is walked toward 300
+  units at a time from where the bot stands (a caster's spell range round a cave's bend, say) until it is in sight or
+  in contact. In contact, out of sight 5 s, it is dropped, and the bot's picks pass it over for 30 s, each such monster
+  for its own 30 s (it still fights it back if it comes on and hits it).
 - A monster within 2,000 units that has the bot as its target counts as an attacker before its first hit, so the bot
   stands up and fights it first. Before it sits, a bot within reach of an aggressive monster from its last search,
   or of the spawn spot of one of its last 3 kills in the last 150 s (where that monster respawns, 80 s after the kill
@@ -472,9 +474,9 @@ All start `PLAYER_BOT_`:
   40% with a read (-999: none, or out of a fight). `FIGHT` then gives `endStart=` and `end=`, its endurance at the
   fight's first think and at its end, and both give `styleHeld=`, the style choices a close fight's endurance reserve
   left unstyled though it could pay for a style, and `castHeld=`, the thinks the reserve held a damage spell back (-1
-  each out of a fight). `FIGHT` then ends with `sight=`, the sight checks its target hitting it in contact answered (the
-  navmesh's line said no), and `blind=` (1: dropped after 5 s out of sight, fighting neither the bot nor its pet, nor
-  coming at it).
+  each out of a fight). `FIGHT` then gives `sight=`, the sight checks its target hitting it in contact answered (the
+  navmesh's line said no), and `blind=` (1: dropped after 5 s out of sight in contact, fighting neither the bot nor its
+  pet, nor coming at it), and ends with `blindSteps=`, the steps it took toward its target out of sight.
   `BLOCKED`'s `walk=` is `target`, `roam`, `clear` (the step out after a release), `walkout`, `rest`, `kite`, `turret`
   or `breakoff`. `RELOCATE` after a death (`reason=died`) ends with `sinceRelease=`, the milliseconds since the release;
   after a break-off its `reason=` is `brokeoff`. Either ends with `barred=old` when the death or the break-off came on

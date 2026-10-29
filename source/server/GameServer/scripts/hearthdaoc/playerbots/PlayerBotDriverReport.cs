@@ -34,7 +34,8 @@ public readonly record struct PlayerBotDriverWindow(
 /// -999: none); then (#167 E-R) its endurance at the fight's first think and at its end, and the style choices and the
 /// thinks that held a style or a hybrid's damage cast back for a run's reserve (PlayerBotDriver.StyleWithin,
 /// HoldsCast); then (#167 E M2) the sight checks its target hitting it in contact answered (Sight: the navmesh's ray
-/// said no; PlayerBotDriver.SightInReach) and whether it dropped the target for want of sight (Blind).</summary>
+/// said no; PlayerBotDriver.SightInReach) and whether it dropped the target for want of sight (Blind); then (#167 E R1)
+/// its steps in toward the target out of sight (BlindSteps; PlayerBotDriver.BlindStepStop).</summary>
 public readonly record struct PlayerBotFight(
     string Bot, int Level, string Target, int TargetLevel, ConColor Con, bool FromDefence, bool Killed,
     byte StartHp, byte EndHp, byte StartMana, byte EndMana, long Seconds, int Adds, int Swings, int NotVisible, int Casts,
@@ -44,7 +45,7 @@ public readonly record struct PlayerBotFight(
     int HpAtReach = -1, int TargetHpAtReach = -1, double Rate = 0, int WouldBreak = -1, PlayerBotWalk Walk = PlayerBotWalk.None,
     (int Range, int Clear, int Mesh, int Fit)? KiteNone = null, int Dots = 0, bool KillingQuickcast = false,
     int TargetMezzes = 0, int RaceLeft = -999, int EndStart = -1, int End = -1, int StylesHeld = 0, int CastsHeld = 0,
-    int Sight = 0, bool Blind = false);
+    int Sight = 0, bool Blind = false, int BlindSteps = 0);
 
 /// <summary>What a PLAYER_BOT_DEATH line adds after its first fields (levelmatch/DEATHS.md 2); -1 for none: the fight's
 /// fields (startHp, fightSec, adds, swings, notVisible) out of a fight, targetHp with no target, sinceKillSec with no kill
@@ -207,7 +208,8 @@ public static class PlayerBotDriverReport
         $"hpAtReach={f.HpAtReach} tHpAtReach={f.TargetHpAtReach} rate={FormatRate(f.Rate)} wouldBreak={f.WouldBreak} " +
         $"walk={FormatWalk(f.Walk)} kiteNone={FormatKiteNone(f.KiteNone ?? default)} dots={f.Dots} " +
         $"qcKill={(f.KillingQuickcast ? 1 : 0)} ctlMez={f.TargetMezzes} raceLeft={f.RaceLeft} endStart={f.EndStart} " +
-        $"end={f.End} styleHeld={f.StylesHeld} castHeld={f.CastsHeld} sight={f.Sight} blind={(f.Blind ? 1 : 0)}");
+        $"end={f.End} styleHeld={f.StylesHeld} castHeld={f.CastsHeld} sight={f.Sight} blind={(f.Blind ? 1 : 0)} " +
+        $"blindSteps={f.BlindSteps}");
 
     /// <summary>#167 rate=: one decimal, a loss under 0.05 a second (either way) as 0.0, not -0.0.</summary>
     private static string FormatRate(double rate) =>
