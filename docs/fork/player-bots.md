@@ -43,9 +43,9 @@ Two more settings are read only when bots are on:
     until 50); and every Warden takes the Battle Warden plan, the one with a weapon line (the GameBot's other two have
     none or a weak one). On a server that keeps its bots' characters, a Warden made before that keeps the specs it
     trained (training never lowers a line) and gets the weapon line from new points only, though its `KIT` line says
-    `choice=BattleWarden`; the test legs make fresh characters. A Hand-to-Hand Savage wears a claw in each hand, as a GameBot Savage does (Midgard has few right-hand
-    fist weapons, so it kept its starter axe); at the levels that have some, its right hand picks among them and the
-    claws.
+    `choice=BattleWarden`; the test legs make fresh characters. A Hand-to-Hand Savage wears a claw in each hand, as a
+    GameBot Savage does (Midgard has few right-hand fist weapons, so it kept its starter axe); at the levels that have
+    some, its right hand picks among them and the claws.
   - A bad value or an unreadable file keeps the bots off, with a `HEARTHDAOC_PLAYER_BOTS error` line.
 
 ## What they do
@@ -55,10 +55,10 @@ Each bot thinks every 250 ms, a thin copy of the `/bot` pilot's think:
   Healer, Mercenary, Nightshade, Blademaster or Mentalist hunts blue at most alone, as other bots do after a death:
   their yellow pulls were fatal one time in five or more (for them a first death leaves it at blue). With no blue camp
   in its zone it takes a yellow one as its fallback, as after a death. Each death lowers that con by one step, by two
-  at most. For 5 minutes after a death to a yellow or harder monster it also hunts
-  nothing that cons as high as its killer did, and takes no fallback camp that cons as high: a bot killed by a yellow
-  hunts blue at most. A blue or green killer changes neither (the death's own step lowers the con), and once the 5
-  minutes are up a bot with only yellow camps round it takes one as its fallback again.
+  at most. For 5 minutes after a death to a yellow or harder monster it also hunts nothing that cons as high as its
+  killer did, and takes no fallback camp that cons as high: a bot killed by a yellow hunts blue at most. A blue or green
+  killer changes neither (the death's own step lowers the con), and once the 5 minutes are up a bot with only yellow
+  camps round it takes one as its fallback again.
 - It rests after each kill, and whenever below a GameBot's rest thresholds (70% health, 45% power, 35% endurance). A
   rest stops at full health, 60% endurance, and full power, or 90% power for a caster (Wizard, Sorcerer, Runemaster,
   Eldritch, Mentalist: under 50% power it regains power at half the rate, so a pull that ends below half costs more
@@ -111,8 +111,8 @@ Each bot thinks every 250 ms, a thin copy of the `/bot` pilot's think:
   once; with a snare or taunt turret (Creeping, Verdant), which slows or draws the monster on its way in, while its
   spell reaches the monster, or from its spell's reach toward the turret when the turret reaches that spot. Otherwise
   it releases the turret and plants a new one near the target, if the summon is ready and it has the power. If it
-  can't, it holds the pull up to 12 s and then leaves that monster for 30 s. Its bombers count as damage spells only when their payload does damage, so it no longer casts the
-  root bombers (Spreading Vines and the like) as nukes.
+  can't, it holds the pull up to 12 s and then leaves that monster for 30 s. Its bombers count as damage spells only
+  when their payload does damage, so it no longer casts the root bombers (Spreading Vines and the like) as nukes.
 - Each cast it picks the damage spell ready now: its bolt when off its recast, else its best single-target spell,
   else an area one, never an area one while another monster stands in its radius. It drops the low ranks a GameBot
   drops. With none ready (a Shaman's two 20-s spells both on recast), it swings until one is.
@@ -167,16 +167,16 @@ Each bot thinks every 250 ms, a thin copy of the `/bot` pilot's think:
   plan) it first takes a camp within 10,000 units of where it stands, in the zone it stands in, that it can walk to:
   one that fits its cap, else the safest that cons blue or easier, never one it died at; only with none it plans as
   before. That gain depends on where it binds: on the test spots each bot binds at its camp, so a near camp is there;
-  a bot bound in a town gains little. It plans at once, while the release's 10-s immunity lasts:
-  the plan counts the monsters it may not attack until then. With a camp planned and the immunity still on, no monster
-  may attack it, so it walks out toward the camp instead of standing: sprinting, from spot to spot out of every
-  aggressive monster's reach, each the one that leaves the least of the way, as far as the immunity left lets it get,
-  and from a clear spot only to one nearer the camp. Its sprint goes off when that walk ends. It casts no self-buff and
-  summons no pet until the immunity is over: it buffs where the walk ends. It takes no camp it died at in the last 15
-  minutes while another camp that cons yellow or easier is left, nor the camp it was walking to when it died more than
-  1,400 units short of it. From its third death with no XP in between it waits 30-120 s out there, as a GameBot does,
-  and it waits out the resurrection illness there too. It pulls nothing until then, but fights back. No hold for a camp
-  lasts over 60 s: then it hunts where it is.
+  a bot bound in a town gains little. It plans at once, while the release's 10-s immunity lasts: the plan counts the
+  monsters it may not attack until then. With a camp planned and the immunity still on, no monster may attack it, so it
+  walks out toward the camp instead of standing: sprinting, from spot to spot out of every aggressive monster's reach,
+  each the one that leaves the least of the way, as far as the immunity left lets it get, and from a clear spot only to
+  one nearer the camp. Its sprint goes off when that walk ends. It casts no self-buff and summons no pet until the
+  immunity is over: it buffs where the walk ends. It takes no camp it died at in the last 15 minutes while another camp
+  that cons yellow or easier is left, nor the camp it was walking to when it died more than 1,400 units short of it.
+  From its third death with no XP in between it waits 30-120 s out there, as a GameBot does, and it waits out the
+  resurrection illness there too. It pulls nothing until then, but fights back. No hold for a camp lasts over 60 s: then
+  it hunts where it is.
 - At login it also first steps out of the reach of every monster round it that would aggro, then hunts: no wait and
   no new camp. A caster rests first, after its login buffs, as after a kill; a life after a release needs no such rest
   (the release restores full power).
