@@ -118,7 +118,7 @@ Each bot thinks every 250 ms, a thin copy of the `/bot` pilot's think:
   (a Shaman's Frigg's Cure) only while what it regenerates is short of where the rest stops.
 - It picks a monster with no aggressive neighbours, none within reach of the target, of its walk in, or of the spot
   it would fight from (its spell's range for a caster, else melee). After deaths it moves to an easier camp. It avoids
-  what killed it for 15 minutes.
+  what killed it for 15 minutes. Training dummies are no monsters: it neither plans camps at them nor pulls them.
 - A monster within 2,000 units that has the bot as its target counts as an attacker before its first hit, so the bot
   stands up and fights it first. Before it sits, a bot within reach of an aggressive monster from its last search,
   or of the spawn spot of one of its last 3 kills in the last 150 s (where that monster respawns, 80 s after the kill
