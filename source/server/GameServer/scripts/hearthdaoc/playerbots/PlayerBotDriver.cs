@@ -627,7 +627,19 @@ public static class PlayerBotDriver
             return;
         }
         Engage(state, player, now);                                                      // 16
-        if (state.Engaged) state.RoamingSince = 0;   // reached: a target blocked on the way leaves the idle clock running
+        SettleIdleClock(state);
+    }
+
+    /// <summary>Step 16's idle clock (RoamingSince, RelocateReason's Outgrown): a target reached stops it; a target
+    /// blocked on the way leaves it running. #167 E fix U2: reached is engaged with no step in under way (BlindStop 0,
+    /// R1): a step in out of sight opens the fight (Engaged) before its walk, and a walk that then ends blocked
+    /// (LeaveUnreachable) left the fight open. On st-deathsE2b Pbotmaada, on a pocket of the navmesh above its camp,
+    /// opened a step in each time it picked a crackler 719-880 units off, out of sight below the edge and within its
+    /// spell stop; each reset the clock, so the 2 minutes of an outgrown camp never ran and no relocation moved it.
+    /// </summary>
+    public static void SettleIdleClock(PlayerBotState state)
+    {
+        if (state.Engaged && state.BlindStop == 0) state.RoamingSince = 0;
     }
 
     /// <summary>Step 6, a new life (after a release, or the login's first): the recovery LifeStart gives (StartRecovery),

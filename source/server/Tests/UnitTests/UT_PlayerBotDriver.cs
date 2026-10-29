@@ -6110,6 +6110,35 @@ public sealed class UT_PlayerBotDriver
         Assert.That(PlayerBotDriver.BlindLook(inView, kept, distance, meleeStop, blindSince, now, casting, blindStop),
             Is.EqualTo((drop, nextStop)));
 
+    // #167 E fix U2: a step in out of sight (R1's BlindStop) is no target reached, so the idle clock (RoamingSince) runs
+    // on through it, and through its walk ending blocked (LeaveUnreachable; the fight it opened stays Engaged). Think
+    // reset the clock on every engaged think: st-deathsE2b, Pbotmaada's crackler, 719-880 units off and out of sight
+    // below the pocket's edge, within its spell stop, opened a step in each time it was picked, and the clock never ran
+    // the 2 minutes of an outgrown camp (RelocateReason), so no relocation took the bot off the pocket. In sight (no
+    // step) the target is reached, as before; not engaged (a walk in), the clock runs.
+    [Test]
+    public void A_step_in_out_of_sight_that_ends_blocked_leaves_the_idle_clock_running()
+    {
+        GameNPC crackler = Mob();
+        var state = new PlayerBotState(Player(null)) { Target = crackler, Engaged = true, RoamingSince = 5_000 };
+        (bool drop, state.BlindStop) = PlayerBotDriver.BlindLook(false, false, 719, 80, 0, 6_000, false, 0);
+        Assert.That((drop, state.BlindStop), Is.EqualTo((false, 419)), "a step in");
+        PlayerBotDriver.SettleIdleClock(state);
+        Assert.That(state.RoamingSince, Is.EqualTo(5_000L), "the step in: no target reached");
+        PlayerBotDriver.LeaveUnreachable(state, crackler, 6_250);
+        PlayerBotDriver.SettleIdleClock(state);
+        Assert.That(state.RoamingSince, Is.EqualTo(5_000L), "its walk blocked");
+        Assert.That(PlayerBotDriver.RelocateReason(state.RoamingSince, 0, 5_000 + PlayerBotDriver.RelocateAfterMilliseconds,
+            null), Is.EqualTo(PlayerBotDriver.Outgrown), "2 minutes on: outgrown");
+        state.Target = Mob();
+        (_, state.BlindStop) = PlayerBotDriver.BlindLook(true, false, 400, 80, 0, 7_000, false, state.BlindStop);
+        PlayerBotDriver.SettleIdleClock(state);
+        Assert.That(state.RoamingSince, Is.EqualTo(0L), "in sight: a target reached");
+        (state.Engaged, state.RoamingSince) = (false, 8_000);
+        PlayerBotDriver.SettleIdleClock(state);
+        Assert.That(state.RoamingSince, Is.EqualTo(8_000L), "a walk in: the clock runs");
+    }
+
     // #167: one PLAYER_BOT_REST line per rest when the bot stands: the seconds it sat and why it stood (recovered, hit,
     // heal, pet or buff: a cast on itself, died, other); then (the next leg's) its health and power when it sat, hp= and
     // mp=, and respawn=, the killed monsters' spawn spots its rest spot was read against (RespawnSpots, C7); then (#167
