@@ -3461,14 +3461,17 @@ public static class PlayerBotDriver
     /// the bot's feet (SummonPet) and reaches turretReach (its TurretSpell, 1,000; 1,350 for a Verdant taunt), and the
     /// monster the bot pulls comes to the bot. With a damage turret (damageTurret: Arboreal's), by its turret (here,
     /// within AnimistStandMargin of it) while both its spell and its turret reach the target from there, the turret less
-    /// the margin (limit); else it plants a new one (Replant) by the target, within that limit of it, here if it is that
-    /// near already. F10b stood by the turret while only the spell reached (1,420 with most nukes), or at the spell's
-    /// reach toward the turret (the target up to 2,270 from it): the turret's aggro range is its spell's
-    /// (TurretBrain.cs:18-24), so the monster reached the bot unhurt. Over st-deathsD2 and D2b Arboreal one-monster pulls
-    /// opened beyond the limit died 8 of 15, within it 0 of 33. A snare or taunt turret (Creeping's, Verdant's) keeps
-    /// F10b's stand: by it while its spell reaches the target, else at its spell's reach toward the turret if the turret
-    /// reaches that spot (less the margin), else the new one; it wears the monster down or draws it on its way in (its
-    /// pulls beyond the limit died 1 of 33, 0 of 28 on st-hearth11 and 11b).</summary>
+    /// the margin (limit); else it plants a new one (Replant) by the target: here if it is within that limit of it
+    /// already, else at a stand AnimistStandMargin inside the limit. AnimistStepFor plants within the margin of the
+    /// stand, short of it on the walk in, so the new turret lands within the limit and keeps (with the stand at the
+    /// limit it landed up to the margin beyond, and the bot planted again every think). F10b stood by the turret while
+    /// only the spell reached (1,420 with most nukes), or at the spell's reach toward the turret (the target up to 2,270
+    /// from it): the turret's aggro range is its spell's (TurretBrain.cs:18-24), so the monster reached the bot unhurt.
+    /// Over st-deathsD2 and D2b Arboreal one-monster pulls opened beyond the limit died 8 of 15, within it 0 of 33. A
+    /// snare or taunt turret (Creeping's, Verdant's) keeps F10b's stand: by it while its spell reaches the target, else
+    /// at its spell's reach toward the turret if the turret reaches that spot (less the margin), else the new one, at
+    /// the limit; it wears the monster down or draws it on its way in (its pulls beyond the limit died 1 of 33, 0 of 28
+    /// on st-hearth11 and 11b).</summary>
     public static (Vector3 Stand, bool Replant) AnimistStand(Vector3 bot, Vector3 turret, Vector3 target, int spellStop,
         int turretReach, bool damageTurret)
     {
@@ -3480,8 +3483,8 @@ public static class PlayerBotDriver
             Vector3 near = target + (turret - target) * (spellStop / toTurret);
             if (Vector3.Distance(near, turret) <= turretReach - AnimistStandMargin) return (near, false);
         }
-        float toBot = Vector3.Distance(target, bot);
-        return (toBot <= limit ? bot : target + (bot - target) * (limit / toBot), true);
+        float toBot = Vector3.Distance(target, bot), standOff = damageTurret ? limit - AnimistStandMargin : limit;
+        return (toBot <= limit ? bot : target + (bot - target) * (standOff / toBot), true);
     }
 
     /// <summary>#167 E CY3: an Animist's step before a pull (AnimistApproach), from AnimistStand's stand (toStand: the
