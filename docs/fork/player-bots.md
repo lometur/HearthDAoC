@@ -47,9 +47,10 @@ Two more settings are read only when bots are on:
 
 Each bot thinks every 250 ms, a thin copy of the `/bot` pilot's think:
 - It roams within 4,000 units of its start and hunts monsters within 5,400 that con at most yellow. Each death lowers
-  that con by one step, by two at most. For 15 minutes after a death it also hunts nothing that cons as high as its
-  killer did, down to green at the lowest, and takes no fallback camp that cons higher than that: a bot killed by a
-  yellow hunts blue at most, and one killed by a green still takes a green camp.
+  that con by one step, by two at most. For 5 minutes after a death to a yellow or harder monster it also hunts
+  nothing that cons as high as its killer did, and takes no fallback camp that cons as high: a bot killed by a yellow
+  hunts blue at most. A blue or green killer changes neither (the death's own step lowers the con), and once the 5
+  minutes are up a bot with only yellow camps round it takes one as its fallback again.
 - It rests after each kill, and whenever below a GameBot's rest thresholds (70% health, 45% power, 35% endurance). A
   rest stops at full health, 60% endurance, and full power, or 90% power for a caster (Wizard, Sorcerer, Runemaster,
   Eldritch, Mentalist: under 50% power it regains power at half the rate, so a pull that ends below half costs more
@@ -406,7 +407,8 @@ All start `PLAYER_BOT_`:
   or `breakoff`. `RELOCATE` after a death (`reason=died`) ends with `sinceRelease=`, the milliseconds since the release;
   after a break-off its `reason=` is `brokeoff`. Either ends with `barred=old` when the death or the break-off came on
   the walk to the camp it had, which the plan then leaves out. Any `RELOCATE` then ends with `capKill=`, the lowest con
-  that killed the bot in the last 15 minutes, while there is one. A break-off drops its fight (`FIGHT result=dropped`);
+  that killed the bot in the last 5 minutes, yellow or harder (a blue or green killer logs none), while there is one. A
+  break-off drops its fight (`FIGHT result=dropped`);
 - `BREAKOFF`: one per break-off, when it ends: the bot's `hp=`, `end=` (endurance) and `attackers=` when it broke off,
   `sec=`, the seconds it ran, and `outcome=`: `shook` (none still after it, or from 30 s none within 1,500 units),
   `fought` (still chased after 45 s, caught with no control to cast, or nowhere to run) or `died`; then `rate=`, the

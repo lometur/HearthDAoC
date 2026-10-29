@@ -382,26 +382,28 @@ public sealed class UT_PlayerBotDriver
     // in its zone) takes the safest con it passed over where it is, as a GameBot takes the safest camp there is rather
     // than plan forever (AutonomousBotDecisionEngine.cs:287-313); run 1's bots stood idle after two deaths without it.
     // Not for an outgrown bot, nor one that passed over only names it avoids (they expire). #167 D6: nor a con at or
-    // over the lowest that killed the bot in the last 15 minutes (LowestKillerCon).
+    // over the lowest that killed the bot in the last 5 minutes (LowestKillerCon), a YELLOW or harder one: a BLUE or
+    // GREEN killer leaves the fallback alone (st-deathsD's fix round).
     [TestCase("capped", ConColor.BLUE, null, ConColor.BLUE)] [TestCase("capped", null, null, null)]
     [TestCase("outgrown", ConColor.BLUE, null, null)] [TestCase(null, ConColor.BLUE, null, null)]
-    [TestCase("capped", ConColor.BLUE, ConColor.YELLOW, ConColor.BLUE)] [TestCase("capped", ConColor.BLUE, ConColor.BLUE, null)]
-    [TestCase("capped", ConColor.YELLOW, ConColor.BLUE, null)]
-    [TestCase("capped", ConColor.GREEN, ConColor.GREEN, ConColor.GREEN)]      // the review of D: the cap's own floor
+    [TestCase("capped", ConColor.BLUE, ConColor.YELLOW, ConColor.BLUE)] [TestCase("capped", ConColor.YELLOW, ConColor.YELLOW, null)]
+    [TestCase("capped", ConColor.YELLOW, ConColor.ORANGE, ConColor.YELLOW)]
+    [TestCase("capped", ConColor.BLUE, ConColor.BLUE, ConColor.BLUE)] [TestCase("capped", ConColor.YELLOW, ConColor.BLUE, ConColor.YELLOW)]
+    [TestCase("capped", ConColor.GREEN, ConColor.GREEN, ConColor.GREEN)]
     public void A_capped_bot_that_cannot_move_takes_the_safest_con_it_passed_over(string reason, ConColor? safest,
         ConColor? lowestKillerCon, ConColor? cap) =>
         Assert.That(PlayerBotDriver.FallbackInPlace(reason, safest, lowestKillerCon), Is.EqualTo(cap));
 
-    // Its wiring (#167 D6): FallBackInPlace reads the killers' cons the bot keeps.
+    // Its wiring (#167 D6): FallBackInPlace reads the killers' cons the bot keeps, for 5 minutes.
     [Test]
     public void A_capped_bot_takes_no_fallback_con_that_killed_it_where_it_is()
     {
         MethodInfo fallBack = typeof(PlayerBotDriver).GetMethod("FallBackInPlace", BindingFlags.Static | BindingFlags.NonPublic)!;
         var state = new PlayerBotState(Player(null)) { SafestPassedOver = ConColor.YELLOW, CappedSince = 5_000 };
         PlayerBotDriver.RememberKillerCon(state.KillerCons, ConColor.YELLOW, 1_000);
-        fallBack.Invoke(null, [state, PlayerBotDriver.Capped, 2_000L]);
+        fallBack.Invoke(null, [state, PlayerBotDriver.Capped, 300_999L]);
         Assert.That((state.FallbackCap, state.CappedSince), Is.EqualTo(((ConColor?)null, 5_000L)));
-        fallBack.Invoke(null, [state, PlayerBotDriver.Capped, 901_000L]);              // its 15 minutes are up
+        fallBack.Invoke(null, [state, PlayerBotDriver.Capped, 301_000L]);              // its 5 minutes are up
         Assert.That((state.FallbackCap, state.CappedSince), Is.EqualTo(((ConColor?)ConColor.YELLOW, 0L)));
     }
 
@@ -507,36 +509,68 @@ public sealed class UT_PlayerBotDriver
 
     // HandleDeath stepped the cap down and cleared FallbackCap, then a fallback plan set FallbackCap to YELLOW again and
     // Cap lifted the cap back to it: st-deathsC's release first fights at fallback=YELLOW camps were fatal 32 of 42 (fit
-    // camps 4 of 76). The cap after deaths is EncounterMaximum's, under the lowest con that killed the bot in the last 15
-    // minutes, never under GREEN.
+    // camps 4 of 76). The cap after deaths is EncounterMaximum's, under the lowest con that killed the bot in the last 5
+    // minutes, never under GREEN. st-deathsD's fix round: a YELLOW or harder killer only; a BLUE or GREEN one leaves the
+    // cap and the fallback alone.
     [TestCase(ConColor.GREEN, ConColor.YELLOW, ConColor.YELLOW, ConColor.BLUE)]
     [TestCase(ConColor.BLUE, ConColor.YELLOW, ConColor.ORANGE, ConColor.YELLOW)]
     [TestCase(ConColor.GREEN, null, ConColor.YELLOW, ConColor.GREEN)]
     [TestCase(ConColor.GREEN, ConColor.YELLOW, null, ConColor.YELLOW)]               // as before
-    [TestCase(ConColor.GREEN, ConColor.BLUE, ConColor.BLUE, ConColor.GREEN)]
-    [TestCase(ConColor.GREEN, null, ConColor.GREEN, ConColor.GREEN)]                  // never under GREEN
+    [TestCase(ConColor.GREEN, ConColor.BLUE, ConColor.BLUE, ConColor.BLUE)]          // a BLUE killer: as before
+    [TestCase(ConColor.BLUE, null, ConColor.BLUE, ConColor.BLUE)]
+    [TestCase(ConColor.GREEN, ConColor.YELLOW, ConColor.GREEN, ConColor.YELLOW)]     // a GREEN killer: as before
+    [TestCase(ConColor.GREEN, null, ConColor.GREEN, ConColor.GREEN)]
     [TestCase(ConColor.BLUE, null, null, ConColor.BLUE)]
     public void The_cap_after_deaths_stays_under_the_lowest_con_that_killed_the_bot(ConColor deathCap, ConColor? fallback,
         ConColor? lowestKillerCon, ConColor cap) =>
         Assert.That(PlayerBotDriver.CapAfterDeaths(deathCap, fallback, lowestKillerCon), Is.EqualTo(cap));
 
-    // A killer's con is kept for a GameBot's failure memory, 15 minutes, each death's; the lowest one kept counts, and
-    // one whose time is up goes. A grey killer is none: no cap goes under it.
+    // A killer's con is kept KillerConMemoryMilliseconds (5 minutes), each death's, for a YELLOW or harder killer only; the
+    // lowest one kept counts, and one whose time is up goes. st-deathsD's fix round: after one death the cap is BLUE
+    // already, so a BLUE or GREEN killer changed no cap and only left the fallback no camp, and a YELLOW one's 15 minutes
+    // left a bot among YELLOW camps none: 10 bots logged 75 capped-none plans (BLUE killers 31, YELLOW 44), and 16 lost
+    // 42 kills against st-hearth11. A grey killer is none.
     [Test]
-    public void A_killers_con_is_kept_for_15_minutes_and_the_lowest_counts()
+    public void A_yellow_or_harder_killers_con_is_kept_for_5_minutes_and_the_lowest_counts()
     {
         var cons = new List<(ConColor Con, long Until)>();
         Assert.That(PlayerBotDriver.LowestKillerCon(cons, 0), Is.Null);
         PlayerBotDriver.RememberKillerCon(cons, ConColor.GREY, 0);
+        PlayerBotDriver.RememberKillerCon(cons, ConColor.GREEN, 0);
         PlayerBotDriver.RememberKillerCon(cons, ConColor.ORANGE, 0);
         PlayerBotDriver.RememberKillerCon(cons, ConColor.BLUE, 60_000);
         PlayerBotDriver.RememberKillerCon(cons, ConColor.YELLOW, 120_000);
-        Assert.That(PlayerBotDriver.LowestKillerCon(cons, 120_001), Is.EqualTo(ConColor.BLUE));
-        Assert.That(PlayerBotDriver.LowestKillerCon(cons, 959_999), Is.EqualTo(ConColor.BLUE));
-        Assert.That(PlayerBotDriver.LowestKillerCon(cons, 960_000), Is.EqualTo(ConColor.YELLOW));
-        Assert.That(PlayerBotDriver.LowestKillerCon(cons, 1_020_000), Is.Null);
-        PlayerBotDriver.RememberKillerCon(cons, ConColor.YELLOW, 1_020_000);
-        Assert.That(cons.Select(c => c.Con), Is.EqualTo(new[] { ConColor.YELLOW }), "the expired ones went");
+        Assert.That(cons.Select(c => c.Con), Is.EqualTo(new[] { ConColor.ORANGE, ConColor.YELLOW }), "no GREY, GREEN or BLUE");
+        Assert.That(PlayerBotDriver.LowestKillerCon(cons, 120_001), Is.EqualTo(ConColor.YELLOW));
+        Assert.That(PlayerBotDriver.LowestKillerCon(cons, 419_999), Is.EqualTo(ConColor.YELLOW));
+        Assert.That(PlayerBotDriver.LowestKillerCon(cons, 420_000), Is.Null);
+        PlayerBotDriver.RememberKillerCon(cons, ConColor.RED, 420_000);
+        Assert.That(cons.Select(c => c.Con), Is.EqualTo(new[] { ConColor.RED }), "the expired ones went");
+        Assert.That((PlayerBotDriver.LowestKillerCon(cons, 719_999), PlayerBotDriver.LowestKillerCon(cons, 720_000)),
+            Is.EqualTo(((ConColor?)ConColor.RED, (ConColor?)null)));
+    }
+
+    // st-deathsD's fix round: a bot whose camps all con YELLOW, after a death to a YELLOW (its cap BLUE), planned none for
+    // the killer's 15 minutes (the fallback took no camp at or over the killer's con) and retried every 30 s. It still
+    // plans none for the 5 minutes, then the plan e028a26 made (no killer's con): the YELLOW fallback camp.
+    [Test]
+    public void Among_yellow_camps_after_a_yellow_death_the_old_fallback_comes_back_after_5_minutes()
+    {
+        var monsters = new[] { Monster("y1", 1_000, ConColor.YELLOW), Monster("y2", 1_100, ConColor.YELLOW) };
+        var state = new PlayerBotState(Player(null)) { DeathSafetySteps = 1 };
+        PlayerBotDriver.RememberKillerCon(state.KillerCons, ConColor.YELLOW, 1_000);
+        (string[], ConColor?, bool) Plan(long now)
+        {
+            (ConColor fit, ConColor? killerCon) = PlayerBotDriver.PlanCaps(state, now);   // as RelocateIfOutgrown
+            return PlayerBotDriver.PlanRelocation(monsters, Vector3.Zero, fit, ConColor.YELLOW, null, new HashSet<string>(),
+                5, killerCon);
+        }
+        (string[], ConColor?, bool) atE028a26 = PlayerBotDriver.PlanRelocation(monsters, Vector3.Zero, ConColor.BLUE,
+            ConColor.YELLOW, null, new HashSet<string>(), 5);
+        Assert.That(atE028a26, Is.EqualTo((new[] { "y1", "y2" }, (ConColor?)ConColor.YELLOW, false)));
+        Assert.That(Plan(2_000), Is.EqualTo((Array.Empty<string>(), (ConColor?)null, false)), "none for the 5 minutes");
+        Assert.That(Plan(300_999), Is.EqualTo((Array.Empty<string>(), (ConColor?)null, false)));
+        Assert.That(Plan(301_000), Is.EqualTo(atE028a26), "then e028a26's fallback");
     }
 
     private sealed class LevelOnly : DOL.GS.PropertyCalc.PropertyCalculator
@@ -545,7 +579,8 @@ public sealed class UT_PlayerBotDriver
     }
 
     // HandleDeath keeps the con of the killer the reaper names (the killer's name already, DEATHS.md A3), against the
-    // bot's level then: a level 20 killed by a level 20 (YELLOW), then by a level 17 (BLUE).
+    // bot's level then: a level 20 killed by a level 20 (YELLOW), then by a level 17 (BLUE: none kept, st-deathsD's fix
+    // round).
     [Test]
     public void A_death_keeps_its_killers_con()
     {
@@ -570,7 +605,8 @@ public sealed class UT_PlayerBotDriver
             Assert.That(PlayerBotDriver.LowestKillerCon(state.KillerCons, 54_001), Is.EqualTo(ConColor.YELLOW));
             (state.DeathRecorded, state.Killer, state.KillerAvoided) = (false, KilledBy(17), false);
             handleDeath.Invoke(null, [state, bot, 120_000L]);
-            Assert.That(state.KillerCons.Select(c => c.Con), Is.EqualTo(new[] { ConColor.YELLOW, ConColor.BLUE }));
+            Assert.That(state.KillerCons.Select(c => c.Con), Is.EqualTo(new[] { ConColor.YELLOW }));
+            Assert.That(state.Deaths, Is.EqualTo(2), "both deaths handled");
         }
         finally
         {
@@ -579,31 +615,37 @@ public sealed class UT_PlayerBotDriver
     }
 
     // Cap (FindWithin's and SettleTarget's) reads them: one death (BLUE) to a YELLOW at a fallback=YELLOW camp hunts
-    // BLUE, and YELLOW again once the 15 minutes are up.
+    // BLUE, and YELLOW again once the 5 minutes are up.
     [Test]
     public void The_pull_cap_reads_the_killers_cons()
     {
         MethodInfo cap = typeof(PlayerBotDriver).GetMethod("Cap", BindingFlags.Static | BindingFlags.NonPublic)!;
         var state = new PlayerBotState(Player(null)) { DeathSafetySteps = 1, FallbackCap = ConColor.YELLOW };
         PlayerBotDriver.RememberKillerCon(state.KillerCons, ConColor.YELLOW, 1_000);
-        Assert.That(cap.Invoke(null, [state, 2_000L]), Is.EqualTo(ConColor.BLUE));
-        Assert.That(cap.Invoke(null, [state, 901_000L]), Is.EqualTo(ConColor.YELLOW));
+        Assert.That(cap.Invoke(null, [state, 300_999L]), Is.EqualTo(ConColor.BLUE));
+        Assert.That(cap.Invoke(null, [state, 301_000L]), Is.EqualTo(ConColor.YELLOW));
     }
 
     // The plan's caps (RelocateIfOutgrown): its fit pass under the death cap and the killers' cons, as the pulls are
-    // (else it plans a camp the bot then passes over, capped), and the lowest killer's con for its fallback.
+    // (else it plans a camp the bot then passes over, capped), and the lowest killer's con for its fallback: after deaths
+    // to an ORANGE and a YELLOW (cap GREEN), the YELLOW. A BLUE killer is none kept (st-deathsD's fix round).
     [Test]
     public void The_plan_caps_read_the_killers_cons()
     {
         var state = new PlayerBotState(Player(null)) { DeathSafetySteps = 1, FallbackCap = ConColor.YELLOW };
         Assert.That(PlayerBotDriver.PlanCaps(state, 2_000), Is.EqualTo((ConColor.BLUE, (ConColor?)null)));
         PlayerBotDriver.RememberKillerCon(state.KillerCons, ConColor.BLUE, 1_000);
-        Assert.That(PlayerBotDriver.PlanCaps(state, 2_000), Is.EqualTo((ConColor.GREEN, (ConColor?)ConColor.BLUE)));
+        Assert.That(PlayerBotDriver.PlanCaps(state, 2_000), Is.EqualTo((ConColor.BLUE, (ConColor?)null)));
+        state.DeathSafetySteps = 2;
+        PlayerBotDriver.RememberKillerCon(state.KillerCons, ConColor.ORANGE, 1_000);
+        PlayerBotDriver.RememberKillerCon(state.KillerCons, ConColor.YELLOW, 1_500);
+        Assert.That(PlayerBotDriver.PlanCaps(state, 2_000), Is.EqualTo((ConColor.GREEN, (ConColor?)ConColor.YELLOW)));
     }
 
     // With no camp that fits, the fallback takes no camp whose median is at or over the lowest con that killed the bot:
     // none at all rather than one (EndReplan: it hunts where it is, under its cap). Before the failed camps' preference:
-    // the failed BLUE camp, the only one left, before a YELLOW one after a YELLOW death.
+    // the failed BLUE camp, the only one left, before a YELLOW one after a YELLOW death. A BLUE killer leaves it alone
+    // (st-deathsD's fix round).
     [Test]
     public void A_fallback_camp_cons_under_the_lowest_con_that_killed_the_bot()
     {
@@ -617,7 +659,8 @@ public sealed class UT_PlayerBotDriver
             failed, new HashSet<string>(), 5, killerCon);
         Assert.That(Plan(monsters, null, null), Is.EqualTo((new[] { "b1", "b2" }, (ConColor?)ConColor.BLUE, false)));
         Assert.That(Plan(monsters, null, ConColor.YELLOW), Is.EqualTo((new[] { "b1", "b2" }, (ConColor?)ConColor.BLUE, false)));
-        Assert.That(Plan(monsters, null, ConColor.BLUE), Is.EqualTo((Array.Empty<string>(), (ConColor?)null, false)));
+        Assert.That(Plan(monsters, null, ConColor.BLUE), Is.EqualTo(Plan(monsters, null, null)));
+        Assert.That(Plan(monsters[2..], null, ConColor.BLUE), Is.EqualTo(Plan(monsters[2..], null, null)));
         Assert.That(Plan(monsters[2..], null, null), Is.EqualTo((new[] { "y1", "y2" }, (ConColor?)ConColor.YELLOW, false)));
         Assert.That(Plan(monsters[2..], null, ConColor.YELLOW), Is.EqualTo((Array.Empty<string>(), (ConColor?)null, false)));
         Assert.That(Plan(monsters, [new Vector3(1_050, 0, 0)], null),
@@ -634,8 +677,17 @@ public sealed class UT_PlayerBotDriver
     public void The_con_under_a_killers_is_never_under_green(ConColor killer, ConColor under) =>
         Assert.That(PlayerBotDriver.UnderKillerCon(killer), Is.EqualTo(under));
 
+    // st-deathsD's fix round: the cap's and the fallback's limit (KillerLimit) after a YELLOW or harder killer only; a BLUE
+    // or GREEN one, as none (CountsAsKiller).
+    [TestCase(null, null)] [TestCase(ConColor.GREEN, null)] [TestCase(ConColor.BLUE, null)]
+    [TestCase(ConColor.YELLOW, ConColor.BLUE)] [TestCase(ConColor.ORANGE, ConColor.YELLOW)] [TestCase(ConColor.PURPLE, ConColor.RED)]
+    public void The_killers_limit_counts_a_yellow_or_harder_killer_only(ConColor? killer, ConColor? limit) =>
+        Assert.That(PlayerBotDriver.KillerLimit(killer), Is.EqualTo(limit));
+
+    // After a GREEN or a BLUE killer the fallback is the one with none: the failed GREEN camp the review of D (D6) left
+    // after a GREEN killer gives way to the other camp, and a BLUE camp is left after one (none before).
     [Test]
-    public void After_a_green_killer_a_green_fallback_camp_is_left()
+    public void After_a_green_or_blue_killer_the_fallback_is_as_with_none()
     {
         var monsters = new[]
         {
@@ -647,11 +699,13 @@ public sealed class UT_PlayerBotDriver
                 new HashSet<string>(), 5, killerCon);
         Assert.That(Plan(monsters, null), Is.EqualTo((new[] { "b1", "b2" }, (ConColor?)ConColor.BLUE, false)),
             "the other camp before the failed one");
-        Assert.That(Plan(monsters, ConColor.GREEN), Is.EqualTo((new[] { "g1", "g2" }, (ConColor?)ConColor.GREEN, false)),
-            "the failed GREEN camp, the only one under the cap's floor");
-        Assert.That(Plan(monsters[..2], ConColor.GREEN), Is.EqualTo((new[] { "g1", "g2" }, (ConColor?)ConColor.GREEN, false)));
-        Assert.That(Plan(monsters[2..], ConColor.GREEN), Is.EqualTo((Array.Empty<string>(), (ConColor?)null, false)),
-            "a BLUE camp after a GREEN killer: none");
+        foreach (ConColor killer in new[] { ConColor.GREEN, ConColor.BLUE })
+        {
+            Assert.That(Plan(monsters, killer), Is.EqualTo(Plan(monsters, null)), $"{killer}");
+            Assert.That(Plan(monsters[..2], killer), Is.EqualTo((new[] { "g1", "g2" }, (ConColor?)ConColor.GREEN, false)));
+            Assert.That(Plan(monsters[2..], killer), Is.EqualTo((new[] { "b1", "b2" }, (ConColor?)ConColor.BLUE, false)),
+                $"a BLUE camp after a {killer} killer");
+        }
     }
 
     // --- the recovery from a death (#167 F4) ---

@@ -101,7 +101,7 @@ public sealed class PlayerBotState
     public readonly List<(ushort Region, Vector3 At, long Until)> FailedCamps = new();   // camps, 15 minutes (PlanRelocation)
     public readonly Dictionary<string, long> AvoidUntil = new(StringComparer.OrdinalIgnoreCase);   // DEATHS.md A3: the
     public bool KillerAvoided;                                   //   names of deaths' killers and targets (IsAvoided)
-    public readonly List<(ConColor Con, long Until)> KillerCons = new();   // #167 D6: and the killers' cons, 15 minutes
+    public readonly List<(ConColor Con, long Until)> KillerCons = new();   // #167 D6: and the killers' cons, 5 minutes
     public long AliveSince;                                      // PLAYER_BOT_DEATH: the last release or login
     public int Attackers;                                        //   and the attackers on the last think alive
     public long NextBlockedLine;                                 // PLAYER_BOT_BLOCKED
@@ -267,6 +267,7 @@ public static class PlayerBotDriver
     public const int MaxDeathSteps = (int)ConColor.YELLOW - (int)ConColor.GREEN;   // a solo GameBot's (AWBC:3756, :3793-3796)
     public const string Outgrown = "outgrown", Capped = "capped", Died = "died", BrokeOff = "brokeoff";   // RelocateReason
     public const int MaxHoldMilliseconds = 60_000;           // #167 F4: a hold while no camp is planned ends by then
+    public const int KillerConMemoryMilliseconds = 300_000;  // #167 D6: a killer's con kept (st-deathsD's fix round, inf.)
     public static readonly int[] StepOutRings = [500, 900, 1_300, 1_700, 2_100, 2_500];   // #167 F4: a released bot's
     public const int SpotDirections = 12;                    //   candidate spots, every 30 degrees on each ring
     public const int StepOutPauseMilliseconds = 10_000;      // (inf.) after a blocked step out, it stands this long
@@ -1438,15 +1439,26 @@ public static class PlayerBotDriver
         MaximumTargetCon(1, state.DeathSafetySteps), state.FallbackCap, LowestKillerCon(state.KillerCons, now));
 
     /// <summary>#167 D6: the cap after deaths, EncounterMaximum's (the death cap deathCap, or the fallback camp's con),
-    /// under lowestKillerCon, the lowest con that killed the bot in the last 15 minutes (LowestKillerCon), never under
-    /// GREEN. HandleDeath steps the death cap down and clears FallbackCap, but a fallback plan set it to YELLOW again
-    /// and EncounterMaximum lifted the cap back to it: st-deathsC's release first fights at fallback=YELLOW camps were
-    /// fatal 32 of 42 (12 bots), at fit camps 4 of 76.</summary>
+    /// under lowestKillerCon, the lowest con that killed the bot in the last 5 minutes (LowestKillerCon), never under
+    /// GREEN (KillerLimit: a YELLOW or harder killer only). HandleDeath steps the death cap down and clears FallbackCap,
+    /// but a fallback plan set it to YELLOW again and EncounterMaximum lifted the cap back to it: st-deathsC's release
+    /// first fights at fallback=YELLOW camps were fatal 32 of 42 (12 bots), at fit camps 4 of 76.</summary>
     public static ConColor CapAfterDeaths(ConColor deathCap, ConColor? fallback, ConColor? lowestKillerCon)
     {
         ConColor cap = AutonomousDeathRecoveryPolicy.EncounterMaximum(deathCap, MaximumTargetCon(1, 0), fallback, false);
-        return lowestKillerCon is ConColor killer && cap >= killer ? UnderKillerCon(killer) : cap;
+        return KillerLimit(lowestKillerCon) is ConColor limit && cap > limit ? limit : cap;
     }
+
+    /// <summary>#167 D6: the con the cap and the fallback (CapAfterDeaths, PlanRelocation, FallbackInPlace) stay at or
+    /// under after lowestKillerCon: the con under it (UnderKillerCon) for a killer that counts (CountsAsKiller); none
+    /// (null) with no killer or one that doesn't.</summary>
+    public static ConColor? KillerLimit(ConColor? lowestKillerCon) =>
+        lowestKillerCon is ConColor killer && CountsAsKiller(killer) ? UnderKillerCon(killer) : null;
+
+    /// <summary>A killer's con that counts (#167 D6, st-deathsD's fix round): YELLOW or harder. A BLUE or GREEN killer
+    /// leaves the cap and the fallback alone: the death cap already steps the bot down (DeathSafetySteps), and the
+    /// fallback's filter under a BLUE killer left no camp (4 bots, 31 of st-deathsD's 75 capped-none plans).</summary>
+    public static bool CountsAsKiller(ConColor con) => con >= ConColor.YELLOW;
 
     /// <summary>#167 D6: the highest con under a killer's, never under GREEN: the cap's limit (CapAfterDeaths) and the
     /// fallback's (PlanRelocation, FallbackInPlace). The review of D: the fallback took only a camp under the killer's
@@ -1463,13 +1475,15 @@ public static class PlayerBotDriver
         return (CapAfterDeaths(MaximumTargetCon(1, state.DeathSafetySteps), null, killer), killer);
     }
 
-    /// <summary>#167 D6: a killer's con (con, against the bot's level then), kept for a GameBot's failure memory
-    /// (FailureMemoryMilliseconds, 15 minutes), each death's; those whose time is up go. A grey killer is none: no cap
-    /// goes under GREEN (UnderKillerCon), so it would only count as a GREEN one.</summary>
+    /// <summary>#167 D6: a killer's con (con, against the bot's level then), each death's, for a killer that counts
+    /// (CountsAsKiller: YELLOW or harder), kept KillerConMemoryMilliseconds; those whose time is up go. st-deathsD's fix
+    /// round: kept for a GameBot's failure memory (FailureMemoryMilliseconds, 15 minutes), a YELLOW killer left a bot
+    /// among YELLOW camps no fallback for that long, planning none every 30 s (6 bots, 44 capped-none plans); 16 bots
+    /// lost 42 kills against st-hearth11.</summary>
     public static void RememberKillerCon(List<(ConColor Con, long Until)> cons, ConColor con, long now)
     {
         cons.RemoveAll(kept => kept.Until <= now);
-        if (con > ConColor.GREY) cons.Add((con, now + AutonomousDeathRecoveryPolicy.FailureMemoryMilliseconds));
+        if (CountsAsKiller(con)) cons.Add((con, now + KillerConMemoryMilliseconds));
     }
 
     /// <summary>The lowest con kept that killed the bot (RememberKillerCon), null with none (#167 D6).</summary>
@@ -1591,7 +1605,7 @@ public static class PlayerBotDriver
 
     // #167 C1: RELOCATE sinceRelease= on a death's replan, last (the fields before it stay as they were); D9: then
     // barred=old when the plan bars the anchor the bot had (BarOldAnchor); D6: then capKill=, the lowest con that killed
-    // the bot in the last 15 minutes, while it keeps one (PlanCaps).
+    // the bot in the last 5 minutes, YELLOW or harder (RememberKillerCon), while it keeps one (PlanCaps).
     private static string RelocateSuffix(string reason, long sinceReleaseMs, bool barredOld, ConColor? capKill) =>
         (reason == Died ? $" sinceRelease={sinceReleaseMs}" : "") + (barredOld ? " barred=old" : "") +
         (capKill is ConColor kill ? $" capKill={kill}" : "");
@@ -2590,9 +2604,9 @@ public static class PlayerBotDriver
     /// safest camp there is rather than plan forever (AutonomousBotDecisionEngine.cs:287-313); the old rollback did so
     /// at once. Null for an outgrown bot, and for one that passed over only names it avoids: they expire. #167 D6: null
     /// too for a con over the cap's limit after the lowest that killed the bot (lowestKillerCon, LowestKillerCon;
-    /// UnderKillerCon, never under GREEN).</summary>
+    /// KillerLimit: YELLOW or harder, never under GREEN).</summary>
     public static ConColor? FallbackInPlace(string reason, ConColor? safestPassedOver, ConColor? lowestKillerCon) =>
-        reason == Capped && (lowestKillerCon is not ConColor killer || safestPassedOver <= UnderKillerCon(killer))
+        reason == Capped && (KillerLimit(lowestKillerCon) is not ConColor limit || safestPassedOver <= limit)
             ? safestPassedOver : null;
 
     /// <summary>The relocation's spots (DEATHS.md A4), at most count, nearest first: monsters the bot would hunt
@@ -2609,8 +2623,8 @@ public static class PlayerBotDriver
     /// GameBot hunts its camp's monster, AWBC:3087-3088), not one the bot died at in the last 15 minutes (within
     /// RoamRadius of a failedCamps spot; AWBC:3246, :3803-3804) while another is left, those with the safest median, and
     /// that median as Fallback, the con the bot hunts there (AWBC:3446-3452). #167 D6: no fallback camp whose median is
-    /// over the cap's limit after killerCon, the lowest con that killed the bot in the last 15 minutes (UnderKillerCon:
-    /// under it, never under GREEN; none: no camp).</summary>
+    /// over the cap's limit after killerCon, the lowest con that killed the bot in the last 5 minutes (KillerLimit: under
+    /// a YELLOW or harder one, never under GREEN; none: no camp).</summary>
     public static (T[] Spots, ConColor? Fallback, bool Stale) PlanRelocation<T>(
         IReadOnlyList<(T Npc, Vector3 At, ConColor Con, bool Huntable, bool Avoided)> monsters, Vector3 here, ConColor cap,
         ConColor natural, IReadOnlyCollection<Vector3> failedCamps, ISet<T> rejected, int count, ConColor? killerCon = null)
@@ -2642,7 +2656,7 @@ public static class PlayerBotDriver
         foreach (int i in order)
         {
             (ConColor median, ConColor fresh) = CampCon(monsters, grid, i);
-            if (median <= natural && (killerCon is not ConColor killer || median <= UnderKillerCon(killer)))   // #167 D6
+            if (median <= natural && (KillerLimit(killerCon) is not ConColor limit || median <= limit))   // #167 D6
                 safe.Add((i, median, fresh <= natural, Failed(i)));
         }
         if (safe.Count == 0) return (Array.Empty<T>(), null, false);
