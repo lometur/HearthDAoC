@@ -4679,6 +4679,22 @@ public sealed class UT_PlayerBotDriver
     public void A_cast_on_itself_ends_a_rest_as_recovered_once_the_bot_has(string why, bool recovered, string logged) =>
         Assert.That(PlayerBotDriver.RestEndWhy(why, recovered), Is.EqualTo(logged));
 
+    // #167 D13 R1a: a cast on itself as the bot sits recovered ends the rest owed (CastOnSelf). 84 re-sits came straight
+    // after REST why=recovered in st-deathsC, 38 of them a Skald's chant swap (5 endurance, SpellHandler.cs:1244-1250)
+    // taking it under the 60% stop while RecoverBeforePull was still set: Think clears it only after step 11b's casts. A
+    // standing cast keeps the rest owed (D3: a caster's login buffs, cast standing, keep its login rest).
+    [TestCase(true, true, true, false)] [TestCase(true, false, true, true)] [TestCase(true, true, false, true)]
+    [TestCase(false, true, true, false)]
+    public void A_cast_as_the_bot_sits_recovered_ends_the_rest_owed(bool owed, bool sitting, bool recovered, bool stillOwed) =>
+        Assert.That(PlayerBotDriver.RestOwedAfterCast(owed, sitting, recovered), Is.EqualTo(stillOwed));
+
+    // #167 D13 R1b: the kill stops a cast still under way at the dead target (SettleTarget). The kill's buff scan needs no
+    // cast under way (SelfBuffScanDue), so it waited; the rest then stopped the cast and sat, and the buffs waited for the
+    // rest's end (BuffScanAllowed): 46 of the 84 re-sits. A cast at anything else (a heal on itself) goes on.
+    [TestCase(true, true, true)] [TestCase(true, false, false)] [TestCase(false, true, false)]
+    public void The_kill_stops_a_cast_at_the_dead_target(bool casting, bool atDeadTarget, bool stops) =>
+        Assert.That(PlayerBotDriver.StopsCastAtKill(casting, atDeadTarget), Is.EqualTo(stops));
+
     // The fields PLAYER_BOT_DEATH appends after task= (its earlier fields stay as they were: runs/legcheck.py reads them),
     // then the names the bot avoided when it died (DEATHS.md A3), before this death's; then (#167 F4) again=, no kill
     // since its last release, sinceRelease=, the seconds since it (-1: none this login), and ill=, the resurrection

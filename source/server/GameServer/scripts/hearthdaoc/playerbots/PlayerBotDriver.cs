@@ -1197,7 +1197,8 @@ public static class PlayerBotDriver
 
     // Drops a target that died or is no longer fair game (one fighting the bot or its pet stays fair game whatever its
     // con, FightsBotOrPet). A death counts for the TALLY of the first bot to report it only, so bots sharing a camp sum
-    // to the DRIVER line's kills.
+    // to the DRIVER line's kills. #167 D13 R1b: a kill stops a cast still under way at the dead target (StopsCastAtKill),
+    // so the kill's buff scan runs before the rest.
     private static void SettleTarget(PlayerBotState state, GamePlayer player)
     {
         if (state.Target == null || IsValidTarget(player, state.Target, Cap(state, GameLoop.GameLoopTime)) ||
@@ -1212,6 +1213,10 @@ public static class PlayerBotDriver
             state.LastKillTick = GameLoop.GameLoopTime;
             state.RecoverBeforePull = true;                       // rest before the next pull (WantsRest)
             state.NextSelfBuffTick = 0;                           // #167 C9: the self-buffs first, before the rest
+            CastingComponent casting = player.castingComponent;   // #167 D13 R1b: and no cast at the dead target to wait
+            if (StopsCastAtKill(casting?.IsCasting == true,       //   out first (null-safe: the tests' players have no
+                    casting?.SpellHandler?.Target == state.Target))   //   casting component)
+                player.StopCurrentSpellcast();
             if (PlayerBotDriverReport.Kill(state.Target)) state.Kills++;
             if (state.TargetRespawnReach > 0)                     // #167 C7: rested out of (WalksToRestSpot)
                 RememberKill(state.RecentKills, state.TargetSpawn, state.TargetRespawnReach, GameLoop.GameLoopTime);
@@ -4482,13 +4487,16 @@ public static class PlayerBotDriver
     // does it, F1 then the spell, unless it is a Self spell, which ignores the target (SpellHandler.cs:411-416): a
     // self-target is in view (GamePlayer.cs:127-139), and a Group heal takes the caster with no group
     // (SpellHandler.cs:1807-1811). The request is read in the Casting phase later in this tick (CastingComponent.cs:116-144,
-    // SpellHandler.cs:403-406), so the target stays until the next think's Engage.
+    // SpellHandler.cs:403-406), so the target stays until the next think's Engage. #167 D13 R1a: a cast as it sits
+    // recovered ends the rest owed (RestOwedAfterCast), so the cast's cost doesn't sit it down again.
     private static bool CastOnSelf(PlayerBotState state, GamePlayer player, long now, Spell spell, SpellLine line, string why)
     {
         state.Mover.Stop(now);
+        bool recovered = Recovered(player);
+        state.RecoverBeforePull = RestOwedAfterCast(state.RecoverBeforePull, player.IsSitting, recovered);   // #167 D13 R1a
         if (player.IsSitting)
         {
-            EndRest(state, player, now, RestEndWhy(why, Recovered(player)));           // PLAYER_BOT_REST why= (#167)
+            EndRest(state, player, now, RestEndWhy(why, recovered));                   // PLAYER_BOT_REST why= (#167)
             player.Sit(false);
         }
         if (spell.Target is not eSpellTarget.SELF) player.TargetObject = player;
@@ -4530,6 +4538,20 @@ public static class PlayerBotDriver
     /// so a rest that ended recovered logged why=buff, every Skald's with its Song of Rest swapped back, and C9's
     /// mid-rest count reads why=buff).</summary>
     public static string RestEndWhy(string why, bool recovered) => recovered ? "recovered" : why;
+
+    /// <summary>Whether the rest after a kill is still owed after a cast on itself (#167 D13 R1a, CastOnSelf): not when the
+    /// bot casts as it sits recovered (the rest is done; Think clears RecoverBeforePull only after step 11b's casts, and a
+    /// Skald's chant swap, 5 endurance, SpellHandler.cs:1244-1250, took it under the 60% stop: 38 of st-deathsC's 84
+    /// re-sits straight after REST why=recovered). A standing cast keeps it owed (D3: a caster's login buffs, cast
+    /// standing, keep its login rest).</summary>
+    public static bool RestOwedAfterCast(bool recoverBeforePull, bool sitting, bool recovered) =>
+        recoverBeforePull && !(sitting && recovered);
+
+    /// <summary>Whether the kill stops the bot's cast (#167 D13 R1b, SettleTarget): one under way (casting) at the target
+    /// that just died (atDeadTarget). The kill's buff scan needs no cast under way (SelfBuffScanDue), so it waited; the
+    /// rest then stopped the cast and sat, and the buffs waited for the rest's end (BuffScanAllowed): 46 of st-deathsC's
+    /// 84 re-sits.</summary>
+    public static bool StopsCastAtKill(bool casting, bool atDeadTarget) => casting && atDeadTarget;
 
     // #167: PLAYER_BOT_REST once per rest, when it ends.
     private static void EndRest(PlayerBotState state, GamePlayer player, long now, string why)

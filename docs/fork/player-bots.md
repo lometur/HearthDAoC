@@ -107,12 +107,13 @@ Each bot thinks every 250 ms, a thin copy of the `/bot` pilot's think:
   damage add, stat buffs and regeneration buffs, and one chant that costs no power each pulse (so no resist chant: the
   Paladin's cost power each pulse): the first of those kinds, but from a kill to the end of its rest a regeneration
   chant for what it is short of, so a Skald sings its Song of Rest as it sits and its combat chant again once rested.
-  It looks every 5 s, and at once after a kill, before it sits, casting the missing
-  ones back to back; never while it sits, until its rest is done. It uses the buffs' real power, concentration and
-  recast; the server's own checks decide the rest. A buff under 2 minutes it no longer keeps up between fights: an
-  instant one (a Reaver's Surge) goes up in a hard fight instead, at the start of one against a yellow or harder
-  monster, or when a second monster comes on it; one with a cast time (a Spiritmaster's Benison) not at all yet, and a
-  regeneration one (a Shaman's Frigg's Cure) only while what it regenerates is short of where the rest stops.
+  It looks every 5 s, and at once after a kill, before it sits, casting the missing ones back to back (a cast still
+  under way at the monster it killed stops at the kill); never while it sits, until its rest is done, and a buff it
+  casts as it gets up rested doesn't sit it down again. It uses the buffs' real power, concentration and recast; the
+  server's own checks decide the rest. A buff under 2 minutes it no longer keeps up between fights: an instant one (a
+  Reaver's Surge) goes up in a hard fight instead, at the start of one against a yellow or harder monster, or when a
+  second monster comes on it; one with a cast time (a Spiritmaster's Benison) not at all yet, and a regeneration one
+  (a Shaman's Frigg's Cure) only while what it regenerates is short of where the rest stops.
 - It picks a monster with no aggressive neighbours, none within reach of the target, of its walk in, or of the spot
   it would fight from (its spell's range for a caster, else melee). After deaths it moves to an easier camp. It avoids
   what killed it for 15 minutes.
@@ -183,8 +184,7 @@ Playing:
     usually dies (10 of 13).
   - Walks don't look ahead for monsters on the route.
 - **Resting:** 49% of their time on `st-deathsC`. Rest per kill fell 2%; the share rose because they die less and
-  kill 5% more per hour. Most of it is the real cost of player regeneration. A buff cast as a bot recovers makes it sit
-  again (84 times), and a Skald stands and sits again within a second (38).
+  kill 5% more per hour. Most of it is the real cost of player regeneration.
 - **Not done at all:** they don't group, buff others, take part in RvR or battlegrounds, stealth, use realm abilities
   or ride horses (#152, #167).
 - **Ranged and songs:** they can't shoot or play. Archers fight in melee, and Bards and Minstrels have no songs: theirs
