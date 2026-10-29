@@ -1205,7 +1205,7 @@ public sealed class UT_PlayerBotDriver
             LastWalk = PlayerBotWalk.Rest, FightWalk = PlayerBotWalk.Hunt, FightHeldMs = 3_000, FightCtlLanded = 2,
             FightCtlFailed = 1, FightHpAtReach = 50, FightTargetHpAtReach = 40, WouldBreakHp = 30,
             PendingControl = (Control(500, "root", "SpeedDecrease", 10, 99), Player(null), 8_000), FightBuffHitters = 2,
-            FightDots = 2 };
+            FightDots = 2, FightKillingQuickcast = true };
         Assert.That(PlayerBotDriver.OpenFight(state, 10_000, 90, 60, 1_420, 100), Is.True, "the first fight since a release");
         Assert.That((state.BackPending, state.KilledWithAdds, state.ControlTries, state.FightCasts, state.FightAdd),
             Is.EqualTo((false, false, 0, 0, (-1, -1))));
@@ -1220,6 +1220,7 @@ public sealed class UT_PlayerBotDriver
             -1, -1, -1, (Spell)null)), "st-deathsD's fields afresh; walk=: the last think's walk");
         Assert.That(state.FightBuffHitters, Is.Zero, "#167 D12: no monster on the bot before the fight's first think");
         Assert.That(state.FightDots, Is.Zero, "#167 E C1: dots= afresh");
+        Assert.That(state.FightKillingQuickcast, Is.False, "#167 E C2b: qcKill= afresh");
         Assert.That(PlayerBotDriver.OpenFight(state, 30_000, 90, 60, 1_420, 100), Is.False, "the next one");
     }
 
@@ -3584,11 +3585,24 @@ public sealed class UT_PlayerBotDriver
             Is.EqualTo(factor).Within(1e-9));
 
     // The reserve: the cheapest known control's cost while the target isn't held, else none (one root stays for the
-    // escape).
-    [TestCase(new[] { 20, 12 }, false, 12)] [TestCase(new[] { 20, 12 }, true, 0)] [TestCase(new int[0], false, 0)]
+    // escape). #167 E C2b: none for the killing quickcast.
+    [TestCase(new[] { 20, 12 }, false, false, 12)] [TestCase(new[] { 20, 12 }, true, false, 0)]
+    [TestCase(new int[0], false, false, 0)] [TestCase(new[] { 20, 12 }, false, true, 0)]
     public void A_caster_keeps_its_cheapest_control_in_reserve_while_its_target_is_free(int[] costs, bool held,
-        int reserve) =>
-        Assert.That(PlayerBotDriver.ControlReserve(costs, held), Is.EqualTo(reserve));
+        bool killingQuickcast, int reserve) =>
+        Assert.That(PlayerBotDriver.ControlReserve(costs, held, killingQuickcast), Is.EqualTo(reserve));
+
+    // #167 E C2b: the killing quickcast keeps no control in reserve, so a dry Mentalist (7 of 300 power, Aurora Ray 26, the
+    // reserve Prismatic Shimmer's 16) casts it: the server checks only power left under Quickcast.
+    [Test]
+    public void A_dry_caster_quickcasts_its_killing_nuke_with_no_reserve()
+    {
+        Assert.That(PlayerBotDriver.CasterCanCast(300, 7, 26,
+            PlayerBotDriver.ControlReserve(new[] { 16 }, held: false, killingQuickcast: true), 1.0, true, 2_600), Is.True);
+        Assert.That(PlayerBotDriver.CasterCanCast(300, 7, 26,
+            PlayerBotDriver.ControlReserve(new[] { 16 }, held: false, killingQuickcast: false), 1.0, true, 2_600), Is.False,
+            "the reserve kept");
+    }
 
     // The cast gate by role: a caster's is its cost (CasterCanCast), every other role keeps 18% (ShouldCast's rows hold
     // for them), and the cast watch blocks either.
@@ -4147,21 +4161,27 @@ public sealed class UT_PlayerBotDriver
     // CasterStep's killsFirst as it reads it (the review of 9aacd69: forced false there, no test failed): the nukes the
     // fight's casts say the target needs land before contact, the bot at 60% health or more and one monster at most on it.
     // #167 E C2a: the Quickcast already on counts as the ready one did (once on, QuickcastReady is false and the killing
-    // nuke lost it to the control).
-    [TestCase(100, 65, 1, 6_100L, 3_000, true, false, (byte)100, 1, true)]
-    [TestCase(100, 65, 1, 6_100L, 3_000, false, false, (byte)100, 1, false)]                 // no Quickcast: 1 lands
-    [TestCase(100, 65, 1, 6_100L, 3_000, true, false, (byte)59, 1, false)]                   // under 60%
-    [TestCase(100, 65, 1, 6_100L, 3_000, true, false, (byte)60, 1, true)]
-    [TestCase(100, 65, 1, 6_100L, 3_000, true, false, (byte)100, 2, false)]                  // an add on it
-    [TestCase(100, 100, 0, 60_000L, 3_000, true, false, (byte)100, 0, false)]                // nothing measured
-    [TestCase(100, 65, 1, 6_100L, 3_000, false, true, (byte)100, 1, true)]                   // E C2a: Quickcast on
-    [TestCase(100, 8, 5, 0L, 2_600, false, true, (byte)100, 1, true)]                        // E C2a: on, in melee
-    [TestCase(100, 8, 5, 0L, 2_600, false, false, (byte)100, 1, false)]                      // in melee, none: no nuke lands
+    // nuke lost it to the control). #167 E C2b: at any health when one nuke kills (oneNukeKills: the chosen nuke's hit
+    // at the variance minimum, less the resist, at least the target's health less its own DoTs' ticks due; E2's 13 died
+    // with the target on 2-15%), not NukesNeeded's 1, which a bolt or a landed DoT over-reads.
+    [TestCase(100, 65, 1, 6_100L, 3_000, true, false, false, (byte)100, 1, true)]
+    [TestCase(100, 65, 1, 6_100L, 3_000, false, false, false, (byte)100, 1, false)]          // no Quickcast: 1 lands
+    [TestCase(100, 65, 1, 6_100L, 3_000, true, false, false, (byte)59, 1, false)]            // under 60%
+    [TestCase(100, 65, 1, 6_100L, 3_000, true, false, false, (byte)60, 1, true)]
+    [TestCase(100, 65, 1, 6_100L, 3_000, true, false, false, (byte)100, 2, false)]           // an add on it
+    [TestCase(100, 100, 0, 60_000L, 3_000, true, false, false, (byte)100, 0, false)]         // nothing measured
+    [TestCase(100, 65, 1, 6_100L, 3_000, false, true, false, (byte)100, 1, true)]            // E C2a: Quickcast on
+    [TestCase(100, 8, 5, 0L, 2_600, false, true, false, (byte)100, 1, true)]                 // E C2a: on, in melee
+    [TestCase(100, 8, 5, 0L, 2_600, false, false, false, (byte)100, 1, false)]               // in melee, none: no nuke lands
+    [TestCase(100, 8, 5, 0L, 2_600, true, false, true, (byte)30, 1, true)]                   // E C2b: one kills, at 30%
+    [TestCase(100, 8, 5, 0L, 2_600, false, true, true, (byte)30, 1, true)]                   // E C2b: and Quickcast on
+    [TestCase(100, 8, 5, 0L, 2_600, true, false, false, (byte)30, 1, false)]                 // E C2b: its hit falls short
+    [TestCase(100, 8, 5, 0L, 2_600, true, false, true, (byte)30, 2, false)]                  // E C2b: an add on it
     public void A_caster_skips_its_control_when_its_nukes_kill_first_healthy_and_alone(int engageHealth, int health,
-        int casts, long contactMs, int nukeCastMs, bool quickcastReady, bool quickcastOn, byte botHealth, int attackers,
-        bool killsFirst) =>
+        int casts, long contactMs, int nukeCastMs, bool quickcastReady, bool quickcastOn, bool oneNukeKills, byte botHealth,
+        int attackers, bool killsFirst) =>
         Assert.That(PlayerBotDriver.KillsFirstNow(engageHealth, health, casts, contactMs, nukeCastMs, quickcastReady,
-            quickcastOn, botHealth, attackers), Is.EqualTo(killsFirst));
+            quickcastOn, oneNukeKills, botHealth, attackers), Is.EqualTo(killsFirst));
 
     // #167 E C2a, Correction 3: the killing nuke's two thinks. In melee and hit, Quickcast ready: the nuke, and
     // CombatAction turns Quickcast on. Next think, Quickcast on (not ready, not interrupted under it): still the nuke, not
@@ -4169,16 +4189,47 @@ public sealed class UT_PlayerBotDriver
     [Test]
     public void The_killing_nuke_keeps_the_quickcast_it_turned_on()
     {
-        bool first = PlayerBotDriver.KillsFirstNow(100, 8, 5, 0L, 2_600, true, false, (byte)100, 1);
+        bool first = PlayerBotDriver.KillsFirstNow(100, 8, 5, 0L, 2_600, true, false, false, (byte)100, 1);
         Assert.That(PlayerBotDriver.CasterAction(true, 0, false, false, 2_500, 2_600, true, true, false, first),
             Is.EqualTo(PlayerBotCasterAction.Nuke));
         Assert.That(PlayerBotDriver.CombatAction(true, true, 0, true, true, due: true, heldBreaksOnHit: false),
             Is.EqualTo(PlayerBotCombatAction.Quickcast));
         bool ready = PlayerBotDriver.QuickcastReady(true, quickcastOn: true, 0, 0, false, 1_000);
-        bool second = PlayerBotDriver.KillsFirstNow(100, 8, 5, 0L, 2_600, ready, quickcastOn: true, (byte)100, 1);
+        bool second = PlayerBotDriver.KillsFirstNow(100, 8, 5, 0L, 2_600, ready, quickcastOn: true, false, (byte)100, 1);
         Assert.That(PlayerBotDriver.CasterAction(true, 0, false, false, 2_500, 2_600, false, ready, true, second),
             Is.EqualTo(PlayerBotCasterAction.Nuke), "before: Control, the Quickcast to the control");
     }
+
+    // #167 E C2b: a caster at 30% in melee, its target on 8%: the nuke's hit at the variance minimum kills it, so the
+    // killing nuke goes first (and keeps its Quickcast) where the 60% gate gave the Quickcast to the control.
+    [Test]
+    public void The_killing_nuke_goes_first_at_any_health_when_one_nuke_kills()
+    {
+        bool Kills(bool oneNukeKills) => PlayerBotDriver.KillsFirstNow(100, 8, 5, 0L, 2_600, true, false, oneNukeKills,
+            (byte)30, 1);
+        Assert.That(PlayerBotDriver.CasterAction(true, 0, false, false, 2_500, 2_600, true, true, false, Kills(true)),
+            Is.EqualTo(PlayerBotCasterAction.Nuke));
+        Assert.That(PlayerBotDriver.CasterAction(true, 0, false, false, 2_500, 2_600, true, true, false, Kills(false)),
+            Is.EqualTo(PlayerBotCasterAction.QcControl), "its hit falls short: the control, as before");
+    }
+
+    // #167 E C2b: one nuke kills when its hit at the variance minimum, less the resist, is at least the target's health
+    // less its own DoTs' ticks still due. Aurora Ray at Light 3 on a level-41 monster: 148 x 0.3104, 45.9.
+    [TestCase(40, 0.0, 0, true)] [TestCase(50, 0.0, 0, false)] [TestCase(50, 12.0, 0, true)] [TestCase(40, 0.0, 20, false)]
+    [TestCase(45, 0.0, 0, true)]
+    public void One_nuke_kills_by_its_lowest_hit_less_the_resist(int health, double pendingDot, int resist, bool kills) =>
+        Assert.That(PlayerBotDriver.OneNukeKills(PlayerBotDriver.ExpectedHit(148, 0.3104, 0.3104, resist, false, 0), health,
+            pendingDot), Is.EqualTo(kills));
+
+    // #167 E C2b: the killing quickcast: a caster in a fight whose chosen nuke kills at once (oneNukeKills), one monster at
+    // most on it (the review), and the cast under Quickcast (on, or ready with hits interrupting it: due).
+    [TestCase(true, true, true, false, 1, true)] [TestCase(true, true, false, true, 1, true)]
+    [TestCase(true, false, true, false, 1, false)] [TestCase(false, true, true, false, 1, false)]
+    [TestCase(true, true, false, false, 1, false)] [TestCase(true, true, true, false, 2, false)]
+    [TestCase(true, true, true, false, 0, true)]
+    public void The_killing_quickcast_is_one_killing_nuke_under_quickcast(bool caster, bool oneNukeKills, bool on, bool due,
+        int attackers, bool killing) =>
+        Assert.That(PlayerBotDriver.KillingQuickcast(caster, oneNukeKills, on, due, attackers), Is.EqualTo(killing));
 
     // #167 D11: a GREEN gets a control only as the escape. 143 of st-deathsC's 347 GREEN wins had a control, 22.1 s and 40.9
     // power each against 7.9 s and 19.2 without one, and 106 of the 143 spent Quickcast. A control on the target is worth
@@ -4585,17 +4636,22 @@ public sealed class UT_PlayerBotDriver
 
     // The review's seams for Nuke's composition (a wiring slip there failed no test): the ready filter and the scored
     // choice with KeepsRootCastable applied. Ready: off its recast and paid for; a scored DoT only where it fits and none
-    // it conflicts with is on the target; unscored (every other role, the pull's stop), as before.
-    [TestCase(true, true, false, true, false, true, true)]                  // unscored: as before
-    [TestCase(true, true, true, false, false, true, true)]                  // a direct hit: no DoT test
-    [TestCase(true, true, true, true, true, false, true)]
-    [TestCase(true, true, true, true, false, false, false)]                 // a root caster's control wanted
-    [TestCase(true, true, true, true, true, true, false)]                   // its own or a conflicting DoT on it
-    [TestCase(false, true, true, false, true, false, false)]                // on its recast
-    [TestCase(true, false, true, false, true, false, false)]                // not paid for
-    public void A_nuke_is_ready_off_its_recast_paid_for_and_a_dot_only_where_it_fits(bool offRecast, bool paid, bool scored,
-        bool dot, bool dotFits, bool dotConflict, bool ready) =>
-        Assert.That(PlayerBotDriver.NukeReady(offRecast, paid, scored, dot, dotFits, dotConflict), Is.EqualTo(ready));
+    // it conflicts with is on the target; unscored (every other role, the pull's stop), as before. #167 E C2b: under the
+    // killing quickcast a nuke it has any power for (the server checks only power left under Quickcast).
+    [TestCase(true, true, false, 100, false, true, false, true, true)]      // unscored: as before
+    [TestCase(true, true, false, 100, true, false, false, true, true)]      // a direct hit: no DoT test
+    [TestCase(true, true, false, 100, true, true, true, false, true)]
+    [TestCase(true, true, false, 100, true, true, false, false, false)]     // a root caster's control wanted
+    [TestCase(true, true, false, 100, true, true, true, true, false)]       // its own or a conflicting DoT on it
+    [TestCase(false, true, false, 100, true, false, true, false, false)]    // on its recast
+    [TestCase(true, false, false, 100, true, false, true, false, false)]    // not paid for
+    [TestCase(true, false, true, 7, true, false, true, false, true)]        // E C2b: the killing quickcast, 7 power left
+    [TestCase(true, false, true, 0, true, false, true, false, false)]       //   but none
+    [TestCase(false, false, true, 7, true, false, true, false, false)]       //   on its recast
+    public void A_nuke_is_ready_off_its_recast_paid_for_and_a_dot_only_where_it_fits(bool offRecast, bool paid,
+        bool killingQuickcast, int mana, bool scored, bool dot, bool dotFits, bool dotConflict, bool ready) =>
+        Assert.That(PlayerBotDriver.NukeReady(offRecast, paid, killingQuickcast, mana, scored, dot, dotFits, dotConflict),
+            Is.EqualTo(ready));
 
     [Test]
     public void A_scored_nuke_keeps_a_root_casters_root_castable()
@@ -5286,7 +5342,8 @@ public sealed class UT_PlayerBotDriver
     // that held or not (ControlLanded), hpAtReach= and tHpAtReach=, its and its target's health at the first hit on it
     // (-1: none), rate=, the health it lost a second over the last 3 s (HealthRate; a gain is negative), wouldBreak=, its
     // health when the projected break-off would have fired (ProjectedBreak; -1: never), and walk=, the walk on the think
-    // before the fight's first; then (#167 D8) kiteNone=, and (#167 E C1) dots=, its damage-over-time casts.
+    // before the fight's first; then (#167 D8) kiteNone=, (#167 E C1) dots=, its damage-over-time casts, and (#167 E
+    // C2b) qcKill=, 1 when a cast went under Quickcast as the killing nuke.
     [Test]
     public void FightFormat()
     {
@@ -5294,19 +5351,19 @@ public sealed class UT_PlayerBotDriver
                 true, 100, 38, 100, 12, 21, 1, 9, 2, 4, 0, 0, Pet: true, Heals: 2, Quickcast: true, Buffs: 3, PetCasts: 2, Waits: 5,
                 Controls: 2, Kites: 1, CtlBroken: 1, AddControls: 1, AddAt: 6, AddHp: 71, BreakOff: true, EngageDistance: 1_450,
                 Crowd: 1, HeldSeconds: 7, CtlLanded: 1, CtlFailed: 1, HpAtReach: 92, TargetHpAtReach: 64, Rate: 4.26, WouldBreak: 38,
-                Walk: PlayerBotWalk.Hunt, KiteNone: (1, 0, 2, 3), Dots: 2)),
+                Walk: PlayerBotWalk.Hunt, KiteNone: (1, 0, 2, 3), Dots: 2, KillingQuickcast: true)),
             Is.EqualTo("PLAYER_BOT_FIGHT bot=Pbotaaaac level=40 target=\"widow claw\" targetLevel=40 con=YELLOW from=pull result=kill " +
                        "startHp=100 endHp=38 startMana=100 endMana=12 sec=21 adds=1 swings=9 notVisible=2 casts=4 lifeKills=0 rests=0 " +
                        "pet=alive heals=2 qc=1 buffs=3 petCasts=2 waits=5 ctl=2 kites=1 ctlBroken=1 addCtl=1 addAt=6 addHp=71 " +
                        "breakOff=1 engageDist=1450 crowd=1 heldSec=7 ctlLanded=1 ctlFailed=1 hpAtReach=92 tHpAtReach=64 rate=4.3 " +
-                       "wouldBreak=38 walk=hunt kiteNone=1:0:2:3 dots=2"));
+                       "wouldBreak=38 walk=hunt kiteNone=1:0:2:3 dots=2 qcKill=1"));
         Assert.That(PlayerBotDriverReport.FormatFight(new PlayerBotFight("Pbothaaab", 43, "empyrean guardian", 36, ConColor.BLUE, true,
                 false, 64, 51, 100, 100, 7, 2, 3, 0, 0, 3, 1, Rate: -0.04, Walk: PlayerBotWalk.BreakOff)),
             Is.EqualTo("PLAYER_BOT_FIGHT bot=Pbothaaab level=43 target=\"empyrean guardian\" targetLevel=36 con=BLUE from=defence " +
                        "result=dropped startHp=64 endHp=51 startMana=100 endMana=100 sec=7 adds=2 swings=3 notVisible=0 casts=0 " +
                        "lifeKills=3 rests=1 pet=none heals=0 qc=0 buffs=0 petCasts=0 waits=0 ctl=0 kites=0 ctlBroken=0 addCtl=0 " +
                        "addAt=-1 addHp=-1 breakOff=0 engageDist=-1 crowd=-1 heldSec=0 ctlLanded=0 ctlFailed=0 hpAtReach=-1 " +
-                       "tHpAtReach=-1 rate=0.0 wouldBreak=-1 walk=breakoff kiteNone=0:0:0:0 dots=0"),
+                       "tHpAtReach=-1 rate=0.0 wouldBreak=-1 walk=breakoff kiteNone=0:0:0:0 dots=0 qcKill=0"),
             "a gain under 0.05 a second: 0.0, not -0.0");
     }
 
@@ -5373,7 +5430,7 @@ public sealed class UT_PlayerBotDriver
     // then FIGHT's addAt=, addHp= and engageDist= (-1 out of a fight too) and breakOff=, a death on a break-off's run;
     // then (st-deathsD's) FIGHT's heldSec=, ctlLanded=, ctlFailed=, hpAtReach=, tHpAtReach= and wouldBreak= (-1 out of a
     // fight), rate= at the death, walk=, the fight's (FIGHT's) or, out of a fight, the last think's alive, and end=, the
-    // endurance; then (#167 D8) FIGHT's kiteNone= and (#167 E C1) dots= (-1 out of a fight).
+    // endurance; then (#167 D8) FIGHT's kiteNone=, (#167 E C1) dots= and (#167 E C2b) qcKill= (-1 out of a fight).
     [Test]
     public void DeathDetailFormat()
     {
@@ -5381,12 +5438,12 @@ public sealed class UT_PlayerBotDriver
                 2, 3, 0, 40, 100, 6, 1, "widow claw", 40, true, 748, Avoided: 2, Again: true, SinceRelease: 42, Ill: true,
                 Controls: 2, Kites: 1, Casts: 4, Quickcast: 1, Waits: 3, CtlBroken: 1, AddControls: 1, AddAt: 6, AddHp: 71,
                 EngageDistance: 1_450, HeldSeconds: 5, CtlLanded: 1, CtlFailed: 0, HpAtReach: 88, TargetHpAtReach: 90, Rate: 12.5,
-                WouldBreak: 52, Walk: PlayerBotWalk.Anchor, Endurance: 64, KiteNone: (0, 2, 1, 0), Dots: 1)),
+                WouldBreak: 52, Walk: PlayerBotWalk.Anchor, Endurance: 64, KiteNone: (0, 2, 1, 0), Dots: 1, KillingQuickcast: 1)),
             Is.EqualTo("activity=Fighting startHp=62 fightSec=14 targetHp=71 from=pull adds=2 lifeKills=3 rests=0 sinceKillSec=40 " +
                        "mana=100 swings=6 notVisible=1 killer=\"widow claw\" killerLevel=40 killerIsTarget=True fromBind=748 " +
                        "avoided=2 again=True sinceRelease=42 ill=True ctl=2 kites=1 casts=4 qc=1 waits=3 ctlBroken=1 addCtl=1 " +
                        "addAt=6 addHp=71 breakOff=0 engageDist=1450 heldSec=5 ctlLanded=1 ctlFailed=0 hpAtReach=88 tHpAtReach=90 " +
-                       "rate=12.5 wouldBreak=52 walk=anchor end=64 kiteNone=0:2:1:0 dots=1"));
+                       "rate=12.5 wouldBreak=52 walk=anchor end=64 kiteNone=0:2:1:0 dots=1 qcKill=1"));
         // Out of a fight, no target, no kill this life, no killer named by the Dying event, the bind in another region.
         Assert.That(PlayerBotDriverReport.FormatDeathDetail(new PlayerBotDeathDetail(PlayerBotActivity.Hunting, -1, -1, -1, true,
                 -1, 0, 2, -1, 37, -1, -1, null, 0, false, -1, BreakOff: true, Rate: 3, Walk: PlayerBotWalk.Clear, Endurance: 100)),
@@ -5394,7 +5451,7 @@ public sealed class UT_PlayerBotDriver
                        "mana=37 swings=-1 notVisible=-1 killer=\"\" killerLevel=0 killerIsTarget=False fromBind=-1 avoided=0 " +
                        "again=False sinceRelease=-1 ill=False ctl=-1 kites=-1 casts=-1 qc=-1 waits=-1 ctlBroken=-1 addCtl=-1 " +
                        "addAt=-1 addHp=-1 breakOff=1 engageDist=-1 heldSec=-1 ctlLanded=-1 ctlFailed=-1 hpAtReach=-1 tHpAtReach=-1 " +
-                       "rate=3.0 wouldBreak=-1 walk=clear end=100 kiteNone=-1:-1:-1:-1 dots=-1"),
+                       "rate=3.0 wouldBreak=-1 walk=clear end=100 kiteNone=-1:-1:-1:-1 dots=-1 qcKill=-1"),
             "died on a break-off's run: out of a fight (the dropped one's FIGHT has it)");
     }
 
@@ -5430,7 +5487,7 @@ public sealed class UT_PlayerBotDriver
             "targetHp=71 from=pull adds=2 lifeKills=3 rests=0 sinceKillSec=40 mana=100 swings=6 notVisible=1 killer=\"widow claw\" " +
             "killerLevel=40 killerIsTarget=True fromBind=748 avoided=0 again=False sinceRelease=-1 ill=False ctl=-1 kites=-1 casts=-1 " +
             "qc=-1 waits=-1 ctlBroken=-1 addCtl=-1 addAt=-1 addHp=-1 breakOff=0 engageDist=-1 heldSec=-1 ctlLanded=-1 ctlFailed=-1 " +
-            "hpAtReach=-1 tHpAtReach=-1 rate=0.0 wouldBreak=-1 walk=none end=-1 kiteNone=-1:-1:-1:-1 dots=-1"));
+            "hpAtReach=-1 tHpAtReach=-1 rate=0.0 wouldBreak=-1 walk=none end=-1 kiteNone=-1:-1:-1:-1 dots=-1 qcKill=-1"));
         Assert.That(PlayerBotDriver.DeathLine(head, detail, add, target),
             Does.Contain(" killer=\"a wolf\" killerLevel=38 killerIsTarget=False fromBind=748 avoided=0 again=False sinceRelease=-1 ill=False "));
         Assert.That(PlayerBotDriver.DeathLine(head, detail, null, null),

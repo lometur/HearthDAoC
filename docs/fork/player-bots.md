@@ -75,27 +75,29 @@ Each bot thinks every 250 ms, a thin copy of the `/bot` pilot's think:
   nuke and a control spell after it. Then it stuns, roots or mezzes it, in that order of choice, if the cast ends
   before the monster reaches it. In melee it uses Quickcast for the control spell. It skips the control while its
   nukes kill the monster before it arrives, at the rate the fight's nukes have taken its health so far (one nuke more
-  with Quickcast ready or on, which goes to that nuke), if it has 60% health or more and no other monster on it. A
-  green monster gets no control at all while the caster has 60% health or more and no other monster on it: it nukes it
-  down, and keeps its power and Quickcast. A rooted or mezzed monster near it would break free at the next nuke, so it
-  first steps back to range, on a spot clear of other aggressive monsters, within its spell's range; so it does from a
-  stunned one while hits interrupt it. It tries each such spot in turn (straight away, then turned 30, 60 and 90
-  degrees either way), and one the navmesh puts too far above or below the target it tries once nearer in; in melee,
-  if none works, it steps back 400 units straight away anyway, and never to a spot nearer the target than it stands.
-  While its target is held it keeps its spell's range, even with hits blocking its spells or too little power (then
-  its longest damage spell's range), and it never swings at a rooted or mezzed monster (its hit, or a miss, would free
-  it): it waits instead. Not while another monster that isn't held hits it, and not for 5 s after a blocked step back:
-  then it fights as before. Only single-target spells the bot has, that the monster isn't immune to by the server's
-  own rules: a monster stunned or mezzed in the last minute takes the next one for half the time, then a quarter, and
-  none under 1 s; and no root on a monster a slow holds that the root doesn't beat (the server refuses it: a
-  damage-and-snare nuke's slow carries damage no root has), so it casts its next control, or none. A mez on its
-  target only as the last escape, the monster about to reach it, and only on a monster above 75% health. It puts no root
-  or mez on a monster its own damage-over-time spell is ticking on (the next tick would free it), and for the break-off
-  such a monster has no hold ready; so a root caster that put one on a green monster has no root for it for the spell's
-  20-24 s should the fight turn (the caster under 60% health, or an add). It casts its damage spell while it can pay
-  that spell's cost as the server charges it (a focus caster 80-120% by its focus, double under Quickcast), keeping the
-  cheapest of its controls' cost in hand while its target isn't held; with none to keep, a Quickcast spell goes at any
-  power, as the server lets it. Every other class stops casting under 18% power.
+  with Quickcast ready or on, which goes to that nuke), if it has 60% health or more or its next nuke kills the monster
+  even at that spell's lowest damage, and no other monster on it. A green monster gets no control at all while the
+  caster has 60% health or more and no other monster on it: it nukes it down, and keeps its power and Quickcast. A
+  rooted or mezzed monster near it would break free at the next nuke, so it first steps back to range, on a spot clear
+  of other aggressive monsters, within its spell's range; so it does from a stunned one while hits interrupt it. It
+  tries each such spot in turn (straight away, then turned 30, 60 and 90 degrees either way), and one the navmesh puts
+  too far above or below the target it tries once nearer in; in melee, if none works, it steps back 400 units straight
+  away anyway, and never to a spot nearer the target than it stands. While its target is held it keeps its spell's
+  range, even with hits blocking its spells or too little power (then its longest damage spell's range), and it never
+  swings at a rooted or mezzed monster (its hit, or a miss, would free it): it waits instead. Not while another monster
+  that isn't held hits it, and not for 5 s after a blocked step back: then it fights as before. Only single-target
+  spells the bot has, that the monster isn't immune to by the server's own rules: a monster stunned or mezzed in the
+  last minute takes the next one for half the time, then a quarter, and none under 1 s; and no root on a monster a slow
+  holds that the root doesn't beat (the server refuses it: a damage-and-snare nuke's slow carries damage no root has),
+  so it casts its next control, or none. A mez on its target only as the last escape, the monster about to reach it, and
+  only on a monster above 75% health. It puts no root or mez on a monster its own damage-over-time spell is ticking on
+  (the next tick would free it), and for the break-off such a monster has no hold ready; so a root caster that put one
+  on a green monster has no root for it for the spell's 20-24 s should the fight turn (the caster under 60% health, or
+  an add). It casts its damage spell while it can pay that spell's cost as the server charges it (a focus caster 80-120%
+  by its focus, double under Quickcast), keeping the cheapest of its controls' cost in hand while its target isn't held;
+  with none to keep, a Quickcast spell goes at any power, as the server lets it. Its killing nuke under Quickcast (that
+  nuke kills at its lowest damage, no other monster on it) keeps nothing in hand and goes with any power left. Every
+  other class stops casting under 18% power.
 - Any bot with a control spell (casters, healers, pet classes, a Skald or a Minstrel) also controls an add: the
   nearest other monster coming at it or hitting it that isn't held. A mez first, then a root, then a stun; no mez from
   a pet class (its pet would hit the add and free it), and no root on an add already in melee (it still hits from
@@ -435,14 +437,15 @@ All start `PLAYER_BOT_`:
   (endurance). Both then give `kiteNone=range:clear:mesh:fit`, the fight's steps back that found no point, by why:
   `range` (the bot already stood at its spell's reach), `clear` (no point out of the other monsters' reach), `mesh`
   (none on the navmesh) or `fit` (none within the stop once on the navmesh's height); -1 each out of a fight.
-  Then `dots=`, its damage-over-time casts (-1 out of a fight). `BLOCKED`'s `walk=` is `target`, `roam`, `clear` (the
-  step out after a release), `walkout`, `rest`, `kite`, `turret` or `breakoff`. `RELOCATE` after a death (`reason=died`)
-  ends with `sinceRelease=`, the milliseconds since the release; after a break-off its `reason=` is `brokeoff`. Either
-  ends with `barred=old` when the death or the break-off came on the walk to the camp it had, which the plan then leaves
-  out. Any `RELOCATE` then ends with `capKill=`, the lowest con that killed the bot in the last 5 minutes, yellow or
-  harder (a blue or green killer logs none), while there is one. Then `recent=1` on a plan made within 15 minutes of a
-  death (a died, break-off or capped one), and `near=1` when the camp came from its near pass (within 10,000 units of
-  where the bot stood). A break-off drops its fight (`FIGHT result=dropped`);
+  Then `dots=`, its damage-over-time casts, and `qcKill=`, 1 when a cast went under Quickcast as the killing nuke (-1
+  each out of a fight). `BLOCKED`'s `walk=` is `target`, `roam`, `clear` (the step out after a release), `walkout`,
+  `rest`, `kite`, `turret` or `breakoff`. `RELOCATE` after a death (`reason=died`) ends with `sinceRelease=`, the
+  milliseconds since the release; after a break-off its `reason=` is `brokeoff`. Either ends with `barred=old` when the
+  death or the break-off came on the walk to the camp it had, which the plan then leaves out. Any `RELOCATE` then ends
+  with `capKill=`, the lowest con that killed the bot in the last 5 minutes, yellow or harder (a blue or green killer
+  logs none), while there is one. Then `recent=1` on a plan made within 15 minutes of a death (a died, break-off or
+  capped one), and `near=1` when the camp came from its near pass (within 10,000 units of where the bot stood). A
+  break-off drops its fight (`FIGHT result=dropped`);
 - `BREAKOFF`: one per break-off, when it ends: the bot's `hp=`, `end=` (endurance) and `attackers=` when it broke off,
   `sec=`, the seconds it ran, and `outcome=`: `shook` (none still after it, or from 30 s none within 1,500 units),
   `fought` (still chased after 45 s, caught with no control to cast, or nowhere to run) or `died`; then `rate=`, the
