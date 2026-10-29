@@ -5672,13 +5672,13 @@ public sealed class UT_PlayerBotDriver
                 Controls: 2, Kites: 1, CtlBroken: 1, AddControls: 1, AddAt: 6, AddHp: 71, BreakOff: true, EngageDistance: 1_450,
                 Crowd: 1, HeldSeconds: 7, CtlLanded: 1, CtlFailed: 1, HpAtReach: 92, TargetHpAtReach: 64, Rate: 4.26, WouldBreak: 38,
                 Walk: PlayerBotWalk.Hunt, KiteNone: (1, 0, 2, 3), Dots: 2, KillingQuickcast: true, TargetMezzes: 1,
-                RaceLeft: 22, EndStart: 85, End: 31, StylesHeld: 3, CastsHeld: 2)),
+                RaceLeft: 22, EndStart: 85, End: 31, StylesHeld: 3, CastsHeld: 2, Sight: 4, Blind: true)),
             Is.EqualTo("PLAYER_BOT_FIGHT bot=Pbotaaaac level=40 target=\"widow claw\" targetLevel=40 con=YELLOW from=pull result=kill " +
                        "startHp=100 endHp=38 startMana=100 endMana=12 sec=21 adds=1 swings=9 notVisible=2 casts=4 lifeKills=0 rests=0 " +
                        "pet=alive heals=2 qc=1 buffs=3 petCasts=2 waits=5 ctl=2 kites=1 ctlBroken=1 addCtl=1 addAt=6 addHp=71 " +
                        "breakOff=1 engageDist=1450 crowd=1 heldSec=7 ctlLanded=1 ctlFailed=1 hpAtReach=92 tHpAtReach=64 rate=4.3 " +
                        "wouldBreak=38 walk=hunt kiteNone=1:0:2:3 dots=2 qcKill=1 ctlMez=1 raceLeft=22 endStart=85 end=31 " +
-                       "styleHeld=3 castHeld=2"));
+                       "styleHeld=3 castHeld=2 sight=4 blind=1"));
         Assert.That(PlayerBotDriverReport.FormatFight(new PlayerBotFight("Pbothaaab", 43, "empyrean guardian", 36, ConColor.BLUE, true,
                 false, 64, 51, 100, 100, 7, 2, 3, 0, 0, 3, 1, Rate: -0.04, Walk: PlayerBotWalk.BreakOff)),
             Is.EqualTo("PLAYER_BOT_FIGHT bot=Pbothaaab level=43 target=\"empyrean guardian\" targetLevel=36 con=BLUE from=defence " +
@@ -5686,8 +5686,60 @@ public sealed class UT_PlayerBotDriver
                        "lifeKills=3 rests=1 pet=none heals=0 qc=0 buffs=0 petCasts=0 waits=0 ctl=0 kites=0 ctlBroken=0 addCtl=0 " +
                        "addAt=-1 addHp=-1 breakOff=0 engageDist=-1 crowd=-1 heldSec=0 ctlLanded=0 ctlFailed=0 hpAtReach=-1 " +
                        "tHpAtReach=-1 rate=0.0 wouldBreak=-1 walk=breakoff kiteNone=0:0:0:0 dots=0 qcKill=0 ctlMez=0 " +
-                       "raceLeft=-999 endStart=-1 end=-1 styleHeld=0 castHeld=0"),
+                       "raceLeft=-999 endStart=-1 end=-1 styleHeld=0 castHeld=0 sight=0 blind=0"),
             "a gain under 0.05 a second: 0.0, not -0.0");
+    }
+
+    // #167 E M2: a swing needs sight (AttackComponent.cs:1062-1070). The navmesh's 2D ray, or with none its target hitting
+    // the bot in contact (within CaughtReach, 250): a client in contact sees what hits it. Not at range: a ranged monster
+    // casting at a ranged bot from behind a wall is no sight (the review). st-deathsD2/D2b: 5 deaths in fights with half
+    // the swings or more refused for sight (98 of 111, 344 of 345), every killer the bot's own target in contact.
+    [TestCase(true, 1_000, false, true)]
+    [TestCase(false, 150, true, true)]
+    [TestCase(false, 250, true, true)]
+    [TestCase(false, 251, true, false)]
+    [TestCase(false, 150, false, false)]
+    [TestCase(false, 1_500, true, false)]                                      // a ranged bot hit from range
+    public void A_target_hitting_the_bot_in_contact_is_in_sight(bool los, int distance, bool fightsBot, bool inView) =>
+        Assert.That(PlayerBotDriver.SightInReach(los, distance, fightsBot), Is.EqualTo(inView));
+
+    // #167 E M2: out of sight since (0: in sight): kept while out of sight, now when it goes.
+    [TestCase(0L, false, 5_000L, 5_000L)]
+    [TestCase(5_000L, false, 6_000L, 5_000L)]
+    [TestCase(5_000L, true, 6_000L, 0L)]
+    [TestCase(0L, true, 6_000L, 0L)]
+    public void The_blind_clock_runs_while_the_target_is_out_of_sight(long since, bool inView, long now, long next) =>
+        Assert.That(PlayerBotDriver.BlindClock(since, inView, now), Is.EqualTo(next));
+
+    // #167 E M2: out of sight 5 s, fighting neither the bot nor its pet: dropped. 15 stuck fights ended in a kill with
+    // the bot unhurt (another bot's or the pet's), the longest 250 s.
+    [TestCase(1_000L, 6_000L, false, false, true)]
+    [TestCase(1_000L, 5_999L, false, false, false)]
+    [TestCase(0L, 60_000L, false, false, false)]
+    [TestCase(1_000L, 6_000L, true, false, false)]
+    [TestCase(1_000L, 6_000L, false, true, false)]
+    public void A_target_out_of_sight_5_s_that_fights_neither_bot_nor_pet_is_dropped(long blindSince, long now,
+        bool fightsBot, bool petOnTarget, bool drops) =>
+        Assert.That(PlayerBotDriver.DropsBlindTarget(blindSince, now, fightsBot, petOnTarget), Is.EqualTo(drops));
+
+    // #167 E M2: a target dropped blind is passed over by the pick (FindWithin) for 30 s, and only by it: self-defence
+    // (Attacker) and the monster coming at it (Incoming) still take it, so one that comes round and hits the bot is fought,
+    // and a blocked walk's Unreachable mark stays as it was (the review).
+    [Test]
+    public void A_target_dropped_blind_is_passed_over_by_the_pick_only()
+    {
+        GameNPC blind = Mob(), blocked = Mob();
+        var state = new PlayerBotState(Player(null)) { Unreachable = blocked, UnreachableUntil = 20_000 };
+        PlayerBotDriver.MarkBlind(state, blind, 10_000);
+        Assert.That((state.BlindSkip == blind, state.BlindSkipUntil, state.Unreachable == blocked, state.UnreachableUntil),
+            Is.EqualTo((true, 40_000L, true, 20_000L)), "its own mark, 30 s; the unreachable one kept");
+        Assert.That(PlayerBotDriver.BlindSkipped(state.BlindSkip == blind, 39_999, state.BlindSkipUntil), Is.True,
+            "the pick passes it over");
+        Assert.That(PlayerBotDriver.BlindSkipped(state.BlindSkip == blind, 40_000, state.BlindSkipUntil), Is.False, "30 s on");
+        Assert.That(PlayerBotDriver.BlindSkipped(state.BlindSkip == blocked, 39_999, state.BlindSkipUntil), Is.False,
+            "another monster");
+        Assert.That(PlayerBotDriver.SkipsHitter(blind == state.Unreachable, 39_999, state.UnreachableUntil, false), Is.False,
+            "self-defence still takes it");
     }
 
     // #167: one PLAYER_BOT_REST line per rest when the bot stands: the seconds it sat and why it stood (recovered, hit,

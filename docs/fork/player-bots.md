@@ -149,6 +149,10 @@ Each bot thinks every 250 ms, a thin copy of the `/bot` pilot's think:
 - It picks a monster with no aggressive neighbours, none within reach of the target, of its walk in, or of the spot
   it would fight from (its spell's range for a caster, else melee). After deaths it moves to an easier camp. It avoids
   what killed it for 15 minutes. Training dummies are no monsters: it neither plans camps at them nor pulls them.
+- It swings and casts only at a target in sight, by the navmesh's line; a target hitting it in contact (within 250
+  units) counts as in sight though that line says not, as a player sees what hits it. A target out of sight 5 s that
+  fights neither it nor its pet is dropped, and its picks pass it over for 30 s (it still fights it back if it comes
+  on and hits it).
 - A monster within 2,000 units that has the bot as its target counts as an attacker before its first hit, so the bot
   stands up and fights it first. Before it sits, a bot within reach of an aggressive monster from its last search,
   or of the spawn spot of one of its last 3 kills in the last 150 s (where that monster respawns, 80 s after the kill
@@ -464,14 +468,16 @@ All start `PLAYER_BOT_`:
   40% with a read (-999: none, or out of a fight). `FIGHT` then gives `endStart=` and `end=`, its endurance at the
   fight's first think and at its end, and both give `styleHeld=`, the style choices a close fight's endurance reserve
   left unstyled though it could pay for a style, and `castHeld=`, the thinks the reserve held a damage spell back (-1
-  each out of a fight). `BLOCKED`'s `walk=` is `target`, `roam`, `clear` (the step out after a release), `walkout`,
-  `rest`, `kite`, `turret` or `breakoff`. `RELOCATE` after a death (`reason=died`) ends with `sinceRelease=`, the
-  milliseconds since the release; after a break-off its `reason=` is `brokeoff`. Either ends with `barred=old` when the
-  death or the break-off came on the walk to the camp it had, which the plan then leaves out. Any `RELOCATE` then ends
-  with `capKill=`, the lowest con that killed the bot in the last 5 minutes, yellow or harder (a blue or green killer
-  logs none), while there is one. Then `recent=1` on a plan made within 15 minutes of a death (a died, break-off or
-  capped one), and `near=1` when the camp came from its near pass (within 10,000 units of where the bot stood). A
-  break-off drops its fight (`FIGHT result=dropped`);
+  each out of a fight). `FIGHT` then ends with `sight=`, the sight checks its target hitting it in contact answered (the
+  navmesh's line said no), and `blind=` (1: dropped after 5 s out of sight, fighting neither the bot nor its pet).
+  `BLOCKED`'s `walk=` is `target`, `roam`, `clear` (the step out after a release), `walkout`, `rest`, `kite`, `turret`
+  or `breakoff`. `RELOCATE` after a death (`reason=died`) ends with `sinceRelease=`, the milliseconds since the release;
+  after a break-off its `reason=` is `brokeoff`. Either ends with `barred=old` when the death or the break-off came on
+  the walk to the camp it had, which the plan then leaves out. Any `RELOCATE` then ends with `capKill=`, the lowest con
+  that killed the bot in the last 5 minutes, yellow or harder (a blue or green killer logs none), while there is one.
+  Then `recent=1` on a plan made within 15 minutes of a death (a died, break-off or capped one), and `near=1` when the
+  camp came from its near pass (within 10,000 units of where the bot stood). A break-off drops its fight (`FIGHT
+  result=dropped`);
 - `BREAKOFF`: one per break-off, when it ends: the bot's `hp=`, `end=` (endurance) and `attackers=` when it broke off,
   `sec=`, the seconds it ran (a run on to its point, done in another monster's reach, counts in it), and `outcome=`:
   `shook` (none still after it, or from 30 s none within 1,500 units), `fought` (still chased after 45 s, caught with no

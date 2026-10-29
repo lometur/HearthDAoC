@@ -90,6 +90,8 @@ public sealed class PlayerBotState
     public volatile PlayerBotActivity Activity;      // read by the report thread
     public volatile int NearPlayerBots, NearGamebots;
     public GameLiving Target, Unreachable;
+    public GameLiving BlindSkip;                                 // #167 E M2: a target dropped for want of sight, passed
+    public long BlindSkipUntil;                                  //   over by the pick only (BlindSkipped) until then
     public bool Engaged;
     public Spell Spell;
     public SpellLine SpellLine;
@@ -134,6 +136,9 @@ public sealed class PlayerBotState
     public byte EngageHealth, EngageMana;                        //   fight's first think in reach and the bot's health and
     public int FightAdds, Swings, NotVisible, FightCasts;        //   power then, its most attackers, swings and casts,
     public AttackData LastSeenSwing;                             //   the swing counted last (CountSwing), its target
+    public long BlindSince;                                      // #167 E M2: its target out of sight since (0: in sight,
+    public int FightSight;                                       //   BlindClock), the sight checks a hit in contact
+    public bool FightBlind;                                      //   answered (FIGHT sight=) and a drop for it (blind=1)
     public bool FromDefence;                                     //   hitting the bot when picked (PLAYER_BOT_FIGHT);
     public int LifeKills, LifeRests;                             //   this life's fights won and sits, its last kill,
     public long LastKillTick;                                    //   and the killer the Dying event names (OnBotDying)
@@ -280,6 +285,8 @@ public static class PlayerBotDriver
     public const int RoamRadius = 1400;                      // APP:483
     public const int LeashRadius = 4000;                     // stay in the start area (fair runs)
     public const int LosRefreshMilliseconds = 1000;
+    public const int BlindDropMilliseconds = 5_000;          // #167 E M2: a target out of sight this long that fights
+                                                             //   neither the bot nor its pet is dropped (inf.)
     public const int StyleMilliseconds = 1000;
     public const int NeighbourCountMilliseconds = 60_000;
     public const int UnreachableSkipMilliseconds = 30_000;
@@ -718,6 +725,7 @@ public static class PlayerBotDriver
             player.attackComponent.StopAttack();
             player.StopCurrentSpellcast();
             state.Activity = PlayerBotActivity.Hunting;
+            state.BlindSince = 0;                                                       // #167 E M2: no blind clock walking in
             Vector3 goal = new(target.X, target.Y, target.Z);
             state.Walk = PlayerBotWalk.Hunt;                                            // #167 walk=
             if (state.Mover.StepToward(goal, stop, now) is PlayerBotStepResult.Blocked)
@@ -735,8 +743,17 @@ public static class PlayerBotDriver
         if (now >= state.NextLosTick)                         // TargetInView: AttackComponent.cs:1065, SpellHandler.cs:450
         {
             state.NextLosTick = now + LosRefreshMilliseconds;
-            player.TargetInView = HeadlessLos.Answer(PathfindingProvider.Instance, player.CurrentZone,
+            bool los = HeadlessLos.Answer(PathfindingProvider.Instance, player.CurrentZone,
                 new Vector3(player.X, player.Y, player.Z), new Vector3(target.X, target.Y, target.Z));
+            bool fightsBot = !los && FightsBot(player, target);                         // #167 E M2: read only when the
+            player.TargetInView = SightInReach(los, distance, fightsBot);               //   ray says no; in contact,
+            if (!los && player.TargetInView) state.FightSight++;                        //   FIGHT sight=
+            state.BlindSince = BlindClock(state.BlindSince, player.TargetInView, now);
+            if (DropsBlindTarget(state.BlindSince, now, fightsBot, PetOn(player, target)))
+            {
+                DropBlind(state, player, now);                                          //   FIGHT blind=1, the pick
+                return;                                                                 //   passes it over 30 s
+            }
         }
         bool opening = !state.Engaged;
         if (opening)                                          // the fight's first think in reach: PLAYER_BOT_FIGHT's start
@@ -849,6 +866,27 @@ public static class PlayerBotDriver
                 player.attackComponent.RequestStartAttack(target);                      // AttackComponent.cs:491-496
             state.Activity = PlayerBotActivity.Fighting;
         }
+    }
+
+    // #167 E M2: its target fights the bot: has it as its target and is on its attacker list (it hit or swung lately).
+    private static bool FightsBot(GamePlayer player, GameLiving target) =>
+        target.TargetObject == player && player.attackComponent.AttackerTracker.ContainsAttacker(target);
+
+    // #167 E M2: the bot's live pet has its target as its own (a pet's kill is the owner's).
+    private static bool PetOn(GamePlayer player, GameLiving target) =>
+        player.ControlledBrain?.Body is GameNPC pet && pet.IsAlive && pet.TargetObject == target;
+
+    // #167 E M2: a target out of sight BlindDropMilliseconds that fights neither the bot nor its pet: its fight's line
+    // (FIGHT result=dropped blind=1), then the pick alone passes it over 30 s (MarkBlind; not Unreachable, the review).
+    private static void DropBlind(PlayerBotState state, GamePlayer player, long now)
+    {
+        if (state.Engaged)
+        {
+            state.FightBlind = true;
+            ReportFight(state, player, now, false, false);
+        }
+        MarkBlind(state, state.Target, now);
+        Disengage(state, player);
     }
 
     /// <summary>Whether the bot has a spell it may cast (APP:670, the cast watch's block); the interrupts are
@@ -1355,6 +1393,7 @@ public static class PlayerBotDriver
         state.CastTarget = null;
         state.NextSpellChoiceTick = 0;                                                     //   and chooses at once
         state.KiteGoal = null;                                                             // #167 F11
+        (state.BlindSince, state.FightSight, state.FightBlind) = (0, 0, false);            // #167 E M2
         (state.Spell, state.SpellLine) = found == null ? (null, null) : Nuke(state, player, found);
     }
 
@@ -1380,7 +1419,8 @@ public static class PlayerBotDriver
             Vector3 at = new(npc.X, npc.Y, npc.Z);                                      //   a hostile keep guard as an
             if (AddReach(player, npc) is > 0 and int reach) adds.Add((npc, at, reach)); //   add, never a pick
             if (!experience || !player.IsWithinRadius(npc, radius) || !IsValidTarget(player, npc, natural) ||
-                npc == state.Unreachable && now < state.UnreachableUntil)
+                npc == state.Unreachable && now < state.UnreachableUntil ||
+                BlindSkipped(npc == state.BlindSkip, now, state.BlindSkipUntil))     // #167 E M2: the pick only
                 continue;
             ConColor con = ConLevels.GetConColor(player.GetConLevel(npc));
             if (!AutonomousPlayerPilot.IsEligibleExperienceTarget(con, npc.EffectiveLevel, player.Level, 1) ||
@@ -3171,6 +3211,34 @@ public static class PlayerBotDriver
         if (swing.AttackResult is eAttackResult.TargetNotVisible) state.NotVisible++;
     }
 
+    /// <summary>#167 E M2: the bot's TargetInView (AttackComponent.cs:1062-1070, SpellHandler.cs:450): the navmesh's 2D ray
+    /// (los, HeadlessLos), or without it its target fighting it (fightsBot: FightsBot) in contact, within CaughtReach
+    /// (distance): a client in contact sees what hits it. Not at range (the review): a ranged monster casting at a ranged
+    /// bot from behind a wall is no sight. st-deathsD2/D2b: 5 deaths in fights with half the swings or more refused for
+    /// sight (98 of 111, 344 of 345), every killer the bot's own target in contact.</summary>
+    public static bool SightInReach(bool los, int distance, bool fightsBot) =>
+        los || fightsBot && distance <= CaughtReach;
+
+    /// <summary>#167 E M2: out of sight since (0: in sight): kept while out of sight, now when it goes.</summary>
+    public static long BlindClock(long since, bool inView, long now) => inView ? 0 : since != 0 ? since : now;
+
+    /// <summary>#167 E M2: a target out of sight BlindDropMilliseconds (blindSince, BlindClock) that fights neither the bot
+    /// (fightsBot) nor its pet (petOnTarget) is dropped. 49 stuck fights stood 2,390 s, 250 s at one cluricaun, swinging
+    /// at nothing.</summary>
+    public static bool DropsBlindTarget(long blindSince, long now, bool fightsBot, bool petOnTarget) =>
+        blindSince != 0 && now - blindSince >= BlindDropMilliseconds && !fightsBot && !petOnTarget;
+
+    /// <summary>#167 E M2: a target dropped for want of sight (DropBlind) is marked for the pick alone (BlindSkip, until
+    /// UnreachableSkipMilliseconds on): the review, a blocked walk's Unreachable mark made self-defence (Attacker) and the
+    /// monster coming at it (Incoming) pass it over too, so one that came round and hit the bot was no hitter for 30 s,
+    /// and it overwrote a real unreachable mark.</summary>
+    public static void MarkBlind(PlayerBotState state, GameLiving target, long now) =>
+        (state.BlindSkip, state.BlindSkipUntil) = (target, now + UnreachableSkipMilliseconds);
+
+    /// <summary>#167 E M2: whether the pick (FindWithin, and only it) passes over a monster (blindSkip: the one MarkBlind
+    /// marked) while blindSkipUntil lasts.</summary>
+    public static bool BlindSkipped(bool blindSkip, long now, long blindSkipUntil) => blindSkip && now < blindSkipUntil;
+
     /// <summary>The DEATH line's killer. ProcessDeath notifies Dying last (GameLiving.cs:2073), in ReaperService's phase of
     /// the tick the bot was killed in, so before its next think (GameLoop.cs:149, :159). Never throws: any sender but a
     /// driven bot is ignored.</summary>
@@ -4817,7 +4885,8 @@ public static class PlayerBotDriver
             HealthRate(state.HealthSamples, now, player.HealthPercent), state.WouldBreakHp, state.FightWalk,
             state.FightKiteNone, state.FightDots, state.FightKillingQuickcast,          // #167 D8, E C1, E C2b,
             state.FightTargetMezzes, state.FightRaceLeft, state.EngageEndurance,       //   E C4, E-L, E-R
-            player.EndurancePercent, state.FightStylesHeld, state.FightCastsHeld)));
+            player.EndurancePercent, state.FightStylesHeld, state.FightCastsHeld,
+            state.FightSight, state.FightBlind)));                                      // #167 E M2
     }
 
     // APP:585-624, changed: every 10 s, no inventory count, no saves; after 15 minutes with no progress, back to the
