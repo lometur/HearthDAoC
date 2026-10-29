@@ -139,12 +139,12 @@ Each bot thinks every 250 ms, a thin copy of the `/bot` pilot's think:
   none, to the spot 1,500 units straight away from them if it can walk there; on again from there while one still chases
   it. A spot it was blocked on it never takes again in that run. A mezzed, stunned or rooted monster still counts as
   after it. From 3 s into the run (time for its sprint to gain on one that started in contact), one not held that stays
-  within 250 units of it for 2 s, with a hit on the bot in the last 2 s, has caught it: it stops, casts a control at it
-  (as at an add, with Quickcast while hit), faces it until the cast is done and runs on; with no control to cast it
-  turns on the weakest monster in reach. From 30 s it is done once none is within 1,500 units; still chased at 45 s,
-  or with nowhere to run, it turns and fights them out. Afterwards it takes no camp there and avoids those monsters for
-  15 minutes, and plans a new camp from where it ran to before it looks for a new target. A break-off on the walk to
-  its camp, more than 1,400 units short of it, bars that camp too for 15 minutes.
+  within 250 units of it for 2 s, attacking it in the last 2 s (a miss, block, parry or evade counts too), has caught
+  it: it stops, casts a control at it (as at an add, with Quickcast while hit), faces it until the cast is done and runs
+  on; with no control to cast it turns on the weakest monster in reach. From 30 s it is done once none is within 1,500
+  units; still chased at 45 s, or with nowhere to run, it turns and fights them out. Afterwards it takes no camp there
+  and avoids those monsters for 15 minutes, and plans a new camp from where it ran to before it looks for a new target.
+  A break-off on the walk to its camp, more than 1,400 units short of it, bars that camp too for 15 minutes.
 - It releases 10 s after a death, counted from when the server has handled the death, never before: a bow's or a bolt's
   killing hit lands in the bots' own phase of the game loop, and a release asked for then was undone by the server's
   death handling later in the same tick, which left the bot dead for 15 minutes. A release that didn't revive it is
@@ -189,8 +189,8 @@ Playing:
     comes. Changed since `st-deathsC`, to be measured: a green gets no control while the caster is healthy and alone.
   - After a release, a bot dies again before its next kill as often as before (43%): the new camp's first fight is no
     safer. Changed since `st-deathsC`, to be measured: it plans its camp and walks out under the release's immunity,
-    takes no camp that cons as high as what killed it nor the camp it died on the way to, sees a hostile keep guard,
-    and asks again for a release that didn't take.
+    takes neither the camp it died on the way to nor, for 5 minutes, one that cons as high as a yellow or harder
+    monster that killed it, sees a hostile keep guard, and asks again for a release that didn't take.
   - A break-off often comes late (half the deaths on the run come in its first 4 s), and a bot caught on the run
     usually dies (10 of 13). Changed since `st-deathsC`, to be measured: a caught bot controls the chaser or turns on
     the weakest, a held chaser still counts, and it runs from no monster with a long-range spell. The late start
@@ -395,15 +395,15 @@ All start `PLAYER_BOT_`:
   it, so that fight's own fields are on its `FIGHT result=dropped breakOff=1` line). Both then give `heldSec=` (the
   seconds the target was held: stunned, mezzed or rooted), `ctlLanded=` and `ctlFailed=` (control casts that held or
   didn't: resisted, refused or interrupted; one still under way when the fight ends counts neither), `hpAtReach=` and
-  `tHpAtReach=` (the bot's and its target's health at the first hit on the bot; -1 if none), `rate=` (the health lost
-  a second over the last 3 s; a gain is negative), `wouldBreak=` (the bot's health when a break-off projected from that
-  rate would have fired, under 40% or under 6 s of the loss; logged only, -1 if never) and `walk=` (the walk on the
-  think before the fight began: `none`, `hunt`, `anchor`, `roam`, `clear`, `rest`, `kite`, `breakoff` or `walkout`, the
-  walk out toward the camp planned under the release's immunity). Out of a
-  fight `DEATH` gives -1 for the fight's fields, `rate=` at the death and the walk on its last think alive; it gives
-  `end=` (endurance). Both end with `kiteNone=range:clear:mesh:fit`, the fight's steps back that found no point, by
-  why: `range` (the bot already stood at its spell's reach), `clear` (no point out of the other monsters' reach),
-  `mesh` (none on the navmesh) or `fit` (none within the stop once on the navmesh's height); -1 each out of a fight.
+  `tHpAtReach=` (the bot's and its target's health at the first attack on the bot, a miss or block too; -1 if none),
+  `rate=` (the health lost a second over the last 3 s; a gain is negative), `wouldBreak=` (the bot's health when a
+  break-off projected from that rate would have fired, under 40% or under 6 s of the loss; logged only, -1 if never) and
+  `walk=` (the walk on the think before the fight began: `none`, `hunt`, `anchor`, `roam`, `clear`, `rest`, `kite`,
+  `breakoff` or `walkout`, the walk out toward the camp planned under the release's immunity). Out of a fight `DEATH`
+  gives -1 for the fight's fields, `rate=` at the death and the walk on its last think alive; it gives `end=`
+  (endurance). Both end with `kiteNone=range:clear:mesh:fit`, the fight's steps back that found no point, by why:
+  `range` (the bot already stood at its spell's reach), `clear` (no point out of the other monsters' reach), `mesh`
+  (none on the navmesh) or `fit` (none within the stop once on the navmesh's height); -1 each out of a fight.
   `BLOCKED`'s `walk=` is `target`, `roam`, `clear` (the step out after a release), `walkout`, `rest`, `kite`, `turret`
   or `breakoff`. `RELOCATE` after a death (`reason=died`) ends with `sinceRelease=`, the milliseconds since the release;
   after a break-off its `reason=` is `brokeoff`. Either ends with `barred=old` when the death or the break-off came on

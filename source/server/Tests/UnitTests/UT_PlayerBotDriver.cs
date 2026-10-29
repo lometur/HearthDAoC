@@ -1635,14 +1635,25 @@ public sealed class UT_PlayerBotDriver
     // st-deathsD's caught clock where BreaksOffNow runs it (CaughtThink), from the state StartsBreakOff leaves (BreakOffSince
     // now, CaughtSince 0; the same think runs it next): a break-off begun with its chaser in contact (150) and hit on
     // every think was caught 2 s later, before its sprint could build a lead (89 of st-deathsD's 98 break-offs ended
-    // fought at sec=2). Now it is not; still in contact and hit, it is caught 2 s after the 3-s grace.
+    // fought at sec=2). Now it is not; still in contact and hit, it is caught 2 s after the 3-s grace. The hit is the
+    // bot's own LastAttackedByEnemyTick, set by GameLiving's backing field (GamePlayer's setter sends to its client,
+    // GamePlayer.cs:1185-1195); its own swings (LastAttackTickPvE, in LastCombatTickPvE) are no hit.
     [Test]
     public void A_break_off_begun_in_contact_is_not_caught_2_s_later()
     {
-        var state = new PlayerBotState(Player(null)) { BreakOffSince = 10_000 };
+        GamePlayer bot = Player(null);
+        FieldInfo hit = typeof(GameLiving).GetField("<LastAttackedByEnemyTickPvE>k__BackingField", Hidden)!,
+            swing = typeof(GameLiving).GetField("<LastAttackTickPvE>k__BackingField", Hidden)!;
+        var state = new PlayerBotState(bot) { BreakOffSince = 10_000 };
         for (long now = 10_000; now < 15_000; now += PlayerBotDriver.TickMilliseconds)
-            Assert.That(PlayerBotDriver.CaughtThink(state, 150, now - 100, now), Is.False, $"{now}");
-        Assert.That((PlayerBotDriver.CaughtThink(state, 150, 14_900, 15_000), state.CaughtSince), Is.EqualTo((true, 13_000L)));
+        {
+            hit.SetValue(bot, now - 100);
+            Assert.That(PlayerBotDriver.CaughtThink(state, bot, 150, now), Is.False, $"{now}");
+        }
+        hit.SetValue(bot, 14_900L);
+        Assert.That((PlayerBotDriver.CaughtThink(state, bot, 150, 15_000), state.CaughtSince), Is.EqualTo((true, 13_000L)));
+        swing.SetValue(bot, 16_900L);
+        Assert.That(PlayerBotDriver.CaughtThink(state, bot, 150, 17_000), Is.False, "its own swing; the last hit 2.1 s ago");
     }
 
     // #167 D2: a held chaser stays a chaser (KeepsChaser): a mezzed or stunned monster keeps its target and comes back
@@ -5097,8 +5108,8 @@ public sealed class UT_PlayerBotDriver
     public void The_projected_break_off_keeps_6_seconds_of_the_loss_in_hand(byte health, double rate, bool fires) =>
         Assert.That(PlayerBotDriver.ProjectedBreak(health, rate), Is.EqualTo(fires));
 
-    // hpAtReach=: a hit on the bot (GameLiving.LastAttackedByEnemyTick, set on a hit only, GameLiving.cs:1515-1534) within
-    // the last second.
+    // hpAtReach=: an attack on the bot (GameLiving.LastAttackedByEnemyTick, set on any attack that causes combat, a
+    // miss, block, parry, evade or resisted spell too, GameLiving.cs:1515-1535) within the last second.
     [TestCase(0L, false)] [TestCase(4_000L, true)] [TestCase(3_999L, false)] [TestCase(5_000L, true)]
     public void A_hit_counts_at_the_think_within_a_second_of_it(long lastHit, bool now) =>
         Assert.That(PlayerBotDriver.HitNow(lastHit, 5_000), Is.EqualTo(now));
@@ -5156,8 +5167,9 @@ public sealed class UT_PlayerBotDriver
         (Dictionary<eEffect, List<ECSGameEffect>>)typeof(EffectListComponent).GetField("_effects", Hidden)!
             .GetValue(living.effectListComponent)!;
 
-    private static ECSGameSpellEffect SpellEffect(GameLiving target, GameLiving caster, Spell spell, long startTick) =>
-        new(new(target, 20_000, 1, new DOL.GS.Spells.SpellHandler(caster, spell, BodyLine))) { StartTick = startTick };
+    private static ECSGameSpellEffect SpellEffect(GameLiving target, GameLiving caster, Spell spell, long startTick,
+        double effectiveness = 1) =>
+        new(new(target, 20_000, effectiveness, new DOL.GS.Spells.SpellHandler(caster, spell, BodyLine))) { StartTick = startTick };
 
     // ctlLanded= where SettleControl reads it: the control's effect from the bot, begun since the cast, on its target
     // counts landed, none (resisted) failed, a dead target neither; a new control settles the one awaited at once.
@@ -5249,7 +5261,9 @@ public sealed class UT_PlayerBotDriver
 
     // Where the controls read it (Takes, C8): a monster the snare nuke slowed takes no root, so the caster picks its next
     // control (here its mez, ChooseControl's order for a target); a plain snare or none takes the root. The root's product
-    // is at the caster's debuff effectiveness (SpellHandler.cs:2169-2172; 0% here).
+    // is at the caster's debuff effectiveness (SpellHandler.cs:2169-2172; 0%, then 5%), the slow's at its own
+    // Effectiveness: a 50% snare that crit (x2, SpeedDecreaseSpellHandler.cs:64-80) is 100, over a 99 root at 0% and
+    // under one at 5% (103.95).
     [Test]
     public void A_monster_under_a_snare_nuke_takes_no_root_and_the_caster_picks_its_next_control()
     {
@@ -5278,6 +5292,11 @@ public sealed class UT_PlayerBotDriver
             Assert.That(Choose(), Is.EqualTo(LesserMesmerization), "under the snare nuke: the mez");
             Effects(monster)[eEffect.MovementSpeedDebuff] = [SpellEffect(monster, other, snare, 10_000)];
             Assert.That(Choose(), Is.EqualTo(Cripple), "a plain snare: the root replaces it");
+            Spell halfSnare = Control(5210, "a 50% snare", "SpeedDecrease", 20, 50);
+            Effects(monster)[eEffect.MovementSpeedDebuff] = [SpellEffect(monster, other, halfSnare, 10_000, effectiveness: 2.0)];
+            Assert.That(Choose(), Is.EqualTo(LesserMesmerization), "a 50% snare that crit (100) over the 99 root: the mez");
+            calculators[(int)eProperty.DebuffEffectiveness] = new Fixed(5);
+            Assert.That(Choose(), Is.EqualTo(Cripple), "the root at 5% debuff effectiveness (103.95) replaces it");
         }
         finally
         {
