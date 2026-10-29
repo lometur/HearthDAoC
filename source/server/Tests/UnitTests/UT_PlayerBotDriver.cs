@@ -533,16 +533,108 @@ public sealed class UT_PlayerBotDriver
 
     // After a release: it fights back what hits it; else it steps out of reach, then plans the relocation it owes (any
     // death, C1b), then waits out its back-off (the GameBot's, from the third death with no XP:
-    // AutonomousDeathRecoveryPolicy) and the resurrection illness; then the recovery is over.
-    [TestCase(true, true, true, true, true, PlayerBotRecovery.Fight)]
-    [TestCase(false, true, true, true, true, PlayerBotRecovery.StepOut)]
-    [TestCase(false, false, true, true, true, PlayerBotRecovery.Replan)]
-    [TestCase(false, false, false, true, false, PlayerBotRecovery.Wait)]
-    [TestCase(false, false, false, false, true, PlayerBotRecovery.Wait)]
-    [TestCase(false, false, false, false, false, PlayerBotRecovery.Done)]
+    // AutonomousDeathRecoveryPolicy) and the resurrection illness; then the recovery is over. #167 D4: while the release's
+    // immunity lasts with a camp planned and a point toward it (immuneWalk), it walks out toward the camp, before all but
+    // the fight: the back-off and the illness wait at the point.
+    [TestCase(true, true, true, true, true, false, PlayerBotRecovery.Fight)]
+    [TestCase(false, true, true, true, true, false, PlayerBotRecovery.StepOut)]
+    [TestCase(false, false, true, true, true, false, PlayerBotRecovery.Replan)]
+    [TestCase(false, false, false, true, false, false, PlayerBotRecovery.Wait)]
+    [TestCase(false, false, false, false, true, false, PlayerBotRecovery.Wait)]
+    [TestCase(false, false, false, false, false, false, PlayerBotRecovery.Done)]
+    [TestCase(false, false, false, true, true, true, PlayerBotRecovery.WalkOut)]
+    [TestCase(false, true, false, false, false, true, PlayerBotRecovery.WalkOut)]
+    [TestCase(true, false, false, false, false, true, PlayerBotRecovery.Fight)]
     public void After_a_release_a_bot_steps_out_of_reach_then_replans_then_backs_off(bool attacked, bool stepsOut,
-        bool replanOwed, bool backingOff, bool ill, PlayerBotRecovery step) =>
-        Assert.That(PlayerBotDriver.AfterReleaseStep(attacked, stepsOut, replanOwed, backingOff, ill), Is.EqualTo(step));
+        bool replanOwed, bool backingOff, bool ill, bool immuneWalk, PlayerBotRecovery step) =>
+        Assert.That(PlayerBotDriver.AfterReleaseStep(attacked, stepsOut, replanOwed, backingOff, ill, immuneWalk),
+            Is.EqualTo(step));
+
+    // #167 D4: the walk out's point, here (0,0,0): of the clear points within reach (the immunity left times the bot's
+    // speed), the one that leaves the least distance to the planned camp (progress, not detour: the verifier's
+    // correction); on a tie, the one nearest here. With no camp, the nearest; none in reach, none.
+    [TestCase(10_000f, new[] { -700f, 0f, 0f, 900f, 1_500f, 0f, 2_500f, 0f }, 2_400f, 1_500f, 0f)]
+    [TestCase(10_000f, new[] { -700f, 0f, 0f, 900f, 1_500f, 0f, 2_500f, 0f }, 1_000f, 0f, 900f)]
+    [TestCase(float.NaN, new[] { -700f, 0f, 0f, 900f, 1_500f, 0f, 2_500f, 0f }, 2_400f, -700f, 0f)]
+    [TestCase(2_000f, new[] { 1_000f, 0f, 500f, 0f }, 2_400f, 1_000f, 0f)]
+    [TestCase(2_000f, new[] { 2_000f, 600f, 1_400f, 0f }, 2_400f, 1_400f, 0f)]
+    public void The_walk_out_takes_the_clear_point_nearest_the_camp_within_reach(float goalX, float[] xy, float reach,
+        float x, float y)
+    {
+        Vector3[] points = Enumerable.Range(0, xy.Length / 2).Select(i => new Vector3(xy[2 * i], xy[2 * i + 1], 0)).ToArray();
+        Vector3? goal = float.IsNaN(goalX) ? null : new Vector3(goalX, 0, 0);
+        Assert.That(PlayerBotDriver.StepOutPoint(Vector3.Zero, goal, points, reach), Is.EqualTo((Vector3?)new Vector3(x, y, 0)));
+    }
+
+    [Test]
+    public void The_walk_out_has_no_point_out_of_reach() =>
+        Assert.That(PlayerBotDriver.StepOutPoint(Vector3.Zero, new Vector3(10_000, 0, 0), [new Vector3(3_000, 0, 0)], 2_400),
+            Is.Null);
+
+    // #167 D4: it walks on to the point unless it stands clear already and the point leaves no less to the camp: the
+    // rings start 500 units out, so at the camp's edge it would step between clear points until the immunity ran out.
+    // In a monster's reach it steps out wherever the point is.
+    [TestCase(false, 10_000f, -700f, 0f, true)]
+    [TestCase(true, 10_000f, 1_500f, 0f, true)]
+    [TestCase(true, 10_000f, 0f, 900f, false)]
+    [TestCase(true, float.NaN, -700f, 0f, false)]
+    public void From_a_clear_spot_the_walk_out_goes_on_only_toward_the_camp(bool hereClear, float goalX, float x, float y,
+        bool walks) =>
+        Assert.That(PlayerBotDriver.WalksOut(Vector3.Zero, hereClear, float.IsNaN(goalX) ? null : new Vector3(goalX, 0, 0),
+            new Vector3(x, y, 0)), Is.EqualTo(walks));
+
+    [Test]
+    public void With_no_point_there_is_no_walk_out() =>
+        Assert.That(PlayerBotDriver.WalksOut(Vector3.Zero, false, new Vector3(10_000, 0, 0), null), Is.False);
+
+    // #167 D4: the immunity left. The server's end (m_invulnerabilityTick) is protected (GamePlayer.cs:12236): the release
+    // starts TIMER_KILLED_BY_MOB seconds (AbstractServerRules.cs:258-262) from the release the bot asked for (the ask that
+    // revived it; else from its first think alive), and none with the server's immunity off (a PvE server starts none,
+    // GamePlayer.cs:12249-12250) or over. The reach is that time at its run, or its sprint.
+    [TestCase(9_750L, 10_000L, 10, 19_750L)] [TestCase(0L, 10_000L, 10, 20_000L)] [TestCase(9_750L, 10_000L, 0, 9_750L)]
+    public void The_immunity_ends_its_length_after_the_release(long askedAt, long releasedAt, int seconds, long end) =>
+        Assert.That(PlayerBotDriver.ImmunityEnd(askedAt, releasedAt, seconds), Is.EqualTo(end));
+
+    [TestCase(19_750L, 12_000L, true, 7_750L)] [TestCase(19_750L, 12_000L, false, 0L)]
+    [TestCase(19_750L, 20_000L, true, 0L)]
+    public void The_immunity_left_is_none_once_the_server_holds_none(long end, long now, bool invulnerable, long left) =>
+        Assert.That(PlayerBotDriver.ImmunityLeft(end, now, invulnerable), Is.EqualTo(left));
+
+    [TestCase(6_000L, true, 1_488f)] [TestCase(6_000L, false, 1_146f)] [TestCase(0L, true, 0f)]
+    public void The_walk_outs_reach_is_the_immunity_left_at_its_speed(long leftMs, bool sprinting, float reach) =>
+        Assert.That(PlayerBotDriver.WalkOutReach(leftMs, sprinting), Is.EqualTo(reach).Within(0.01f));
+
+    // #167 D4: the walk out sprints when the bot has the endurance to start one (GamePlayer.cs:8633), and its sprint goes
+    // off when the walk ends: a sprint drains endurance whenever the bot moves (GamePlayer.cs:2397-2425), so the walk on
+    // to the camp would end near 5%. A sprint of its own only (a break-off's stays).
+    [TestCase(true, false, 100, true)] [TestCase(true, false, 10, null)] [TestCase(true, true, 50, null)]
+    [TestCase(false, true, 50, false)] [TestCase(false, false, 50, null)]
+    public void The_walk_out_sprints_and_its_sprint_ends_with_it(bool walkingOut, bool walkOutSprint, int endurance,
+        bool? sprint) =>
+        Assert.That(PlayerBotDriver.SprintChange(walkingOut, walkOutSprint, endurance), Is.EqualTo(sprint));
+
+    // The release reads the immunity's end from the release asked for (still set at StartLife; Think clears it after).
+    [Test]
+    public void A_release_starts_the_walk_out_afresh()
+    {
+        int saved = ServerProperties.Properties.TIMER_KILLED_BY_MOB;
+        try
+        {
+            ServerProperties.Properties.TIMER_KILLED_BY_MOB = 10;
+            var released = new PlayerBotState(Player(null)) { AliveSince = 1_000, DeathRecorded = true, ReleaseAskedAt = 8_750,
+                WalkOutGoal = Vector3.One, WalkOutOver = true, WalkOutSprint = true, BackImmuneMs = 2_000, BackSame = true };
+            PlayerBotDriver.StartLife(released, 9_000);
+            Assert.That((released.ImmuneUntil, released.WalkOutGoal, released.WalkOutOver, released.WalkOutSprint,
+                released.BackImmuneMs, released.BackSame), Is.EqualTo((18_750L, (Vector3?)null, false, false, 0L, false)));
+            var login = new PlayerBotState(Player(null));
+            PlayerBotDriver.StartLife(login, 5_000);
+            Assert.That(login.ImmuneUntil, Is.Zero, "no release, no walk out");
+        }
+        finally
+        {
+            ServerProperties.Properties.TIMER_KILLED_BY_MOB = saved;
+        }
+    }
 
     // #167 C6: a login's first life steps out of reach too (73 of st-deathsB's 370 logins died in their first fight, 37
     // of the 42 login-life deaths with adds within 60 s of the login: the test spots are camp centres), with no back-off
@@ -574,16 +666,30 @@ public sealed class UT_PlayerBotDriver
 
     // PLAYER_BOT_BACK (#167 C1, the verifier's logging): from a release to the first fight, the seconds in all and those
     // stepping out, held and walking, and the replan: moved (a camp planned since the release), none (owed, no camp
-    // planned) or notOwed. The 40 s more from a death to the next fight in st-deathsB was not the failed replan.
+    // planned) or notOwed. The 40 s more from a death to the next fight in st-deathsB was not the failed replan. #167 D4:
+    // then immune=, the seconds it walked while immune.
     [Test]
     public void The_way_back_line_splits_the_time_from_a_release_to_the_first_fight() =>
-        Assert.That(PlayerBotDriverReport.FormatBack("Pbotaaaaz", 34, 81, 6, 42, 20, "moved"),
-            Is.EqualTo("PLAYER_BOT_BACK bot=Pbotaaaaz level=34 sec=81 stepOut=6 hold=42 walk=20 replan=moved"));
+        Assert.That(PlayerBotDriverReport.FormatBack("Pbotaaaaz", 34, 81, 6, 42, 20, "moved", 8),
+            Is.EqualTo("PLAYER_BOT_BACK bot=Pbotaaaaz level=34 sec=81 stepOut=6 hold=42 walk=20 replan=moved immune=8"));
 
-    [TestCase(false, false, "notOwed")] [TestCase(false, true, "notOwed")]
-    [TestCase(true, true, "moved")] [TestCase(true, false, "none")]
-    public void The_way_back_gives_the_replan_owed_at_the_release(bool owed, bool moved, string replan) =>
-        Assert.That(PlayerBotDriver.BackReplan(owed, moved), Is.EqualTo(replan));
+    // #167 D4, D9: replan=same when the camp planned is the anchor the bot had (37 of st-deathsC's 174 died replans, 24
+    // of them not Pbotaaacv's).
+    [TestCase(false, false, false, "notOwed")] [TestCase(false, true, true, "notOwed")]
+    [TestCase(true, true, false, "moved")] [TestCase(true, true, true, "same")]
+    [TestCase(true, false, false, "none")] [TestCase(true, false, true, "none")]
+    public void The_way_back_gives_the_replan_owed_at_the_release(bool owed, bool planned, bool sameAnchor, string replan) =>
+        Assert.That(PlayerBotDriver.BackReplan(owed, planned, sameAnchor), Is.EqualTo(replan));
+
+    // The same camp: within 200 units of the anchor (d-after-release/a3_samespot.py's rule), and only a death's plan
+    // counts it.
+    [TestCase("died", 150f, true)] [TestCase("died", 250f, false)] [TestCase("capped", 150f, false)]
+    public void A_deaths_plan_to_the_anchor_it_had_counts_as_the_same(string reason, float away, bool same)
+    {
+        var state = new PlayerBotState(Player(null)) { Anchor = new Vector3(5_000, 6_000, 70), ReplanOwed = reason };
+        PlayerBotDriver.PlanCamp(state, new Vector3(5_000 + away, 6_000, 70), null, stale: false, reason);
+        Assert.That(state.BackSame, Is.EqualTo(same));
+    }
 
     // A release starts the way back's count afresh (the replan owed then, nothing moved, no time in any phase); a login
     // starts none: no release, no line.

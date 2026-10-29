@@ -206,10 +206,13 @@ public static class PlayerBotDriverReport
 
     /// <summary>PLAYER_BOT_BACK (#167 C1), at the first fight after a release (PlayerBotDriver.ReportBack): the seconds
     /// since the release, those stepping out of reach, held (the back-off, the illness, the replan's hold) and walking
-    /// (Roam), and the replan (PlayerBotDriver.BackReplan).</summary>
-    public static string FormatBack(string bot, int level, long seconds, long stepOut, long hold, long walk, string replan) =>
+    /// (Roam; #167 D4, the walk out toward the camp planned under the release's immunity), the replan
+    /// (PlayerBotDriver.BackReplan), and (#167 D4) the seconds it walked while immune: the step out and the walk out.</summary>
+    public static string FormatBack(string bot, int level, long seconds, long stepOut, long hold, long walk, string replan,
+        long immune) =>
         string.Create(CultureInfo.InvariantCulture,
-            $"PLAYER_BOT_BACK bot={bot} level={level} sec={seconds} stepOut={stepOut} hold={hold} walk={walk} replan={replan}");
+            $"PLAYER_BOT_BACK bot={bot} level={level} sec={seconds} stepOut={stepOut} hold={hold} walk={walk} replan={replan} " +
+            $"immune={immune}");
 
     /// <summary>PLAYER_BOT_BREAKOFF (#167 C2), when a break-off ends (PlayerBotDriver.EndBreakOff): the bot's health,
     /// endurance and attackers when it broke off, the seconds it ran, and how it ended (shook: none still after it;

@@ -20,8 +20,8 @@ public enum PlayerBotActivity { Waiting, Dead, Resting, Hunting, Fighting, Casti
 /// <summary>A class's role, as tools/lmroles.py gives it (CLASS_ROLES; levelmatch REVIEW-FIXES 11).</summary>
 public enum PlayerBotRole { Melee, Caster, Healer, Pet, Archer }
 
-/// <summary>The recovery's step after a release (PlayerBotDriver.AfterReleaseStep, #167 F4).</summary>
-public enum PlayerBotRecovery { Fight, StepOut, Replan, Wait, Done }
+/// <summary>The recovery's step after a release (PlayerBotDriver.AfterReleaseStep, #167 F4; WalkOut, D4).</summary>
+public enum PlayerBotRecovery { Fight, StepOut, Replan, Wait, Done, WalkOut }
 
 /// <summary>A break-off's step (PlayerBotDriver.BreakOffStep, #167 C2).</summary>
 public enum PlayerBotBreakOff { Run, NextPoint, Done, Fight }
@@ -43,8 +43,9 @@ public enum PlayerBotCombatAction { Cast, WaitToCast, Quickcast, Swing }
 
 /// <summary>A think's walk (#167 FIGHT and DEATH walk=, F12d's field; PlayerBotDriver.NextWalk): to its target or an
 /// Animist's stand (Hunt), to its anchor (Anchor) or a roam point (Roam), out of reach after a release (Clear), to its
-/// rest spot (Rest), a caster's step back (Kite), a break-off's run (BreakOff).</summary>
-public enum PlayerBotWalk { None, Hunt, Anchor, Roam, Clear, Rest, Kite, BreakOff }
+/// rest spot (Rest), a caster's step back (Kite), a break-off's run (BreakOff), the walk out toward the camp planned
+/// under the release's immunity (WalkOut, #167 D4).</summary>
+public enum PlayerBotWalk { None, Hunt, Anchor, Roam, Clear, Rest, Kite, BreakOff, WalkOut }
 
 /// <summary>A scripted job (the errands: quest 20206, promotion) that runs before grinding until Finished. Tick returns
 /// true when it used this think (walked, stood, acted), false to let the driver grind this think.</summary>
@@ -191,7 +192,12 @@ public sealed class PlayerBotState
     public double BreakOffRate;                                  // #167 BREAKOFF rate=: its loss rate then (HealthRate)
     public bool BackPending, BackOwed, BackMoved;                // #167 C1: PLAYER_BOT_BACK, from a release to its first
     public long BackStepOutMs, BackHoldMs, BackWalkMs;           //   fight: the line due, the replan owed and a camp planned
-                                                                 //   since, and the time stepping out, held and walking
+                                                                 //   since, and the time stepping out, held and walking;
+    public bool BackSame;                                        //   #167 D4: that camp the anchor it had (replan=same),
+    public long BackImmuneMs;                                    //   and the time walked while immune (immune=)
+    public long ImmuneUntil;                                     // #167 D4: the release's immunity's end (ImmunityEnd), the
+    public Vector3? WalkOutGoal;                                 //   walk out's point (StepOutPoint), the walk over for this
+    public bool WalkOutOver, WalkOutSprint;                      //   release, and a sprint of its own on (SprintChange)
     public Vector3 TargetSpawn;                                  // #167 C7: the target's spawn spot and the reach it aggroes
     public int TargetRespawnReach;                               //   from (RespawnOf, at the pick), and the last kills'
     public readonly List<(Vector3 At, int Reach, long KilledAt)> RecentKills = new();   //   (RememberKill): rested out of
@@ -251,6 +257,7 @@ public static class PlayerBotDriver
     public static readonly int[] StepOutRings = [500, 900, 1_300, 1_700, 2_100, 2_500];   // #167 F4: a released bot's
     public const int SpotDirections = 12;                    //   candidate spots, every 30 degrees on each ring
     public const int StepOutPauseMilliseconds = 10_000;      // (inf.) after a blocked step out, it stands this long
+    public const int SameCampDistance = 200;                 // #167 BACK replan=same (d-after-release/a3_samespot.py)
     public const int ContactDistance = 250;                   // #167 F11: a monster this near is in melee (inf.)
     public const int ControlMarginMilliseconds = 500;         //   a cast's slack before contact (inf.)
     public const int MaxControlTries = 3;                     //   control casts per target that held nothing (inf.)
@@ -1423,10 +1430,12 @@ public static class PlayerBotDriver
     /// <summary>A camp planned (RelocateIfOutgrown's move to spot, for reason): the leash and the walk go there (a task bot
     /// levelling for its errand has no leash to pull it), its rejects start afresh, that camp's con the fallback cap
     /// (fallback; none: the death cap, Cap) and at a camp of avoided names (stale) those too (FindWithin), the capped
-    /// clock afresh (the next search starts it, on the way there too), BACK replan=moved after a death (#167 C1), and
-    /// the relocation owed planned (#167 F4, C2). The review of 9aacd69: with BackMoved's line dropped no test failed.</summary>
+    /// clock afresh (the next search starts it, on the way there too), BACK replan=moved after a death (#167 C1; same at
+    /// the anchor it had, D4), and the relocation owed planned (#167 F4, C2). The review of 9aacd69: with BackMoved's line
+    /// dropped no test failed.</summary>
     public static void PlanCamp(PlayerBotState state, Vector3 spot, ConColor? fallback, bool stale, string reason)
     {
+        if (reason == Died) state.BackSame = SameCamp(spot, state.Anchor);
         state.Anchor = spot;
         state.RoamDestination = spot;
         state.RelocateRejected.Clear();
@@ -1526,8 +1535,15 @@ public static class PlayerBotDriver
     }
 
     /// <summary>PLAYER_BOT_BACK replan= (#167 C1): notOwed when the release owed no replan (OwesReplan); else moved once
-    /// a camp was planned since, none when not (none found, or the hold ran out, or still owed at the fight).</summary>
-    public static string BackReplan(bool owed, bool moved) => !owed ? "notOwed" : moved ? "moved" : "none";
+    /// a camp was planned since, none when not (none found, or the hold ran out, or still owed at the fight). #167 D4, D9:
+    /// same when that camp was the anchor the bot had (sameAnchor, SameCamp): 37 of st-deathsC's 174 died replans.</summary>
+    public static string BackReplan(bool owed, bool planned, bool sameAnchor) =>
+        !owed ? "notOwed" : !planned ? "none" : sameAnchor ? "same" : "moved";
+
+    /// <summary>A camp planned at the anchor the bot had (#167 BACK replan=same): its spot within SameCampDistance of it,
+    /// as d-after-release/a3_samespot.py counts "same anchor".</summary>
+    public static bool SameCamp(Vector3 spot, Vector3 anchor) =>
+        Vector3.DistanceSquared(spot, anchor) <= SameCampDistance * SameCampDistance;
 
     /// <summary>Where a relocation plans from (PlanRelocation's here): after a death (Died) the spot the bot died at, not
     /// its bind; else where it is (after a break-off, #167 C2, where it ran to).</summary>
@@ -1545,10 +1561,64 @@ public static class PlayerBotDriver
     /// it steps out of the reach of any monster that would aggro (stepsOut: in reach, with a clear spot to go to); then
     /// it plans the relocation owed after a death (replanOwed, OwesReplan); then it waits out its back-off (the GameBot's
     /// no-XP death streak, AutonomousDeathRecoveryPolicy) and the resurrection illness out there; then it is done. The
-    /// release restores health, power and endurance (GamePlayer.cs:1723-1725): no rest to full.</summary>
-    public static PlayerBotRecovery AfterReleaseStep(bool attacked, bool stepsOut, bool replanOwed, bool backingOff, bool ill) =>
-        attacked ? PlayerBotRecovery.Fight : stepsOut ? PlayerBotRecovery.StepOut : replanOwed ? PlayerBotRecovery.Replan :
+    /// release restores health, power and endurance (GamePlayer.cs:1723-1725): no rest to full. #167 D4: while the
+    /// release's immunity lasts with a camp planned and a point toward it (immuneWalk), it walks out toward the camp
+    /// first (WalkOut), as no monster may attack it then (AbstractServerRules.cs:354; StandardMobBrain.cs:582, :675): the
+    /// safest seconds of the life were spent standing, held for the replan.</summary>
+    public static PlayerBotRecovery AfterReleaseStep(bool attacked, bool stepsOut, bool replanOwed, bool backingOff, bool ill,
+        bool immuneWalk) =>
+        attacked ? PlayerBotRecovery.Fight : immuneWalk ? PlayerBotRecovery.WalkOut :
+        stepsOut ? PlayerBotRecovery.StepOut : replanOwed ? PlayerBotRecovery.Replan :
         backingOff || ill ? PlayerBotRecovery.Wait : PlayerBotRecovery.Done;
+
+    /// <summary>The walk out's point (#167 D4): of the clear points (out of every reach) within maxDistance of here, the
+    /// one that leaves the least distance to the goal, the camp planned (progress, not detour: with the least detour, every
+    /// point on the line to the camp tied and the nearest ring won); on a tie, the one nearest here. With no goal, the
+    /// nearest. None within maxDistance: null. Recomputed on each arrival while the immunity lasts.</summary>
+    public static Vector3? StepOutPoint(Vector3 here, Vector3? goal, IReadOnlyList<Vector3> clearPoints, float maxDistance)
+    {
+        Vector3? best = null;
+        float bestLeft = 0, bestNear = 0;
+        foreach (Vector3 point in clearPoints)
+        {
+            float near = Vector3.Distance(here, point);
+            if (near > maxDistance) continue;
+            float left = goal is Vector3 camp ? Vector3.Distance(point, camp) : 0;
+            if (best == null || left < bestLeft || left == bestLeft && near < bestNear)
+                (best, bestLeft, bestNear) = (point, left, near);
+        }
+        return best;
+    }
+
+    /// <summary>Whether the walk out goes on to point (#167 D4): in a monster's reach (hereClear false) to any; from a clear
+    /// spot only to one that leaves less to the goal. The rings start 500 units out, so at the camp's edge it stepped
+    /// from clear point to clear point until the immunity ran out.</summary>
+    public static bool WalksOut(Vector3 here, bool hereClear, Vector3? goal, Vector3? point) =>
+        point is Vector3 next && (!hereClear || goal is Vector3 camp && Vector3.Distance(next, camp) < Vector3.Distance(here, camp));
+
+    /// <summary>The release's immunity's end (#167 D4): the server's (m_invulnerabilityTick) is protected
+    /// (GamePlayer.cs:12236). Release's Released event (GamePlayer.cs:1752) starts TIMER_KILLED_BY_MOB seconds
+    /// (AbstractServerRules.cs:258-262, :280-285; ServerProperties.cs:1273-1274), from the release the bot asked for
+    /// (askedAt: the ask that revived it, the think before its first alive), else from that first think (releasedAt). An
+    /// ask that came earlier than the release that took gives an earlier end: a shorter walk, never one past it.</summary>
+    public static long ImmunityEnd(long askedAt, long releasedAt, int immunitySeconds) =>
+        (askedAt != 0 ? askedAt : releasedAt) + immunitySeconds * 1000L;
+
+    /// <summary>The immunity left (#167 D4): to its end (ImmunityEnd) while the server still holds the bot immune
+    /// (invulnerable, GamePlayer.cs:12284-12287); none on a PvE server, which starts none (GamePlayer.cs:12249-12250).</summary>
+    public static long ImmunityLeft(long immuneUntil, long now, bool invulnerable) =>
+        invulnerable ? Math.Max(0, immuneUntil - now) : 0;
+
+    /// <summary>How far the walk out reaches in the immunity left (#167 D4): that time at the bot's run, or its sprint
+    /// (RunSpeed, SprintSpeed).</summary>
+    public static float WalkOutReach(long leftMs, bool sprinting) => leftMs * (sprinting ? SprintSpeed : RunSpeed) / 1000f;
+
+    /// <summary>The walk out's sprint (#167 D4): on when a walk out starts with the endurance to start one (over
+    /// SprintStartEndurance, GamePlayer.cs:8633), off when the walk ends (walkOutSprint: its own is on). A sprint drains
+    /// endurance whenever the bot moves (GamePlayer.cs:2397-2425): left on, the walk on to the camp ended near 5%. A
+    /// break-off's sprint is its own. Null: no change.</summary>
+    public static bool? SprintChange(bool walkingOut, bool walkOutSprint, int endurance) =>
+        walkingOut ? (walkOutSprint || endurance <= SprintStartEndurance ? null : true) : walkOutSprint ? false : null;
 
     /// <summary>Whether the bot breaks off and sprints out of reach (#167 C2): losing to two. 2 or more monsters on it, or
     /// right after a kill in a fight that had 2 or more on it with 1 still on it (addFight: the second-monster case, k12's
@@ -2623,7 +2693,8 @@ public static class PlayerBotDriver
 
     // #167 F4: a release starts the recovery (AfterReleaseStep): the back-off from now (the GameBot's, from its replan
     // after the release, AWBC:3778-3786), and the hold for the relocation owed. #167 C6: a login only its step out (no
-    // backOff): no release time (DEATH again= and sinceRelease= stay the release's), no back-off, no replan owed.
+    // backOff): no release time (DEATH again= and sinceRelease= stay the release's), no back-off, no replan owed. #167
+    // D4: the release's immunity's end (ImmunityEnd, from the ask, still set here) and the walk out afresh; a login none.
     private static void StartRecovery(PlayerBotState state, long now, bool backOff)
     {
         if (backOff)
@@ -2633,8 +2704,15 @@ public static class PlayerBotDriver
             state.ReplanSince = state.ReplanOwed != null ? now : 0;
             (state.BackPending, state.BackOwed, state.BackMoved) = (true, state.ReplanOwed != null, false);   // C1: BACK
             state.BackStepOutMs = state.BackHoldMs = state.BackWalkMs = 0;
+            (state.BackSame, state.BackImmuneMs) = (false, 0);                                                  // D4
+            state.ImmuneUntil = ImmunityEnd(state.ReleaseAskedAt, now, ServerProperties.Properties.TIMER_KILLED_BY_MOB);
         }
-        else state.RecoverUntil = now;
+        else
+        {
+            state.RecoverUntil = now;
+            state.ImmuneUntil = 0;
+        }
+        (state.WalkOutGoal, state.WalkOutOver, state.WalkOutSprint) = (null, false, false);
         state.AfterRelease = true;
         state.ClearSpot = null;
         state.NextReachTick = state.StepOutBlockedUntil = 0;
@@ -2654,24 +2732,56 @@ public static class PlayerBotDriver
     // test every 2 s, over the monsters round it that would aggro (AddReach), and a walk to the nearest clear spot on
     // the navmesh, unless it sits (a rest after it fought back). A blocked walk stands it for StepOutPauseMilliseconds.
     // Its other steps run in Think: the relocation owed and the holds at step 15, no search at step 14 while the
-    // recovery lasts; when it is over, the idle clock starts afresh. True while it walks.
+    // recovery lasts; when it is over, the idle clock starts afresh. True while it walks. #167 D4: while the release's
+    // immunity lasts (ImmunityLeft) with a camp planned since the release (BackMoved: PlanCamp's, a death's), it walks
+    // out toward that camp instead (WalkOut), point by point (NextWalkOutPoint, again on each arrival), sprinting
+    // (SprintChange). The immunity over, no point, a blocked step or a fight end the walk out for this release
+    // (EndWalkOut), and its sprint with it; the ring test pauses meanwhile and runs again at its end.
     private static bool StepsOutOfReach(PlayerBotState state, GamePlayer player, long now)
     {
         if (!state.AfterRelease) return false;
-        if (now >= state.NextReachTick)
+        long immuneLeft = ImmunityLeft(state.ImmuneUntil, now, player.IsInvulnerableToAttack);   // #167 D4
+        if (immuneLeft <= 0 && state.WalkOutGoal != null) EndWalkOut(state);
+        else if (immuneLeft > 0 && state.WalkOutGoal == null && !state.WalkOutOver && state.BackMoved)
+            state.WalkOutOver = (state.WalkOutGoal = NextWalkOutPoint(state, player, immuneLeft)) == null;
+        if (state.WalkOutGoal == null && now >= state.NextReachTick)
         {
             state.NextReachTick = now + TargetRefreshMilliseconds;
             state.ClearSpot = now < state.StepOutBlockedUntil ? null : ClearSpotNear(player, StepOutRings);
         }
-        switch (AfterReleaseStep(Threat(state, player, now) != null,                    // #167 F7: coming at it too
-                    state.ClearSpot != null && !player.IsSitting, state.ReplanOwed != null, now < state.RecoverUntil, Ill(player)))
+        PlayerBotRecovery next = AfterReleaseStep(Threat(state, player, now) != null,   // #167 F7: coming at it too
+            state.ClearSpot != null && !player.IsSitting, state.ReplanOwed != null, now < state.RecoverUntil, Ill(player),
+            state.WalkOutGoal != null);
+        if (next is not PlayerBotRecovery.WalkOut && state.WalkOutGoal != null) EndWalkOut(state);   // a fight
+        if (SprintChange(next is PlayerBotRecovery.WalkOut, state.WalkOutSprint, player.Endurance) is bool sprint)
+        {
+            player.Sprint(sprint);                                                      // GamePlayer.cs:8625-8652
+            state.WalkOutSprint = sprint;
+        }
+        switch (next)
         {
             case PlayerBotRecovery.Fight:
                 state.ClearSpot = null;                                                 // it fights back (step 14)
                 return false;
+            case PlayerBotRecovery.WalkOut:
+                state.Activity = PlayerBotActivity.Roaming;
+                state.BackWalkMs += TickMilliseconds;                                   // #167 D4: BACK walk=, the walk
+                state.BackImmuneMs += TickMilliseconds;                                 //   back, and immune=
+                state.Walk = PlayerBotWalk.WalkOut;                                     // #167 walk=
+                Vector3 point = state.WalkOutGoal.Value;
+                PlayerBotStepResult walked = state.Mover.StepToward(point, 20, now);
+                if (walked is PlayerBotStepResult.Blocked)
+                {
+                    ReportBlocked(state, player, "walkout", point, now);
+                    state.StepOutBlockedUntil = now + StepOutPauseMilliseconds;         //   as a blocked step out
+                    EndWalkOut(state);
+                }
+                else if (walked is PlayerBotStepResult.Arrived) state.WalkOutGoal = null;   // the next point next think
+                return true;
             case PlayerBotRecovery.StepOut:
                 state.Activity = PlayerBotActivity.Roaming;
                 state.BackStepOutMs += TickMilliseconds;                                // #167 C1: BACK stepOut=
+                if (immuneLeft > 0) state.BackImmuneMs += TickMilliseconds;             // #167 D4: and immune=
                 state.Walk = PlayerBotWalk.Clear;                                       // #167 walk=
                 PlayerBotStepResult step = state.Mover.StepToward(state.ClearSpot.Value, 20, now);
                 if (step is PlayerBotStepResult.Blocked)
@@ -2690,18 +2800,50 @@ public static class PlayerBotDriver
         }
     }
 
+    // #167 D4: the walk out's end for this release (WalkOutOver): its point dropped, and the ring test at once (its 2-s
+    // clock paused during the walk). Its sprint goes off on the same think (SprintChange).
+    private static void EndWalkOut(PlayerBotState state) =>
+        (state.WalkOutGoal, state.WalkOutOver, state.NextReachTick) = (null, true, 0);
+
+    // #167 D4: the walk out's next point toward the camp planned (the anchor, PlanCamp's): of the step-out rings' points
+    // within the reach the immunity left gives (WalkOutReach, at the sprint's speed when it sprints), on the navmesh and
+    // out of the reach of every monster round it that would aggro (ThreatsWithin, as ClearSpotNear's), the one that
+    // leaves the least to the camp (StepOutPoint); from a clear spot only one nearer the camp (WalksOut). None: null.
+    private static Vector3? NextWalkOutPoint(PlayerBotState state, GamePlayer player, long immuneLeft)
+    {
+        float reach = WalkOutReach(immuneLeft, state.WalkOutSprint || player.Endurance > SprintStartEndurance);
+        int[] rings = StepOutRings.Where(ring => ring <= reach).ToArray();
+        if (rings.Length == 0) return null;
+        List<(GameNPC Npc, Vector3 At, int AggroRange)> adds = ThreatsWithin(player, rings[^1] + AddScanMargin);
+        Vector3 here = new(player.X, player.Y, player.Z);
+        List<Vector3> clear = ClearSpots(here, RingPoints(here, rings, SpotDirections).Select(p => OnMesh(player, p))
+            .Where(p => p.HasValue).Select(p => p.Value), adds);
+        bool hereClear = !InAddReach(here, adds);
+        adds.Clear();                                                                   // no monster held past the scan
+        Vector3? point = StepOutPoint(here, state.Anchor, clear, reach);
+        return WalksOut(here, hereClear, state.Anchor, point) ? point : null;
+    }
+
     // The spot out of every potential add's reach nearest the bot (SpotOutOfReach), or null: the monsters within the
     // rings' reach (AddScanMargin past the outer one) that would aggro, a hostile keep guard too (#167 D7, CountsAsThreat).
     private static Vector3? ClearSpotNear(GamePlayer player, int[] rings)
     {
-        List<(GameNPC Npc, Vector3 At, int AggroRange)> adds = _reach ??= new();
-        adds.Clear();
-        foreach (GameNPC npc in player.GetNPCsInRadius((ushort)(rings[^1] + AddScanMargin)))
-            if (IsThreat(npc, player.Realm) && AddReach(player, npc) is > 0 and int reach)  // #167 D7: hostile keep guards too
-                adds.Add((npc, new(npc.X, npc.Y, npc.Z), reach));
+        List<(GameNPC Npc, Vector3 At, int AggroRange)> adds = ThreatsWithin(player, rings[^1] + AddScanMargin);
         Vector3? found = SpotOutOfReach(player, rings, adds);
         adds.Clear();                                                                   // no monster held past the scan
         return found;
+    }
+
+    // The monsters within radius round the bot that would aggro it (AddReach), a hostile keep guard too (#167 D7,
+    // IsThreat), in the scans' list (_reach): the caller clears it.
+    private static List<(GameNPC Npc, Vector3 At, int AggroRange)> ThreatsWithin(GamePlayer player, int radius)
+    {
+        List<(GameNPC Npc, Vector3 At, int AggroRange)> adds = _reach ??= new();
+        adds.Clear();
+        foreach (GameNPC npc in player.GetNPCsInRadius((ushort)radius))
+            if (IsThreat(npc, player.Realm) && AddReach(player, npc) is > 0 and int reach)  // #167 D7: hostile keep guards too
+                adds.Add((npc, new(npc.X, npc.Y, npc.Z), reach));
+        return adds;
     }
 
     // RestSpot over the ring points on the navmesh (each one's nearest mesh point; with no navmesh, the points), or null
@@ -2938,7 +3080,8 @@ public static class PlayerBotDriver
                 state.Anchor);                                                          // wherever (C1b)
             state.NextRelocateTick = 0;                                                 //   and the plan before the walk back
             state.AfterRelease = false;
-            state.CappedSince = 0;
+            (state.WalkOutGoal, state.WalkOutSprint) = (null, false);                    // #167 D4: Die ends the sprint
+            state.CappedSince = 0;                                                      //   (GameLiving.cs:2058)
             state.Target = null;
             state.Engaged = false;
             state.RoamDestination = null;
@@ -3060,7 +3203,7 @@ public static class PlayerBotDriver
         if (Log.IsInfoEnabled)
             Log.Info(PlayerBotDriverReport.FormatBack(player.Name, player.Level, (now - state.ReleasedAt) / 1000,
                 state.BackStepOutMs / 1000, state.BackHoldMs / 1000, state.BackWalkMs / 1000,
-                BackReplan(state.BackOwed, state.BackMoved)));
+                BackReplan(state.BackOwed, state.BackMoved, state.BackSame), state.BackImmuneMs / 1000));
     }
 
     // One line per fight the bot was in when it settles (SettleTarget), so a fight's cost shows beside the deaths; or
@@ -3569,8 +3712,9 @@ public static class PlayerBotDriver
     }
 
     // #167 D4, step 11b: after a release, while its immunity lasts (GamePlayer.cs:12284-12287), no self-buff and no pet:
-    // the bot plans first (step 15) and casts them after. A cast returns the think before the plan, and stands the bot
-    // (CastOnSelf). Its heal is moot then: the release restores its health (GamePlayer.cs:1723).
+    // the bot plans first (step 15) and walks out (StepsOutOfReach's WalkOut), and casts them where the walk ends. A cast
+    // returns the think before the plan, and stands the bot (CastOnSelf). Its heal is moot then: the release restores its
+    // health (GamePlayer.cs:1723).
     private static bool CastsAfterWalkOut(PlayerBotState state, GamePlayer player) =>
         state.AfterRelease && player.IsInvulnerableToAttack;
 

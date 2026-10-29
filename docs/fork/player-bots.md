@@ -129,11 +129,14 @@ Each bot thinks every 250 ms, a thin copy of the `/bot` pilot's think:
   realm or of none too. Such a guard also counts as an add when it picks a target and a spot to rest, but it never
   pulls one. Wherever it died (at its camp or on a walk), it then plans a new camp from where it died, one it can walk
   to from there, before it walks back. It plans at once, while the release's 10-s immunity lasts: the plan counts the
-  monsters it may not attack until then. It casts no self-buff and summons no pet until the immunity is over, so
-  nothing holds the plan back. It takes no camp it died at in the last 15 minutes while another camp that
-  cons yellow or easier is left. From its third death with no XP in between it waits 30-120 s out there, as a GameBot
-  does, and it waits out the resurrection illness there too. It pulls nothing until then, but fights back. No hold for
-  a camp lasts over 60 s: then it hunts where it is.
+  monsters it may not attack until then. With a camp planned and the immunity still on, no monster may attack it, so
+  it walks out toward the camp instead of standing: sprinting, from spot to spot out of every aggressive monster's
+  reach, each the one that leaves the least of the way, as far as the immunity left lets it get, and from a clear spot
+  only to one nearer the camp. Its sprint goes off when that walk ends. It casts no self-buff and summons no pet until
+  the immunity is over: it buffs where the walk ends. It takes no camp it died at in the last 15 minutes while another
+  camp that cons yellow or easier is left. From its third death with no XP in between it waits 30-120 s out there, as a
+  GameBot does, and it waits out the resurrection illness there too. It pulls nothing until then, but fights back. No
+  hold for a camp lasts over 60 s: then it hunts where it is.
 - At login it also first steps out of the reach of every monster round it that would aggro, then hunts: no wait and
   no new camp.
 - It walks on the navmesh. A bot made at a level from a spots line also trains on each level-up.
@@ -359,11 +362,12 @@ All start `PLAYER_BOT_`:
   `tHpAtReach=` (the bot's and its target's health at the first hit on the bot; -1 if none), `rate=` (the health lost
   a second over the last 3 s; a gain is negative), `wouldBreak=` (the bot's health when a break-off projected from that
   rate would have fired, under 40% or under 6 s of the loss; logged only, -1 if never) and `walk=` (the walk on the
-  think before the fight began: `none`, `hunt`, `anchor`, `roam`, `clear`, `rest`, `kite` or `breakoff`). Out of a
+  think before the fight began: `none`, `hunt`, `anchor`, `roam`, `clear`, `rest`, `kite`, `breakoff` or `walkout`, the
+  walk out toward the camp planned under the release's immunity). Out of a
   fight `DEATH` gives -1 for the fight's fields, `rate=` at the death and the walk on its last think alive; it ends with
   `end=` (endurance).
-  `BLOCKED`'s `walk=` is `target`, `roam`, `clear` (the step out after a release), `rest`, `kite`, `turret` or
-  `breakoff`. `RELOCATE` after a death (`reason=died`) ends with `sinceRelease=`, the milliseconds since the release;
+  `BLOCKED`'s `walk=` is `target`, `roam`, `clear` (the step out after a release), `walkout`, `rest`, `kite`, `turret`
+  or `breakoff`. `RELOCATE` after a death (`reason=died`) ends with `sinceRelease=`, the milliseconds since the release;
   after a break-off its `reason=` is `brokeoff`. A break-off drops its fight (`FIGHT result=dropped`);
 - `BREAKOFF`: one per break-off, when it ends: the bot's `hp=`, `end=` (endurance) and `attackers=` when it broke off,
   `sec=`, the seconds it ran, and `outcome=`: `shook` (none still after it), `fought` (still chased after 30 s, or
@@ -374,7 +378,9 @@ All start `PLAYER_BOT_`:
   `sinceDeath=` (the milliseconds since the death);
 - `BACK`: at the first fight after a release, `sec=`, the seconds since the release, and of those `stepOut=` (the step
   out of reach), `hold=` (the back-off, the illness or the hold for the replan) and `walk=` (roaming, the walk back
-  among it); then `replan=`: `moved` (a camp planned since), `none` (owed, none planned) or `notOwed`;
+  among it, and the walk out under the immunity); then `replan=`: `moved` (a camp planned since), `same` (that camp is
+  the anchor it had, within 200 units), `none` (owed, none planned) or `notOwed`; then `immune=`, the seconds it walked
+  while the release's immunity lasted (the step out and the walk out);
 - `REST`: one per rest, when the bot stands: `sec=`, the seconds it sat, `why=`: `recovered`, `hit`, `incoming` (a
   monster coming at it), `heal`, `pet` or `buff` (a cast on itself before it had recovered; after, `recovered`),
   `died`, or `other`; then `hp=` and `mp=`, its health and power when it sat (`mp=100` with no power pool), and
