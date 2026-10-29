@@ -3435,9 +3435,22 @@ public static class PlayerBotDriver
     private static (bool Held, bool BreaksOnHit) Hold(GameLiving target) =>
         target.IsStunned ? (true, false) : target.IsMezzed || Rooted(target) ? (true, true) : (false, false);
 
+    // #167 D5: every slow on it (AnyRoot), not the first by StartTick (EffectListService.GetEffectOnTarget). Its spellType
+    // overload (EffectListService.cs:102-106) would return the first SpeedDecrease, which can be a plain snare.
     private static bool Rooted(GameLiving target) =>
-        EffectListService.GetEffectOnTarget(target, eEffect.MovementSpeedDebuff) is ECSGameSpellEffect effect &&
-        effect.SpellHandler?.Spell is Spell spell && spell.SpellType is eSpellType.SpeedDecrease && spell.Value >= 99;
+        AnyRoot(target.effectListComponent.GetSpellEffects(eEffect.MovementSpeedDebuff)
+            .Where(effect => effect.SpellHandler?.Spell != null)
+            .Select(effect => (effect.SpellHandler.Spell.SpellType, effect.SpellHandler.Spell.Value, effect.IsDisabled)));
+
+    /// <summary>#167 D5: a root among the slows on a target (its MovementSpeedDebuff list): a SpeedDecrease of 99% or more
+    /// that isn't disabled, whatever landed before it. A damage-and-snare nuke (EffectGroup 0) and a root (65) both sit
+    /// in that list; the first by StartTick was the snare in st-deathsC's caster traps.</summary>
+    public static bool AnyRoot(IEnumerable<(eSpellType Type, double Value, bool Disabled)> slows)
+    {
+        foreach ((eSpellType type, double value, bool disabled) in slows)
+            if (!disabled && type is eSpellType.SpeedDecrease && value >= 99) return true;
+        return false;
+    }
 
     // #167 C8: whether the target takes this control now, by the server's own tests of its kind: the immunities
     // (AbstractCCSpellHandler.ApplyEffectOnTarget's CCImmunity, CCSpellHandler.cs:17-21; a stun's, :276-283; a mez's,

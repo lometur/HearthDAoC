@@ -3930,6 +3930,37 @@ public sealed class UT_PlayerBotDriver
         Assert.That((state.Swings, state.NotVisible), Is.EqualTo((4, 2)));
     }
 
+    // #167 D5: a caster sees its root under a damage-and-snare nuke. Both sit in the target's MovementSpeedDebuff list,
+    // and the hold read only the first by StartTick: with the snare first, held stayed false (no step back, no broken hold
+    // counted, and the control tries ran out on re-roots the root already there refused). Any root on counts: a
+    // SpeedDecrease of 99% or more that isn't disabled.
+    [TestCase(new[] { eSpellType.DamageSpeedDecrease, eSpellType.SpeedDecrease }, new[] { 35.0, 99.0 }, new[] { false, false },
+        true)]
+    [TestCase(new[] { eSpellType.SpeedDecrease, eSpellType.DamageSpeedDecrease }, new[] { 99.0, 35.0 }, new[] { false, false },
+        true)]
+    [TestCase(new[] { eSpellType.DamageSpeedDecrease }, new[] { 35.0 }, new[] { false }, false)]
+    [TestCase(new[] { eSpellType.SpeedDecrease }, new[] { 35.0 }, new[] { false }, false)]
+    [TestCase(new[] { eSpellType.SpeedDecrease }, new[] { 99.0 }, new[] { true }, false)]
+    [TestCase(new eSpellType[0], new double[0], new bool[0], false)]
+    public void A_root_counts_whatever_slow_landed_before_it(eSpellType[] types, double[] values, bool[] disabled, bool rooted) =>
+        Assert.That(PlayerBotDriver.AnyRoot(types.Select((type, i) => (type, values[i], disabled[i]))), Is.EqualTo(rooted));
+
+    // The st-deathsC case where the hold reads it: a snare nuke landed, then the root.
+    [Test]
+    public void A_target_snared_then_rooted_is_held()
+    {
+        MethodInfo rooted = typeof(PlayerBotDriver).GetMethod("Rooted", BindingFlags.Static | BindingFlags.NonPublic)!;
+        GamePlayer bot = Player(null);
+        GameNPC monster = LiveMonster();
+        Spell snareNuke = Control(5208, "snare nuke", "DamageSpeedDecrease", 10, 35),
+            root = Control(500, "root", "SpeedDecrease", 10, 99);
+        Effects(monster)[eEffect.MovementSpeedDebuff] = [SpellEffect(monster, bot, snareNuke, 10_000),
+            SpellEffect(monster, bot, root, 11_000)];
+        Assert.That(rooted.Invoke(null, [monster]), Is.True, "the root under the snare");
+        Effects(monster)[eEffect.MovementSpeedDebuff] = [SpellEffect(monster, bot, snareNuke, 10_000)];
+        Assert.That(rooted.Invoke(null, [monster]), Is.False, "the snare alone");
+    }
+
     // FIGHT and DEATH ctlBroken= (#167 C3): a hold the bot's own swing ended, as a think sees it: its target held by a root
     // or a mez (a hit or a miss ends them, GameLiving.cs:1762-1777) at the last think, no longer now, and a swing of its
     // own counted since (CountSwing).

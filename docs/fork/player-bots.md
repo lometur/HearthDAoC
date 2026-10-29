@@ -70,8 +70,9 @@ Each bot thinks every 250 ms, a thin copy of the `/bot` pilot's think:
   melee with no clear spot it steps back 400 units straight away anyway, and never to a spot nearer the target than
   it stands. While its target is held it keeps its spell's range, even with hits blocking its spells or too little
   power (then its longest damage spell's range), and it never swings at a rooted or mezzed monster (its hit, or a
-  miss, would free it): it waits instead. Not while another monster that isn't held hits it, and not for 5 s after a
-  blocked step back: then it fights as before. Only single-target spells the bot has, that the monster
+  miss, would free it): it waits instead. A root counts even under a snare that landed before it (a damage-and-snare
+  nuke's). Not while another monster that isn't held hits it, and not for 5 s after a blocked step back: then it fights
+  as before. Only single-target spells the bot has, that the monster
   isn't immune to by the server's own rules: a monster stunned or mezzed in the last minute takes the next one for
   half the time, then a quarter, and none under 1 s. A mez on its target only as the last escape, the monster about to
   reach it, and only on a monster above 75% health.
