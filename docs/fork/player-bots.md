@@ -90,7 +90,9 @@ Each bot thinks every 250 ms, a thin copy of the `/bot` pilot's think:
   last minute takes the next one for half the time, then a quarter, and none under 1 s; and no root on a monster a slow
   holds that the root doesn't beat (the server refuses it: a damage-and-snare nuke's slow carries damage no root has),
   so it casts its next control, or none. A mez on its target only as the last escape, the monster about to reach it, and
-  only on a monster above 75% health. It puts no root or mez on a monster its own damage-over-time spell is ticking on
+  only on a monster above 75% health. Hit in melee by its target alone, a caster with a mez (a Mentalist) casts it
+  rather than a stun that would end before its step back to range (a 6-s stun against about 6.4 s of walking from
+  melee), so it walks out with it held. It puts no root or mez on a monster its own damage-over-time spell is ticking on
   (the next tick would free it), and for the break-off such a monster has no hold ready; so a root caster that put one
   on a green monster has no root for it for the spell's 20-24 s should the fight turn (the caster under 60% health, or
   an add). It casts its damage spell while it can pay that spell's cost as the server charges it (a focus caster 80-120%
@@ -437,7 +439,8 @@ All start `PLAYER_BOT_`:
   (endurance). Both then give `kiteNone=range:clear:mesh:fit`, the fight's steps back that found no point, by why:
   `range` (the bot already stood at its spell's reach), `clear` (no point out of the other monsters' reach), `mesh`
   (none on the navmesh) or `fit` (none within the stop once on the navmesh's height); -1 each out of a fight.
-  Then `dots=`, its damage-over-time casts, and `qcKill=`, 1 when a cast went under Quickcast as the killing nuke (-1
+  Then `dots=`, its damage-over-time casts, `qcKill=`, 1 when a cast went under Quickcast as the killing nuke, and
+  `ctlMez=`, its mezzes at the target (-1
   each out of a fight). `BLOCKED`'s `walk=` is `target`, `roam`, `clear` (the step out after a release), `walkout`,
   `rest`, `kite`, `turret` or `breakoff`. `RELOCATE` after a death (`reason=died`) ends with `sinceRelease=`, the
   milliseconds since the release; after a break-off its `reason=` is `brokeoff`. Either ends with `barred=old` when the

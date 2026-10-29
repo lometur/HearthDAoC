@@ -1205,7 +1205,7 @@ public sealed class UT_PlayerBotDriver
             LastWalk = PlayerBotWalk.Rest, FightWalk = PlayerBotWalk.Hunt, FightHeldMs = 3_000, FightCtlLanded = 2,
             FightCtlFailed = 1, FightHpAtReach = 50, FightTargetHpAtReach = 40, WouldBreakHp = 30,
             PendingControl = (Control(500, "root", "SpeedDecrease", 10, 99), Player(null), 8_000), FightBuffHitters = 2,
-            FightDots = 2, FightKillingQuickcast = true };
+            FightDots = 2, FightKillingQuickcast = true, FightTargetMezzes = 1 };
         Assert.That(PlayerBotDriver.OpenFight(state, 10_000, 90, 60, 1_420, 100), Is.True, "the first fight since a release");
         Assert.That((state.BackPending, state.KilledWithAdds, state.ControlTries, state.FightCasts, state.FightAdd),
             Is.EqualTo((false, false, 0, 0, (-1, -1))));
@@ -1221,6 +1221,7 @@ public sealed class UT_PlayerBotDriver
         Assert.That(state.FightBuffHitters, Is.Zero, "#167 D12: no monster on the bot before the fight's first think");
         Assert.That(state.FightDots, Is.Zero, "#167 E C1: dots= afresh");
         Assert.That(state.FightKillingQuickcast, Is.False, "#167 E C2b: qcKill= afresh");
+        Assert.That(state.FightTargetMezzes, Is.Zero, "#167 E C4: ctlMez= afresh");
         Assert.That(PlayerBotDriver.OpenFight(state, 30_000, 90, 60, 1_420, 100), Is.False, "the next one");
     }
 
@@ -3826,6 +3827,68 @@ public sealed class UT_PlayerBotDriver
         Assert.That(PlayerBotDriver.Takes(Cripple, false, true, null, 100), Is.False, "root-immune");
     }
 
+    // --- #167 E C4: the mez before a stun the step back outlasts ---
+
+    // World-DB Mentalist controls: Prismatic Shimmer (Way of the Sun 26, a 6-s stun), Prismatic Sheen (36, 8 s), Lock Mind
+    // (Mind Mastery 31, a 55-s mez).
+    private static readonly Spell PrismaticShimmer = Control(4123, "Prismatic Shimmer", "Stun", 26, 0, duration: 6),
+        PrismaticSheen = Control(4124, "Prismatic Sheen", "Stun", 36, 0, duration: 8),
+        LockMind = Control(4676, "Lock Mind", "Mesmerize", 31, 0, castTime: 3.0, duration: 55);
+    private static readonly SpellLine MindMastery = new("Mind Mastery", "Mind Mastery", Specs.Mentalism, false);
+
+    // The server's diminished hold: 6 s, then 3 s, then 1.5 s within the minute.
+    [Test]
+    public void A_stuns_hold_now_is_what_the_servers_diminishing_leaves_of_it()
+    {
+        NpcStunImmunityEffect afterShimmer = new(new ECSGameEffectInitParams(null, 60_000, 1,
+            new DOL.GS.Spells.StunSpellHandler(null, PrismaticShimmer, SunLine)));
+        Assert.That(PlayerBotDriver.HoldNowMs(null, PrismaticShimmer.Duration), Is.EqualTo(6_000L));
+        Assert.That(PlayerBotDriver.HoldNowMs(afterShimmer, PrismaticShimmer.Duration), Is.EqualTo(3_000L));
+        afterShimmer.OnApplyNewEffect();
+        Assert.That(PlayerBotDriver.HoldNowMs(afterShimmer, PrismaticShimmer.Duration), Is.EqualTo(1_500L));
+    }
+
+    // The step back's walk: from melee (150) to a 1,420 stop less KiteStopMargin, 1,220 units at 191, 6,387 ms; from
+    // beyond that point, none.
+    [TestCase(1_420, 150, 6_387L)] [TestCase(1_420, 1_400, 0L)]
+    public void The_step_back_walks_to_its_stop_at_run_speed(int stop, int distance, long walkMs) =>
+        Assert.That(PlayerBotDriver.StepBackWalkMs(stop, distance), Is.EqualTo(walkMs));
+
+    // With hits on the bot from its target alone (soleHitter: CasterAction then steps back from a stunned target too) a
+    // 6-s stun ends before a 6,387-ms walk and the margin (the mez first), an 8-s one doesn't; not hit, nothing to walk,
+    // or an add's hits too (the review: then CasterHolds is false and no step back comes), the stun.
+    [TestCase(true, true, 6_000L, 6_387L, true)] [TestCase(true, true, 8_000L, 6_387L, false)]
+    [TestCase(false, false, 6_000L, 6_387L, false)] [TestCase(true, true, 6_000L, 0L, false)]
+    [TestCase(true, false, 6_000L, 6_387L, false)]
+    public void The_mez_goes_before_a_stun_the_step_back_outlasts(bool hitsOnBot, bool soleHitter, long stunHoldMs,
+        long walkMs, bool mezFirst) =>
+        Assert.That(PlayerBotDriver.MezBeforeStun(hitsOnBot, soleHitter, stunHoldMs, walkMs), Is.EqualTo(mezFirst));
+
+    // v9: Pbothaadw's defences against arbordons, in melee and hit: Quickcast to Prismatic Shimmer, then a 6.4-s step
+    // back the 6-s stun didn't outlast, 1-3 casts in 26-34 s. Now Lock Mind, and it walks out with the monster held; not
+    // hit, the stun (it stands and nukes); hit by an add too, the stun (no step back comes); no mez it may cast (the
+    // target under 75%, or its DoT on it), the stun; an 8-s Sheen outlasts the walk; a second Shimmer (3 s) doesn't.
+    [Test]
+    public void A_mentalist_hit_in_melee_mezzes_before_a_stun_its_step_back_outlasts()
+    {
+        (Spell, SpellLine)[] mentalist = [(PrismaticShimmer, SunLine), (LockMind, MindMastery)];
+        long walk = PlayerBotDriver.StepBackWalkMs(1_420, 150);
+        Spell Choose((Spell, SpellLine)[] controls, bool hit, bool sole, Func<Spell, long> hold, Func<Spell, bool> allowed) =>
+            PlayerBotDriver.ChooseTargetControl(controls, _ => true, allowed, hold, hit, sole, walk).Item1;
+        Assert.That(Choose(mentalist, true, true, s => s.Duration, _ => true), Is.SameAs(LockMind), "before: Prismatic Shimmer");
+        Assert.That(Choose(mentalist, false, false, s => s.Duration, _ => true), Is.SameAs(PrismaticShimmer), "not hit");
+        Assert.That(Choose(mentalist, true, false, s => s.Duration, _ => true), Is.SameAs(PrismaticShimmer),
+            "an add hits it too: no step back comes");
+        Assert.That(Choose(mentalist, true, true, s => s.Duration, s => s.SpellType is eSpellType.Stun),
+            Is.SameAs(PrismaticShimmer), "no mez it may cast");
+        Assert.That(Choose([(PrismaticSheen, SunLine), (LockMind, MindMastery)], true, true, s => s.Duration, _ => true),
+            Is.SameAs(PrismaticSheen), "8 s outlasts the walk");
+        Assert.That(Choose(mentalist, true, true, s => s.SpellType is eSpellType.Stun ? 3_000 : s.Duration, _ => true),
+            Is.SameAs(LockMind), "a second Shimmer, 3 s");
+        Assert.That(Choose([(PrismaticShimmer, SunLine)], true, true, s => s.Duration, _ => true), Is.SameAs(PrismaticShimmer),
+            "no mez known");
+    }
+
     // CasterStep's filter on its target (C8; the review of 9aacd69: with MezWanted dropped from it no test failed): one the
     // target takes, and a mez only as the escape.
     [TestCase(false, true, 5_000L, true)] [TestCase(true, true, 3_500L, true)] [TestCase(true, true, 3_501L, false)]
@@ -5343,7 +5406,8 @@ public sealed class UT_PlayerBotDriver
     // (-1: none), rate=, the health it lost a second over the last 3 s (HealthRate; a gain is negative), wouldBreak=, its
     // health when the projected break-off would have fired (ProjectedBreak; -1: never), and walk=, the walk on the think
     // before the fight's first; then (#167 D8) kiteNone=, (#167 E C1) dots=, its damage-over-time casts, and (#167 E
-    // C2b) qcKill=, 1 when a cast went under Quickcast as the killing nuke.
+    // C2b) qcKill=, 1 when a cast went under Quickcast as the killing nuke, and (#167 E C4) ctlMez=, its mezzes at the
+    // target.
     [Test]
     public void FightFormat()
     {
@@ -5351,19 +5415,19 @@ public sealed class UT_PlayerBotDriver
                 true, 100, 38, 100, 12, 21, 1, 9, 2, 4, 0, 0, Pet: true, Heals: 2, Quickcast: true, Buffs: 3, PetCasts: 2, Waits: 5,
                 Controls: 2, Kites: 1, CtlBroken: 1, AddControls: 1, AddAt: 6, AddHp: 71, BreakOff: true, EngageDistance: 1_450,
                 Crowd: 1, HeldSeconds: 7, CtlLanded: 1, CtlFailed: 1, HpAtReach: 92, TargetHpAtReach: 64, Rate: 4.26, WouldBreak: 38,
-                Walk: PlayerBotWalk.Hunt, KiteNone: (1, 0, 2, 3), Dots: 2, KillingQuickcast: true)),
+                Walk: PlayerBotWalk.Hunt, KiteNone: (1, 0, 2, 3), Dots: 2, KillingQuickcast: true, TargetMezzes: 1)),
             Is.EqualTo("PLAYER_BOT_FIGHT bot=Pbotaaaac level=40 target=\"widow claw\" targetLevel=40 con=YELLOW from=pull result=kill " +
                        "startHp=100 endHp=38 startMana=100 endMana=12 sec=21 adds=1 swings=9 notVisible=2 casts=4 lifeKills=0 rests=0 " +
                        "pet=alive heals=2 qc=1 buffs=3 petCasts=2 waits=5 ctl=2 kites=1 ctlBroken=1 addCtl=1 addAt=6 addHp=71 " +
                        "breakOff=1 engageDist=1450 crowd=1 heldSec=7 ctlLanded=1 ctlFailed=1 hpAtReach=92 tHpAtReach=64 rate=4.3 " +
-                       "wouldBreak=38 walk=hunt kiteNone=1:0:2:3 dots=2 qcKill=1"));
+                       "wouldBreak=38 walk=hunt kiteNone=1:0:2:3 dots=2 qcKill=1 ctlMez=1"));
         Assert.That(PlayerBotDriverReport.FormatFight(new PlayerBotFight("Pbothaaab", 43, "empyrean guardian", 36, ConColor.BLUE, true,
                 false, 64, 51, 100, 100, 7, 2, 3, 0, 0, 3, 1, Rate: -0.04, Walk: PlayerBotWalk.BreakOff)),
             Is.EqualTo("PLAYER_BOT_FIGHT bot=Pbothaaab level=43 target=\"empyrean guardian\" targetLevel=36 con=BLUE from=defence " +
                        "result=dropped startHp=64 endHp=51 startMana=100 endMana=100 sec=7 adds=2 swings=3 notVisible=0 casts=0 " +
                        "lifeKills=3 rests=1 pet=none heals=0 qc=0 buffs=0 petCasts=0 waits=0 ctl=0 kites=0 ctlBroken=0 addCtl=0 " +
                        "addAt=-1 addHp=-1 breakOff=0 engageDist=-1 crowd=-1 heldSec=0 ctlLanded=0 ctlFailed=0 hpAtReach=-1 " +
-                       "tHpAtReach=-1 rate=0.0 wouldBreak=-1 walk=breakoff kiteNone=0:0:0:0 dots=0 qcKill=0"),
+                       "tHpAtReach=-1 rate=0.0 wouldBreak=-1 walk=breakoff kiteNone=0:0:0:0 dots=0 qcKill=0 ctlMez=0"),
             "a gain under 0.05 a second: 0.0, not -0.0");
     }
 
@@ -5430,7 +5494,8 @@ public sealed class UT_PlayerBotDriver
     // then FIGHT's addAt=, addHp= and engageDist= (-1 out of a fight too) and breakOff=, a death on a break-off's run;
     // then (st-deathsD's) FIGHT's heldSec=, ctlLanded=, ctlFailed=, hpAtReach=, tHpAtReach= and wouldBreak= (-1 out of a
     // fight), rate= at the death, walk=, the fight's (FIGHT's) or, out of a fight, the last think's alive, and end=, the
-    // endurance; then (#167 D8) FIGHT's kiteNone=, (#167 E C1) dots= and (#167 E C2b) qcKill= (-1 out of a fight).
+    // endurance; then (#167 D8) FIGHT's kiteNone=, (#167 E C1) dots=, (#167 E C2b) qcKill= and (#167 E C4) ctlMez= (-1
+    // out of a fight).
     [Test]
     public void DeathDetailFormat()
     {
@@ -5438,12 +5503,13 @@ public sealed class UT_PlayerBotDriver
                 2, 3, 0, 40, 100, 6, 1, "widow claw", 40, true, 748, Avoided: 2, Again: true, SinceRelease: 42, Ill: true,
                 Controls: 2, Kites: 1, Casts: 4, Quickcast: 1, Waits: 3, CtlBroken: 1, AddControls: 1, AddAt: 6, AddHp: 71,
                 EngageDistance: 1_450, HeldSeconds: 5, CtlLanded: 1, CtlFailed: 0, HpAtReach: 88, TargetHpAtReach: 90, Rate: 12.5,
-                WouldBreak: 52, Walk: PlayerBotWalk.Anchor, Endurance: 64, KiteNone: (0, 2, 1, 0), Dots: 1, KillingQuickcast: 1)),
+                WouldBreak: 52, Walk: PlayerBotWalk.Anchor, Endurance: 64, KiteNone: (0, 2, 1, 0), Dots: 1, KillingQuickcast: 1,
+                TargetMezzes: 1)),
             Is.EqualTo("activity=Fighting startHp=62 fightSec=14 targetHp=71 from=pull adds=2 lifeKills=3 rests=0 sinceKillSec=40 " +
                        "mana=100 swings=6 notVisible=1 killer=\"widow claw\" killerLevel=40 killerIsTarget=True fromBind=748 " +
                        "avoided=2 again=True sinceRelease=42 ill=True ctl=2 kites=1 casts=4 qc=1 waits=3 ctlBroken=1 addCtl=1 " +
                        "addAt=6 addHp=71 breakOff=0 engageDist=1450 heldSec=5 ctlLanded=1 ctlFailed=0 hpAtReach=88 tHpAtReach=90 " +
-                       "rate=12.5 wouldBreak=52 walk=anchor end=64 kiteNone=0:2:1:0 dots=1 qcKill=1"));
+                       "rate=12.5 wouldBreak=52 walk=anchor end=64 kiteNone=0:2:1:0 dots=1 qcKill=1 ctlMez=1"));
         // Out of a fight, no target, no kill this life, no killer named by the Dying event, the bind in another region.
         Assert.That(PlayerBotDriverReport.FormatDeathDetail(new PlayerBotDeathDetail(PlayerBotActivity.Hunting, -1, -1, -1, true,
                 -1, 0, 2, -1, 37, -1, -1, null, 0, false, -1, BreakOff: true, Rate: 3, Walk: PlayerBotWalk.Clear, Endurance: 100)),
@@ -5451,7 +5517,7 @@ public sealed class UT_PlayerBotDriver
                        "mana=37 swings=-1 notVisible=-1 killer=\"\" killerLevel=0 killerIsTarget=False fromBind=-1 avoided=0 " +
                        "again=False sinceRelease=-1 ill=False ctl=-1 kites=-1 casts=-1 qc=-1 waits=-1 ctlBroken=-1 addCtl=-1 " +
                        "addAt=-1 addHp=-1 breakOff=1 engageDist=-1 heldSec=-1 ctlLanded=-1 ctlFailed=-1 hpAtReach=-1 tHpAtReach=-1 " +
-                       "rate=3.0 wouldBreak=-1 walk=clear end=100 kiteNone=-1:-1:-1:-1 dots=-1 qcKill=-1"),
+                       "rate=3.0 wouldBreak=-1 walk=clear end=100 kiteNone=-1:-1:-1:-1 dots=-1 qcKill=-1 ctlMez=-1"),
             "died on a break-off's run: out of a fight (the dropped one's FIGHT has it)");
     }
 
@@ -5487,7 +5553,8 @@ public sealed class UT_PlayerBotDriver
             "targetHp=71 from=pull adds=2 lifeKills=3 rests=0 sinceKillSec=40 mana=100 swings=6 notVisible=1 killer=\"widow claw\" " +
             "killerLevel=40 killerIsTarget=True fromBind=748 avoided=0 again=False sinceRelease=-1 ill=False ctl=-1 kites=-1 casts=-1 " +
             "qc=-1 waits=-1 ctlBroken=-1 addCtl=-1 addAt=-1 addHp=-1 breakOff=0 engageDist=-1 heldSec=-1 ctlLanded=-1 ctlFailed=-1 " +
-            "hpAtReach=-1 tHpAtReach=-1 rate=0.0 wouldBreak=-1 walk=none end=-1 kiteNone=-1:-1:-1:-1 dots=-1 qcKill=-1"));
+            "hpAtReach=-1 tHpAtReach=-1 rate=0.0 wouldBreak=-1 walk=none end=-1 kiteNone=-1:-1:-1:-1 dots=-1 qcKill=-1 " +
+            "ctlMez=-1"));
         Assert.That(PlayerBotDriver.DeathLine(head, detail, add, target),
             Does.Contain(" killer=\"a wolf\" killerLevel=38 killerIsTarget=False fromBind=748 avoided=0 again=False sinceRelease=-1 ill=False "));
         Assert.That(PlayerBotDriver.DeathLine(head, detail, null, null),

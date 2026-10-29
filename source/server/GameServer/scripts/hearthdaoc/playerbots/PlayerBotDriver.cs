@@ -160,6 +160,7 @@ public sealed class PlayerBotState
     public int FightDots;                                        // #167 E C1: FIGHT and DEATH dots=, its DoT casts
     public bool KillingQuickcast, FightKillingQuickcast;         // #167 E C2b: Engage's, and FIGHT qcKill=; whether its
     public bool OneNukeKills;                                    //   nuke kills at once, read at the last cast choice
+    public int FightTargetMezzes;                                // #167 E C4: FIGHT and DEATH ctlMez=, its mezzes at the target
     public long NextAnimistStandTick;                            // #167 F10b: after a blocked walk to its stand
     public long TurretWaitSince;                                 // #167 E CY3: a pull held for a turret it can't plant yet
     public int FightControls, FightKites;                        // #167 FIGHT ctl= and kites=
@@ -1746,6 +1747,7 @@ public static class PlayerBotDriver
         state.FightKiteNone = default;                                              // #167 D8 kiteNone=
         state.FightDots = 0;                                                        // #167 E C1 dots=
         state.FightKillingQuickcast = false;                                        // #167 E C2b qcKill=
+        state.FightTargetMezzes = 0;                                                // #167 E C4 ctlMez=
         state.TargetHeldBreaks = false;                                             // #167 C3
         state.FightAddControls = 0;                                                 // #167 C4
         (state.FightAdd, state.EngageDistance) = ((-1, -1), distance);              // #167 FIGHT addAt=, engageDist=
@@ -2430,6 +2432,45 @@ public static class PlayerBotDriver
     /// as the escape (MezWanted at contactMs). TargetFirst reads the same choice (the review of 9aacd69).</summary>
     public static bool CasterControlAllowed(Spell spell, bool takes, long contactMs) =>
         takes && (spell.SpellType is not eSpellType.Mesmerize || MezWanted(contactMs, spell.CastTime));
+
+    /// <summary>The hold a stun or mez gives a monster now (#167 E C4): its duration (ms), or what the NPC's diminishing
+    /// immunity leaves of it (NpcImmunityEffect.CalculateNewEffectDuration, ECSImmunityEffect.cs:46-51: a half the second
+    /// time, a quarter the third); none on it, the whole duration.</summary>
+    public static long HoldNowMs(NpcImmunityEffect immunity, int duration) =>
+        immunity == null ? duration : immunity.CalculateNewEffectDuration(duration);
+
+    /// <summary>The step back's walk (#167 E C4): from the bot's distance to its point (KiteRange: the stop less
+    /// KiteStopMargin) at RunSpeed; nothing to walk, 0. From melee (150) to a 1,420 stop: 1,220 units, 6,387 ms. It
+    /// assumes the walk to the stop: with no clear point KitePoint walks KiteFallbackDistance (400, about 1.3 s), which
+    /// the stun outlasts, so the mez goes first where it wasn't needed (the review's note).</summary>
+    public static long StepBackWalkMs(int stop, int distance) =>
+        KiteRange(stop, distance) is int range ? (range - distance) * 1000L / RunSpeed : 0;
+
+    /// <summary>Whether the escape's mez goes before the stun (#167 E C4): hits on the bot (hitsOnBot) from its target
+    /// alone (soleHitter: CasterAction then steps back from a stunned target too; with an add's hits CasterHolds is false,
+    /// no step back comes and the stun holds through the nukes, where the next nuke would end a mez) and the stun's hold
+    /// ends before that step back's walk (walkMs, StepBackWalkMs) and the margin, so the monster wakes as the bot walks
+    /// with its back to it. A Mentalist's mez (16-80 s) outlasts it, and the bot opens again from its stop as at a
+    /// pull.</summary>
+    public static bool MezBeforeStun(bool hitsOnBot, bool soleHitter, long stunHoldMs, long walkMs) =>
+        hitsOnBot && soleHitter && stunHoldMs < walkMs + ControlMarginMilliseconds;
+
+    /// <summary>The control CasterStep casts at its target (#167 E C4): ChooseControl's target order (a stun, a root, a mez
+    /// as the escape), with the mez before the stun when the stun's hold now (holdMs: HoldNowMs) ends before the step
+    /// back's walk (MezBeforeStun); no mez it may cast, the stun. allowed and ready as TargetControl gives them.</summary>
+    public static (Spell, SpellLine) ChooseTargetControl(IEnumerable<(Spell Spell, SpellLine Line)> controls,
+        Func<Spell, bool> ready, Func<Spell, bool> allowed, Func<Spell, long> holdMs, bool hitsOnBot, bool soleHitter,
+        long walkMs)
+    {
+        (Spell Spell, SpellLine Line) choice = ChooseControl(controls, ready, allowed, forAdd: false, petClass: false);
+        if (choice.Spell?.SpellType is eSpellType.Stun && MezBeforeStun(hitsOnBot, soleHitter, holdMs(choice.Spell), walkMs))
+        {
+            (Spell Spell, SpellLine Line) mez = ChooseControl(controls, ready,
+                spell => spell.SpellType is eSpellType.Mesmerize && allowed(spell), forAdd: false, petClass: false);
+            if (mez.Spell != null) return mez;
+        }
+        return choice;
+    }
 
     /// <summary>The add the bot controls (#167 C4): the nearest monster with the bot as its target (TargetsBot), not held
     /// (Held: a stun, a root or a mez) and not its target; none, null. Caster add fights were fatal 51 times in 53 in
@@ -4340,7 +4381,8 @@ public static class PlayerBotDriver
             inFight ? state.FightWalk : state.LastWalk, player.EndurancePercent,          //   and end=; #167 D8
             inFight ? state.FightKiteNone : null,                                         //   kiteNone=, FIGHT's;
             inFight ? state.FightDots : -1,                                               // #167 E C1 dots=,
-            inFight ? (state.FightKillingQuickcast ? 1 : 0) : -1);                        // #167 E C2b qcKill=
+            inFight ? (state.FightKillingQuickcast ? 1 : 0) : -1,                         // #167 E C2b qcKill=,
+            inFight ? state.FightTargetMezzes : -1);                                      // #167 E C4 ctlMez=
         string head = $"PLAYER_BOT_DEATH bot={player.Name} level={player.Level} at=({player.X},{player.Y},{player.Z}) " +
                       $"zone={player.CurrentZone?.ID} {fight} attackers={state.Attackers} deathSteps={state.DeathSafetySteps} " +
                       $"aliveSec={(now - state.AliveSince) / 1000} task={state.Task != null}";
@@ -4413,7 +4455,8 @@ public static class PlayerBotDriver
             state.FightAdd.Hp, brokeOff, state.EngageDistance, state.PickCrowd, state.FightHeldMs / 1000, state.FightCtlLanded,
             state.FightCtlFailed, state.FightHpAtReach, state.FightTargetHpAtReach,      // #167 st-deathsD's
             HealthRate(state.HealthSamples, now, player.HealthPercent), state.WouldBreakHp, state.FightWalk,
-            state.FightKiteNone, state.FightDots, state.FightKillingQuickcast)));       // #167 D8, E C1, E C2b
+            state.FightKiteNone, state.FightDots, state.FightKillingQuickcast,          // #167 D8, E C1, E C2b,
+            state.FightTargetMezzes)));                                                 //   E C4
     }
 
     // APP:585-624, changed: every 10 s, no inventory count, no saves; after 15 minutes with no progress, back to the
@@ -4583,6 +4626,7 @@ public static class PlayerBotDriver
                 if (!player.CastSpell(control, line)) return false;
                 AwaitControl(state, player, control, npc, now);                         // #167 ctlLanded=
                 state.FightControls++;
+                if (control.SpellType is eSpellType.Mesmerize) state.FightTargetMezzes++;   // #167 E C4 ctlMez=
                 state.FightQuickcast |= quickcasting;
                 state.NextCombatChoiceTick = now + Math.Max(900, control.CastTime + 250);
                 state.Activity = PlayerBotActivity.Casting;
@@ -4601,17 +4645,26 @@ public static class PlayerBotDriver
     // TargetFirst read it through WorthyTargetControl; the break-off's TargetHoldReady reads it as it is (it asks under 40%
     // health or with the target held, where ControlWorth holds or isn't asked). #167 E C1: no root or mez while its own
     // DoT ticks on the target (HoldSurvivesDot): the next tick would end it; so neither is a hold ready for the
-    // one-monster break-off (TargetHoldReady) then.
+    // one-monster break-off (TargetHoldReady) then. #167 E C4: the escape's mez first when hits from the target alone
+    // would walk the bot out of a shorter stun (ChooseTargetControl: the stun's hold now through the server's
+    // diminishing, the walk to Engage's spell stop; the hits as the server keeps them, not Engage's quickcast-masked
+    // interrupted, so the think after Quickcast chooses as the one before it).
     private static (Spell, SpellLine) TargetControl(PlayerBotState state, GamePlayer player, GameNPC npc, long contact,
         long now)
     {
         if (now < state.NextControlTick || state.ControlTries >= MaxControlTries) return default;
         bool dotOn = OwnDotOn(player, npc);
-        return ChooseControl(state.Controls, spell => player.GetSkillDisabledDuration(spell) <= 0 &&
+        bool hitsOnBot = player.IsBeingInterruptedByOther;
+        bool soleHitter = hitsOnBot && LiveHitters(player) <= 1 && npc.TargetObject == player;
+        long walk = soleHitter ? StepBackWalkMs(SpellStopDistance(StopSpellRange(state.Spell, state.Nukes,
+            player.castingComponent.CalculateSpellRange)), player.GetDistanceTo(npc)) : 0;
+        return ChooseTargetControl(state.Controls, spell => player.GetSkillDisabledDuration(spell) <= 0 &&
                 HasPowerFor(player.MaxMana, player.Mana, spell.Power) &&
                 player.IsWithinRadius(npc, player.castingComponent.CalculateSpellRange(spell)),
             spell => CasterControlAllowed(spell, Takes(player, npc, spell), contact) && HoldSurvivesDot(spell, dotOn),
-            forAdd: false, petClass: false);
+            spell => HoldNowMs(EffectListService.GetEffectOnTarget(npc, spell.SpellType is eSpellType.Stun
+                ? eEffect.NPCStunImmunity : eEffect.NPCMezImmunity) as NpcImmunityEffect, spell.Duration),
+            hitsOnBot, soleHitter, walk);
     }
 
     // #167 D11: TargetControl when a control on the target is worth it (ControlWorth: its con, the bot's health and the
