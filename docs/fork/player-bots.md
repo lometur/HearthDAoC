@@ -346,7 +346,15 @@ All start `PLAYER_BOT_`:
   and `ill=` (the resurrection illness on when the fatal fight began), then the fatal fight's `ctl=`, `kites=`,
   `casts=`, `qc=`, `waits=`, `ctlBroken=`, `addCtl=`, `addAt=`, `addHp=` and `engageDist=` as `FIGHT` gives them (-1
   out of a fight), and `breakOff=` (1: it died running from a break-off; out of a fight then, as the break-off dropped
-  it, so that fight's own fields are on its `FIGHT result=dropped breakOff=1` line).
+  it, so that fight's own fields are on its `FIGHT result=dropped breakOff=1` line). Both then give `heldSec=` (the
+  seconds the target was held: stunned, mezzed or rooted), `ctlLanded=` and `ctlFailed=` (control casts that held or
+  didn't: resisted, refused or interrupted; one still under way when the fight ends counts neither), `hpAtReach=` and
+  `tHpAtReach=` (the bot's and its target's health at the first hit on the bot; -1 if none), `rate=` (the health lost
+  a second over the last 3 s; a gain is negative), `wouldBreak=` (the bot's health when a break-off projected from that
+  rate would have fired, under 40% or under 6 s of the loss; logged only, -1 if never) and `walk=` (the walk on the
+  think before the fight began: `none`, `hunt`, `anchor`, `roam`, `clear`, `rest`, `kite` or `breakoff`). Out of a
+  fight `DEATH` gives -1 for the fight's fields, `rate=` at the death and the walk on its last think alive; it ends with
+  `end=` (endurance).
   `BLOCKED`'s `walk=` is `target`, `roam`, `clear` (the step out after a release), `rest`, `kite`, `turret` or
   `breakoff`. `RELOCATE` after a death (`reason=died`) ends with `sinceRelease=`, the milliseconds since the release;
   after a break-off its `reason=` is `brokeoff`. A break-off drops its fight (`FIGHT result=dropped`);

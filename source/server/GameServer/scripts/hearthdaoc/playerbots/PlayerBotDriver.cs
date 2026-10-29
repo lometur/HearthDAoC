@@ -41,6 +41,11 @@ public enum PlayerBotEngageStep { Wait, Add, PetLeads, Caster }
 /// <summary>What the bot does in reach of its target this think (PlayerBotDriver.CombatAction, #167 F6).</summary>
 public enum PlayerBotCombatAction { Cast, WaitToCast, Quickcast, Swing }
 
+/// <summary>A think's walk (#167 FIGHT and DEATH walk=, F12d's field; PlayerBotDriver.NextWalk): to its target or an
+/// Animist's stand (Hunt), to its anchor (Anchor) or a roam point (Roam), out of reach after a release (Clear), to its
+/// rest spot (Rest), a caster's step back (Kite), a break-off's run (BreakOff).</summary>
+public enum PlayerBotWalk { None, Hunt, Anchor, Roam, Clear, Rest, Kite, BreakOff }
+
 /// <summary>A scripted job (the errands: quest 20206, promotion) that runs before grinding until Finished. Tick returns
 /// true when it used this think (walked, stood, acted), false to let the driver grind this think.</summary>
 public interface IPlayerBotTask
@@ -192,6 +197,13 @@ public sealed class PlayerBotState
                                                                  //   crowding (crowd=, FindWithin's; -1 for another pick);
     public byte SitHealth, SitMana;                              //   REST hp= and mp= when it sat, and respawn=: the spawn
     public int RestRespawns;                                     //   spots the rest spot was read against (WalksToRestSpot)
+    public PlayerBotWalk Walk, LastWalk, FightWalk;              // #167 st-deathsD's FIGHT and DEATH fields: walk=, this
+    public readonly Queue<(long Tick, byte Health)> HealthSamples = new();   //   think's walk, the last think's (NextWalk) and the
+    public long FightHeldMs;                                     //   fight's (OpenFight); rate=, the last 3 s of thinks'
+    public int FightCtlLanded, FightCtlFailed;                   //   health (SampleHealth); heldSec=, its target held
+    public (Spell Spell, GameLiving Target, long At) PendingControl;   //   (Hold); ctlLanded= and ctlFailed=, and the control
+    public int FightHpAtReach = -1, FightTargetHpAtReach = -1;   //   cast awaited (SettleControl); hpAtReach= and
+    public int WouldBreakHp = -1;                                //   tHpAtReach= (HitNow) and wouldBreak= (ProjectedBreak)
 }
 
 // HearthDAoC player bots (#137): a thin copy of the /bot pilot's think (bots/autonomous/AutonomousPlayerPilot.cs:229-374) for a
@@ -288,6 +300,9 @@ public static class PlayerBotDriver
     public const int BreakOffBlockedRadius = 100;            //   a point this near one blocked is left out (inf.), and the
     public const int BreakOffCorridorTries = 3;              //   corridor tests per point chosen (inf.)
     public const string Shook = "shook", Fought = "fought";  //   PLAYER_BOT_BREAKOFF outcome= (and Died)
+    public const int HealthRateMilliseconds = 3_000;         // #167 rate=: the health lost a second over the last 3 s
+    public const int ProjectedSeconds = 6;                   //   wouldBreak=: 6 s of that loss kept in hand (breakoff #5,
+                                                             //   d-breakoff/projected.py's P6; logged only)
 
     private static readonly ConcurrentDictionary<GamePlayer, PlayerBotState> _states = new();
     [ThreadStatic] private static List<(GameNPC Npc, Vector3 At, int Score)> _candidates;      // FindWithin's, per timer
@@ -389,6 +404,7 @@ public static class PlayerBotDriver
 
     private static void Think(PlayerBotState state, GamePlayer player, long now)
     {
+        NextWalk(state);                                     //    #167 walk=: none yet, the last think's kept
         if (player.IsLinkDeathTimerRunning)                  // 3. a soft link death started anyway (driver stalled > 5 s)
         {
             player.IsPositionUpdateFromPacketAllowed();      //    what a client's next packet does (GP:857-867; PPUH:27-28)
@@ -405,6 +421,7 @@ public static class PlayerBotDriver
         }
         if (!player.IsAlive) { HandleDeath(state, player, now); return; }               // 6
         StartLife(state, now);                                                           //    a new life
+        SampleHealth(state.HealthSamples, now, player.HealthPercent);                    //    #167 rate=
         if (state.SitSince != 0 && !player.IsSitting)                                    //    stood by the server (a hit)
             EndRest(state, player, now, Attacker(state, player, now, anyHitter: true) != null ? "hit" : "other");
         state.DeathRecorded = false;
@@ -494,6 +511,7 @@ public static class PlayerBotDriver
         (bool stepOut, bool backOff) = LifeStart(state.DeathRecorded, state.AliveSince == 0);
         if (stepOut) StartRecovery(state, now, backOff);                                // #167 F4, C6
         state.AliveSince = now;
+        state.HealthSamples.Clear();                                                     // #167 rate=: no gain from the release
         state.LifeKills = state.LifeRests = 0;
         state.Killer = null;
         state.KillerAvoided = false;
@@ -549,6 +567,7 @@ public static class PlayerBotDriver
         PlayerBotRole role = RoleOf(player.CharacterClass.ID);
         (bool held, bool breaksOnHit) = role == PlayerBotRole.Caster ? Hold(target) : default;   // #167 C3: a caster's hold
         bool otherHitting = held && OtherHitting(player, target);                                //   on its target, alone
+        if (state.Engaged) WatchFight(state, player, target, role, held, now);           // #167 heldSec= and on, walk in or not
         long selfInterrupt = quickcasting ? 0 : Math.Max(0, player.SelfInterruptTime - now);
         int spellRange = StopSpellRange(state.Spell, state.Nukes, player.castingComponent.CalculateSpellRange);
         (PlayerBotCombatAction Action, int Stop, bool Holds) Plan() => CasterHoldPlan(role, held, breaksOnHit, otherHitting,
@@ -567,6 +586,7 @@ public static class PlayerBotDriver
             player.StopCurrentSpellcast();
             state.Activity = PlayerBotActivity.Hunting;
             Vector3 goal = new(target.X, target.Y, target.Z);
+            state.Walk = PlayerBotWalk.Hunt;                                            // #167 walk=
             if (state.Mover.StepToward(goal, stop, now) is PlayerBotStepResult.Blocked)
             {
                 ReportBlocked(state, player, "target", goal, now);
@@ -595,6 +615,7 @@ public static class PlayerBotDriver
                 .Where(effect => effect.SpellHandler?.Spell != null).Select(effect => effect.SpellHandler.Spell.SpellType));
             state.EngagePet = player.ControlledBrain?.Body?.IsAlive == true;
             state.EngageIll = Ill(player);                                              // DEATH ill= (#167 F4)
+            WatchFight(state, player, target, role, held, now);                         // #167 heldSec= and on
             if (player.ControlledBrain != null)                                         // its pet too: the pet window's
                 player.CommandNpcAttack();                                              //   attack (PetWindowHandler.cs:79-82)
         }
@@ -1393,8 +1414,9 @@ public static class PlayerBotDriver
     /// <summary>The fight's first think in reach (Engage's opening; PLAYER_BOT_FIGHT's start): its counts afresh, the bot's
     /// health and power (mana: PowerPercent), its distance and the target's health then (#167 FIGHT engageDist=, C11's
     /// NukesNeeded), a fresh add scan (ScanComing), no control tried (F11) or step back due, the kill's second-monster case
-    /// over (C2), and the pet's lead from now (F10c). True for the first fight since a release (BackPending, cleared):
-    /// PLAYER_BOT_BACK then (#167 C1; the review of 9aacd69: with Engage's ReportBack dropped no test failed).</summary>
+    /// over (C2), the pet's lead from now (F10c), and the walk on the think before (#167 walk=, LastWalk). True for the
+    /// first fight since a release (BackPending, cleared): PLAYER_BOT_BACK then (#167 C1; the review of 9aacd69: with
+    /// Engage's ReportBack dropped no test failed).</summary>
     public static bool OpenFight(PlayerBotState state, long now, byte health, byte mana, int distance, byte targetHealth)
     {
         state.EngagedSince = now;
@@ -1412,9 +1434,68 @@ public static class PlayerBotDriver
         state.KilledWithAdds = false;                                               // #167 C2: the kill's case over
         state.FightQuickcast = false;
         state.PetOrderTick = now;                                                   // #167 F10c
+        state.FightWalk = state.LastWalk;                                           // #167 st-deathsD's fields: walk=,
+        (state.FightHeldMs, state.FightCtlLanded, state.FightCtlFailed) = (0, 0, 0);   //   the think before's, and the
+        (state.FightHpAtReach, state.FightTargetHpAtReach, state.WouldBreakHp) = (-1, -1, -1);   //   counts afresh
+        state.PendingControl = default;                                             //   (a cast still awaited: neither)
         bool back = state.BackPending;                                              // #167 C1: the first since a release
         state.BackPending = false;
         return back;
+    }
+
+    /// <summary>A think's start (#167 FIGHT and DEATH walk=, F12d's field): no walk yet, the last think's kept (LastWalk).
+    /// Each walk names itself as it steps (Walk); OpenFight reads the last think's: the walk on the think before the
+    /// fight's first. It touches neither PlayerBotPathMover nor PlayerTravelPath.</summary>
+    public static void NextWalk(PlayerBotState state) => (state.LastWalk, state.Walk) = (state.Walk, PlayerBotWalk.None);
+
+    /// <summary>#167 rate=: a think's health, the last HealthRateMilliseconds of them kept (Think, each think alive; a new
+    /// life drops them, StartLife).</summary>
+    public static void SampleHealth(Queue<(long Tick, byte Health)> samples, long now, byte health)
+    {
+        while (samples.Count > 0 && now - samples.Peek().Tick > HealthRateMilliseconds) samples.Dequeue();
+        samples.Enqueue((now, health));
+    }
+
+    /// <summary>#167 rate=: the health lost a second since the oldest think of the last 3 s (samples, oldest first), this
+    /// think's own left out; 0 with none. A gain (a heal, regeneration) is negative.</summary>
+    public static double HealthRate(IEnumerable<(long Tick, byte Health)> samples, long now, byte health)
+    {
+        foreach ((long tick, byte was) in samples)
+            if (tick < now && now - tick <= HealthRateMilliseconds) return (was - health) * 1000.0 / (now - tick);
+        return 0;
+    }
+
+    /// <summary>#167 wouldBreak=, logged only: breakoff #5's projected trigger (d-breakoff/projected.py's P6). Below
+    /// BreakOffHealthPercent, or below the health ProjectedSeconds of the loss (rate, HealthRate) take, 95 at most: the
+    /// seconds of loss a run would keep in hand to clear the chasers' reach.</summary>
+    public static bool ProjectedBreak(byte health, double rate) =>
+        health < Math.Max(BreakOffHealthPercent, Math.Min(95, rate * ProjectedSeconds));
+
+    /// <summary>#167 hpAtReach=: a hit on the bot within the last second (lastHit: GameLiving.LastAttackedByEnemyTick, set
+    /// on a hit only, GameLiving.cs:1515-1534; 0, none since login).</summary>
+    public static bool HitNow(long lastHit, long now) => lastHit > 0 && now - lastHit <= 1_000;
+
+    /// <summary>#167 ctlLanded=: a control cast asked for at requestedAt held, its effect (spellId) the bot's own (Mine) and
+    /// begun since (StartTick, ECSGameEffect.cs:65) on its target; else ctlFailed= (resisted, refused, interrupted).</summary>
+    public static bool ControlLanded(IEnumerable<(int SpellId, bool Mine, long StartTick)> effects, int spellId,
+        long requestedAt) =>
+        effects.Any(effect => effect.Mine && effect.SpellId == spellId && effect.StartTick >= requestedAt);
+
+    /// <summary>#167 ctlLanded=: a control cast settles (SettleControl) once its cast time and a think have passed since it
+    /// was asked for and the bot casts no more (one queued behind another cast goes later).</summary>
+    public static bool ControlResolves(long now, long requestedAt, int castTime, bool casting) =>
+        !casting && now >= requestedAt + castTime + TickMilliseconds;
+
+    /// <summary>A fight think (#167, st-deathsD's FIGHT and DEATH fields, Engage's WatchFight): heldSec= by think while its
+    /// target is held (targetHeld: Hold), hpAtReach= and tHpAtReach= at the first think with a hit on the bot (HitNow),
+    /// and wouldBreak= at the first the projected break-off would fire (ProjectedBreak over HealthRate).</summary>
+    public static void TrackFight(PlayerBotState state, long now, bool targetHeld, byte health, byte targetHealth, long lastHit)
+    {
+        if (targetHeld) state.FightHeldMs += TickMilliseconds;
+        if (state.FightHpAtReach < 0 && HitNow(lastHit, now))
+            (state.FightHpAtReach, state.FightTargetHpAtReach) = (health, targetHealth);
+        if (state.WouldBreakHp < 0 && ProjectedBreak(health, HealthRate(state.HealthSamples, now, health)))
+            state.WouldBreakHp = health;
     }
 
     /// <summary>PLAYER_BOT_BACK replan= (#167 C1): notOwed when the release owed no replan (OwesReplan); else moved once
@@ -2358,6 +2439,7 @@ public static class PlayerBotDriver
         else if (state.RoamDestination == null || Vector3.Distance(here, state.RoamDestination.Value) < 80)
             state.RoamDestination = PickRoamPoint(player, leashed ? state.Anchor : here);
         state.Activity = PlayerBotActivity.Roaming;
+        state.Walk = state.RoamDestination == state.Anchor ? PlayerBotWalk.Anchor : PlayerBotWalk.Roam;   // #167 walk=
         PlayerBotStepResult step = state.Mover.StepToward(state.RoamDestination.Value, 20, now);
         if (step is PlayerBotStepResult.Blocked) ReportBlocked(state, player, "roam", state.RoamDestination.Value, now);
         if (step is PlayerBotStepResult.Blocked or PlayerBotStepResult.Arrived)
@@ -2558,6 +2640,7 @@ public static class PlayerBotDriver
             case PlayerBotRecovery.StepOut:
                 state.Activity = PlayerBotActivity.Roaming;
                 state.BackStepOutMs += TickMilliseconds;                                // #167 C1: BACK stepOut=
+                state.Walk = PlayerBotWalk.Clear;                                       // #167 walk=
                 PlayerBotStepResult step = state.Mover.StepToward(state.ClearSpot.Value, 20, now);
                 if (step is PlayerBotStepResult.Blocked)
                 {
@@ -2632,6 +2715,7 @@ public static class PlayerBotDriver
         }
         if (state.RestGoal is not Vector3 goal) return false;
         state.Activity = PlayerBotActivity.Resting;
+        state.Walk = PlayerBotWalk.Rest;                                                // #167 walk=
         PlayerBotStepResult step = state.Mover.StepToward(goal, 20, now);
         if (step is PlayerBotStepResult.Blocked) ReportBlocked(state, player, "rest", goal, now);
         if (step is not (PlayerBotStepResult.Blocked or PlayerBotStepResult.Arrived)) return true;
@@ -2661,6 +2745,7 @@ public static class PlayerBotDriver
             return false;                                                               // Fight: step 14 picks a hitter
         }
         state.Activity = PlayerBotActivity.Fighting;
+        state.Walk = PlayerBotWalk.BreakOff;                                            // #167 walk=
         Vector3 goal = state.BreakOffGoal.Value;
         PlayerBotStepResult step = state.Mover.StepToward(goal, 20, now);
         if (step is PlayerBotStepResult.Arrived) state.BreakOffArrived = true;
@@ -2862,7 +2947,12 @@ public static class PlayerBotDriver
             inFight ? state.FightWaits : -1, inFight ? state.FightCtlBroken : -1,
             inFight ? state.FightAddControls : -1,                                        // #167 C4
             inFight ? state.FightAdd.At : -1, inFight ? state.FightAdd.Hp : -1,           // #167, the next leg's: as FIGHT's,
-            state.BreakOffSince != 0, inFight ? state.EngageDistance : -1);               //   and on a break-off's run
+            state.BreakOffSince != 0, inFight ? state.EngageDistance : -1,                //   and on a break-off's run
+            inFight ? state.FightHeldMs / 1000 : -1, inFight ? state.FightCtlLanded : -1, //   st-deathsD's: as FIGHT's, but
+            inFight ? state.FightCtlFailed : -1, inFight ? state.FightHpAtReach : -1,     //   rate= at the death, walk=
+            inFight ? state.FightTargetHpAtReach : -1,                                    //   the last think's alive out of
+            HealthRate(state.HealthSamples, now, player.HealthPercent), inFight ? state.WouldBreakHp : -1,   //   a fight,
+            inFight ? state.FightWalk : state.LastWalk, player.EndurancePercent);         //   and end=
         string head = $"PLAYER_BOT_DEATH bot={player.Name} level={player.Level} at=({player.X},{player.Y},{player.Z}) " +
                       $"zone={player.CurrentZone?.ID} {fight} attackers={state.Attackers} deathSteps={state.DeathSafetySteps} " +
                       $"aliveSec={(now - state.AliveSince) / 1000} task={state.Task != null}";
@@ -2870,6 +2960,42 @@ public static class PlayerBotDriver
             state.PendingDeath = (head, detail, target);                                   // the next think writes it
         else
             Log.Info(DeathLine(head, detail, state.Killer, target));
+    }
+
+    // #167 st-deathsD's fields: a fight think in Engage (TrackFight) from the bot and its target, the hold as Hold reads
+    // it (a caster's is Engage's own, held), and the control cast awaited settled when due (SettleControl).
+    private static void WatchFight(PlayerBotState state, GamePlayer player, GameLiving target, PlayerBotRole role, bool held,
+        long now)
+    {
+        TrackFight(state, now, role == PlayerBotRole.Caster ? held : Hold(target).Held, player.HealthPercent,
+            target.HealthPercent, player.LastAttackedByEnemyTick);
+        SettleControl(state, player, now, force: false);
+    }
+
+    // #167 ctlLanded= and ctlFailed=: the control cast awaited (AwaitControl) once it could have ended (ControlResolves),
+    // or at once when another is cast (force). Its target dead by then counts neither way; so does one still under way
+    // when the fight ends (OpenFight drops it).
+    private static void SettleControl(PlayerBotState state, GamePlayer player, long now, bool force)
+    {
+        if (state.PendingControl.Spell is not Spell spell) return;
+        (_, GameLiving target, long at) = state.PendingControl;
+        if (!force && !ControlResolves(now, at, spell.CastTime, player.IsCasting)) return;
+        state.PendingControl = default;
+        if (target?.IsAlive != true) return;
+        if (ControlLanded(target.effectListComponent.GetSpellEffects().Where(effect => effect.SpellHandler?.Spell != null)
+                .Select(effect => (effect.SpellHandler.Spell.ID, effect.SpellHandler.Caster == player, effect.StartTick)),
+                spell.ID, at))
+            state.FightCtlLanded++;
+        else
+            state.FightCtlFailed++;
+    }
+
+    // #167 ctlLanded=: a control cast asked for (CasterStep's at the target, AddAct's at an add), awaited; one still
+    // awaited settles now.
+    private static void AwaitControl(PlayerBotState state, GamePlayer player, Spell spell, GameLiving target, long now)
+    {
+        SettleControl(state, player, now, force: true);
+        state.PendingControl = (spell, target, now);
     }
 
     // #167 C1: PLAYER_BOT_BACK at the first fight in reach after a release (the verifier's logging: the 40 s more from a
@@ -2889,13 +3015,16 @@ public static class PlayerBotDriver
     {
         if (!Log.IsInfoEnabled) return;
         GameLiving target = state.Target;
+        SettleControl(state, player, now, force: false);                                // #167 ctlLanded=, when due
         Log.Info(PlayerBotDriverReport.FormatFight(new(player.Name, player.Level, target.Name, target.EffectiveLevel,
             ConLevels.GetConColor(player.GetConLevel(target)), state.FromDefence, killed, state.EngageHealth, player.HealthPercent,
             state.EngageMana, PowerPercent(player.MaxMana, player.ManaPercent), (now - state.EngagedSince) / 1000, state.FightAdds,
             state.Swings, state.NotVisible, state.FightCasts, state.LifeKills, state.LifeRests, state.EngagePet,
             state.FightHeals, state.FightQuickcast, state.EngageBuffs, state.FightPetCasts, state.FightWaits,
             state.FightControls, state.FightKites, state.FightCtlBroken, state.FightAddControls, state.FightAdd.At,
-            state.FightAdd.Hp, brokeOff, state.EngageDistance, state.PickCrowd)));
+            state.FightAdd.Hp, brokeOff, state.EngageDistance, state.PickCrowd, state.FightHeldMs / 1000, state.FightCtlLanded,
+            state.FightCtlFailed, state.FightHpAtReach, state.FightTargetHpAtReach,      // #167 st-deathsD's
+            HealthRate(state.HealthSamples, now, player.HealthPercent), state.WouldBreakHp, state.FightWalk)));
     }
 
     // APP:585-624, changed: every 10 s, no inventory count, no saves; after 15 minutes with no progress, back to the
@@ -2968,6 +3097,7 @@ public static class PlayerBotDriver
         {
             player.attackComponent.StopAttack();
             state.Activity = PlayerBotActivity.Hunting;
+            state.Walk = PlayerBotWalk.Hunt;                                            // #167 walk=
             if (state.Mover.StepToward(stand, AnimistStandMargin - 50, now) is not PlayerBotStepResult.Blocked) return true;
             ReportBlocked(state, player, "turret", stand, now);
             state.NextAnimistStandTick = now + UnreachableSkipMilliseconds;
@@ -3033,6 +3163,7 @@ public static class PlayerBotDriver
                 state.ControlTries++;
                 state.NextControlTick = now + control.CastTime + ControlMarginMilliseconds;
                 if (!player.CastSpell(control, line)) return false;
+                AwaitControl(state, player, control, npc, now);                         // #167 ctlLanded=
                 state.FightControls++;
                 state.FightQuickcast |= quickcasting;
                 state.NextCombatChoiceTick = now + Math.Max(900, control.CastTime + 250);
@@ -3109,6 +3240,7 @@ public static class PlayerBotDriver
             state.AddControlTries++;
             state.FightControls++;
             state.FightAddControls++;
+            AwaitControl(state, player, spell, add, now);                               // #167 ctlLanded=
             state.FightQuickcast |= quickcasting;
         }
         state.NextCombatChoiceTick = now + Math.Max(900, spell.CastTime + 250);
@@ -3239,6 +3371,7 @@ public static class PlayerBotDriver
         }
         player.attackComponent.StopAttack();
         state.Activity = PlayerBotActivity.Fighting;
+        state.Walk = PlayerBotWalk.Kite;                                                // #167 walk=
         PlayerBotStepResult step = state.Mover.StepToward(goal, KiteArriveDistance, now);
         if (step is PlayerBotStepResult.Blocked)
         {
