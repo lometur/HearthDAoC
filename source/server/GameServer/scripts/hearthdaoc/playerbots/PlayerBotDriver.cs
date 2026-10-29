@@ -336,7 +336,9 @@ public static class PlayerBotDriver
     public const int BreakOffMaxMilliseconds = 45_000;       // #167 D2: still chased then, it fights (inf.); from
     public const int ShakenDistance = 1_500;                 //   BreakOffMilliseconds, done with none this near (inf.)
     public const int CaughtReach = ChaserReach + 50;         //   caught: a chaser not held this near (inf.), this long
-    public const int CaughtMilliseconds = 2_000;             //   (inf.)
+    public const int CaughtMilliseconds = 2_000;             //   (inf.), from this long into the run, and a hit on the bot
+    public const int CaughtGraceMilliseconds = 3_000;        //   this recent (CaughtNow, st-deathsD's fix round; inf.)
+    public const int CaughtHitMilliseconds = 2_000;
     public const int RangedHarmRange = 1_000;                //   a chaser's spell from this far harms the run (inf.)
     public const int HealthRateMilliseconds = 3_000;         // #167 rate=: the health lost a second over the last 3 s
     public const int ProjectedSeconds = 6;                   //   wouldBreak=: 6 s of that loss kept in hand (breakoff #5,
@@ -2082,14 +2084,31 @@ public static class PlayerBotDriver
 
     /// <summary>Caught on a break-off's run (#167 D2): a chaser not held within CaughtReach (nearestChaser) since
     /// inReachSince (InReachSince; 0: none) for CaughtMilliseconds. Health fell in 9 of st-deathsC's 12 caught runs, and
-    /// 10 of the 13 died within 60 s, 6 within 6 s.</summary>
-    public static bool CaughtNow(int nearestChaser, long inReachSince, long now) =>
-        nearestChaser <= CaughtReach && inReachSince > 0 && now - inReachSince >= CaughtMilliseconds;
+    /// 10 of the 13 died within 60 s, 6 within 6 s. st-deathsD's fix round: the clock started with the chaser still in
+    /// contact as the run began (runStart), and the sprint gains 57 a second at most on a 191 chaser (Outruns), so it
+    /// fired 2 s in: 89 of 98 break-offs ended fought at sec=2, 80 died within 60 s, and health fell during only 31 of 87
+    /// runs. So caught is a chaser really landing hits once the sprint had time to build a lead: CaughtGraceMilliseconds
+    /// into the run, the clock no earlier than the grace's end, and a hit on the bot (lastHitOnBot: HitNow's
+    /// LastAttackedByEnemyTick, a hit only; 0, none) within CaughtHitMilliseconds.</summary>
+    public static bool CaughtNow(int nearestChaser, long runStart, long inReachSince, long lastHitOnBot, long now) =>
+        now - runStart >= CaughtGraceMilliseconds && nearestChaser <= CaughtReach &&
+        inReachSince >= runStart + CaughtGraceMilliseconds && now - inReachSince >= CaughtMilliseconds &&
+        lastHitOnBot > 0 && now - lastHitOnBot <= CaughtHitMilliseconds;
 
     /// <summary>The caught clock (#167 D2, CaughtNow): kept while a chaser not held is within CaughtReach (nearestChaser),
-    /// started now when one comes in, 0 when none is.</summary>
-    public static long InReachSince(long since, int nearestChaser, long now) =>
-        nearestChaser > CaughtReach ? 0 : since != 0 ? since : now;
+    /// started now when one comes in, 0 when none is; none inside the run's grace (runStart, CaughtGraceMilliseconds:
+    /// st-deathsD's fix round).</summary>
+    public static long InReachSince(long since, int nearestChaser, long runStart, long now) =>
+        nearestChaser > CaughtReach || now - runStart < CaughtGraceMilliseconds ? 0 : since != 0 ? since : now;
+
+    /// <summary>The caught clock's think (BreaksOffNow's, st-deathsD's fix round): the clock (CaughtSince, InReachSince)
+    /// on the nearest chaser not held (freeDistance) from the run's start (BreakOffSince), and caught (CaughtNow) with
+    /// the last hit on the bot (lastHit: LastAttackedByEnemyTick).</summary>
+    public static bool CaughtThink(PlayerBotState state, int freeDistance, long lastHit, long now)
+    {
+        state.CaughtSince = InReachSince(state.CaughtSince, freeDistance, state.BreakOffSince, now);
+        return CaughtNow(freeDistance, state.BreakOffSince, state.CaughtSince, lastHit, now);
+    }
 
     /// <summary>Whether a monster stays a break-off's chaser (#167 D2, KeepChasers): it has the bot as its target
     /// (targetsBot) within ChaseRadius (distance), held or not. A mezzed or stunned monster keeps its target and comes back
@@ -3413,17 +3432,17 @@ public static class PlayerBotDriver
     // and runs to the break-off point (BreakOffPoint), then on from there while one still chases it (BreakOffStep), at
     // most BreakOffMaxMilliseconds; EndBreakOff ends it. A blocked step bars its point and takes the next at once; with
     // none left it turns on them (the review of 9aacd69: the same point was chosen again every think). Before the
-    // self-heal (11b): its cast stops the mover (CastOnSelf). #167 D2: caught (CaughtNow), it controls the chaser and runs
-    // on (CaughtControl), standing and facing it while that cast is under way; with no control it turns on the weakest
-    // chaser in reach (WeakestChaser, TurnOn). True while it runs.
+    // self-heal (11b): its cast stops the mover (CastOnSelf). #167 D2: caught (CaughtThink: hit by a chaser in reach after
+    // the run's grace, st-deathsD's fix round), it controls the chaser and runs on (CaughtControl), standing and facing it
+    // while that cast is under way; with no control it turns on the weakest chaser in reach (WeakestChaser, TurnOn). True
+    // while it runs.
     private static bool BreaksOffNow(PlayerBotState state, GamePlayer player, long now)
     {
         if (state.BreakOffSince == 0 && !StartsBreakOff(state, player, now)) return false;
         KeepChasers(state, player);
         (int nearest, GameNPC free, int freeDistance) = NearestChasers(state, player);
-        state.CaughtSince = InReachSince(state.CaughtSince, freeDistance, now);
         PlayerBotBreakOff next = BreakOffStep(state.BreakOffArrived, state.BreakOffChasers.Count, now - state.BreakOffSince,
-            nearest, CaughtNow(freeDistance, state.CaughtSince, now));
+            nearest, CaughtThink(state, freeDistance, player.LastAttackedByEnemyTick, now));
         if (next is not (PlayerBotBreakOff.Done or PlayerBotBreakOff.Fight) && player.IsCasting)
         {
             state.Mover.Stop(now);                                                      // #167 D2: its control at a caught

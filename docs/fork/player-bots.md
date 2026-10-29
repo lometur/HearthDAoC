@@ -136,12 +136,13 @@ Each bot thinks every 250 ms, a thin copy of the `/bot` pilot's think:
   1,500-2,500 units straight away from them to a spot clear of other aggressive monsters that it can walk to, or with
   none, to the spot 1,500 units straight away from them if it can walk there; on again from there while one still chases
   it. A spot it was blocked on it never takes again in that run. A mezzed, stunned or rooted monster still counts as
-  after it. One not held that stays within 250 units of it for 2 s has caught it: it stops, casts a control at it (as at
-  an add, with Quickcast while hit), faces it until the cast is done and runs on; with no control to cast it turns on
-  the weakest monster in reach. From 30 s it is done once none is within 1,500 units; still chased at 45 s, or with
-  nowhere to run, it turns and fights them out. Afterwards it takes no camp there and avoids those monsters for 15
-  minutes, and plans a new camp from where it ran to before it looks for a new target. A break-off on the walk to its
-  camp, more than 1,400 units short of it, bars that camp too for 15 minutes.
+  after it. From 3 s into the run (time for its sprint to gain on one that started in contact), one not held that stays
+  within 250 units of it for 2 s, with a hit on the bot in the last 2 s, has caught it: it stops, casts a control at it
+  (as at an add, with Quickcast while hit), faces it until the cast is done and runs on; with no control to cast it
+  turns on the weakest monster in reach. From 30 s it is done once none is within 1,500 units; still chased at 45 s,
+  or with nowhere to run, it turns and fights them out. Afterwards it takes no camp there and avoids those monsters for
+  15 minutes, and plans a new camp from where it ran to before it looks for a new target. A break-off on the walk to
+  its camp, more than 1,400 units short of it, bars that camp too for 15 minutes.
 - It releases 10 s after a death, counted from when the server has handled the death, never before: a bow's or a bolt's
   killing hit lands in the bots' own phase of the game loop, and a release asked for then was undone by the server's
   death handling later in the same tick, which left the bot dead for 15 minutes. A release that didn't revive it is

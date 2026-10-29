@@ -1554,17 +1554,42 @@ public sealed class UT_PlayerBotDriver
         long sinceMs, int nearestChaser, bool caught, PlayerBotBreakOff step) =>
         Assert.That(PlayerBotDriver.BreakOffStep(arrived, chasers, sinceMs, nearestChaser, caught), Is.EqualTo(step));
 
-    // #167 D2: caught on the run, a chaser (not held) within 250 (ChaserReach and 50) for 2 s; InReachSince keeps when
-    // one came within it (0: none).
-    [TestCase(180, 10_000L, 12_000L, true)] [TestCase(180, 10_000L, 11_999L, false)] [TestCase(251, 10_000L, 15_000L, false)]
-    [TestCase(180, 0L, 15_000L, false)]
-    public void A_chaser_in_reach_for_2_s_catches_the_bot(int nearestChaser, long inReachSince, long now, bool caught) =>
-        Assert.That(PlayerBotDriver.CaughtNow(nearestChaser, inReachSince, now), Is.EqualTo(caught));
+    // #167 D2: caught on the run, a chaser (not held) within 250 (ChaserReach and 50) for 2 s. st-deathsD: the clock started
+    // with the chaser still in contact and fired 2 s into the run, before the sprint could gain on it (57 a second at
+    // most on a 191 chaser): 89 of 98 break-offs ended fought at sec=2, and health fell during only 31 of 87 runs. Now
+    // caught means really hit after the sprint had time to build a lead: the clock from the 3-s grace's end
+    // (inReachSince no earlier), 2 s in reach, and a hit on the bot in the last 2 s. Runs from 10,000.
+    [TestCase(180, 10_000L, 10_000L, 11_500L, 12_000L, false)]                 // inside the grace
+    [TestCase(180, 10_000L, 13_000L, 14_800L, 15_000L, true)]
+    [TestCase(180, 10_000L, 13_000L, 12_000L, 15_000L, false)]                 // no hit in 2 s
+    [TestCase(180, 10_000L, 14_000L, 15_500L, 15_500L, false)]                 // in reach 1.5 s
+    [TestCase(300, 10_000L, 13_000L, 14_900L, 15_000L, false)]                 // out of reach
+    [TestCase(180, 10_000L, 13_000L, 0L, 15_000L, false)]                      // never hit
+    public void A_chaser_hitting_the_bot_in_reach_for_2_s_after_the_grace_catches_it(int nearestChaser, long runStart,
+        long inReachSince, long lastHitOnBot, long now, bool caught) =>
+        Assert.That(PlayerBotDriver.CaughtNow(nearestChaser, runStart, inReachSince, lastHitOnBot, now), Is.EqualTo(caught));
 
-    [TestCase(0L, 180, 5_000L, 5_000L)] [TestCase(3_000L, 250, 5_000L, 3_000L)] [TestCase(3_000L, 251, 5_000L, 0L)]
-    [TestCase(0L, int.MaxValue, 5_000L, 0L)]
-    public void The_reach_clock_starts_when_a_chaser_comes_within_250(long since, int nearestChaser, long now, long kept) =>
-        Assert.That(PlayerBotDriver.InReachSince(since, nearestChaser, now), Is.EqualTo(kept));
+    // InReachSince keeps when one came within it (0: none), and starts no clock inside the grace. Runs from 0, and from
+    // 10,000.
+    [TestCase(0L, 180, 0L, 5_000L, 5_000L)] [TestCase(3_000L, 250, 0L, 5_000L, 3_000L)]
+    [TestCase(3_000L, 251, 0L, 5_000L, 0L)] [TestCase(0L, int.MaxValue, 0L, 5_000L, 0L)]
+    [TestCase(0L, 150, 10_000L, 12_999L, 0L)] [TestCase(0L, 150, 10_000L, 13_000L, 13_000L)]
+    public void The_reach_clock_starts_when_a_chaser_comes_within_250_after_the_grace(long since, int nearestChaser,
+        long runStart, long now, long kept) =>
+        Assert.That(PlayerBotDriver.InReachSince(since, nearestChaser, runStart, now), Is.EqualTo(kept));
+
+    // st-deathsD's caught clock where BreaksOffNow runs it (CaughtThink), from the state StartsBreakOff leaves (BreakOffSince
+    // now, CaughtSince 0; the same think runs it next): a break-off begun with its chaser in contact (150) and hit on
+    // every think was caught 2 s later, before its sprint could build a lead (89 of st-deathsD's 98 break-offs ended
+    // fought at sec=2). Now it is not; still in contact and hit, it is caught 2 s after the 3-s grace.
+    [Test]
+    public void A_break_off_begun_in_contact_is_not_caught_2_s_later()
+    {
+        var state = new PlayerBotState(Player(null)) { BreakOffSince = 10_000 };
+        for (long now = 10_000; now < 15_000; now += PlayerBotDriver.TickMilliseconds)
+            Assert.That(PlayerBotDriver.CaughtThink(state, 150, now - 100, now), Is.False, $"{now}");
+        Assert.That((PlayerBotDriver.CaughtThink(state, 150, 14_900, 15_000), state.CaughtSince), Is.EqualTo((true, 13_000L)));
+    }
 
     // #167 D2: a held chaser stays a chaser (KeepsChaser): a mezzed or stunned monster keeps its target and comes back
     // (2 of st-deathsC's 41 "shook" died within 10 s); one goes when it turns from the bot or is past ChaseRadius.
