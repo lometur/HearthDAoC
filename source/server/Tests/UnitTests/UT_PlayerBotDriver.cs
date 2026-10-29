@@ -656,6 +656,37 @@ public sealed class UT_PlayerBotDriver
         Assert.That(PlayerBotDriverReport.FormatRelease("Pbotaaacv", 35, 2, 20_000),
             Is.EqualTo("PLAYER_BOT_RELEASE bot=Pbotaaacv level=35 try=2 sinceDeath=20000"));
 
+    // #167 D7: Pbotaaacv's bind lay by a battleground keep's realm-less "Renegade" guards, which killed it in 14 of its 14
+    // release first fights, 10-13 s after the immunity. IsExperienceTarget leaves keep guards out, so the step out
+    // (ClearSpotNear) and the adds rule (the pick's adds, the rest spot's) never saw them. A keep guard of another realm,
+    // or of none, counts there; keep guards stay out of pulls and plans (IsExperienceTarget).
+    [TestCase(false, true, eRealm.None, eRealm.Albion, true)]
+    [TestCase(false, true, eRealm.Albion, eRealm.Albion, false)]
+    [TestCase(false, true, eRealm.Midgard, eRealm.Albion, true)]
+    [TestCase(true, false, eRealm.None, eRealm.Albion, true)]
+    [TestCase(false, false, eRealm.None, eRealm.Albion, false)]
+    public void A_keep_guard_of_another_realm_or_none_is_a_threat(bool expTarget, bool keepGuard, eRealm guardRealm,
+        eRealm botRealm, bool threat) =>
+        Assert.That(PlayerBotDriver.CountsAsThreat(expTarget, keepGuard, guardRealm, botRealm), Is.EqualTo(threat));
+
+    // The scans' read of a monster (IsThreat) with a real guard: a lord of no realm counts against an Albion bot, its own
+    // realm's doesn't, and neither is a target to pull.
+    [Test]
+    public void The_scans_see_a_realmless_keep_guard_and_still_pull_none()
+    {
+        var lord = (DOL.GS.Keeps.GuardLord)RuntimeHelpers.GetUninitializedObject(typeof(DOL.GS.Keeps.GuardLord));
+        lord.ObjectState = GameObject.eObjectState.Active;
+        typeof(GameNPC).GetField("m_brains", Hidden)!.SetValue(lord, new System.Collections.ArrayList());
+        typeof(GameNPC).GetField("m_ownBrain", Hidden)!.SetValue(lord, new DOL.AI.Brain.KeepGuardBrain());
+        GameNPC monster = LiveMonster();
+        typeof(GameNPC).GetField("m_ownBrain", Hidden)!.SetValue(monster, new DOL.AI.Brain.StandardMobBrain());
+        Assert.That((PlayerBotDriver.IsExperienceTarget(lord), PlayerBotDriver.IsThreat(lord, eRealm.Albion)),
+            Is.EqualTo((false, true)), "no pull or plan, but a threat");
+        Assert.That(PlayerBotDriver.IsThreat(monster, eRealm.Albion), Is.True, "a monster, as before");
+        lord.Realm = eRealm.Albion;
+        Assert.That(PlayerBotDriver.IsThreat(lord, eRealm.Albion), Is.False, "its own realm's");
+    }
+
     // --- the break-off when losing to two (#167 C2) ---
 
     // It breaks off with 2 or more monsters on it, or right after a kill in a fight that had 2 or more on it with 1 still

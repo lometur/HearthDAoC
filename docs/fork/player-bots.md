@@ -70,12 +70,12 @@ Each bot thinks every 250 ms, a thin copy of the `/bot` pilot's think:
   melee with no clear spot it steps back 400 units straight away anyway, and never to a spot nearer the target than
   it stands. While its target is held it keeps its spell's range, even with hits blocking its spells or too little
   power (then its longest damage spell's range), and it never swings at a rooted or mezzed monster (its hit, or a
-  miss, would free it): it waits instead. A root counts even under a snare that landed before it (a damage-and-snare
-  nuke's). Not while another monster that isn't held hits it, and not for 5 s after a blocked step back: then it fights
-  as before. Only single-target spells the bot has, that the monster
-  isn't immune to by the server's own rules: a monster stunned or mezzed in the last minute takes the next one for
-  half the time, then a quarter, and none under 1 s. A mez on its target only as the last escape, the monster about to
-  reach it, and only on a monster above 75% health.
+  miss, would free it): it waits instead. Not while another monster that isn't held hits it, and not for 5 s after a
+  blocked step back: then it fights as before. A root counts as a hold even under a snare that landed before it (a
+  damage-and-snare nuke's). Only single-target spells the bot has, that the monster isn't immune to by the server's
+  own rules: a monster stunned or mezzed in the last minute takes the next one for half the time, then a quarter, and
+  none under 1 s. A mez on its target only as the last escape, the monster about to reach it, and only on a monster
+  above 75% health.
 - Any bot with a control spell (casters, healers, pet classes, a Skald or a Minstrel) also controls an add: the
   nearest other monster coming at it or hitting it that isn't held. A mez first, then a root, then a stun; no mez
   from a pet class (its pet would hit the add and free it), and no root on an add already in melee (it still hits
@@ -125,13 +125,14 @@ Each bot thinks every 250 ms, a thin copy of the `/bot` pilot's think:
   killing hit lands in the bots' own phase of the game loop, and a release asked for then was undone by the server's
   death handling later in the same tick, which left the bot dead for 15 minutes. A release that didn't revive it is
   asked for again every 10 s.
-- After a release it first steps out of the reach of every monster round it that would aggro. Wherever it died (at its
-  camp or on a walk), it then plans a new camp from where it died, one it can walk to from there, before it walks
-  back. It plans once the release's 10-s immunity is over: until then a player can attack no monster, so a plan found
-  none. It takes no camp it died at in the last 15 minutes while another camp that cons yellow or easier is left. From
-  its third death with no XP in between it waits 30-120 s out there, as a GameBot does, and it waits out the
-  resurrection illness there too. It pulls nothing until then, but fights back. No hold for a camp lasts over 60 s:
-  then it hunts where it is.
+- After a release it first steps out of the reach of every monster round it that would aggro, a keep guard of another
+  realm or of none too. Such a guard also counts as an add when it picks a target and a spot to rest, but it never
+  pulls one. Wherever it died (at its camp or on a walk), it then plans a new camp from where it died, one it can walk
+  to from there, before it walks back. It plans once the release's 10-s immunity is over: until then a player can
+  attack no monster, so a plan found none. It takes no camp it died at in the last 15 minutes while another camp that
+  cons yellow or easier is left. From its third death with no XP in between it waits 30-120 s out there, as a GameBot
+  does, and it waits out the resurrection illness there too. It pulls nothing until then, but fights back. No hold for
+  a camp lasts over 60 s: then it hunts where it is.
 - At login it also first steps out of the reach of every monster round it that would aggro, then hunts: no wait and
   no new camp.
 - It walks on the navmesh. A bot made at a level from a spots line also trains on each level-up.

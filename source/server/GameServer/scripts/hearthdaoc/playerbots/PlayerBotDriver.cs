@@ -1148,7 +1148,8 @@ public static class PlayerBotDriver
     // the adds this scan finds, no new one), the 5,000-unit ring the least crowded. The scan reaches AddScanMargin past
     // the ring for the adds by a candidate at its edge; those along a walk in lie within it. One over the cap is passed over, never taken (DEATHS.md A4: the old rollback
     // reset the death steps to fit it), and the capped clock runs while the wider ring finds nothing else. An avoided
-    // name is passed over too, unless the bot was sent to a camp of them (HuntAvoided).
+    // name is passed over too, unless the bot was sent to a camp of them (HuntAvoided). A keep guard of another realm or
+    // of none counts as an add, never as a candidate (#167 D7, CountsAsThreat).
     private static GameNPC FindWithin(PlayerBotState state, GamePlayer player, ushort radius, long now, out int crowd)
     {
         bool passedOver = false;
@@ -1159,10 +1160,11 @@ public static class PlayerBotDriver
         List<(GameNPC Npc, Vector3 At, int AggroRange)> adds = _adds ??= new();
         foreach (GameNPC npc in player.GetNPCsInRadius((ushort)(radius + AddScanMargin)))
         {
-            if (!IsExperienceTarget(npc)) continue;                                     // monsters only, adds too
-            Vector3 at = new(npc.X, npc.Y, npc.Z);
-            if (AddReach(player, npc) is > 0 and int reach) adds.Add((npc, at, reach));
-            if (!player.IsWithinRadius(npc, radius) || !IsValidTarget(player, npc, natural) ||
+            bool experience = IsExperienceTarget(npc);                                  // monsters only, adds too, and
+            if (!CountsAsThreat(experience, npc is GameKeepGuard, npc.Realm, player.Realm)) continue;   //   (#167 D7)
+            Vector3 at = new(npc.X, npc.Y, npc.Z);                                      //   a hostile keep guard as an
+            if (AddReach(player, npc) is > 0 and int reach) adds.Add((npc, at, reach)); //   add, never a pick
+            if (!experience || !player.IsWithinRadius(npc, radius) || !IsValidTarget(player, npc, natural) ||
                 npc == state.Unreachable && now < state.UnreachableUntil)
                 continue;
             ConColor con = ConLevels.GetConColor(player.GetConLevel(npc));
@@ -1307,6 +1309,18 @@ public static class PlayerBotDriver
         target != null && target != player && target.IsAlive && target.ObjectState is GameObject.eObjectState.Active &&
         target.CurrentRegion == player.CurrentRegion && GameServer.ServerRules.IsAllowedToAttack(player, target, true) &&
         (target is not GameNPC npc || (npc.Flags & (GameNPC.eFlags.PEACE | GameNPC.eFlags.CANTTARGET)) == 0);
+
+    /// <summary>#167 D7: a monster the step out (ClearSpotNear) and the adds rule (FindWithin's adds: the pick's
+    /// crowding, the rest spot's and the step back's) keep clear of: an experience target, or a keep guard of another
+    /// realm or of none (Pbotaaacv's realm-less "Renegade" guards at its battleground bind killed it in all 14 of its
+    /// release first fights). Keep guards stay out of pulls and plans (IsExperienceTarget). Threat sees them already
+    /// (Attacker has no such filter): the bot fights back.</summary>
+    public static bool CountsAsThreat(bool expTarget, bool keepGuard, eRealm guardRealm, eRealm botRealm) =>
+        expTarget || keepGuard && guardRealm != botRealm;
+
+    /// <summary>CountsAsThreat for a monster round a bot of botRealm.</summary>
+    public static bool IsThreat(GameNPC npc, eRealm botRealm) =>
+        CountsAsThreat(IsExperienceTarget(npc), npc is GameKeepGuard, npc.Realm, botRealm);
 
     // A copy of AutonomousWorldBotController.IsExperienceMonster (AWBC:4855-4861, private there).
     public static bool IsExperienceTarget(GameNPC npc) =>
@@ -2673,13 +2687,13 @@ public static class PlayerBotDriver
     }
 
     // The spot out of every potential add's reach nearest the bot (SpotOutOfReach), or null: the monsters within the
-    // rings' reach (AddScanMargin past the outer one) that would aggro.
+    // rings' reach (AddScanMargin past the outer one) that would aggro, a hostile keep guard too (#167 D7, CountsAsThreat).
     private static Vector3? ClearSpotNear(GamePlayer player, int[] rings)
     {
         List<(GameNPC Npc, Vector3 At, int AggroRange)> adds = _reach ??= new();
         adds.Clear();
         foreach (GameNPC npc in player.GetNPCsInRadius((ushort)(rings[^1] + AddScanMargin)))
-            if (IsExperienceTarget(npc) && AddReach(player, npc) is > 0 and int reach)
+            if (IsThreat(npc, player.Realm) && AddReach(player, npc) is > 0 and int reach)  // #167 D7: hostile keep guards too
                 adds.Add((npc, new(npc.X, npc.Y, npc.Z), reach));
         Vector3? found = SpotOutOfReach(player, rings, adds);
         adds.Clear();                                                                   // no monster held past the scan
