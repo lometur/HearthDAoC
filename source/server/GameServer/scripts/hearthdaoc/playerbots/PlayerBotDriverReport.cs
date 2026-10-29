@@ -31,7 +31,9 @@ public readonly record struct PlayerBotDriverWindow(
 /// damage-over-time casts (Dots), (#167 E C2b) whether a cast went under Quickcast as the killing nuke
 /// (KillingQuickcast), and (#167 E C4) its mezzes at the target (TargetMezzes); then (#167 E-L) the race's projection
 /// of its target's health at its death, at its first think under 40% with a read (PlayerBotDriver.TargetLeftAtDeath;
-/// -999: none).</summary>
+/// -999: none); then (#167 E-R) its endurance at the fight's first think and at its end, and the style choices and the
+/// thinks that held a style or a hybrid's damage cast back for a run's reserve (PlayerBotDriver.StyleWithin,
+/// HoldsCast).</summary>
 public readonly record struct PlayerBotFight(
     string Bot, int Level, string Target, int TargetLevel, ConColor Con, bool FromDefence, bool Killed,
     byte StartHp, byte EndHp, byte StartMana, byte EndMana, long Seconds, int Adds, int Swings, int NotVisible, int Casts,
@@ -40,7 +42,7 @@ public readonly record struct PlayerBotFight(
     bool BreakOff = false, int EngageDistance = -1, int Crowd = -1, long HeldSeconds = 0, int CtlLanded = 0, int CtlFailed = 0,
     int HpAtReach = -1, int TargetHpAtReach = -1, double Rate = 0, int WouldBreak = -1, PlayerBotWalk Walk = PlayerBotWalk.None,
     (int Range, int Clear, int Mesh, int Fit)? KiteNone = null, int Dots = 0, bool KillingQuickcast = false,
-    int TargetMezzes = 0, int RaceLeft = -999);
+    int TargetMezzes = 0, int RaceLeft = -999, int EndStart = -1, int End = -1, int StylesHeld = 0, int CastsHeld = 0);
 
 /// <summary>What a PLAYER_BOT_DEATH line adds after its first fields (levelmatch/DEATHS.md 2); -1 for none: the fight's
 /// fields (startHp, fightSec, adds, swings, notVisible) out of a fight, targetHp with no target, sinceKillSec with no kill
@@ -53,7 +55,8 @@ public readonly record struct PlayerBotFight(
 /// CtlFailed, HpAtReach, TargetHpAtReach and WouldBreak (-1 out of a fight), Rate at the death, Walk: the fight's, or out
 /// of a fight the last think's alive, and Endurance; then (#167 D8) FIGHT's KiteNone (none: out of a fight, -1 each);
 /// then (#167 E C1, C2b, C4) FIGHT's Dots, KillingQuickcast (1 or 0) and TargetMezzes (-1 each out of a
-/// fight); then (#167 E-L) FIGHT's RaceLeft (-999 out of a fight).</summary>
+/// fight); then (#167 E-L) FIGHT's RaceLeft (-999 out of a fight), and (#167 E-R) FIGHT's StylesHeld and CastsHeld (-1
+/// each out of a fight).</summary>
 public readonly record struct PlayerBotDeathDetail(
     PlayerBotActivity Activity, int StartHp, long FightSeconds, int TargetHp, bool FromDefence, int Adds, int LifeKills,
     int Rests, long SinceKillSeconds, byte Mana, int Swings, int NotVisible, string Killer, int KillerLevel,
@@ -62,7 +65,8 @@ public readonly record struct PlayerBotDeathDetail(
     int AddControls = -1, int AddAt = -1, int AddHp = -1, bool BreakOff = false, int EngageDistance = -1, long HeldSeconds = -1,
     int CtlLanded = -1, int CtlFailed = -1, int HpAtReach = -1, int TargetHpAtReach = -1, double Rate = 0, int WouldBreak = -1,
     PlayerBotWalk Walk = PlayerBotWalk.None, int Endurance = -1, (int Range, int Clear, int Mesh, int Fit)? KiteNone = null,
-    int Dots = -1, int KillingQuickcast = -1, int TargetMezzes = -1, int RaceLeft = -999);
+    int Dots = -1, int KillingQuickcast = -1, int TargetMezzes = -1, int RaceLeft = -999, int StylesHeld = -1,
+    int CastsHeld = -1);
 
 // HearthDAoC player bots (#137): one PLAYER_BOT_DRIVER line a minute, then the lever's PLAYER_BOT_WAKE line, from a thread-pool
 // timer off the game loop, and every TallyEveryWindows windows a PLAYER_BOT_TALLY line per bot (the level-matched run).
@@ -200,7 +204,8 @@ public static class PlayerBotDriverReport
         $"engageDist={f.EngageDistance} crowd={f.Crowd} heldSec={f.HeldSeconds} ctlLanded={f.CtlLanded} ctlFailed={f.CtlFailed} " +
         $"hpAtReach={f.HpAtReach} tHpAtReach={f.TargetHpAtReach} rate={FormatRate(f.Rate)} wouldBreak={f.WouldBreak} " +
         $"walk={FormatWalk(f.Walk)} kiteNone={FormatKiteNone(f.KiteNone ?? default)} dots={f.Dots} " +
-        $"qcKill={(f.KillingQuickcast ? 1 : 0)} ctlMez={f.TargetMezzes} raceLeft={f.RaceLeft}");
+        $"qcKill={(f.KillingQuickcast ? 1 : 0)} ctlMez={f.TargetMezzes} raceLeft={f.RaceLeft} endStart={f.EndStart} " +
+        $"end={f.End} styleHeld={f.StylesHeld} castHeld={f.CastsHeld}");
 
     /// <summary>#167 rate=: one decimal, a loss under 0.05 a second (either way) as 0.0, not -0.0.</summary>
     private static string FormatRate(double rate) =>
@@ -215,12 +220,13 @@ public static class PlayerBotDriverReport
     /// <summary>PLAYER_BOT_REST (#167), when a rest ends: the seconds the bot sat and why it stood (PlayerBotDriver.EndRest);
     /// then its health and power when it sat, and the killed monsters' spawn spots its rest spot was read against (C7);
     /// then (#167 D10) its rest walks blocked before it sat (PlayerBotDriver.RestGoalAt's tries), and inReach=1 when it
-    /// sat within a potential add's reach as its rest check read them.</summary>
+    /// sat within a potential add's reach as its rest check read them; then (#167 E-R) end=, its endurance when it sat
+    /// (-1: none given).</summary>
     public static string FormatRest(string bot, int level, long seconds, string why, int hp, int mp, int respawn,
-        int blocked, bool inReach) =>
+        int blocked, bool inReach, int end = -1) =>
         string.Create(CultureInfo.InvariantCulture,
             $"PLAYER_BOT_REST bot={bot} level={level} sec={seconds} why={why} hp={hp} mp={mp} respawn={respawn} " +
-            $"blocked={blocked} inReach={(inReach ? 1 : 0)}");
+            $"blocked={blocked} inReach={(inReach ? 1 : 0)} end={end}");
 
     /// <summary>PLAYER_BOT_BACK (#167 C1), at the first fight after a release (PlayerBotDriver.ReportBack): the seconds
     /// since the release, those stepping out of reach, held (the back-off, the illness, the replan's hold) and walking
@@ -263,7 +269,8 @@ public static class PlayerBotDriverReport
         $"breakOff={(d.BreakOff ? 1 : 0)} engageDist={d.EngageDistance} heldSec={d.HeldSeconds} ctlLanded={d.CtlLanded} " +
         $"ctlFailed={d.CtlFailed} hpAtReach={d.HpAtReach} tHpAtReach={d.TargetHpAtReach} rate={FormatRate(d.Rate)} " +
         $"wouldBreak={d.WouldBreak} walk={FormatWalk(d.Walk)} end={d.Endurance} kiteNone={FormatKiteNone(d.KiteNone ?? (-1, -1, -1, -1))} " +
-        $"dots={d.Dots} qcKill={d.KillingQuickcast} ctlMez={d.TargetMezzes} raceLeft={d.RaceLeft}");
+        $"dots={d.Dots} qcKill={d.KillingQuickcast} ctlMez={d.TargetMezzes} raceLeft={d.RaceLeft} " +
+        $"styleHeld={d.StylesHeld} castHeld={d.CastsHeld}");
 
     public static string Format(PlayerBotDriverWindow w)
     {

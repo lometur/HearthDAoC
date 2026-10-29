@@ -60,9 +60,11 @@ Each bot thinks every 250 ms, a thin copy of the `/bot` pilot's think:
   killer changes neither (the death's own step lowers the con), and once the 5 minutes are up a bot with only yellow
   camps round it takes one as its fallback again.
 - It rests after each kill, and whenever below a GameBot's rest thresholds (70% health, 45% power, 35% endurance). A
-  rest stops at full health, 60% endurance, and full power, or 90% power for a caster (Wizard, Sorcerer, Runemaster,
-  Eldritch, Mentalist: under 50% power it regains power at half the rate, so a pull that ends below half costs more
-  rest than the last 10%); the quest bot's rests before an errand's walk stop there too.
+  rest stops at full health, 80% endurance (enough to sprint away from a monster after a fight that leaves it styling
+  less), and full power, or 90% power for a caster (Wizard, Sorcerer, Runemaster, Eldritch, Mentalist: under 50% power
+  it regains power at half the rate, so a pull that ends below half costs more rest than the last 10%); the quest bot's
+  rests before an errand's walk stop there too, and a Skald's Song of Rest and an endurance regeneration buff run to the
+  same 80%.
 - A bot with a heal heals itself below 60% health, whatever its power. Out of a fight it also heals itself below 85%
   before it sits, if half its power is left after the heal. A caster doesn't start a cast that a hit would interrupt,
   and uses Quickcast once a monster's hits interrupt it. Its own swing doesn't block its next cast: with a spell to
@@ -177,6 +179,13 @@ Each bot thinks every 250 ms, a thin copy of the `/bot` pilot's think:
   units; still chased at 45 s, or with nowhere to run, it turns and fights them out. Afterwards it takes no camp there
   and avoids those monsters for 15 minutes, and plans a new camp from where it ran to before it looks for a new target.
   A break-off on the walk to its camp, more than 1,400 units short of it, bars that camp too for 15 minutes.
+- In a close fight (2 or more monsters on it now or earlier in the fight, a defence, the fight after a kill with adds,
+  or a fight the race since the first hit on it projects it to end under 30% health) a bot keeps the endurance a sprint
+  away from the fastest monster on it would need, plus 5: 31 against a monster no faster than its run, up to 41 against
+  one of speed 204. Its styles, and for a class that isn't a caster or pet class its damage spells (5 endurance a cast),
+  wait while they would take it under that; a cheaper style that leaves it goes instead. Heals don't wait. Against a
+  monster of speed 205 or more it keeps none, since no sprint it could keep would outrun it. Out of a close fight it
+  styles as before.
 - It releases 10 s after a death, counted from when the server has handled the death, never before: a bow's or a bolt's
   killing hit lands in the bots' own phase of the game loop, and a release asked for then was undone by the server's
   death handling later in the same tick, which left the bot dead for 15 minutes. A release that didn't revive it is
@@ -446,8 +455,10 @@ All start `PLAYER_BOT_`:
   Then `dots=`, its damage-over-time casts, `qcKill=`, 1 when a cast went under Quickcast as the killing nuke, and
   `ctlMez=`, its mezzes at the target (-1 each out of a fight), then `raceLeft=`, the race's projection of the target's
   health at the bot's death (the one-monster break-off's, with 20% lost since the first hit), at the first think under
-  40% with a read (-999: none, or out of a fight). `BLOCKED`'s `walk=` is `target`, `roam`, `clear` (the step out after
-  a release), `walkout`,
+  40% with a read (-999: none, or out of a fight). `FIGHT` then gives `endStart=` and `end=`, its endurance at the
+  fight's first think and at its end, and both give `styleHeld=`, the style choices a close fight's endurance reserve
+  left unstyled though it could pay for a style, and `castHeld=`, the thinks the reserve held a damage spell back (-1
+  each out of a fight). `BLOCKED`'s `walk=` is `target`, `roam`, `clear` (the step out after a release), `walkout`,
   `rest`, `kite`, `turret` or `breakoff`. `RELOCATE` after a death (`reason=died`) ends with `sinceRelease=`, the
   milliseconds since the release; after a break-off its `reason=` is `brokeoff`. Either ends with `barred=old` when the
   death or the break-off came on the walk to the camp it had, which the plan then leaves out. Any `RELOCATE` then ends
@@ -483,7 +494,7 @@ All start `PLAYER_BOT_`:
   `died`, or `other`; then `hp=` and `mp=`, its health and power when it sat (`mp=100` with no power pool),
   `respawn=`, the spawn spots of its recent kills its rest spot was chosen against, `blocked=`, its walks to a rest spot
   that were blocked before it sat (3 at most), and `inReach=` (1: it sat within an aggressive monster's reach, or a
-  recent kill's spawn spot's, as it read them before the walk);
+  recent kill's spawn spot's, as it read them before the walk), then `end=`, its endurance when it sat;
 - `FLOOR_STEP`: a step onto the nearest floor, with where from and to and why;
 - `REPLAN`: a stalled walk planned again, with where, the goal, the count in that walk and the stall's first step;
 - `ERRAND`: the quest bot's steps;

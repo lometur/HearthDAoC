@@ -230,6 +230,7 @@ public sealed class PlayerBotState
     public int RestRespawns;                                     //   spots the rest spot was read against (WalksToRestSpot)
     public int SitBlocked;                                       // #167 D10: REST blocked= and inReach= as it sat (Rest)
     public bool SitInReach;
+    public byte SitEndurance;                                    // #167 E-R: REST end=, its endurance as it sat
     public PlayerBotWalk Walk, LastWalk, FightWalk;              // #167 st-deathsD's FIGHT and DEATH fields: walk=, this
     public readonly Queue<(long Tick, byte Health)> HealthSamples = new();   //   think's walk, the last think's (NextWalk) and the
     public long FightHeldMs;                                     //   fight's (OpenFight); rate=, the last 3 s of thinks'
@@ -238,6 +239,10 @@ public sealed class PlayerBotState
     public int FightHpAtReach = -1, FightTargetHpAtReach = -1;   //   cast awaited (SettleControl); hpAtReach= and
     public int WouldBreakHp = -1;                                //   tHpAtReach= (HitNow) and wouldBreak= (ProjectedBreak)
     public int FightRaceLeft = PlayerBotDriver.NoRace;           // #167 E-L: FIGHT and DEATH raceLeft= (TrackFight)
+    public int Reserve;                                          // #167 E-R: the endurance a close fight keeps for a run
+    public long NextReserveTick;                                 //   (ReserveNow, read once a StyleMilliseconds); FIGHT
+    public byte EngageEndurance;                                 //   endStart= (Engage's opening), styleHeld= and castHeld=
+    public int FightStylesHeld, FightCastsHeld;                  //   (the style choices and the thinks it held one back)
     public int FightBuffHitters;                                 // #167 D12: the live monsters on the bot when the fight's
                                                                  //   buff was last weighed (FightBuffCheck)
 }
@@ -321,9 +326,16 @@ public static class PlayerBotDriver
     public const int SummonRetryMilliseconds = 2_000;        // (inf.) as the heal's
     public const int QuickcastRetryMilliseconds = 2_000;     // (inf.) as the heal's
     public const byte CasterPowerStop = 90;                  // #167 F3, C10: a caster stops resting power here (a list
-    public const byte RestEnduranceStop = 60;                //   caster regenerates at half rate under 50%,
+    public const byte RestEnduranceStop = 80;                //   caster regenerates at half rate under 50%,
                                                              //   PowerRegenerationAmountCalculator.cs:38-50: batch A's 70
                                                              //   left 46.6% of its pulls ending under 50%); all, endurance
+                                                             //   (#167 E-R: 60 left a style class 0-20 after one fight,
+                                                             //   a style costing 15-22 with a slow weapon and endurance
+                                                             //   regenerating neither in combat nor moving,
+                                                             //   ClassicRestRegeneration.cs; 80 holds a run's reserve and
+                                                             //   a style or two: +0.3% of bot time on st-deathsD2's rests,
+                                                             //   e-design s7). The chant (WantedChant), the regeneration
+                                                             //   buff (KeepsUpOutOfFight) and the errand rests read it too
     public const int SelfBuffScanMilliseconds = 5_000;       // #167 F8: the self-buffs' scan, out of a fight
     public const int ShortBuffMilliseconds = 120_000;        // #167 C9: a shorter buff is kept up in fights only, but a
                                                              //   regeneration one while its resource is low
@@ -372,6 +384,14 @@ public static class PlayerBotDriver
                                                              //   deaths, 105 with no break-off (e-design s3, s13)
     public const int NoRace = -999;                          //   FIGHT and DEATH raceLeft= with no read
     public const string RaceLost = "race";                   //   BREAKOFF why=
+    public const int ReserveMargin = 5;                      // #167 E-R: in a close fight (CloseFight) a style or a
+    public const int MaxEscapeReserve = 41;                  //   hybrid's damage cast keeps the endurance a run needs
+    public const int CloseRacePercent = 30;                  //   from the fastest monster on the bot (EscapeEndurance)
+    public const int SpellEnduranceCost = 5;                 //   and this margin; none when that is past MaxEscapeReserve
+                                                             //   (205 and faster: the two styles it costs buy no run). A
+                                                             //   race projecting the bot under 30 at its target's death
+                                                             //   is close (HealthLeftAtKill). A cast costs 5
+                                                             //   (SpellHandler.cs:1244-1250, :1442-1445)
 
     private static readonly ConcurrentDictionary<GamePlayer, PlayerBotState> _states = new();
     [ThreadStatic] private static List<(GameNPC Npc, Vector3 At, int Score)> _candidates;      // FindWithin's, per timer
@@ -659,6 +679,12 @@ public static class PlayerBotDriver
                 quickcasting || interrupted && interruptible && quickcastReady,           //   cost, doubled under Quickcast,
                 state.KillingQuickcast),                                                  //   no reserve to kill (#167 E C2b)
             now, state.SpellBlockedUntil);
+        if (canCast && role is not (PlayerBotRole.Caster or PlayerBotRole.Pet) &&      // #167 E-R: a hybrid's damage cast
+            HoldsCast(role, player.Endurance, ReserveNow(state, player, target, now)))   //   keeps a run's reserve too (5 a
+        {                                                                                //   cast, SpellHandler.cs:1442-1445):
+            canCast = false;                                                             //   it swings instead; FIGHT
+            state.FightCastsHeld++;                                                      //   castHeld=, by think
+        }
         if (state.Engaged) WatchFight(state, player, target, role, held, now);           // #167 heldSec= and on, walk in or not
         long selfInterrupt = quickcasting ? 0 : Math.Max(0, player.SelfInterruptTime - now);
         int spellRange = StopSpellRange(state.Spell, state.Nukes, player.castingComponent.CalculateSpellRange);
@@ -707,6 +733,7 @@ public static class PlayerBotDriver
                 .Where(effect => effect.SpellHandler?.Spell != null).Select(effect => effect.SpellHandler.Spell.SpellType));
             state.EngagePet = player.ControlledBrain?.Body?.IsAlive == true;
             state.EngageIll = Ill(player);                                              // DEATH ill= (#167 F4)
+            state.EngageEndurance = player.EndurancePercent;                            // #167 E-R FIGHT endStart=
             WatchFight(state, player, target, role, held, now);                         // #167 heldSec= and on
             if (player.ControlledBrain != null)                                         // its pet too: the pet window's
                 player.CommandNpcAttack();                                              //   attack (PetWindowHandler.cs:79-82)
@@ -801,7 +828,7 @@ public static class PlayerBotDriver
             if (now >= state.NextStyleTick)                                             //   145), as before
             {
                 state.NextStyleTick = now + StyleMilliseconds;
-                QueueUsableStyle(player);                                               // APP:694-710 without the quickbar filter
+                QueueUsableStyle(state, player, ReserveNow(state, player, target, now));  // #167 E-R: a run's reserve
             }
             if (!player.attackComponent.AttackState && CanSwing(player.ControlledBrain?.Body))
                 player.attackComponent.RequestStartAttack(target);                      // AttackComponent.cs:491-496
@@ -1758,6 +1785,8 @@ public static class PlayerBotDriver
         state.FightKillingQuickcast = false;                                        // #167 E C2b qcKill=
         state.FightTargetMezzes = 0;                                                // #167 E C4 ctlMez=
         state.FightRaceLeft = NoRace;                                               // #167 E-L raceLeft=
+        (state.FightStylesHeld, state.FightCastsHeld) = (0, 0);                     // #167 E-R styleHeld=, castHeld=,
+        (state.Reserve, state.NextReserveTick) = (0, 0);                            //   and a fresh reserve read
         state.TargetHeldBreaks = false;                                             // #167 C3
         state.FightAddControls = 0;                                                 // #167 C4
         (state.FightAdd, state.EngageDistance) = ((-1, -1), distance);              // #167 FIGHT addAt=, engageDist=
@@ -2160,6 +2189,85 @@ public static class PlayerBotDriver
         if (fatigueConsumption > 1) net = (int)Math.Ceiling(net * fatigueConsumption * 0.01);
         return net >= 0 ? int.MaxValue : (endurance - SprintStopEndurance - 1) / -net;
     }
+
+    /// <summary>The least endurance whose sprint outruns a chaser of this speed (#167 E-R: Outruns over SprintSeconds, at
+    /// the bot's regeneration, fatigue consumption and Long Wind), from just over SprintStartEndurance to
+    /// MaxEscapeReserve; none within it, int.MaxValue. 26 against 191 (4 s of sprint), 31 against 200, 41 against 205,
+    /// 21 against 150 (3 s).</summary>
+    public static int EscapeEndurance(int fastestSpeed, int regeneration, int fatigueConsumption, int longWind)
+    {
+        for (int endurance = SprintStartEndurance + 1; endurance <= MaxEscapeReserve; endurance++)
+            if (Outruns(fastestSpeed, SprintSeconds(endurance, regeneration, fatigueConsumption, longWind), rangedHarm: false))
+                return endurance;
+        return int.MaxValue;
+    }
+
+    /// <summary>The endurance a close fight keeps for a run (#167 E-R): EscapeEndurance against the fastest monster, read
+    /// at the run's 191 at the least (a choice, not the arithmetic: a 150-180 chaser needs 21, and the floor keeps 5 more
+    /// in hand), and ReserveMargin; 0 when that passes MaxEscapeReserve (a 205-or-faster monster: no reserve it could keep
+    /// buys a run, so it keeps its styles).</summary>
+    public static int EscapeReserve(int fastestSpeed, int regeneration, int fatigueConsumption, int longWind)
+    {
+        int need = EscapeEndurance(Math.Max(fastestSpeed, RunSpeed), regeneration, fatigueConsumption, longWind);
+        return need <= MaxEscapeReserve - ReserveMargin ? need + ReserveMargin : 0;
+    }
+
+    /// <summary>A style's endurance cost as StyleProcessor.CalculateEnduranceCost charges it (#167 E-R;
+    /// StyleProcessor.cs:460-479, private): a Battlemaster style 30 x cost / 40, any other weaponSpeed x cost / 40 and
+    /// 1 more under speed 40, scaled by the fatigue consumption (percent), 1 at the least. Valhalla's Blessing's free
+    /// proc (a 1.108 realm ability) is left out.</summary>
+    public static int StyleEnduranceCost(int weaponSpeed, int styleCost, int fatigueConsumption, bool battlemaster)
+    {
+        int cost = battlemaster ? 30 * styleCost / 40 : weaponSpeed * styleCost / 40 + (weaponSpeed < 40 ? 1 : 0);
+        return Math.Max(1, (int)Math.Ceiling(cost * fatigueConsumption * 0.01));
+    }
+
+    /// <summary>Whether a style of this cost leaves the bot's endurance at the reserve or above (#167 E-R, StyleWithin).
+    /// With no reserve, only whether it can pay (StyleProcessor's own check).</summary>
+    public static bool KeepsReserve(int endurance, int cost, int reserve) => endurance - cost >= reserve;
+
+    /// <summary>QueueUsableStyle's choice (#167 E-R; the review's seam): of the usable styles by level, highest first
+    /// (costs: each one's StyleEnduranceCost), the highest-level one that leaves the reserve (KeepsReserve); with no
+    /// reserve, today's pick, the highest whatever it costs (the server drops one the bot can't pay for at the swing,
+    /// PlayerAttackAction.cs:36-42); none, -1. Held: the reserve left the swing unstyled though the bot could pay for a
+    /// style (FIGHT styleHeld=), not a choice with none it could pay for (the fatigue the reserve didn't cause).</summary>
+    public static (int Index, bool Held) StyleWithin(IReadOnlyList<int> costs, int endurance, int reserve)
+    {
+        if (costs.Count == 0) return (-1, false);
+        if (reserve <= 0) return (0, false);
+        bool payable = false;
+        for (int i = 0; i < costs.Count; i++)
+        {
+            if (KeepsReserve(endurance, costs[i], reserve)) return (i, false);
+            payable |= endurance >= costs[i];
+        }
+        return (-1, payable);
+    }
+
+    /// <summary>Whether a hybrid's damage cast waits for the reserve (#167 E-R, Engage's cast gate): a reserve kept, the
+    /// cast's 5 would take the bot under it, and the bot is no caster or pet class (their spells are their fight, and
+    /// they style little). A heal is never held: it is SelfHeal's, not this gate's.</summary>
+    public static bool HoldsCast(PlayerBotRole role, int endurance, int reserve) =>
+        reserve > 0 && role is not (PlayerBotRole.Caster or PlayerBotRole.Pet) && endurance - SpellEnduranceCost < reserve;
+
+    /// <summary>The bot's health at its target's death on the race since the first hit on it (#167 E-R, CloseFight):
+    /// health less what it loses while its target loses the health it has left, both at their loss since that hit
+    /// (hpAtReach, targetHpAtReach: FIGHT hpAtReach= and tHpAtReach=). Null with no hit yet or under RaceReadLoss
+    /// lost since (TargetLeftAtDeath's read); int.MinValue when the target lost nothing since.</summary>
+    public static int? HealthLeftAtKill(byte health, byte targetHealth, int hpAtReach, int targetHpAtReach)
+    {
+        int botLost = hpAtReach - health, targetLost = targetHpAtReach - targetHealth;
+        if (hpAtReach < 0 || targetHpAtReach < 0 || botLost < RaceReadLoss) return null;
+        return targetLost <= 0 ? int.MinValue : health - targetHealth * botLost / targetLost;
+    }
+
+    /// <summary>A close fight (#167 E-R), the one that keeps a run's reserve: 2 or more monsters on the bot now or in the
+    /// fight (fightAdds, FIGHT adds=), a defence or the fight after an add kill (defence), or the race projecting the
+    /// bot under CloseRacePercent at its target's death (healthLeftAtKill; none read yet, no). 14% of st-deathsD's
+    /// style-class fights on straight-line races, about 18% with hits in chunks (the review); an ordinary pull keeps its
+    /// styles.</summary>
+    public static bool CloseFight(int monstersOnBot, int fightAdds, bool defence, int? healthLeftAtKill) =>
+        monstersOnBot >= 2 || fightAdds >= 2 || defence || healthLeftAtKill < CloseRacePercent;
 
     /// <summary>Where a break-off runs to (#167 C2): of the candidates, those ahead of straight away from the chasers (a
     /// dot product with here less their middle above 0: never square to them; any way with none to run from), out of every
@@ -3028,7 +3136,7 @@ public static class PlayerBotDriver
     }
 
     /// <summary>Low, or sitting and not yet recovered (APP:290-291 without the combat check), or after a kill until
-    /// recovered (recoverBeforePull; Recovered: full health, the role's power stop, 60% endurance, #167 F3): the driver
+    /// recovered (recoverBeforePull; Recovered: full health, the role's power stop, 80% endurance, #167 F3, E-R): the driver
     /// rests when MayRest says so, and a task that walks lets it.</summary>
     public static bool WantsRest(GamePlayer player, bool recoverBeforePull = false) =>
         WantsRest(NeedsRest(player.HealthPercent, player.MaxMana, player.ManaPercent, player.EndurancePercent),
@@ -3541,19 +3649,60 @@ public static class PlayerBotDriver
     }
 
     // APP:694-710 without the quickbar filter.
-    private static void QueueUsableStyle(GamePlayer player)
+    // APP:694-710 without the quickbar filter. #167 E-R: the style StyleWithin takes of the usable ones by level, each at
+    // its cost as StyleProcessor charges it (StyleEnduranceCost; a shield style off the left hand, as the swing pays for
+    // it, PlayerAttackAction.cs:38), keeping a close fight's reserve (reserve: ReserveNow's; 0 out of one, today's pick);
+    // a choice the reserve left unstyled counts FIGHT styleHeld=.
+    private static void QueueUsableStyle(PlayerBotState state, GamePlayer player, int reserve)
     {
-        if (player.styleComponent.NextCombatStyle != null || player.EndurancePercent < 15 || player.ActiveWeapon == null)
+        if (player.styleComponent.NextCombatStyle != null || player.EndurancePercent < 15 || player.ActiveWeapon is not { } weapon)
             return;
         AttackData lastAttack = player.attackComponent.attackAction.LastAttackData;
-        Style style = player.GetAllUsableSkills()
+        List<Style> styles = player.GetAllUsableSkills()
             .Select(entry => entry.Item1)
             .OfType<Style>()
-            .Where(candidate => StyleProcessor.CanUseStyle(lastAttack, player, candidate, player.ActiveWeapon))
+            .Where(candidate => StyleProcessor.CanUseStyle(lastAttack, player, candidate, weapon))
             .OrderByDescending(candidate => candidate.Level)
-            .FirstOrDefault();
-        if (style != null)
-            player.styleComponent.NextCombatStyle = style;
+            .ToList();
+        if (styles.Count == 0) return;
+        int fatigue = player.GetModified(eProperty.FatigueConsumption);
+        DOL.Database.DbInventoryItem leftHand = null;
+        int[] costs = new int[styles.Count];
+        for (int i = 0; i < styles.Count; i++)
+        {
+            DOL.Database.DbInventoryItem paidBy = (eObjectType)styles[i].WeaponTypeRequirement is eObjectType.Shield
+                ? leftHand ??= player.Inventory.GetItem(eInventorySlot.LeftHandWeapon) : weapon;
+            costs[i] = paidBy == null ? 0 : StyleEnduranceCost(paidBy.SPD_ABS, styles[i].EnduranceCost, fatigue,
+                styles[i].Spec == Specs.Battlemaster);
+        }
+        (int pick, bool held) = StyleWithin(costs, player.Endurance, reserve);
+        if (pick >= 0) player.styleComponent.NextCombatStyle = styles[pick];
+        if (held) state.FightStylesHeld++;
+    }
+
+    // #167 E-R: the endurance the bot keeps for a run now (EscapeReserve), in a fight only (the review: Engage's cast gate
+    // runs on the walk in and the first think in reach, before OpenFight's resets) and a close one (CloseFight): 2 or
+    // more monsters attacking it now (AttackerTracker's few, IsAttacking: no world scan) or in this fight (FightAdds), a
+    // defence or the fight after an add kill, or the race since the first hit on it projecting it under
+    // CloseRacePercent at its target's death (HealthLeftAtKill); else 0. Against the fastest of them and its target.
+    // Read at most once a StyleMilliseconds (Reserve, NextReserveTick), the style choice's own pace.
+    private static int ReserveNow(PlayerBotState state, GamePlayer player, GameLiving target, long now)
+    {
+        if (!state.Engaged) return 0;
+        if (now < state.NextReserveTick) return state.Reserve;
+        state.NextReserveTick = now + StyleMilliseconds;
+        bool targetAlive = target?.IsAlive == true;
+        int onBot = 0, fastest = targetAlive ? target.MaxSpeed : 0;
+        foreach (GameLiving living in player.attackComponent.AttackerTracker.Attackers)
+            if (living is GameNPC npc && IsAttacking(player, npc))
+                (onBot, fastest) = (onBot + 1, Math.Max(fastest, (int)npc.MaxSpeed));
+        int? left = targetAlive
+            ? HealthLeftAtKill(player.HealthPercent, target.HealthPercent, state.FightHpAtReach, state.FightTargetHpAtReach)
+            : null;
+        return state.Reserve = CloseFight(onBot, state.FightAdds, state.FromDefence || state.FollowsAddKill, left)
+            ? EscapeReserve(fastest, player.GetModified(eProperty.EnduranceRegenerationAmount),
+                player.GetModified(eProperty.FatigueConsumption), LongWindCost(player))
+            : 0;
     }
 
     // APP:474-500, plus the leash.
@@ -4431,7 +4580,8 @@ public static class PlayerBotDriver
             inFight ? state.FightDots : -1,                                               // #167 E C1 dots=,
             inFight ? (state.FightKillingQuickcast ? 1 : 0) : -1,                         // #167 E C2b qcKill=,
             inFight ? state.FightTargetMezzes : -1,                                       // #167 E C4 ctlMez=,
-            inFight ? state.FightRaceLeft : NoRace);                                      // #167 E-L raceLeft=
+            inFight ? state.FightRaceLeft : NoRace,                                       // #167 E-L raceLeft=,
+            inFight ? state.FightStylesHeld : -1, inFight ? state.FightCastsHeld : -1);   // #167 E-R as FIGHT's
         string head = $"PLAYER_BOT_DEATH bot={player.Name} level={player.Level} at=({player.X},{player.Y},{player.Z}) " +
                       $"zone={player.CurrentZone?.ID} {fight} attackers={state.Attackers} deathSteps={state.DeathSafetySteps} " +
                       $"aliveSec={(now - state.AliveSince) / 1000} task={state.Task != null}";
@@ -4505,7 +4655,8 @@ public static class PlayerBotDriver
             state.FightCtlFailed, state.FightHpAtReach, state.FightTargetHpAtReach,      // #167 st-deathsD's
             HealthRate(state.HealthSamples, now, player.HealthPercent), state.WouldBreakHp, state.FightWalk,
             state.FightKiteNone, state.FightDots, state.FightKillingQuickcast,          // #167 D8, E C1, E C2b,
-            state.FightTargetMezzes, state.FightRaceLeft)));                            //   E C4, E-L
+            state.FightTargetMezzes, state.FightRaceLeft, state.EngageEndurance,       //   E C4, E-L, E-R
+            player.EndurancePercent, state.FightStylesHeld, state.FightCastsHeld)));
     }
 
     // APP:585-624, changed: every 10 s, no inventory count, no saves; after 15 minutes with no progress, back to the
@@ -5230,8 +5381,9 @@ public static class PlayerBotDriver
             state.LifeRests++;                                                             // FIGHT and DEATH rests=
             if (player.IsSitting)                                                          // REST sec= (#167), if it sat,
             {                                                                              //   and hp= and mp=; #167 D10:
-                (state.SitSince, state.SitHealth, state.SitMana) =                         //   blocked= and inReach=, by the
-                    (now, player.HealthPercent, PowerPercent(player.MaxMana, player.ManaPercent));   //   reaches its rest
+                (state.SitSince, state.SitHealth, state.SitMana, state.SitEndurance) =     //   blocked= and inReach=, by the
+                    (now, player.HealthPercent, PowerPercent(player.MaxMana, player.ManaPercent),   //   reaches its rest
+                        player.EndurancePercent);                                                     //   (#167 E-R end=)
                 (state.SitBlocked, state.SitInReach) =                                     //   check read (RestReach)
                     (state.RestBlocked, InAddReach(new Vector3(player.X, player.Y, player.Z), state.RestReach));
             }
@@ -5270,7 +5422,7 @@ public static class PlayerBotDriver
         if (state.SitSince == 0) return;
         if (Log.IsInfoEnabled)
             Log.Info(PlayerBotDriverReport.FormatRest(player.Name, player.Level, (now - state.SitSince) / 1000, why,
-                state.SitHealth, state.SitMana, state.RestRespawns, state.SitBlocked, state.SitInReach));
+                state.SitHealth, state.SitMana, state.RestRespawns, state.SitBlocked, state.SitInReach, state.SitEndurance));
         state.SitSince = 0;
     }
 
