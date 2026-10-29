@@ -712,8 +712,8 @@ public static class PlayerBotDriver
                 state.KillingQuickcast),                                                  //   no reserve to kill (#167 E C2b)
             now, state.SpellBlockedUntil);
         if (canCast && role is not (PlayerBotRole.Caster or PlayerBotRole.Pet) &&      // #167 E-R: a hybrid's damage cast
-            HoldsCast(role, player.Endurance, ReserveNow(state, player, target, now),    //   keeps a run's reserve too (5 a
-                HealsCaster(state.Spell.SpellType, state.Spell.LifeDrainReturn)))       //   cast, SpellHandler.cs:1442-1445),
+            HoldsDamageCast(role, player.Endurance,                                      //   keeps a run's reserve too (5 a
+                ReserveNow(state, player, target, now), state.Spell))                    //   cast, SpellHandler.cs:1442-1445),
         {                                                                                //   never a lifetap (#167 E fix R2):
             canCast = false;                                                             //   it swings instead; FIGHT
             state.FightCastsHeld++;                                                      //   castHeld=, by think
@@ -2347,6 +2347,11 @@ public static class PlayerBotDriver
         lifeDrainReturn > 0 && type is eSpellType.Lifedrain or eSpellType.LifedrainNoVariance or eSpellType.OmniLifedrain or
             eSpellType.DamageSpeedDecrease or eSpellType.DamageSpeedDecreaseNoVariance;
 
+    /// <summary>Engage's cast gate on the spell the bot will cast (#167 E fix R2, its review's seam): HoldsCast with that
+    /// spell's HealsCaster, so a lifetap is never held.</summary>
+    public static bool HoldsDamageCast(PlayerBotRole role, int endurance, int reserve, Spell spell) =>
+        HoldsCast(role, endurance, reserve, HealsCaster(spell.SpellType, spell.LifeDrainReturn));
+
     /// <summary>The reserve a hold keeps now (#167 E fix R2): the close fight's (reserve, ReserveNow's read) only while
     /// holding can still buy a run, else 0 (no hold: the style and cast as before). Not under the run's need against the
     /// fastest monster (runNeed, EscapeEndurance): endurance comes back neither in a fight nor moving
@@ -2378,6 +2383,25 @@ public static class PlayerBotDriver
     /// styles.</summary>
     public static bool CloseFight(int monstersOnBot, int fightAdds, bool defence, int? healthLeftAtKill) =>
         monstersOnBot >= 2 || fightAdds >= 2 || defence || healthLeftAtKill < CloseRacePercent;
+
+    /// <summary>ReserveNow's read (#167 E-R; #167 E fix R2, its review's seam), over the monsters attacking the bot
+    /// (onBot: each one's speed and whether it is the bot's target) and its target's speed (targetSpeed, on the bot or
+    /// not; 0 with none alive): the close fight's reserve (CloseFight on onBot's count, EscapeReserve against the
+    /// fastest), the run's need against that fastest chaser itself (RunNeed: EscapeEndurance, not EscapeReserve's 191
+    /// floor; 0 with no reserve) and whether no monster but the target is on the bot (TargetAlone), HoldingReserve's
+    /// terms.</summary>
+    public static (int Reserve, int RunNeed, bool TargetAlone) ReserveRead(int targetSpeed,
+        IReadOnlyList<(int Speed, bool IsTarget)> onBot, int fightAdds, bool defence, int? leftAtKill, int regeneration,
+        int fatigue, int longWind)
+    {
+        int others = 0, fastest = targetSpeed;
+        for (int i = 0; i < onBot.Count; i++)
+            (others, fastest) = (onBot[i].IsTarget ? others : others + 1, Math.Max(fastest, onBot[i].Speed));
+        int reserve = CloseFight(onBot.Count, fightAdds, defence, leftAtKill)
+            ? EscapeReserve(fastest, regeneration, fatigue, longWind)
+            : 0;
+        return (reserve, reserve > 0 ? EscapeEndurance(fastest, regeneration, fatigue, longWind) : 0, others == 0);
+    }
 
     /// <summary>Where a break-off runs to (#167 C2): of the candidates, those ahead of straight away from the chasers (a
     /// dot product with here less their middle above 0: never square to them; any way with none to run from), out of every
@@ -3930,7 +3954,7 @@ public static class PlayerBotDriver
     // Read at most once a StyleMilliseconds (Reserve, NextReserveTick), the style choice's own pace. #167 E fix R2: held
     // only while holding can still buy a run (HoldingReserve), on every call against the endurance and the target's health
     // now, on the read's need (RunNeed: EscapeEndurance against that fastest monster) and whether its target is the only
-    // monster on the bot (TargetAlone).
+    // monster on the bot (TargetAlone). The read itself is ReserveRead's (the fix's review: a seam its rows reach).
     private static int ReserveNow(PlayerBotState state, GamePlayer player, GameLiving target, long now)
     {
         if (!state.Engaged) return 0;
@@ -3938,20 +3962,17 @@ public static class PlayerBotDriver
         if (now >= state.NextReserveTick)
         {
             state.NextReserveTick = now + StyleMilliseconds;
-            int onBot = 0, others = 0, fastest = targetAlive ? target.MaxSpeed : 0;
-            foreach (GameLiving living in player.attackComponent.AttackerTracker.Attackers)
+            ICollection<GameLiving> attackers = player.attackComponent.AttackerTracker.Attackers;
+            var onBot = new List<(int Speed, bool IsTarget)>(attackers.Count);
+            foreach (GameLiving living in attackers)
                 if (living is GameNPC npc && IsAttacking(player, npc))
-                    (onBot, others, fastest) =
-                        (onBot + 1, npc == target ? others : others + 1, Math.Max(fastest, (int)npc.MaxSpeed));
+                    onBot.Add((npc.MaxSpeed, npc == target));
             int? left = targetAlive ? HealthLeftAtKill(player.HealthPercent, target.HealthPercent, state.FightHpAtReach,
                 state.FightTargetHpAtReach) : null;
-            int regeneration = player.GetModified(eProperty.EnduranceRegenerationAmount),
-                fatigue = player.GetModified(eProperty.FatigueConsumption), longWind = LongWindCost(player);
-            state.Reserve = CloseFight(onBot, state.FightAdds, state.FromDefence || state.FollowsAddKill, left)
-                ? EscapeReserve(fastest, regeneration, fatigue, longWind)
-                : 0;
-            (state.RunNeed, state.TargetAlone) =
-                (state.Reserve > 0 ? EscapeEndurance(fastest, regeneration, fatigue, longWind) : 0, others == 0);
+            (state.Reserve, state.RunNeed, state.TargetAlone) = ReserveRead(targetAlive ? target.MaxSpeed : 0, onBot,
+                state.FightAdds, state.FromDefence || state.FollowsAddKill, left,
+                player.GetModified(eProperty.EnduranceRegenerationAmount), player.GetModified(eProperty.FatigueConsumption),
+                LongWindCost(player));
         }
         return HoldingReserve(state.Reserve, state.RunNeed, player.Endurance, targetAlive ? target.HealthPercent : (byte)100,
             state.TargetAlone);

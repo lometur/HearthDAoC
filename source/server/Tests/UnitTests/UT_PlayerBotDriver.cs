@@ -1766,6 +1766,26 @@ public sealed class UT_PlayerBotDriver
     public void A_lifetap_heals_its_caster(eSpellType type, int lifeDrainReturn, bool heals) =>
         Assert.That(PlayerBotDriver.HealsCaster(type, lifeDrainReturn), Is.EqualTo(heals));
 
+    // #167 E fix R2, its review: Engage's cast gate on the spell the bot will cast (HoldsDamageCast: HoldsCast on that
+    // spell's HealsCaster). A mutation run passed the gate false for healsCaster with every test green; the Reaver's
+    // Siphon (Lifedrain, 60 returned) held again down to end=0 would go unseen. A direct damage, or a lifedrain that
+    // returns none, is held as before; a caster's, or one over the reserve, never.
+    [TestCase("Lifedrain", 60, PlayerBotRole.Melee, 40, 36, false)]          // the Reaver's Siphon: never held
+    [TestCase("Lifedrain", 60, PlayerBotRole.Melee, 0, 31, false)]
+    [TestCase("DamageSpeedDecrease", 40, PlayerBotRole.Melee, 40, 36, false)] // the Valewalker's Force of Nature
+    [TestCase("DirectDamage", 0, PlayerBotRole.Melee, 40, 36, true)]         // a damage cast: held
+    [TestCase("Lifedrain", 0, PlayerBotRole.Melee, 40, 36, true)]            //   and a drain that returns none
+    [TestCase("DirectDamage", 0, PlayerBotRole.Melee, 41, 36, false)]        // over the reserve
+    [TestCase("DirectDamage", 0, PlayerBotRole.Caster, 10, 36, false)]       // a caster's
+    [TestCase("DirectDamage", 0, PlayerBotRole.Melee, 3, 0, false)]          // no reserve kept
+    public void The_cast_gate_holds_the_spell_the_bot_casts_unless_it_heals_it(string type, int lifeDrainReturn,
+        PlayerBotRole role, int endurance, int reserve, bool holds)
+    {
+        Spell spell = new(new DbSpell { SpellID = 990_100, Name = type, Type = type, Target = "Enemy", Damage = 50,
+            LifeDrainReturn = lifeDrainReturn, Range = 1500 }, 50);
+        Assert.That(PlayerBotDriver.HoldsDamageCast(role, endurance, reserve, spell), Is.EqualTo(holds));
+    }
+
     // #167 E fix R2: the reserve holds only while holding can still buy a run. Endurance comes back neither in a fight nor
     // moving (ClassicRestRegeneration.cs), so under the run's need against the fastest monster (runNeed, EscapeEndurance)
     // no hold buys one: 26 of the 31 held in-fight deaths on st-deathsE and Eb were under it at death (end=0 after a
@@ -1847,6 +1867,29 @@ public sealed class UT_PlayerBotDriver
         {
             calculators[(int)eProperty.MaxHealth] = previous;
         }
+    }
+
+    // #167 E fix R2, its review: ReserveNow's read (ReserveRead) over the monsters on the bot (speeds, each its target or
+    // not) and its target's speed (targetSpeed, on the bot or not): the reserve (CloseFight, EscapeReserve against the
+    // fastest), the run's need against that fastest chaser itself, not the 191 floor (RunNeed: EscapeEndurance), and
+    // whether no monster but the target is on the bot (TargetAlone). A mutation run read the need at the floor (26 for a
+    // 150 chaser, not 21) and TargetAlone always true (a target at 10% or less with an add on the bot released the hold)
+    // with every test green: the other R2 test sets the three itself. At regeneration 0, fatigue 100, Long Wind 5.
+    [TestCase(150, new[] { 150 }, new[] { true }, 1, true, null, 31, 21, true)]          // a 150 target alone, a defence
+    [TestCase(150, new[] { 150, 200 }, new[] { true, false }, 2, false, null, 36, 31, false)]   // and a 200 add on it
+    [TestCase(150, new[] { 200 }, new[] { false }, 2, false, null, 36, 31, false)]       // the add only, not the target
+    [TestCase(200, new[] { 150 }, new[] { false }, 1, true, null, 36, 31, false)]        // the target's speed off the bot
+    [TestCase(150, new[] { 150, 150 }, new[] { true, false }, 1, false, null, 31, 21, false)]   // 2 on the bot now
+    [TestCase(150, new[] { 150 }, new[] { true }, 1, false, 29, 31, 21, true)]           // the race under 30 at the kill
+    [TestCase(150, new[] { 150 }, new[] { true }, 1, false, null, 0, 0, true)]           // no close fight
+    [TestCase(205, new[] { 205 }, new[] { true }, 1, true, null, 0, 0, true)]            // 205: no reserve buys a run
+    public void The_reserve_read_takes_the_need_and_the_adds_from_the_monsters_on_the_bot(int targetSpeed, int[] speeds,
+        bool[] isTarget, int fightAdds, bool defence, int? leftAtKill, int reserve, int runNeed, bool targetAlone)
+    {
+        var onBot = new List<(int Speed, bool IsTarget)>();
+        for (int i = 0; i < speeds.Length; i++) onBot.Add((speeds[i], isTarget[i]));
+        Assert.That(PlayerBotDriver.ReserveRead(targetSpeed, onBot, fightAdds, defence, leftAtKill, 0, 100,
+            PlayerBotDriver.LongWind), Is.EqualTo((reserve, runNeed, targetAlone)));
     }
 
     // Where it runs: ahead of straight away from its chasers (a dot product above 0, so never square to them), out of
