@@ -5221,35 +5221,69 @@ public sealed class UT_PlayerBotDriver
         Assert.That((state.Swings, state.NotVisible), Is.EqualTo((4, 2)));
     }
 
-    // #167 D5: a caster sees its root under a damage-and-snare nuke. Both sit in the target's MovementSpeedDebuff list,
-    // and the hold read only the first by StartTick: with the snare first, held stayed false (no step back, no broken hold
-    // counted, and the control tries ran out on re-roots the root already there refused). Any root on counts: a
-    // SpeedDecrease of 99% or more that isn't disabled.
-    [TestCase(new[] { eSpellType.DamageSpeedDecrease, eSpellType.SpeedDecrease }, new[] { 35.0, 99.0 }, new[] { false, false },
-        true)]
-    [TestCase(new[] { eSpellType.SpeedDecrease, eSpellType.DamageSpeedDecrease }, new[] { 99.0, 35.0 }, new[] { false, false },
-        true)]
-    [TestCase(new[] { eSpellType.DamageSpeedDecrease }, new[] { 35.0 }, new[] { false }, false)]
-    [TestCase(new[] { eSpellType.SpeedDecrease }, new[] { 35.0 }, new[] { false }, false)]
-    [TestCase(new[] { eSpellType.SpeedDecrease }, new[] { 99.0 }, new[] { true }, false)]
-    [TestCase(new eSpellType[0], new double[0], new bool[0], false)]
-    public void A_root_counts_whatever_slow_landed_before_it(eSpellType[] types, double[] values, bool[] disabled, bool rooted) =>
-        Assert.That(PlayerBotDriver.AnyRoot(types.Select((type, i) => (type, values[i], disabled[i]))), Is.EqualTo(rooted));
+    // st-deathsD's fix round (R3): D5 (a root read under a snare) changed nothing, and the casters cast roots the server
+    // refuses. A snare and a root always conflict (SpeedDecreaseSpellHandler.HasConflictingEffectWith,
+    // SpeedDecreaseSpellHandler.cs:44-48, which the damage-and-snare nuke's handler doesn't override), and a new effect
+    // replaces one it conflicts with only when it is better (ECSGameEffect.IsBetterThan, ECSGameEffect.cs:179-183: Value
+    // and Damage, each by its Effectiveness, both at least as high), else the server refuses it
+    // (EffectListComponent.cs:745-779). Every root's Damage is 0 and the snare nukes' 143-148: the snare group landed 10
+    // controls and failed 56. RootTakes is that rule on the products: no enabled movement debuff on the target, or the
+    // root better than each (equal counts as better).
+    [TestCase(new double[0], new double[0], new bool[0], 99.0, 0.0, true)]
+    [TestCase(new[] { 35.0 }, new[] { 143.0 }, new[] { false }, 99.0, 0.0, false)]
+    [TestCase(new[] { 35.0 }, new[] { 0.0 }, new[] { false }, 99.0, 0.0, true)]
+    [TestCase(new[] { 35.0 }, new[] { 143.0 }, new[] { true }, 99.0, 0.0, true)]
+    [TestCase(new[] { 99.0 }, new[] { 0.0 }, new[] { false }, 99.0, 0.0, true)]
+    [TestCase(new[] { 123.75 }, new[] { 0.0 }, new[] { false }, 99.0, 0.0, false)]           // another's root at 125%
+    [TestCase(new[] { 35.0, 99.0 }, new[] { 0.0, 0.0 }, new[] { false, false }, 99.0, 0.0, true)]
+    public void A_root_takes_only_over_the_slows_it_beats(double[] values, double[] damages, bool[] disabled,
+        double rootValue, double rootDamage, bool takes) =>
+        Assert.That(PlayerBotDriver.RootTakes(values.Select((value, i) => (value, damages[i], disabled[i])), rootValue,
+            rootDamage), Is.EqualTo(takes));
 
-    // The st-deathsC case where the hold reads it: a snare nuke landed, then the root.
-    [Test]
-    public void A_target_snared_then_rooted_is_held()
+    // A calculator that gives one value (the caster's debuff effectiveness here).
+    private sealed class Fixed(int value) : DOL.GS.PropertyCalc.PropertyCalculator
     {
-        MethodInfo rooted = typeof(PlayerBotDriver).GetMethod("Rooted", BindingFlags.Static | BindingFlags.NonPublic)!;
-        GamePlayer bot = Player(null);
-        GameNPC monster = LiveMonster();
-        Spell snareNuke = Control(5208, "snare nuke", "DamageSpeedDecrease", 10, 35),
-            root = Control(500, "root", "SpeedDecrease", 10, 99);
-        Effects(monster)[eEffect.MovementSpeedDebuff] = [SpellEffect(monster, bot, snareNuke, 10_000),
-            SpellEffect(monster, bot, root, 11_000)];
-        Assert.That(rooted.Invoke(null, [monster]), Is.True, "the root under the snare");
-        Effects(monster)[eEffect.MovementSpeedDebuff] = [SpellEffect(monster, bot, snareNuke, 10_000)];
-        Assert.That(rooted.Invoke(null, [monster]), Is.False, "the snare alone");
+        public override int CalcValue(GameLiving living, eProperty property) => value;
+    }
+
+    // Where the controls read it (Takes, C8): a monster the snare nuke slowed takes no root, so the caster picks its next
+    // control (here its mez, ChooseControl's order for a target); a plain snare or none takes the root. The root's product
+    // is at the caster's debuff effectiveness (SpellHandler.cs:2169-2172; 0% here).
+    [Test]
+    public void A_monster_under_a_snare_nuke_takes_no_root_and_the_caster_picks_its_next_control()
+    {
+        MethodInfo takes = typeof(PlayerBotDriver).GetMethod("Takes", BindingFlags.Static | BindingFlags.NonPublic,
+            [typeof(GamePlayer), typeof(GameLiving), typeof(Spell)])!;
+        var calculators = (DOL.GS.PropertyCalc.IPropertyCalculator[])typeof(GameLiving)
+            .GetField("m_propertyCalc", BindingFlags.Static | BindingFlags.NonPublic)!.GetValue(null)!;
+        DOL.GS.PropertyCalc.IPropertyCalculator previous = calculators[(int)eProperty.DebuffEffectiveness],
+            previousHealth = calculators[(int)eProperty.MaxHealth];
+        calculators[(int)eProperty.DebuffEffectiveness] = new Fixed(0);
+        calculators[(int)eProperty.MaxHealth] = new Fixed(100);                       // HealthPercent's (a mez's 75%)
+        try
+        {
+            GamePlayer bot = Player(null), other = Player(null);
+            GameNPC monster = LiveMonster();
+            typeof(GameLiving).GetField("m_abilities", Hidden)!.SetValue(monster, new Dictionary<string, Ability>());
+            typeof(GameLiving).GetField("_abilitiesLock", Hidden)!.SetValue(monster, new System.Threading.Lock());
+            Spell snareNuke = new(new DbSpell { SpellID = 5208, Name = "Constricting Force", Type = "DamageSpeedDecrease",
+                    Target = "Enemy", Value = 35, Damage = 143, Range = 1500, CastTime = 2.5, Duration = 20 }, 20),
+                snare = Control(5209, "a snare", "SpeedDecrease", 20, 35);
+            (Spell, SpellLine)[] controls = [(Cripple, BodyLine), (LesserMesmerization, BodyLine)];
+            Spell Choose() => PlayerBotDriver.ChooseControl(controls, _ => true,
+                spell => (bool)takes.Invoke(null, [bot, monster, spell])!, forAdd: false, petClass: false).Item1;
+            Assert.That(Choose(), Is.EqualTo(Cripple), "nothing on it: the root");
+            Effects(monster)[eEffect.MovementSpeedDebuff] = [SpellEffect(monster, other, snareNuke, 10_000)];
+            Assert.That(Choose(), Is.EqualTo(LesserMesmerization), "under the snare nuke: the mez");
+            Effects(monster)[eEffect.MovementSpeedDebuff] = [SpellEffect(monster, other, snare, 10_000)];
+            Assert.That(Choose(), Is.EqualTo(Cripple), "a plain snare: the root replaces it");
+        }
+        finally
+        {
+            calculators[(int)eProperty.DebuffEffectiveness] = previous;
+            calculators[(int)eProperty.MaxHealth] = previousHealth;
+        }
     }
 
     // FIGHT and DEATH ctlBroken= (#167 C3): a hold the bot's own swing ended, as a think sees it: its target held by a root

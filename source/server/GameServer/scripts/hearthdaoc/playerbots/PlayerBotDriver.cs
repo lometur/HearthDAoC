@@ -2115,9 +2115,9 @@ public static class PlayerBotDriver
     public static long InReachSince(long since, int nearestChaser, long runStart, long now) =>
         nearestChaser > CaughtReach || now - runStart < CaughtGraceMilliseconds ? 0 : since != 0 ? since : now;
 
-    /// <summary>The caught clock's think (BreaksOffNow's, st-deathsD's fix round): the clock (CaughtSince, InReachSince)
-    /// on the nearest chaser not held (freeDistance) from the run's start (BreakOffSince), and caught (CaughtNow) with
-    /// the last hit on the bot (lastHit: LastAttackedByEnemyTick).</summary>
+    /// <summary>The caught clock's think (#167 D2, BreaksOffNow's; st-deathsD's fix round): the clock (CaughtSince,
+    /// InReachSince) on the nearest chaser not held (freeDistance) from the run's start (BreakOffSince), and caught
+    /// (CaughtNow) with the last hit on the bot (lastHit: LastAttackedByEnemyTick).</summary>
     public static bool CaughtThink(PlayerBotState state, int freeDistance, long lastHit, long now)
     {
         state.CaughtSince = InReachSince(state.CaughtSince, freeDistance, state.BreakOffSince, now);
@@ -3732,7 +3732,8 @@ public static class PlayerBotDriver
         (Spell control, SpellLine line) = ChooseControl(state.Controls, spell => player.GetSkillDisabledDuration(spell) <= 0 &&
                 HasPowerFor(player.MaxMana, player.Mana, spell.Power) &&
                 player.IsWithinRadius(chaser, player.castingComponent.CalculateSpellRange(spell)),
-            spell => Takes(chaser, spell), forAdd: true, petClass: RoleOf(player.CharacterClass.ID) == PlayerBotRole.Pet);
+            spell => Takes(player, chaser, spell), forAdd: true,
+            petClass: RoleOf(player.CharacterClass.ID) == PlayerBotRole.Pet);
         if (control == null) return false;
         bool quickcasting = player.effectListComponent.ContainsEffectForEffectType(eEffect.QuickCast);
         Ability quickcast = player.GetAbility(Abilities.Quickcast);
@@ -4151,7 +4152,7 @@ public static class PlayerBotDriver
         ChooseControl(state.Controls, spell => player.GetSkillDisabledDuration(spell) <= 0 &&
                 HasPowerFor(player.MaxMana, player.Mana, spell.Power) &&
                 player.IsWithinRadius(npc, player.castingComponent.CalculateSpellRange(spell)),
-            spell => CasterControlAllowed(spell, Takes(npc, spell), contact), forAdd: false, petClass: false);
+            spell => CasterControlAllowed(spell, Takes(player, npc, spell), contact), forAdd: false, petClass: false);
 
     // #167 D11: TargetControl when a control on the target is worth it (ControlWorth: its con, the bot's health and the
     // live monsters on it, LiveHitters), else none: CasterStep's control and TargetFirst's, one gate for both.
@@ -4274,7 +4275,8 @@ public static class PlayerBotDriver
         (Spell control, SpellLine line) = ChooseControl(state.Controls, spell => player.GetSkillDisabledDuration(spell) <= 0 &&
                 HasPowerFor(player.MaxMana, player.Mana, spell.Power) &&
                 player.IsWithinRadius(add, player.castingComponent.CalculateSpellRange(spell)),
-            spell => Takes(add, spell) && ControlKeepsAddOff(spell, distance), forAdd: true, petClass: role == PlayerBotRole.Pet);
+            spell => Takes(player, add, spell) && ControlKeepsAddOff(spell, distance), forAdd: true,
+            petClass: role == PlayerBotRole.Pet);
         if (control == null) return default;
         long contact = TimeToContact(distance, add.MaxSpeedBase);
         GameNPC targetNpc = role == PlayerBotRole.Caster && !targetHeld ? target as GameNPC : null;   // else none first
@@ -4403,29 +4405,16 @@ public static class PlayerBotDriver
     private static (bool Held, bool BreaksOnHit) Hold(GameLiving target) =>
         target.IsStunned ? (true, false) : target.IsMezzed || Rooted(target) ? (true, true) : (false, false);
 
-    // #167 D5: every slow on it (AnyRoot), not the first by StartTick (EffectListService.GetEffectOnTarget). Its spellType
-    // overload (EffectListService.cs:102-106) would return the first SpeedDecrease, which can be a plain snare.
     private static bool Rooted(GameLiving target) =>
-        AnyRoot(target.effectListComponent.GetSpellEffects(eEffect.MovementSpeedDebuff)
-            .Where(effect => effect.SpellHandler?.Spell != null)
-            .Select(effect => (effect.SpellHandler.Spell.SpellType, effect.SpellHandler.Spell.Value, effect.IsDisabled)));
-
-    /// <summary>#167 D5: a root among the slows on a target (its MovementSpeedDebuff list): a SpeedDecrease of 99% or more
-    /// that isn't disabled, whatever landed before it. A damage-and-snare nuke (EffectGroup 0) and a root (65) both sit
-    /// in that list; the first by StartTick was the snare in st-deathsC's caster traps.</summary>
-    public static bool AnyRoot(IEnumerable<(eSpellType Type, double Value, bool Disabled)> slows)
-    {
-        foreach ((eSpellType type, double value, bool disabled) in slows)
-            if (!disabled && type is eSpellType.SpeedDecrease && value >= 99) return true;
-        return false;
-    }
+        EffectListService.GetEffectOnTarget(target, eEffect.MovementSpeedDebuff) is ECSGameSpellEffect effect &&
+        effect.SpellHandler?.Spell is Spell spell && spell.SpellType is eSpellType.SpeedDecrease && spell.Value >= 99;
 
     // #167 C8: whether the target takes this control now, by the server's own tests of its kind: the immunities
     // (AbstractCCSpellHandler.ApplyEffectOnTarget's CCImmunity, CCSpellHandler.cs:17-21; a stun's, :276-283; a mez's,
     // :160-169, and its resist under 75% health, :173-177; a root's, SpeedDecreaseSpellHandler.cs:25-33), and an NPC's
     // diminishing immunity only when it would refuse this hold (DiminishedAllows; the old StunOk and MezOk read it as
-    // immune).
-    private static bool Takes(GameLiving target, Spell spell) => spell.SpellType switch
+    // immune). st-deathsD's fix round: a root only where the server lets it replace the slow on the target (RootTakesNow).
+    private static bool Takes(GamePlayer caster, GameLiving target, Spell spell) => spell.SpellType switch
     {
         eSpellType.Stun => Takes(spell, target.HasAbility(Abilities.CCImmunity), target.HasAbility(Abilities.StunImmunity) ||
             target.effectListComponent.ContainsEffectForEffectType(eEffect.StunImmunity),
@@ -4435,8 +4424,24 @@ public static class PlayerBotDriver
             EffectListService.GetEffectOnTarget(target, eEffect.NPCMezImmunity) as NpcImmunityEffect, target.HealthPercent),
         _ => Takes(spell, target.HasAbility(Abilities.CCImmunity), target.HasAbility(Abilities.RootImmunity) ||
             target.effectListComponent.ContainsEffectForEffectType(eEffect.SnareImmunity) ||
-            target.effectListComponent.ContainsEffectForEffectType(eEffect.SpeedOfSound), null, target.HealthPercent),
+            target.effectListComponent.ContainsEffectForEffectType(eEffect.SpeedOfSound), null, target.HealthPercent) &&
+            RootTakesNow(caster, target, spell),
     };
+
+    // #167 C8, st-deathsD's fix round: RootTakes on the target's movement debuffs, each by its Effectiveness, against the
+    // root at its caster's (a debuff's: 1 + DebuffEffectiveness%, SpellHandler.cs:2171; a root never crits,
+    // SpeedDecreaseSpellHandler.cs:66-68), read only when one is on it. One of the root's own spell is renewed, not
+    // weighed (EffectListComponent.cs:632-689).
+    private static bool RootTakesNow(GamePlayer caster, GameLiving target, Spell root)
+    {
+        List<ECSGameSpellEffect> slows = target.effectListComponent.GetSpellEffects(eEffect.MovementSpeedDebuff);
+        if (slows.Count == 0) return true;
+        double effectiveness = 1 + caster.GetModified(eProperty.DebuffEffectiveness) * 0.01;
+        return RootTakes(slows.Where(effect => effect.SpellHandler?.Spell is Spell spell && spell.ID != root.ID)
+            .Select(effect => (effect.SpellHandler.Spell.Value * effect.Effectiveness,
+                effect.SpellHandler.Spell.Damage * effect.Effectiveness, effect.IsDisabled)),
+            root.Value * effectiveness, root.Damage * effectiveness);
+    }
 
     /// <summary>Whether a monster takes a control now (#167 C8; the review of 9aacd69: the rule Takes reads, tested): not
     /// CC-immune (ccImmune), not immune to its kind (kindImmune: a stun's, a mez's, a root's ability or effect), its
@@ -4449,6 +4454,24 @@ public static class PlayerBotDriver
             eSpellType.Mesmerize => DiminishedAllows(diminishing, spell.Duration) && healthPercent >= 75,
             _ => true,
         };
+
+    /// <summary>Whether the server lets a root onto a target now (#167 C8, st-deathsD's fix round), from the movement
+    /// debuffs on it (movementDebuffs: each one's Value and Damage by its Effectiveness, and whether it is disabled). A
+    /// snare and a root always conflict (SpeedDecreaseSpellHandler.HasConflictingEffectWith,
+    /// SpeedDecreaseSpellHandler.cs:44-48; the damage-and-snare nuke's handler, DamageSpeedDecreaseSpellHandler, doesn't
+    /// override it), and a new effect takes the place of one it conflicts with only when it is better
+    /// (ECSGameEffect.IsBetterThan, ECSGameEffect.cs:179-183: Value and Damage by Effectiveness, both at least as high),
+    /// else it fails (EffectListComponent.cs:745-779). So: none enabled on the target, or the root (rootValue,
+    /// rootDamage: its products) better than each. Every root's Damage is 0 and the snare nukes' 143-148: st-deathsD's
+    /// snare group landed 10 controls and failed 56. D5 (AnyRoot) read a root under the snare that the server never
+    /// lets on.</summary>
+    public static bool RootTakes(IEnumerable<(double Value, double Damage, bool Disabled)> movementDebuffs,
+        double rootValue, double rootDamage)
+    {
+        foreach ((double value, double damage, bool disabled) in movementDebuffs)
+            if (!disabled && (rootValue < value || rootDamage < damage)) return false;
+        return true;
+    }
 
     // A healer's heal on itself (DEATHS.md A6), before a rest as a GameBot's (AWBC:2725): below 60% health whatever its
     // power; out of a fight (MayRest's view) from 85% with power to spare, then it sits for power (#167 F2). The gate

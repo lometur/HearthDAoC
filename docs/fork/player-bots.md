@@ -77,14 +77,15 @@ Each bot thinks every 250 ms, a thin copy of the `/bot` pilot's think:
   While its target is held it keeps its spell's range, even with hits blocking its spells or too little power (then
   its longest damage spell's range), and it never swings at a rooted or mezzed monster (its hit, or a miss, would free
   it): it waits instead. Not while another monster that isn't held hits it, and not for 5 s after a blocked step back:
-  then it fights as before. A root counts as a hold even under a snare that landed before it (a damage-and-snare
-  nuke's). Only single-target spells the bot has, that the monster isn't immune to by the server's own rules: a
-  monster stunned or mezzed in the last minute takes the next one for half the time, then a quarter, and none under 1
-  s. A mez on its target only as the last escape, the monster about to reach it, and only on a monster above 75%
-  health. It casts its damage spell while it can pay that spell's cost as the server charges it (a focus caster
-  80-120% by its focus, double under Quickcast), keeping the cheapest of its controls' cost in hand while its target
-  isn't held; with none to keep, a Quickcast spell goes at any power, as the server lets it. Every other class stops
-  casting under 18% power.
+  then it fights as before. Only single-target spells the bot has, that the monster isn't immune to by the server's
+  own rules: a monster stunned or mezzed in the last minute takes the next one for half the time, then a quarter, and
+  none under 1 s; and no root on a monster a slow holds that the root doesn't beat (the server refuses it: a
+  damage-and-snare nuke's slow carries damage no root has), so it casts its next control, or none. A mez on its
+  target only as the last escape, the monster about to reach it, and only on a monster above 75% health. It casts its
+  damage spell while it can pay that spell's cost as the server charges it (a focus caster 80-120% by its focus,
+  double under Quickcast), keeping the cheapest of its controls' cost in hand while its target isn't held; with none
+  to keep, a Quickcast spell goes at any power, as the server lets it. Every other class stops casting under 18%
+  power.
 - Any bot with a control spell (casters, healers, pet classes, a Skald or a Minstrel) also controls an add: the
   nearest other monster coming at it or hitting it that isn't held. A mez first, then a root, then a stun; no mez from
   a pet class (its pet would hit the add and free it), and no root on an add already in melee (it still hits from
@@ -182,8 +183,8 @@ Playing:
   - Casters die most. One that pulls from spell range keeps nuking while the monster closes, and its own swing still
     ends a root or mez in 8% of its controls. Out-of-power caster deaths doubled (9 to 18). Changed since
     `st-deathsC`, to be measured: a caster losing to one monster, or out of power with its target held, breaks off;
-    it casts by its spell's real cost and rests after its login buffs; it sees its root under a snare; it tries every
-    step-back spot.
+    it casts by its spell's real cost and rests after its login buffs; it casts no root the server refuses over a
+    snare nuke's slow; it tries every step-back spot.
   - A caster controls the add in only 1 add fight in 6: its Quickcast has usually gone on the target before the add
     comes. Changed since `st-deathsC`, to be measured: a green gets no control while the caster is healthy and alone.
   - After a release, a bot dies again before its next kill as often as before (43%): the new camp's first fight is no
