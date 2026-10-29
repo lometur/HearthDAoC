@@ -175,31 +175,34 @@ What they don't do yet is under [Known shortcomings](#known-shortcomings).
 Against the GameBots (#167), and between them and a live world. Each line goes when its fix lands.
 
 Playing:
-- **Deaths:** on `st-deathsD2` (15 minutes, 390 level-matched bots on the `spots-lm3` test spots) they die 1.6 times
-  per bot-hour, against about 1 for the PvE GameBots: melee 1.4, casters 1.6, healers 2.2, pet classes 0.9, archers
-  3.0. v0.37b-hearth.11 on the same spots (`st-hearth11`) died 1.8 times, casters 3.8. The older spot list put 30 bots
-  where they couldn't hunt (by a battleground keep, in a dungeon); `spots-lm3` moves the 26 whose spot was the cause,
-  so legs before `st-hearth11` (2.1 on `st-deathsC`, 9.5 on v0.37b-hearth.9's `st-layers5`) don't compare one for
-  one. Still open:
-  - Break-offs that fail. A bot with too little endurance to sprint doesn't break off: 81 refusals on `st-deathsD2`,
-    followed by 39 deaths within a minute, among them 19 of the 21 deaths to a second monster. A bot caught on the
-    run, or with nowhere further to run, turns and fights and usually dies (18 of 24 within a minute). Deaths within
-    a minute of a break-off are 32% of break-offs, as on `st-hearth11` (36%). The late start stays: `wouldBreak=`
-    only logs a projected break-off.
-  - Casters: their holds now last (their own swing ends 1% of controls, 13% on `st-hearth11`), and deaths of a caster
-    stuck in melee with one monster fell from 32 to 6. A long held fight still runs their power low, and the log can't
+- **Deaths:** over two legs of the same code (`st-deathsD2` and `st-deathsD2b`: 15 minutes each, 390 level-matched
+  bots on the `spots-lm3` test spots) they die 1.4 times per bot-hour, against about 1 for the PvE GameBots: melee
+  1.3, casters 1.4, healers 2.1, pet classes 0.9, archers 2.4. v0.37b-hearth.11 on the same spots (`st-hearth11` and
+  `st-hearth11b`) died 1.8 times, casters 4.2. One leg is too short to judge a small change: the two legs of this
+  code died 149 and 118 times. The older spot list put 30 bots where they couldn't hunt (by a battleground keep, in
+  a dungeon); `spots-lm3` moves the 26 whose spot was the cause, so legs before `st-hearth11` (2.1 on `st-deathsC`,
+  9.5 on v0.37b-hearth.9's `st-layers5`) don't compare one for one. Still open:
+  - Break-offs that fail. A bot with too little endurance to sprint doesn't break off (81 and 66 refusals on the two
+    legs). On `st-deathsD2`, 39 deaths came within a minute of a refusal, among them 19 of the 21 deaths to a second
+    monster. A bot caught on the run, or with nowhere further to run, turns and fights and usually dies: 33 of 38
+    within a minute, against 20 of 36 on v0.37b-hearth.11. Deaths within a minute of a break-off are 31% of
+    break-offs, against 36%. The late start stays: `wouldBreak=` only logs a projected break-off.
+  - Casters: their holds now last (their own swing ends 1% of controls, 14% on v0.37b-hearth.11), and deaths of a
+    caster stuck in melee with one monster fell from 66 to 9 over two legs. A long held fight still runs their power
+    low, most of all a Mentalist's long pull of a blue monster, now the largest kind of caster death. The log can't
     tell a control the server refused from one the monster resisted. A caster seldom controls the add: its Quickcast
     has usually gone on the target before the add comes.
-  - After a release a bot dies again before its next kill 23% of the time (37% on `st-hearth11`). A died plan bars
-    the old camp, not the route to the new one, so a bot whose route passes the monster that killed it can die on
-    the same stretch again.
+  - After a release a bot dies again before its next kill 18% of the time, against 36% on v0.37b-hearth.11. A died
+    plan bars the old camp, not the route to the new one, so a bot whose route passes the monster that killed it can
+    die on the same stretch again.
   - For 5 minutes after a yellow or harder monster kills it, a bot takes no camp that cons as high. Where its level
-    has no other camp (3 bots on `st-deathsD2`), it waits at its bind, and a bind inside an aggressive camp is
-    attacked.
+    has no other camp (3 or 4 bots a leg), it waits at its bind, and a bind inside an aggressive camp is attacked.
+  - A bot can stay minutes in a fight with a monster it can't see: on `st-deathsD2b` three bots fought one cluricaun
+    for over 4 minutes, and that camp sticks on every leg, v0.37b-hearth.11's too.
   - A camp of training dummies counts as a camp: a bot sent there fights nothing.
   - Walks don't look ahead for monsters on the route.
-- **Resting:** 52% of their time on `st-deathsD2`, as on `st-hearth11`. Most of it is the real cost of player
-  regeneration.
+- **Resting:** about half their time (51% over the two legs, 50% on v0.37b-hearth.11). Most of it is the real cost
+  of player regeneration.
 - **Not done at all:** they don't group, buff others, take part in RvR or battlegrounds, stealth, use realm abilities
   or ride horses (#152, #167).
 - **Ranged and songs:** they can't shoot or play. Archers fight in melee, and Bards and Minstrels have no songs: theirs
@@ -259,9 +262,9 @@ Read these with their caveats:
   of what the live GameBots cost on our PC.
 - **PvE hunting only.** About 37% of the live GameBots were in RvR or battlegrounds, which isn't modelled and may cost
   more.
-- **They are not yet GameBot-like.** They die 1.6 times per bot-hour (`st-deathsD2`); the live PvE GameBots die about
-  once, and archers are worst (3.0). They spend about half their time resting (52%). Sitting is cheap, so the ratios
-  are more likely low than high.
+- **They are not yet GameBot-like.** They die 1.4 times per bot-hour (`st-deathsD2` and `st-deathsD2b`); the live
+  PvE GameBots die about once. Healers (2.1) and archers (2.4) die most. They spend about half their time resting
+  (51%). Sitting is cheap, so the ratios are more likely low than high.
 - A GameBot is a monster to the game: its armour comes from a monster formula, and it regains at least 10% a second once
   2 seconds out of a fight. Player bots use player rules for both, on purpose.
 
