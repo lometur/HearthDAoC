@@ -264,7 +264,7 @@ public sealed class UT_PlayerBotSpots
     {
         MethodInfo relocate = typeof(PlayerBotDriver).GetMethod("RelocateIfOutgrown", BindingFlags.Static | BindingFlags.NonPublic);
         Assert.That(relocate, Is.Not.Null);
-        PlayerBotState state = (PlayerBotState)RuntimeHelpers.GetUninitializedObject(typeof(PlayerBotState));
+        PlayerBotState state = new((GamePlayer)RuntimeHelpers.GetUninitializedObject(typeof(GamePlayer)));   // its lists
         state.RoamingSince = 1;                                                  // roaming for long past RelocateAfterMilliseconds
         state.HoldAnchor = true;
         long now = 1 + 10L * PlayerBotDriver.RelocateAfterMilliseconds;
