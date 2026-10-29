@@ -217,12 +217,15 @@ public static class PlayerBotDriverReport
     /// <summary>PLAYER_BOT_BREAKOFF (#167 C2), when a break-off ends (PlayerBotDriver.EndBreakOff): the bot's health,
     /// endurance and attackers when it broke off, the seconds it ran, and how it ended (shook: none still after it;
     /// fought: still chased, or nowhere to run, it turned on them; died); then (#167, st-deathsD's) the health it lost a
-    /// second over the 3 s before it broke off (PlayerBotDriver.HealthRate).</summary>
+    /// second over the 3 s before it broke off (PlayerBotDriver.HealthRate), and (#167 D1) why=, the rule that fired
+    /// (PlayerBotDriver.BreakOffWhy). #167 D2: one that would fire but doesn't, once a fight (PlayerBotDriver.ReportRefusal):
+    /// outcome=refused, sec=0, the bot's health, endurance and monsters on it then, and why= why not
+    /// (PlayerBotDriver.BreakOffRefusal).</summary>
     public static string FormatBreakOff(string bot, int level, int hp, int end, int attackers, long seconds, string outcome,
-        double rate) =>
+        double rate, string why) =>
         string.Create(CultureInfo.InvariantCulture,
             $"PLAYER_BOT_BREAKOFF bot={bot} level={level} hp={hp} end={end} attackers={attackers} sec={seconds} outcome={outcome} " +
-            $"rate={FormatRate(rate)}");
+            $"rate={FormatRate(rate)} why={why}");
 
     /// <summary>PLAYER_BOT_RELEASE (#167 D7), each release the driver asks for (PlayerBotDriver.ReleaseDue): its try in
     /// this death (a release that didn't revive the bot goes again 10 s on) and the milliseconds since the death (the

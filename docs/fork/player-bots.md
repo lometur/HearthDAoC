@@ -114,16 +114,25 @@ Each bot thinks every 250 ms, a thin copy of the `/bot` pilot's think:
   stands up and fights it first. Before it sits, a bot within reach of an aggressive monster from its last search,
   or of the spawn spot of one of its last 3 kills in the last 150 s (where that monster respawns, 80 s after the kill
   in most of the world), walks to the nearest spot out of that reach, 1,200 units away at most.
-- Losing to two, it breaks off: below 40% health with 2 or more monsters on it, or within 3 s of a kill in a fight
-  that had 2 or more on it with 1 still on it, unless its target is down to 10% or less. Only from monsters it can
-  outrun, and only with a sprint whose lead takes it out of the fastest one's 200-unit reach: none faster than its
-  run (191), or none as fast as its sprint (248) when its endurance holds the sprint long enough to keep the fastest
-  off it for the 25 s a monster chases. It stops its fight, sprints, and runs 1,500-2,500 units straight away from
-  them to a spot clear of other aggressive monsters that it can walk to, on again from there while one still chases
-  it. A spot it was blocked on it never takes again in that run. Still chased after 30 s, or with nowhere to run, it
-  turns and fights them out. Afterwards it takes no camp there and avoids those monsters for 15 minutes, and plans a
-  new camp from where it ran to before it looks for a new target. A break-off on the walk to its camp, more than
-  1,400 units short of it, bars that camp too for 15 minutes.
+- Losing, it breaks off: below 40% health with 2 or more monsters on it, or with 1 still on it after a kill in a
+  fight that had 2 or more on it, within 3 s of that kill or in the whole fight it opens next. One monster breaks it
+  off too when it is one the bot avoids (unless it was sent to a camp of them), or when the bot is a caster and its
+  target is above 25%; not while that monster is held, or while the caster would cast a control at it now. None of
+  these while its target is down to 10% or less. A caster whose held target is above 25% with no damage spell it can
+  pay for breaks off at any health, then rests: it takes no camp or names to avoid from that one and doesn't move
+  camp. Only from monsters it can outrun, and only with a sprint whose lead takes it out of the fastest one's
+  200-unit reach: none faster than its run (191), or none as fast as its sprint (248) when its endurance holds the
+  sprint long enough to keep the fastest off it for the 25 s a monster chases. Never from a monster with a snare,
+  stun, mez or damage spell of 1,000 units' range or more. It stops its fight, sprints, and runs 1,500-2,500 units
+  straight away from them to a spot clear of other aggressive monsters that it can walk to, or with none, to the
+  spot 1,500 units straight away from them if it can walk there; on again from there while one still chases it. A
+  spot it was blocked on it never takes again in that run. A mezzed, stunned or rooted monster still counts as after
+  it. One not held that stays within 250 units of it for 2 s has caught it: it stops, casts a control at it (as at
+  an add, with Quickcast while hit), faces it until the cast is done and runs on; with no control to cast it turns on
+  the weakest monster in reach. From 30 s it is done once none is within 1,500 units; still chased at 45 s, or with
+  nowhere to run, it turns and fights them out. Afterwards it takes no camp there and avoids those monsters for 15
+  minutes, and plans a new camp from where it ran to before it looks for a new target. A break-off on the walk to its
+  camp, more than 1,400 units short of it, bars that camp too for 15 minutes.
 - It releases 10 s after a death, counted from when the server has handled the death, never before: a bow's or a bolt's
   killing hit lands in the bots' own phase of the game loop, and a release asked for then was undone by the server's
   death handling later in the same tick, which left the bot dead for 15 minutes. A release that didn't revive it is
@@ -376,10 +385,17 @@ All start `PLAYER_BOT_`:
   the walk to the camp it had, which the plan then leaves out. Any `RELOCATE` then ends with `capKill=`, the lowest con
   that killed the bot in the last 15 minutes, while there is one. A break-off drops its fight (`FIGHT result=dropped`);
 - `BREAKOFF`: one per break-off, when it ends: the bot's `hp=`, `end=` (endurance) and `attackers=` when it broke off,
-  `sec=`, the seconds it ran, and `outcome=`: `shook` (none still after it), `fought` (still chased after 30 s, or
-  nowhere to run) or `died`; then `rate=`, the health it lost a second over the 3 s before it broke off. The fight it
-  dropped (`FIGHT result=dropped breakOff=1`) counts the monsters on the bot then in its `adds=` (never fewer than
-  `attackers=`), and with 2 or more and no add seen before, its `addAt=` and `addHp=` are the break-off's;
+  `sec=`, the seconds it ran, and `outcome=`: `shook` (none still after it, or from 30 s none within 1,500 units),
+  `fought` (still chased after 45 s, caught with no control to cast, or nowhere to run) or `died`; then `rate=`, the
+  health it lost a second over the 3 s before it broke off, and `why=`, the rule that fired: `adds` (2 or more on
+  it), `atkill` (1 still on it within 3 s of a kill with adds), `followup` (the fight after that kill), `avoided` (one
+  it avoids), `caster` (a caster losing to one) or `spent` (a caster out of power with its target held). A break-off
+  that would fire but doesn't logs once a fight as `outcome=refused` with `sec=0` and the bot's `hp=`, `end=`,
+  `attackers=` and `rate=` then, and `why=`: `control` (an add's control comes first), `speed` (a chaser as fast as
+  its sprint), `sprint` (its sprint too short for the fastest), `ranged` (a chaser that harms from range) or `point`
+  (nowhere to run); it is no break-off, so leave it out of break-off counts. The fight it dropped (`FIGHT
+  result=dropped breakOff=1`) counts the monsters on the bot then in its `adds=` (never fewer than `attackers=`), and
+  with 2 or more and no add seen before, its `addAt=` and `addHp=` are the break-off's;
 - `RELEASE`: each release the bot asks for, with `try=` (its count in this death: 2 or more means one didn't take) and
   `sinceDeath=` (the milliseconds since the death);
 - `BACK`: at the first fight after a release, `sec=`, the seconds since the release, and of those `stepOut=` (the step
