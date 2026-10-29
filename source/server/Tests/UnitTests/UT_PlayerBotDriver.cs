@@ -4560,6 +4560,38 @@ public sealed class UT_PlayerBotDriver
         Assert.That(PlayerBotDriver.OneNukeKills(PlayerBotDriver.ExpectedHit(148, 0.3104, 0.3104, resist, false, 0), health,
             pendingDot), Is.EqualTo(kills));
 
+    // #167 E C2b (the review of the batch: risk-1): the cast choice and whether one nuke kills, judged on the nuke the
+    // bot will cast. A dry Mentalist alone (solo): Aurora Ray, the nuke it has any power for (as the server lets it
+    // under Quickcast), and Fungal Ooze, the one it can pay for. Under Quickcast (on or due) a killing any-power nuke
+    // goes; else the paid one, killing or not. Before, the any-power nuke was judged at every cast choice while the bot
+    // cast the paid one: the Quickcast and the control's reserve went to a nuke that didn't kill. passes: Nuke's.
+    [TestCase(true, true, true, false, "Aurora Ray", true, 1)]             // any power kills under Quickcast: it goes
+    [TestCase(true, true, false, true, "Fungal Ooze", true, 2)]            //   it doesn't: the paid one, which kills
+    [TestCase(true, true, false, false, "Fungal Ooze", false, 2)]
+    [TestCase(true, false, true, false, "Fungal Ooze", false, 1)]          // no Quickcast on or due (today: kills)
+    [TestCase(true, false, false, true, "Fungal Ooze", true, 1)]           //   the paid one kills (today: no)
+    [TestCase(false, true, true, true, "Fungal Ooze", false, 1)]           // not alone, or no caster's fight
+    public void One_nuke_kills_is_judged_on_the_nuke_the_bot_casts(bool solo, bool quickcastOnOrDue, bool anyKills,
+        bool paidKills, string cast, bool oneNukeKills, int passes)
+    {
+        int nukes = 0;
+        (Spell spell, SpellLine line, bool kills) = PlayerBotDriver.KillingNukeChoice(solo, quickcastOnOrDue,
+            () => { nukes++; return (AuroraRay, Holism); }, () => { nukes++; return (FungalOoze, Subterranean); },
+            s => s == AuroraRay ? anyKills : paidKills);
+        Assert.That((spell.Name, line, kills, nukes), Is.EqualTo((cast, spell == AuroraRay ? Holism : Subterranean,
+            oneNukeKills, passes)));
+    }
+
+    [Test]
+    public void With_no_nuke_it_has_power_for_the_paid_choice_is_judged()
+    {
+        (Spell spell, _, bool kills) = PlayerBotDriver.KillingNukeChoice(true, true, () => default,
+            () => (FungalOoze, Subterranean), s => s == FungalOoze);
+        Assert.That((spell, kills), Is.EqualTo((FungalOoze, true)));
+        Assert.That(PlayerBotDriver.KillingNukeChoice(true, false, () => default, () => default, _ => true),
+            Is.EqualTo(((Spell)null, (SpellLine)null, false)), "no spell: none kills");
+    }
+
     // #167 E C2b: the killing quickcast: a caster in a fight whose chosen nuke kills at once (oneNukeKills), one monster at
     // most on it (the review), and the cast under Quickcast (on, or ready with hits interrupting it: due).
     [TestCase(true, true, true, false, 1, true)] [TestCase(true, true, false, true, 1, true)]

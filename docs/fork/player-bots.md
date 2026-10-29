@@ -77,9 +77,10 @@ Each bot thinks every 250 ms, a thin copy of the `/bot` pilot's think:
   nuke and a control spell after it. Then it stuns, roots or mezzes it, in that order of choice, if the cast ends
   before the monster reaches it. In melee it uses Quickcast for the control spell. It skips the control while its
   nukes kill the monster before it arrives, at the rate the fight's nukes have taken its health so far (one nuke more
-  with Quickcast ready or on, which goes to that nuke), if it has 60% health or more or its next nuke kills the monster
-  even at that spell's lowest damage, and no other monster on it. A green monster gets no control at all while the
-  caster has 60% health or more and no other monster on it: it nukes it down, and keeps its power and Quickcast. A
+  with Quickcast ready or on, which goes to that nuke), if it has 60% health or more or the nuke it will cast next (the
+  one it can pay for, or under Quickcast one it has any power for) kills the monster even at that spell's lowest
+  damage, and no other monster on it. A green monster gets no control at all while the caster has 60% health or more
+  and no other monster on it: it nukes it down, and keeps its power and Quickcast. A
   rooted or mezzed monster near it would break free at the next nuke, so it first steps back to range, on a spot clear
   of other aggressive monsters, within its spell's range; so it does from a stunned one while hits interrupt it. It
   tries each such spot in turn (straight away, then turned 30, 60 and 90 degrees either way), and one the navmesh puts

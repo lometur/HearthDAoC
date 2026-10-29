@@ -163,8 +163,8 @@ public sealed class PlayerBotState
     public bool HasStun, HasRoot;                                // #167 E C1: a stun or a root among its controls (DotFits,
                                                                  //   KeepsRootCastable), at NukesLevel
     public int FightDots;                                        // #167 E C1: FIGHT and DEATH dots=, its DoT casts
-    public bool KillingQuickcast, FightKillingQuickcast;         // #167 E C2b: Engage's, and FIGHT qcKill=; whether its
-    public bool OneNukeKills;                                    //   nuke kills at once, read at the last cast choice
+    public bool KillingQuickcast, FightKillingQuickcast;         // #167 E C2b: Engage's, and FIGHT qcKill=; whether the
+    public bool OneNukeKills;                                    //   nuke chosen at the last cast choice kills at once
     public int FightTargetMezzes;                                // #167 E C4: FIGHT and DEATH ctlMez=, its mezzes at the target
     public long NextAnimistStandTick;                            // #167 F10b: after a blocked walk to its stand
     public long TurretWaitSince;                                 // #167 E CY3: a pull held for a turret it can't plant yet
@@ -683,16 +683,17 @@ public static class PlayerBotDriver
             quickcast == null ? 0 : player.GetSkillDisabledDuration(quickcast), state.NextQuickcastTick, player.IsCasting, now);
         PlayerBotRole role = RoleOf(player.CharacterClass.ID);                          // #167 D3: before the cast gate
         bool choosesSpell = ChoosesSpell(due, player.IsCasting, now, state.NextSpellChoiceTick);
-        bool casterFight = role == PlayerBotRole.Caster && state.Engaged;               // #167 E C2b: whether its nuke
-        if (choosesSpell)                                                               //   kills at once, at a cast
-            state.OneNukeKills = casterFight && state.Attackers <= 1 && OneNukeKillsNow(state, player, target, now);
-        state.KillingQuickcast = KillingQuickcast(casterFight, state.OneNukeKills, quickcasting,   //   choice; the killing
-            interrupted && quickcastReady, state.Attackers);                            //   quickcast before Nuke
+        bool casterFight = role == PlayerBotRole.Caster && state.Engaged, quickcastDue = interrupted && quickcastReady;
         if (choosesSpell)                                                               // a cast choice: the pet or the
-        {                                                                               //   damage spell (#167 F1)
-            state.NextSpellChoiceTick = now + SpellChoiceMilliseconds;
-            ChooseCombatSpell(state, player, target, now);
+        {                                                                               //   damage spell (#167 F1); #167
+            state.NextSpellChoiceTick = now + SpellChoiceMilliseconds;                  //   E C2b: whether the nuke it
+            (state.Spell, state.SpellLine, state.OneNukeKills) = KillingNukeChoice(     //   casts kills at once (risk-1)
+                casterFight && state.Attackers <= 1, quickcasting || quickcastDue,
+                () => Nuke(state, player, target, killingQuickcast: true), () => CombatSpell(state, player, target, now),
+                spell => NukeKillsNow(state, player, target, spell, now));
         }
+        state.KillingQuickcast = KillingQuickcast(casterFight, state.OneNukeKills, quickcasting, quickcastDue,
+            state.Attackers);                                                           //   the killing quickcast
         bool interruptible = state.Spell != null && Interruptible(state.Spell);
         (bool held, bool breaksOnHit) = role == PlayerBotRole.Caster ? Hold(target) : default;   // #167 C3: a caster's hold
         bool otherHitting = held && OtherHitting(player, target);                                //   on its target, alone
@@ -2874,6 +2875,23 @@ public static class PlayerBotDriver
     /// PendingDotDamage).</summary>
     public static bool OneNukeKills(double minimumHit, double health, double pendingDot) => minimumHit >= health - pendingDot;
 
+    /// <summary>Engage's cast choice and whether it kills at once (#167 E C2b; the review of the batch, risk-1: judged on
+    /// the nuke the bot will cast). Alone in a caster's fight (solo: one monster at most on it) with Quickcast on or due
+    /// (quickcastOnOrDue), the nuke it has any power for (anyPower: Nuke under the killing quickcast, as the server lets
+    /// it cast then) when that kills (kills: OneNukeKills from its handler, NukeKillsNow); else the cast it can pay for
+    /// (paid: CombatSpell), and whether that kills (solo only). Before, the any-power nuke was judged at every cast choice
+    /// while the bot cast the paid one: KillsFirstNow's health-gate bypass and the killing quickcast, which Engage reads
+    /// every think from that verdict, gave the Quickcast and the control's reserve to a nuke that didn't kill. One Nuke
+    /// pass in the common case, two when the any-power nuke under Quickcast doesn't kill.</summary>
+    public static (Spell Spell, SpellLine Line, bool OneNukeKills) KillingNukeChoice(bool solo, bool quickcastOnOrDue,
+        Func<(Spell, SpellLine)> anyPower, Func<(Spell, SpellLine)> paid, Func<Spell, bool> kills)
+    {
+        if (solo && quickcastOnOrDue && anyPower() is (Spell any, SpellLine anyLine) && any != null && kills(any))
+            return (any, anyLine, true);
+        (Spell spell, SpellLine line) = paid();
+        return (spell, line, solo && spell != null && kills(spell));
+    }
+
     /// <summary>Whether the bot's next nuke is the killing one under Quickcast (#167 E C2b): a caster in a fight
     /// (caster), its chosen nuke kills at once (oneNukeKills, OneNukeKills), one monster at most on it (attackers: the
     /// review), and the cast goes under Quickcast (on, or ready with hits interrupting the bot: quickcastDue). Then it
@@ -3662,8 +3680,8 @@ public static class PlayerBotDriver
     // cast-second (NukeValues); a DoT only where it fits (DotFits) and none it conflicts with is on the target
     // (DotConflicts, read once before the passes); a caster with a root not moved onto a damage-and-snare nuke the old
     // order didn't choose (ScoredNuke's KeepsRootCastable; the review: rootWanted at any con). NukeReady and ScoredNuke
-    // are the tested seams. #167 E C2b: under the killing quickcast (Engage's state.KillingQuickcast) a nuke it has any
-    // power for.
+    // are the tested seams. #167 E C2b: under the killing quickcast (killingQuickcast: KillingNukeChoice's any-power
+    // pass; TakeTarget's and a level-up's choice read Engage's state.KillingQuickcast) a nuke it has any power for.
     private static (Spell, SpellLine) Nuke(PlayerBotState state, GamePlayer player, GameLiving target) =>
         Nuke(state, player, target, state.KillingQuickcast);
 
@@ -3692,7 +3710,8 @@ public static class PlayerBotDriver
     // #167 E C1: each single-target nuke's expected damage per cast-second at the target (NukeValue), from its own handler
     // (KnowSpells' NukeHandlers): the direct ones first, whose best sustained one (no bolt: its 20-s recast) sets the
     // fight's horizon (KillHorizonMs) for the DoTs' ticks (RealizedTicks), less the ticks the bot's own DoTs still owe
-    // (PendingDotDamage). One pass per cast choice (at most one a second); the dictionary is reused. CalculateToHitChance
+    // (PendingDotDamage). One pass per Nuke: one a cast choice (at most one a second), two when the any-power nuke under
+    // Quickcast doesn't kill (KillingNukeChoice); the dictionary is reused. CalculateToHitChance
     // copies the bot's effect list once per nuke: about 10 copies a cast choice, no world scan.
     [ThreadStatic] private static Dictionary<Spell, double> _nukeValues;
     private static Dictionary<Spell, double> NukeValues(PlayerBotState state, GamePlayer player, GameLiving target, long now)
@@ -3724,18 +3743,13 @@ public static class PlayerBotDriver
         return values;
     }
 
-    // #167 E C2b: whether the nuke the bot would cast now kills its target at once (OneNukeKills): Nuke's choice with
-    // any power enough (as under the killing quickcast, so the same nuke it then casts), its hit at the variance
-    // minimum less the resist (and a bolt's armour), against the target's health less its own DoTs' ticks still due. A
-    // caster's at a monster (the score's handlers); Engage reads it at a cast choice, as Nuke.
-    private static bool OneNukeKillsNow(PlayerBotState state, GamePlayer player, GameLiving target, long now)
-    {
-        if (target is not GameNPC) return false;
-        (Spell spell, _) = Nuke(state, player, target, killingQuickcast: true);
-        return spell != null && state.NukeHandlers.TryGetValue(spell, out DOL.GS.Spells.SpellHandler handler) &&
-            OneNukeKills(ExpectedHitOf(handler, spell, player, target, minimum: true), target.Health,
-                PendingDotDamage(state, player, target, now));
-    }
+    // #167 E C2b: whether a nuke the bot will cast (KillingNukeChoice's) kills its target at once (OneNukeKills): its hit
+    // at the variance minimum less the resist (and a bolt's armour), against the target's health less its own DoTs'
+    // ticks still due. A caster's at a monster (the score's handlers; a pet summon has none: false).
+    private static bool NukeKillsNow(PlayerBotState state, GamePlayer player, GameLiving target, Spell spell, long now) =>
+        target is GameNPC && spell != null && state.NukeHandlers.TryGetValue(spell, out DOL.GS.Spells.SpellHandler handler) &&
+        OneNukeKills(ExpectedHitOf(handler, spell, player, target, minimum: true), target.Health,
+            PendingDotDamage(state, player, target, now));
 
     // #167 E C1: ExpectedHit from the nuke's handler (CalculateDamageBase, CalculateDamageVariance), the target's resist to
     // its damage type (GetResist) and a bolt's armour factor (2.5 x the bot's level over the target's armour, as
@@ -5556,12 +5570,12 @@ public static class PlayerBotDriver
 
     // #167 F1: at each cast choice a Theurgist casts a pet at its target before its damage spell, whenever it can, as a
     // GameBot does (AutonomousPetSupport.cs:636-650). The server's own cap applies (SummonTheurgistPet.cs:67-71; 0, none,
-    // in 1.65). Otherwise the nuke ready now (#167 F9).
-    private static void ChooseCombatSpell(PlayerBotState state, GamePlayer player, GameLiving target, long now)
+    // in 1.65). Otherwise the nuke ready now (#167 F9), paid for (#167 E C2b: the killing quickcast's any-power nuke is
+    // KillingNukeChoice's).
+    private static (Spell, SpellLine) CombatSpell(PlayerBotState state, GamePlayer player, GameLiving target, long now)
     {
         (Spell pet, SpellLine petLine) = CombatPet(state, player, target, now, player.TargetInView);
-        if (pet != null) (state.Spell, state.SpellLine) = (pet, petLine);
-        else (state.Spell, state.SpellLine) = Nuke(state, player, target);              // #167 F9: chosen per cast
+        return pet != null ? (pet, petLine) : Nuke(state, player, target, killingQuickcast: false);   // #167 F9: per cast
     }
 
     // From the summons known at this level (KnowSpells): none for every class but the Theurgist. inView: sight to target
