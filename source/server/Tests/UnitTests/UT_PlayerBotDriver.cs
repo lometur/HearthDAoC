@@ -1849,6 +1849,65 @@ public sealed class UT_PlayerBotDriver
             "off the mesh");
     }
 
+    // #167 E T1: with no point on its rings (1,500 and out, every one in another monster's reach here) nor straight away,
+    // a break-off tries 800 out: the ring's point ahead of the chasers and out of every other monster's reach
+    // (NextBreakOffPoint), else the point straight away 800 out (StraightAwayGoal), never one in an add's reach.
+    // st-deathsD2/D2b: 11 of 14 turns for want of a point were fatal.
+    [Test]
+    public void With_no_point_out_a_break_off_tries_800_out_never_in_an_adds_reach()
+    {
+        Vector3 here = Vector3.Zero;
+        Vector3[] chasers = [new(300, 0, 0)];
+        Vector3? OnMesh(Vector3 p) => p;
+        Vector3[] rings = [new(-1_500, 0, 0), new(-1_061, 1_061, 0), new(-1_061, -1_061, 0)];
+        var adds = rings.Select(at => ("add", at, 300)).ToList();                     // each in reach of one (300 + 200)
+        Assert.That(PlayerBotDriver.NextBreakOffPoint(here, chasers, rings, adds, new List<Vector3>(), _ => true), Is.Null,
+            "the rings out: every point in reach");
+        Vector3[] near = [new(-800, 0, 0), new(-566, 566, 0), new(-566, -566, 0), new(800, 0, 0)];
+        Assert.That(PlayerBotDriver.NearBreakOffGoal(here, chasers, near, adds, new List<Vector3>(), _ => true, OnMesh),
+            Is.EqualTo(new Vector3(-800, 0, 0)), "the 800 ring is clear: its farthest from the chaser");
+        var add = adds.Append(("near", new Vector3(-800, 0, 0), 300)).ToList();
+        Assert.That(PlayerBotDriver.NearBreakOffGoal(here, chasers, near, add, new List<Vector3>(), _ => true, OnMesh),
+            Is.EqualTo(new Vector3(-566, 566, 0)), "out of an add's reach");
+        var all = add.Append(("a", new Vector3(-566, 566, 0), 300)).Append(("b", new Vector3(-566, -566, 0), 300)).ToList();
+        Assert.That(PlayerBotDriver.NearBreakOffGoal(here, chasers, near, all, new List<Vector3>(), _ => true, OnMesh),
+            Is.Null, "every point 800 out in reach, straight away too: none");
+        Assert.That(PlayerBotDriver.NearBreakOffGoal(here, chasers, [], adds, new List<Vector3>(), _ => true, OnMesh),
+            Is.EqualTo(new Vector3(-800, 0, 0)), "no ring point on the mesh: straight away, clear");
+        var blocked = new List<Vector3>();
+        Assert.That(PlayerBotDriver.NearBreakOffGoal(here, chasers, [], adds, blocked, _ => false, OnMesh), Is.Null, "no walk");
+        Assert.That(blocked, Is.EqualTo(new[] { new Vector3(-800, 0, 0) }), "and never again");
+    }
+
+    // #167 E T1: with still no point it turns on a chaser not held in reach (within 250), when hit while it holds (a chaser
+    // that harms from range, or one held but still casting, never comes within 250: the review), or at once as a caster
+    // or pet class with power (7 of the 11 fatal turns opened with a gap a ranged class could use); else it holds.
+    [TestCase(900, false, false, 900, false)]
+    [TestCase(180, false, false, 180, true)]
+    [TestCase(250, false, false, 250, true)]
+    [TestCase(251, false, false, 251, false)]
+    [TestCase(600, false, false, 600, false)]
+    [TestCase(600, true, false, 600, true)]                                    // the chaser hit it while it held
+    [TestCase(int.MaxValue, true, false, 1_500, true)]                         //   every chaser held, one harms from range
+    [TestCase(int.MaxValue, false, true, 1_400, true)]                         // a caster with power, chasers far off
+    [TestCase(int.MaxValue, false, true, 300, true)]                           //   or near: no 1,000 floor
+    [TestCase(int.MaxValue, false, false, 1_400, false)]
+    [TestCase(int.MaxValue, false, true, int.MaxValue, false)]                 // no chaser to turn on
+    public void With_no_point_it_turns_only_when_caught_hit_or_a_caster_with_power(int freeDistance, bool hitNow,
+        bool casterOrPetWithPower, int nearest, bool turns) =>
+        Assert.That(PlayerBotDriver.NoPointTurns(freeDistance, hitNow, casterOrPetWithPower, nearest), Is.EqualTo(turns));
+
+    // #167 E T1: hit while it holds: an attack on the bot (HitNow: within the last second, a miss too) since the hold began
+    // (holdSince; 0: not holding). A hit before the hold is the run's, which CaughtNow reads.
+    [TestCase(0L, 9_500L, 10_000L, false)]
+    [TestCase(8_000L, 9_500L, 10_000L, true)]
+    [TestCase(8_000L, 8_000L, 8_900L, true)]
+    [TestCase(8_000L, 7_900L, 8_500L, false)]                                  // before the hold
+    [TestCase(8_000L, 8_500L, 9_600L, false)]                                  // over a second ago
+    [TestCase(8_000L, 0L, 9_000L, false)]
+    public void A_hit_while_it_holds_is_one_since_the_hold_began(long holdSince, long lastHit, long now, bool hit) =>
+        Assert.That(PlayerBotDriver.HitWhileHolding(holdSince, lastHit, now), Is.EqualTo(hit));
+
     // The break-off's step: it runs on; at its point with a chaser still after it, it takes the next point; with none
     // after it, it is done. #167 D2: caught (CaughtNow) it acts on the chaser (Caught); from 30 s, with the nearest chaser
     // beyond 1,500 it is done (a monster keeps its target 25 s after its last swing, StandardMobState.cs:122: at the old
@@ -2116,6 +2175,14 @@ public sealed class UT_PlayerBotDriver
         var held = new PlayerBotState(Player(null)) { BreakOffSince = 2_000 };
         PlayerBotDriver.FinishBreakOff(held, PlayerBotDriver.Shook, owesReplan: false, 7_000);
         Assert.That(held.ReplanOwed, Is.Null, "a lever spot bot or a task owes none");
+        var turned = new PlayerBotState(Player(null)) { BreakOffSince = 2_000, BreakOffTurn = PlayerBotDriver.TurnNoPoint,
+            BreakOffHolds = 3, NextBreakOffRetryTick = 9_000, BreakOffHoldSince = 6_000,
+            BreakOffHoldWhy = PlayerBotDriver.TurnBlocked, BreakOffSpeed = 191, BreakOffChaserSpeed = 248 };
+        PlayerBotDriver.FinishBreakOff(turned, PlayerBotDriver.Fought, owesReplan: true, 7_000);
+        Assert.That((turned.BreakOffTurn, turned.BreakOffHolds, turned.NextBreakOffRetryTick, turned.BreakOffHoldSince,
+                turned.BreakOffHoldWhy, turned.BreakOffSpeed, turned.BreakOffChaserSpeed),
+            Is.EqualTo(((string)null, 0, 0L, 0L, (string)null, -1, -1)),
+            "#167 E T1: the turn, the holds, the retry and the speeds go with the run");
     }
 
     // The review of 9aacd69: after a break-off the bot rests (it is under 40%), and the first search after the rest ran
@@ -2132,16 +2199,24 @@ public sealed class UT_PlayerBotDriver
     // then (#167, st-deathsD's) rate=, the health it lost a second over the 3 s before it broke off (HealthRate), and
     // (#167 D1, D2) why=: the rule that fired (BreakOffWhy), or on a refused one (outcome=refused, sec=0) why it wasn't;
     // then (#167 E-S) sprintOff=, the seconds into the run its sprint first went off (-1: never), and endLeft=, its
-    // endurance at the run's end (a refused one's: then).
+    // endurance at the run's end (a refused one's: then); then (#167 E T1) turn=, why a fought one turned (caught,
+    // nopoint, blocked or cap; - for none), holds=, its one-second tries that found no point while it held, and speed= and
+    // chaserSpeed=, its run speed and the fastest chaser's when it began (an encumbered bot runs under 191; -1 before
+    // they are read).
     [Test]
     public void A_break_off_line_gives_its_start_and_outcome()
     {
         Assert.That(PlayerBotDriverReport.FormatBreakOff("Pbotaaaaz", 34, 38, 72, 2, 26, "shook", 6.26, "adds", 9, 41),
             Is.EqualTo("PLAYER_BOT_BREAKOFF bot=Pbotaaaaz level=34 hp=38 end=72 attackers=2 sec=26 outcome=shook rate=6.3 " +
-                "why=adds sprintOff=9 endLeft=41"));
-        Assert.That(PlayerBotDriverReport.FormatBreakOff("Pbotaaaaz", 34, 38, 72, 1, 0, "refused", 3.0, "speed", -1, 72),
+                "why=adds sprintOff=9 endLeft=41 turn=- holds=0 speed=-1 chaserSpeed=-1"));
+        Assert.That(PlayerBotDriverReport.FormatBreakOff("Pbotaaaaz", 34, 38, 72, 1, 0, "refused", 3.0, "speed", -1, 72,
+                speed: 191, chaserSpeed: 191),
             Is.EqualTo("PLAYER_BOT_BREAKOFF bot=Pbotaaaaz level=34 hp=38 end=72 attackers=1 sec=0 outcome=refused rate=3.0 " +
-                "why=speed sprintOff=-1 endLeft=72"));
+                "why=speed sprintOff=-1 endLeft=72 turn=- holds=0 speed=191 chaserSpeed=191"));
+        Assert.That(PlayerBotDriverReport.FormatBreakOff("Pbotaaaaz", 34, 38, 72, 2, 12, "fought", 6.26, "adds", 4, 30,
+                "nopoint", 3, 170, 248),
+            Is.EqualTo("PLAYER_BOT_BREAKOFF bot=Pbotaaaaz level=34 hp=38 end=72 attackers=2 sec=12 outcome=fought rate=6.3 " +
+                "why=adds sprintOff=4 endLeft=30 turn=nopoint holds=3 speed=170 chaserSpeed=248"));
     }
 
     // The dropped FIGHT line's adds= (#167 D2): BreaksOffNow returns before Engage folds the attackers in, so the monsters

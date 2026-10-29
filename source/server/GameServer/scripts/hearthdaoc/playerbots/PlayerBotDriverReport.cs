@@ -246,12 +246,17 @@ public static class PlayerBotDriverReport
     /// outcome=refused, sec=0, the bot's health, endurance and monsters on it then, and why= why not
     /// (PlayerBotDriver.BreakOffRefusal). Then (#167 E-S) sprintOff=, the seconds into the run its sprint first went off
     /// (PlayerBotDriver.BreakOffSprint; -1: never, or none given), and endLeft=, its endurance at the run's end (a refused
-    /// one's: then).</summary>
+    /// one's: then). Then (#167 E T1) turn=, why a fought one turned (caught, nopoint, blocked or cap; - for none),
+    /// holds=, its one-second tries that found no point while it held (PlayerBotDriver.NoPointTurns), and speed= and
+    /// chaserSpeed=, its run speed and the fastest chaser's when it began (191 unencumbered, less when encumbered; a
+    /// refusal's too; -1 before they are read).</summary>
     public static string FormatBreakOff(string bot, int level, int hp, int end, int attackers, long seconds, string outcome,
-        double rate, string why, long sprintOff = -1, int endLeft = -1) =>
+        double rate, string why, long sprintOff = -1, int endLeft = -1, string turn = "-", int holds = 0, int speed = -1,
+        int chaserSpeed = -1) =>
         string.Create(CultureInfo.InvariantCulture,
             $"PLAYER_BOT_BREAKOFF bot={bot} level={level} hp={hp} end={end} attackers={attackers} sec={seconds} outcome={outcome} " +
-            $"rate={FormatRate(rate)} why={why} sprintOff={sprintOff} endLeft={endLeft}");
+            $"rate={FormatRate(rate)} why={why} sprintOff={sprintOff} endLeft={endLeft} turn={turn} holds={holds} " +
+            $"speed={speed} chaserSpeed={chaserSpeed}");
 
     /// <summary>PLAYER_BOT_RELEASE (#167 D7), each release the driver asks for (PlayerBotDriver.ReleaseDue): its try in
     /// this death (a release that didn't revive the bot goes again 10 s on) and the milliseconds since the death (the

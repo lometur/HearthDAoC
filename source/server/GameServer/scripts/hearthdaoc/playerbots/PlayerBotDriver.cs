@@ -213,6 +213,12 @@ public sealed class PlayerBotState
     public bool FollowsAddKill;                                  // #167 D2: the fight after an add kill (OpenFight), the
     public long CaughtSince;                                     //   caught clock (InReachSince), and a refusal logged in
     public bool BreakOffRefused;                                 //   this fight (BREAKOFF outcome=refused, once a fight)
+    public long NextBreakOffRetryTick;                           // #167 E T1: with no point, the next try (0: at once),
+    public int BreakOffHolds;                                    //   the tries that found none while it held (BREAKOFF
+    public long BreakOffHoldSince;                               //   holds=), the hold's start (0: none, HitWhileHolding)
+    public string BreakOffHoldWhy, BreakOffTurn;                 //   and why it began (nopoint, blocked), why it turned
+    public int BreakOffSpeed = -1, BreakOffChaserSpeed = -1;     //   (turn=), and its run speed and the fastest chaser's
+                                                                 //   when it began (speed=, chaserSpeed=; -1: not read)
     public bool BackPending, BackOwed, BackMoved;                // #167 C1: PLAYER_BOT_BACK, from a release to its first
     public long BackStepOutMs, BackHoldMs, BackWalkMs;           //   fight: the line due, the replan owed and a camp planned
                                                                  //   since, and the time stepping out, held and walking;
@@ -373,6 +379,9 @@ public static class PlayerBotDriver
     public const int CaughtMilliseconds = 2_000;             //   (inf.), from this long into the run, and a hit on the bot
     public const int CaughtGraceMilliseconds = 3_000;        //   this recent (CaughtNow, st-deathsD's fix round; inf.)
     public const int CaughtHitMilliseconds = 2_000;
+    public const int BreakOffRetryMilliseconds = 1_000;      // #167 E T1: with no point, a try for one this often (inf.),
+    public static readonly int[] RelaxedBreakOffRings = [800];   //   800 out too (NearBreakOffGoal, inf.); BREAKOFF turn=
+    public const string TurnCaught = "caught", TurnNoPoint = "nopoint", TurnBlocked = "blocked", TurnCap = "cap";
     public const int RangedHarmRange = 1_000;                //   a chaser's spell from this far harms the run (inf.)
     public const int HealthRateMilliseconds = 3_000;         // #167 rate=: the health lost a second over the last 3 s
     public const int ProjectedSeconds = 6;                   //   wouldBreak=: 6 s of that loss kept in hand (breakoff #5,
@@ -2343,6 +2352,34 @@ public static class PlayerBotDriver
         return null;
     }
 
+    /// <summary>A break-off's point 800 out (#167 E T1; RelaxedBreakOffRings) when its rings and the straight-away point
+    /// found none (BreakOffGoal's relaxed pass, from the same add scan): the ring's point (candidates) ahead of the
+    /// chasers and out of every other monster's reach (NextBreakOffPoint), else the point straight away 800 out
+    /// (StraightAwayGoal) only where no other monster's reach lies (InAddReach): a run into an add is worse than holding
+    /// (the review). None, null: it holds or turns (NoPointTurns). st-deathsD2/D2b: 11 of 14 turns for want of a point were
+    /// fatal.</summary>
+    public static Vector3? NearBreakOffGoal<T>(Vector3 here, IReadOnlyList<Vector3> chasers, IReadOnlyList<Vector3> candidates,
+        IReadOnlyList<(T Npc, Vector3 At, int AggroRange)> adds, List<Vector3> blocked, Func<Vector3, bool> walkable,
+        Func<Vector3, Vector3?> onMesh) where T : class =>
+        NextBreakOffPoint(here, chasers, candidates, adds, blocked, walkable) ??
+        StraightAwayGoal(here, chasers, RelaxedBreakOffRings[0],
+            point => onMesh(point) is Vector3 on && !InAddReach(on, adds) ? on : null, blocked, walkable);
+
+    /// <summary>With no point to run to (#167 E T1; BreakOffGoal's passes found none), whether the bot turns now: a chaser
+    /// not held in reach (freeDistance within CaughtReach; none, int.MaxValue), a hit while it holds (hitNow,
+    /// HitWhileHolding: a chaser that harms from range, or one held but casting, never comes within it), or a caster or
+    /// pet class that can pay for a damage spell (casterOrPetWithPower, read after a try failed) at any distance: it opens
+    /// at range. With no chaser (nearest int.MaxValue) there is none to turn on. Else it holds where it stands.
+    /// st-deathsD2/D2b: 11 of 14 no-point turns were fatal; 7 of the 11 opened with a gap a ranged class could use, and
+    /// the 2 casters that turned on chasers 1,400 away lived (the review).</summary>
+    public static bool NoPointTurns(int freeDistance, bool hitNow, bool casterOrPetWithPower, int nearest) =>
+        nearest != int.MaxValue && (freeDistance <= CaughtReach || hitNow || casterOrPetWithPower);
+
+    /// <summary>Hit while it holds (#167 E T1, NoPointTurns): an attack on the bot (lastHit, HitNow's: within the last second,
+    /// a miss too) since its hold began (holdSince; 0: not holding). One before the hold is the run's (CaughtNow).</summary>
+    public static bool HitWhileHolding(long holdSince, long lastHit, long now) =>
+        holdSince != 0 && lastHit >= holdSince && HitNow(lastHit, now);
+
 
     /// <summary>A break-off's step this think (#167 C2): with no monster still after it, Done; at its point (or blocked)
     /// with one still after it, NextPoint; else Run. #167 D2: caught (CaughtNow), Caught: it acts on the chaser; from
@@ -2458,12 +2495,16 @@ public static class PlayerBotDriver
     /// <summary>A break-off's end in the state (#167 C2; EndBreakOff's, the review of 9aacd69): the run cleared, and unless
     /// the bot died (its death's own recovery then, HandleDeath) the relocation owed (AfterBreakOff, owesReplan:
     /// OwesReplan's rule); fought, no new break-off for BreakOffMilliseconds: it fights them out. #167 D1: a spent
-    /// caster's owes no relocation but a rest (RecoverBeforePull): it was short of power, not of a camp.</summary>
+    /// caster's owes no relocation but a rest (RecoverBeforePull): it was short of power, not of a camp. #167 E T1: the
+    /// turn, the holds, the retry and the speeds go with the run.</summary>
     public static void FinishBreakOff(PlayerBotState state, string outcome, bool owesReplan, long now)
     {
         bool spent = state.BreakOffWhy == Spent;
         (state.BreakOffSince, state.BreakOffGoal, state.BreakOffArrived) = (0, null, false);
         (state.BreakOffWhy, state.CaughtSince) = (null, 0);
+        (state.BreakOffTurn, state.BreakOffHolds, state.NextBreakOffRetryTick) = (null, 0, 0);   // #167 E T1
+        (state.BreakOffHoldSince, state.BreakOffHoldWhy) = (0, null);
+        (state.BreakOffSpeed, state.BreakOffChaserSpeed) = (-1, -1);
         state.BreakOffChasers.Clear();
         state.BreakOffBlocked.Clear();
         if (outcome == Died) return;
@@ -4124,7 +4165,9 @@ public static class PlayerBotDriver
     // self-heal (11b): its cast stops the mover (CastOnSelf). #167 D2: caught (CaughtThink: attacked by a chaser in
     // reach after the run's grace, st-deathsD's fix round), it controls the chaser and runs on (CaughtControl),
     // standing and facing it while that cast is under way; with no control it turns on the weakest chaser in reach
-    // (WeakestChaser, TurnOn). True while it runs.
+    // (WeakestChaser, TurnOn). True while it runs. #167 E T1: with no point (NextPoint with none, a blocked step, or
+    // holding) it tries for one each second, 800 out too, and holds or turns (GoalOrHold); BREAKOFF turn= says why it
+    // turned.
     private static bool BreaksOffNow(PlayerBotState state, GamePlayer player, long now)
     {
         if (state.BreakOffSince == 0 && !StartsBreakOff(state, player, now)) return false;
@@ -4144,13 +4187,16 @@ public static class PlayerBotDriver
         {
             if (CaughtControl(state, player, free, now)) return true;                   // #167 D2: then it runs on
             turnOn = WeakestChaser(state, player);
-            next = PlayerBotBreakOff.Fight;
+            (next, state.BreakOffTurn) = (PlayerBotBreakOff.Fight, TurnCaught);         // #167 E T1: turn=caught
         }
-        if (next is PlayerBotBreakOff.NextPoint)
-        {
-            state.BreakOffGoal = BreakOffGoal(state, player);
-            state.BreakOffArrived = false;
-            if (state.BreakOffGoal == null) next = PlayerBotBreakOff.Fight;             // nowhere further: it turns
+        else if (next is PlayerBotBreakOff.Fight) state.BreakOffTurn = TurnCap;         //   turn=cap (45 s)
+        if (next is PlayerBotBreakOff.NextPoint)                                        // a new point at once
+            (state.BreakOffGoal, state.BreakOffArrived, state.NextBreakOffRetryTick) = (null, false, 0);
+        if ((next is PlayerBotBreakOff.NextPoint or PlayerBotBreakOff.Run) && state.BreakOffGoal == null)
+        {                                                                               // #167 E T1: none, or holding
+            if (!GoalOrHold(state, player, now, nearest, freeDistance, state.BreakOffHoldWhy ?? TurnNoPoint))
+                return false;                                                           //   it turned
+            if (state.BreakOffGoal == null) return true;                                //   it holds this think
         }
         if (next is PlayerBotBreakOff.Done or PlayerBotBreakOff.Fight)
         {
@@ -4172,13 +4218,56 @@ public static class PlayerBotDriver
         {
             ReportBlocked(state, player, "breakoff", goal, now);
             state.BreakOffBlocked.Add(goal);                                            // never chosen again (NextBreakOffPoint)
-            if ((state.BreakOffGoal = BreakOffGoal(state, player)) == null)
-            {
-                EndBreakOff(state, player, now, Fought);                                 // none left: it turns at once
-                return false;
-            }
+            (state.BreakOffGoal, state.NextBreakOffRetryTick) = (null, 0);              // #167 E T1: a new point at once,
+            return GoalOrHold(state, player, now, nearest, freeDistance, TurnBlocked);  //   else it holds or turns
         }
         return true;
+    }
+
+    // #167 E T1: with no point to run to, a try for one each BreakOffRetryMilliseconds (BreakOffGoal with its 800 pass,
+    // one add scan: GetNPCsInRadius of 3,200, up to 50 OnMesh calls and 8 corridor tests, only while a bot has no
+    // point); none, it turns (NoPointTurns: a chaser not held in reach, a hit while it holds, or a caster or pet class with
+    // power), BREAKOFF turn=why (the hold's first why: nopoint or blocked), else it holds where it stands for the chasers
+    // to give up (Done), catch it (Caught) or the cap (Fight). holds= counts the tries that found none while it held. True
+    // while the break-off goes on.
+    private static bool GoalOrHold(PlayerBotState state, GamePlayer player, long now, int nearest, int freeDistance,
+        string why)
+    {
+        bool tried = false;
+        if (now >= state.NextBreakOffRetryTick)
+        {
+            state.NextBreakOffRetryTick = now + BreakOffRetryMilliseconds;
+            if ((state.BreakOffGoal = BreakOffGoal(state, player, relaxed: true)) != null)
+            {
+                (state.BreakOffHoldSince, state.BreakOffHoldWhy) = (0, null);           // it runs on
+                return true;
+            }
+            tried = true;
+        }
+        if (NoPointTurns(freeDistance, HitWhileHolding(state.BreakOffHoldSince, player.LastAttackedByEnemyTick, now),
+                tried && CasterOrPetWithPower(state, player), nearest))
+        {
+            state.BreakOffTurn = why;
+            EndBreakOff(state, player, now, Fought);                                    // step 14 picks a hitter
+            return false;
+        }
+        if (state.BreakOffHoldSince == 0) (state.BreakOffHoldSince, state.BreakOffHoldWhy) = (now, why);
+        if (tried) state.BreakOffHolds++;
+        state.Mover.Stop(now);
+        state.Activity = PlayerBotActivity.Fighting;
+        state.Walk = PlayerBotWalk.BreakOff;
+        return true;
+    }
+
+    // #167 E T1: a caster or pet class that broke off with power (not why=spent: breakoff E4's spent turn holds) and can
+    // still pay for a damage spell (CanNuke, as a spent caster's test reads it). Read only after a try for a point failed,
+    // so no per-think spell walk.
+    private static bool CasterOrPetWithPower(PlayerBotState state, GamePlayer player)
+    {
+        if (state.BreakOffWhy == Spent || RoleOf(player.CharacterClass.ID) is not (PlayerBotRole.Caster or PlayerBotRole.Pet))
+            return false;
+        KnowSpells(state, player);
+        return state.Nukes.Count > 0 && CanNuke(state, player);
     }
 
     // A break-off's start (BreakOffFires) from the monsters hitting the bot (Attacker's, each with the bot as its target)
@@ -4240,10 +4329,11 @@ public static class PlayerBotDriver
         {
             chasers.Clear();
             state.NextBreakOffTick = now + TargetRefreshMilliseconds;
-            ReportRefusal(state, player, now, onBot, refusal);                         // #167 D2
+            ReportRefusal(state, player, now, onBot, refusal, player.MaxSpeed, fastest);   // #167 D2; E T1: the speeds
             return false;
         }
         (state.BreakOffSince, state.BreakOffGoal, state.BreakOffArrived, state.BreakOffSprintOffAt) = (now, goal, false, -1);
+        (state.BreakOffSpeed, state.BreakOffChaserSpeed) = (player.MaxSpeed, fastest);   // #167 E T1: before the sprint
         (state.BreakOffHealth, state.BreakOffEndurance, state.BreakOffAttackers) = (health, player.EndurancePercent, onBot);
         state.BreakOffRate = HealthRate(state.HealthSamples, now, health);              // #167 BREAKOFF rate=
         (state.BreakOffWhy, state.CaughtSince) = (why, 0);                              // #167 D1 why= (BrokeOffFrom reads it)
@@ -4352,15 +4442,17 @@ public static class PlayerBotDriver
     }
 
     // #167 D2: PLAYER_BOT_BREAKOFF outcome=refused why= (BreakOffRefusal) at the bot's health, endurance and the monsters on
-    // it now, once a fight (BreakOffRefused, cleared by OpenFight).
-    private static void ReportRefusal(PlayerBotState state, GamePlayer player, long now, int onBot, string why)
+    // it now, once a fight (BreakOffRefused, cleared by OpenFight). #167 E T1: and its run speed and the fastest chaser's
+    // (speed=, chaserSpeed=; -1 before they are read: a control refusal).
+    private static void ReportRefusal(PlayerBotState state, GamePlayer player, long now, int onBot, string why,
+        int speed = -1, int chaserSpeed = -1)
     {
         if (state.BreakOffRefused) return;
         state.BreakOffRefused = true;
         if (Log.IsInfoEnabled)
             Log.Info(PlayerBotDriverReport.FormatBreakOff(player.Name, player.Level, player.HealthPercent,
                 player.EndurancePercent, onBot, 0, Refused, HealthRate(state.HealthSamples, now, player.HealthPercent), why,
-                -1, player.EndurancePercent));                                              // #167 E-S: no run
+                -1, player.EndurancePercent, speed: speed, chaserSpeed: chaserSpeed));      // #167 E-S: no run
     }
 
     // A sprint's cost a second before the regeneration (GamePlayer.cs:2396-2405): LongWind, less Long Wind's 20-100%.
@@ -4467,8 +4559,10 @@ public static class PlayerBotDriver
     // aggro (AddReach; not one with the bot as its target: it is on it already; a hostile keep guard too, #167 D7 and the
     // review of D: IsBreakOffAdd), not one it was blocked on, and one it has a corridor to (PlayerTravelPath.TryBuildCorridor,
     // as RelocateIfOutgrown's; with no navmesh, any); #167 D2: none, the point straight away from them under the same
-    // tests, one try (StraightAwayGoal); none, null.
-    private static Vector3? BreakOffGoal(PlayerBotState state, GamePlayer player)
+    // tests, one try (StraightAwayGoal); none, null. #167 E T1: relaxed (with no point, GoalOrHold), with none of those
+    // the 800 ring and the straight-away point 800 out too, never in another monster's reach (NearBreakOffGoal), from
+    // the same add scan (RelaxedBreakOffRings lie inside the scan's radius).
+    private static Vector3? BreakOffGoal(PlayerBotState state, GamePlayer player, bool relaxed = false)
     {
         List<(GameNPC Npc, Vector3 At, int AggroRange)> adds = _reach ??= new();
         adds.Clear();
@@ -4480,25 +4574,30 @@ public static class PlayerBotDriver
         Zone zone = player.CurrentZone;
         bool meshed = zone != null && nav.HasNavmesh(zone);
         bool Walkable(Vector3 point) => !meshed || PlayerTravelPath.TryBuildCorridor(nav, zone, here, point, out _);
+        Vector3? OnMeshHere(Vector3 point) => OnMesh(player, point);
+        List<Vector3> Ring(int[] rings) => RingPoints(here, rings, SpotDirections).Select(OnMeshHere).Where(p => p.HasValue)
+            .Select(p => p.Value).ToList();
         List<Vector3> chasers = state.BreakOffChasers.Select(npc => new Vector3(npc.X, npc.Y, npc.Z)).ToList();
-        Vector3? goal = NextBreakOffPoint(here, chasers,
-            RingPoints(here, BreakOffRings, SpotDirections).Select(p => OnMesh(player, p)).Where(p => p.HasValue)
-                .Select(p => p.Value).ToList(), adds, state.BreakOffBlocked, Walkable) ??
-            StraightAwayGoal(here, chasers, BreakOffRings[0], point => OnMesh(player, point), state.BreakOffBlocked, Walkable);
+        Vector3? goal = NextBreakOffPoint(here, chasers, Ring(BreakOffRings), adds, state.BreakOffBlocked, Walkable) ??
+            StraightAwayGoal(here, chasers, BreakOffRings[0], OnMeshHere, state.BreakOffBlocked, Walkable);
+        if (goal == null && relaxed)                                                    // #167 E T1
+            goal = NearBreakOffGoal(here, chasers, Ring(RelaxedBreakOffRings), adds, state.BreakOffBlocked, Walkable,
+                OnMeshHere);
         adds.Clear();                                                                   // no monster held past the scan
         return goal;
     }
 
     // A break-off's end: its line (PLAYER_BOT_BREAKOFF, #167 D1 why=), the state's end (FinishBreakOff: the relocation
     // owed, OwesReplan's rule as after a death; fought, no new break-off for BreakOffMilliseconds), and unless the bot died
-    // (the death's own recovery then, HandleDeath) the sprint off.
+    // (the death's own recovery then, HandleDeath) the sprint off. #167 E T1: turn=, holds=, speed= and chaserSpeed=.
     private static void EndBreakOff(PlayerBotState state, GamePlayer player, long now, string outcome)
     {
         if (Log.IsInfoEnabled)
             Log.Info(PlayerBotDriverReport.FormatBreakOff(player.Name, player.Level, state.BreakOffHealth,
                 state.BreakOffEndurance, state.BreakOffAttackers, (now - state.BreakOffSince) / 1000, outcome, state.BreakOffRate,
                 state.BreakOffWhy, state.BreakOffSprintOffAt < 0 ? -1 : state.BreakOffSprintOffAt / 1000,   // #167 E-S
-                player.EndurancePercent));
+                player.EndurancePercent, state.BreakOffTurn ?? "-", state.BreakOffHolds, state.BreakOffSpeed,   // #167 E T1
+                state.BreakOffChaserSpeed));
         FinishBreakOff(state, outcome, OwesReplan(state.Task != null, CanRelocate(state, player)), now);
         if (outcome == Died) return;
         player.Sprint(false);
