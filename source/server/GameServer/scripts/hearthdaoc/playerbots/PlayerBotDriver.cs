@@ -1447,8 +1447,9 @@ public static class PlayerBotDriver
     }
 
     /// <summary>#167 D6: the highest con under a killer's, never under GREEN: the cap's limit (CapAfterDeaths) and the
-    /// fallback's (PlanRelocation, FallbackInPlace). The review of D: the fallback took only a camp under the killer's con,
-    /// so after a GREEN killer none was left (grey monsters form no camp), though the cap still hunts GREEN.</summary>
+    /// fallback's (PlanRelocation, FallbackInPlace). The review of D: the fallback took only a camp under the killer's
+    /// con, so after a GREEN killer none was left (grey monsters form no camp), though the cap still hunts
+    /// GREEN.</summary>
     public static ConColor UnderKillerCon(ConColor killer) => (ConColor)Math.Max((int)ConColor.GREEN, (int)killer - 1);
 
     /// <summary>#167 D6: the plan's caps (RelocateIfOutgrown): its fit pass under the death cap and the killers' cons as
@@ -1494,9 +1495,9 @@ public static class PlayerBotDriver
         IsExperienceTarget(npc) && npc.IsAlive && npc.CurrentRegion == player.CurrentRegion;
 
     /// <summary>#167 D4: the plan's monsters (RelocateIfOutgrown, PlanRelocation's) among npcs: those in zone it counts
-    /// (IsPlannable; the review of D: with the old filter, IsAttackable, put back no test failed) over GREY, each with its
-    /// con to the bot, whether the bot would hunt it under natural (IsEligibleExperienceTarget) and whether it avoids its
-    /// name (avoidUntil).</summary>
+    /// (IsPlannable; the review of D: with the old filter, IsAttackable, put back no test failed) over GREY, each with
+    /// its con to the bot, whether the bot would hunt it under natural (IsEligibleExperienceTarget) and whether it
+    /// avoids its name (avoidUntil).</summary>
     public static List<(GameNPC Npc, Vector3 At, ConColor Con, bool Huntable, bool Avoided)> PlanMonsters(GamePlayer player,
         IEnumerable<GameNPC> npcs, Zone zone, ConColor natural, IReadOnlyDictionary<string, long> avoidUntil, long now)
     {
@@ -1513,9 +1514,9 @@ public static class PlayerBotDriver
         return monsters;
     }
 
-    /// <summary>The walk out's start (#167 D4, StepsOutOfReach; the review of D pinned it): while the release's immunity
-    /// lasts (immuneLeft), with no point to walk to yet (hasGoal), the walk not over for this release (over) and a camp
-    /// planned since the release (backMoved, PlanCamp's).</summary>
+    /// <summary>The walk out's start (#167 D4, StepsOutOfReach; the review of D pinned it): while the release's
+    /// immunity lasts (immuneLeft), with no point to walk to yet (hasGoal), the walk not over for this release (over)
+    /// and a camp planned since the release (backMoved, PlanCamp's).</summary>
     public static bool StartsWalkOut(long immuneLeft, bool hasGoal, bool over, bool backMoved) =>
         immuneLeft > 0 && !hasGoal && !over && backMoved;
 
@@ -1863,32 +1864,35 @@ public static class PlayerBotDriver
     public static bool HoldReady(bool held, bool hasControl, bool interrupted, bool quickcastReady, bool quickcastOn) =>
         held || hasControl && (!interrupted || quickcastReady || quickcastOn);
 
-    /// <summary>The one-monster case's holdReady (#167 D1; the review of D): a control cast at the one monster on the bot
-    /// still under way (controlCasting, ControlCastAt: TargetControl reads none while it casts, NextControlTick, so the
-    /// case fired mid-cast and the break-off's Disengage cancelled the root, CastingComponent.InterruptCasting); else, only
-    /// when that monster is the bot's target (itsTarget; at a kill, the one on it), the target's hold ready
-    /// (targetHoldReady, HoldReady; asked only then: it walks the spells). A target held at range beside another monster
-    /// hitting the bot is no hold on that one; an add's control to come is C4's (AddControlReady, BreakOffFires).</summary>
+    /// <summary>The one-monster case's holdReady (#167 D1; the review of D): a control cast at the one monster on the
+    /// bot still under way (controlCasting, ControlCastAt: TargetControl reads none while it casts, NextControlTick, so
+    /// the case fired mid-cast and the break-off's Disengage cancelled the root, CastingComponent.InterruptCasting);
+    /// else, only when that monster is the bot's target (itsTarget; at a kill, the one on it), the target's hold ready
+    /// (targetHoldReady, HoldReady; asked only then: it walks the spells). A target held at range beside another
+    /// monster hitting the bot is no hold on that one; an add's control to come is C4's (AddControlReady,
+    /// BreakOffFires).</summary>
     public static bool OneMonsterHold(bool controlCasting, bool itsTarget, Func<bool> targetHoldReady) =>
         controlCasting || itsTarget && targetHoldReady();
 
-    /// <summary>A control cast at npc under way (#167 D1, the review of D): the bot's cast now (spell, at castTarget; none:
-    /// null) a control (IsControlSpell) at that monster, CasterStep's at its target or AddAct's at an add.</summary>
+    /// <summary>A control cast at npc under way (#167 D1, the review of D): the bot's cast now (spell, at castTarget;
+    /// none: null) a control (IsControlSpell) at that monster, CasterStep's at its target or AddAct's at an
+    /// add.</summary>
     public static bool ControlCastAt(Spell spell, GameLiving castTarget, GameLiving npc) =>
         spell != null && castTarget == npc && IsControlSpell(spell);
 
-    /// <summary>When the break-off reads the control CasterStep would cast (#167 D1, the review of D): at the end of the
-    /// last control's cast and margin (nextControlTick, ControlMarginMilliseconds) when that is later, so a resisted root's
-    /// margin before its next cast keeps the hold first; else now.</summary>
+    /// <summary>When the break-off reads the control CasterStep would cast (#167 D1, the review of D): at the end of
+    /// the last control's cast and margin (nextControlTick, ControlMarginMilliseconds) when that is later, so a
+    /// resisted root's margin before its next cast keeps the hold first; else now.</summary>
     public static long ControlReadTick(long now, long nextControlTick) => Math.Max(now, nextControlTick);
 
     /// <summary>Whether StartsBreakOff scans the monsters on the bot (#167 D1; the review of D pinned it): under
     /// BreakOffHealthPercent, or a spent caster (CasterSpent, SpentNow) at any health. No scan above it.</summary>
     public static bool BreakOffScans(bool spent, byte health) => spent || health < BreakOffHealthPercent;
 
-    /// <summary>A break-off's start once StartsBreakOff scanned (#167 D1; the review of D pinned it): BREAKOFF why= (BreakOffWhy)
-    /// for a spent caster at any health (spent), with no monster on it too, else when BreakOffFires holds over the monsters
-    /// on the bot (hitters) with the one-monster case's holdReady (HoldReadyNow); none, null.</summary>
+    /// <summary>A break-off's start once StartsBreakOff scanned (#167 D1; the review of D pinned it): BREAKOFF why=
+    /// (BreakOffWhy) for a spent caster at any health (spent), with no monster on it too, else when BreakOffFires holds
+    /// over the monsters on the bot (hitters) with the one-monster case's holdReady (HoldReadyNow); none,
+    /// null.</summary>
     public static string BreakOffStartWhy(PlayerBotState state, PlayerBotRole role, bool spent, byte health, bool holdReady,
         IReadOnlyList<(byte Health, int Distance, bool Avoided)> hitters, long now, Func<bool> addControlReady)
     {
