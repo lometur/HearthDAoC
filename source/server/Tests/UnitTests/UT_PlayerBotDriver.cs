@@ -203,6 +203,50 @@ public sealed class UT_PlayerBotDriver
         Assert.That(PlayerBotDriver.IsPlannable(player, monster), Is.False, "a dead one");
     }
 
+    // A monster the plan would count, alive in region at (x, y) (an NPC's position is its movement component's).
+    private static GameNPC CampMonster(Region region, float x, float y, byte level)
+    {
+        GameNPC npc = LiveMonster();
+        typeof(GameNPC).GetField("m_ownBrain", Hidden)!.SetValue(npc, new DOL.AI.Brain.StandardMobBrain());
+        typeof(GameObject).GetField("m_level", Hidden)!.SetValue(npc, level);
+        var movement = new NpcMovementComponent(npc);
+        typeof(NpcMovementComponent).GetField("_ownerPosition", Hidden)!.SetValue(movement, new Vector3(x, y, 0));
+        npc.movementComponent = movement;
+        npc.CurrentRegion = region;
+        return npc;
+    }
+
+    // The review of D (D4): the plan's monsters where RelocateIfOutgrown takes them (PlanMonsters). A bot still immune
+    // after its release counts the camp round it: with the old filter put back (IsAttackable, false for every monster
+    // while the bot is immune) no test failed, and the immune replan planned nothing in the game. A monster outside the
+    // zone or a dead one is none.
+    [Test]
+    public void The_plans_monsters_count_a_camp_while_the_bot_is_immune()
+    {
+        var calculators = (DOL.GS.PropertyCalc.IPropertyCalculator[])typeof(GameLiving)
+            .GetField("m_propertyCalc", BindingFlags.Static | BindingFlags.NonPublic)!.GetValue(null)!;
+        DOL.GS.PropertyCalc.IPropertyCalculator previous = calculators[(int)eProperty.LivingEffectiveLevel];
+        calculators[(int)eProperty.LivingEffectiveLevel] = new LevelOnly();
+        try
+        {
+            var (region, zone) = World();
+            ImmunePlayer player = LiveImmunePlayer();
+            typeof(GameObject).GetField("m_level", Hidden)!.SetValue(player, (byte)20);
+            player.CurrentRegion = region;
+            GameNPC camp = CampMonster(region, 1_000, 1_000, 20), outside = CampMonster(region, 70_000, 1_000, 20),
+                dead = CampMonster(region, 2_000, 1_000, 20);
+            typeof(GameObject).GetField("m_health", Hidden)!.SetValue(dead, 0);
+            var monsters = PlayerBotDriver.PlanMonsters(player, [camp, outside, dead], zone, ConColor.YELLOW,
+                new Dictionary<string, long>(), 0);
+            Assert.That(monsters.Select(m => (m.Npc, m.At, m.Con, m.Huntable, m.Avoided)),
+                Is.EqualTo(new[] { (camp, new Vector3(1_000, 1_000, 0), ConColor.YELLOW, true, false) }));
+        }
+        finally
+        {
+            calculators[(int)eProperty.LivingEffectiveLevel] = previous;
+        }
+    }
+
     // #167 D4, step 11b: after a release, while the immunity lasts, no self-buff and no pet: the bot plans first (a buff
     // cast returned the think before the plan, and a cast stands the bot).
     [Test]
@@ -782,6 +826,18 @@ public sealed class UT_PlayerBotDriver
     [Test]
     public void With_no_point_there_is_no_walk_out() =>
         Assert.That(PlayerBotDriver.WalksOut(Vector3.Zero, false, new Vector3(10_000, 0, 0), null), Is.False);
+
+    // The review of D (D4): the walk out's start (StartsWalkOut), StepsOutOfReach's gate. With it switched off no test
+    // failed, and a bot back from its release with immunity left stood at its anchor. It starts while the immunity lasts,
+    // with no point to walk to yet, the walk not over for this release, and a camp planned since the release.
+    [TestCase(5_000L, false, false, true, true)]
+    [TestCase(0L, false, false, true, false)]                                 // the immunity over
+    [TestCase(5_000L, true, false, true, false)]                              // a point already
+    [TestCase(5_000L, false, true, true, false)]                              // over for this release
+    [TestCase(5_000L, false, false, false, false)]                            // no camp planned yet
+    public void The_walk_out_starts_while_immune_with_a_camp_planned(long immuneLeft, bool hasGoal, bool over,
+        bool backMoved, bool starts) =>
+        Assert.That(PlayerBotDriver.StartsWalkOut(immuneLeft, hasGoal, over, backMoved), Is.EqualTo(starts));
 
     // #167 D4: the immunity left. The server's end (m_invulnerabilityTick) is protected (GamePlayer.cs:12236): the release
     // starts TIMER_KILLED_BY_MOB seconds (AbstractServerRules.cs:258-262) from the release the bot asked for (the ask that

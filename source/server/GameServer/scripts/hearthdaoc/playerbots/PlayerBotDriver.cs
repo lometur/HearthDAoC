@@ -1489,6 +1489,32 @@ public static class PlayerBotDriver
     public static bool IsPlannable(GamePlayer player, GameNPC npc) =>
         IsExperienceTarget(npc) && npc.IsAlive && npc.CurrentRegion == player.CurrentRegion;
 
+    /// <summary>#167 D4: the plan's monsters (RelocateIfOutgrown, PlanRelocation's) among npcs: those in zone it counts
+    /// (IsPlannable; the review of D: with the old filter, IsAttackable, put back no test failed) over GREY, each with its
+    /// con to the bot, whether the bot would hunt it under natural (IsEligibleExperienceTarget) and whether it avoids its
+    /// name (avoidUntil).</summary>
+    public static List<(GameNPC Npc, Vector3 At, ConColor Con, bool Huntable, bool Avoided)> PlanMonsters(GamePlayer player,
+        IEnumerable<GameNPC> npcs, Zone zone, ConColor natural, IReadOnlyDictionary<string, long> avoidUntil, long now)
+    {
+        List<(GameNPC Npc, Vector3 At, ConColor Con, bool Huntable, bool Avoided)> monsters = new();
+        foreach (GameNPC npc in npcs)
+        {
+            if (npc.CurrentZone != zone || !IsPlannable(player, npc)) continue;
+            ConColor con = ConLevels.GetConColor(player.GetConLevel(npc));
+            if (con > ConColor.GREY)
+                monsters.Add((npc, new(npc.X, npc.Y, npc.Z), con,
+                    con <= natural && AutonomousPlayerPilot.IsEligibleExperienceTarget(con, npc.EffectiveLevel, player.Level, 1),
+                    IsAvoided(avoidUntil, npc.Name, now)));
+        }
+        return monsters;
+    }
+
+    /// <summary>The walk out's start (#167 D4, StepsOutOfReach; the review of D pinned it): while the release's immunity
+    /// lasts (immuneLeft), with no point to walk to yet (hasGoal), the walk not over for this release (over) and a camp
+    /// planned since the release (backMoved, PlanCamp's).</summary>
+    public static bool StartsWalkOut(long immuneLeft, bool hasGoal, bool over, bool backMoved) =>
+        immuneLeft > 0 && !hasGoal && !over && backMoved;
+
     /// <summary>#167 D7: a monster the step out (ClearSpotNear) and the adds rule (FindWithin's adds: the pick's
     /// crowding, the rest spot's and the step back's) keep clear of: an experience target, or a keep guard of another
     /// realm or of none (Pbotaaacv's realm-less "Renegade" guards at its battleground bind killed it in all 14 of its
@@ -3055,7 +3081,8 @@ public static class PlayerBotDriver
     // After a death (#167 F4, C1b) it plans before it walks back, from where it died, in its anchor's region and
     // the zone it died in (the bind may lie elsewhere; then the corridors start at the death spot, CorridorOrigin), the
     // failed camps barred; with no camp it hunts where it is. #167 D4: while the release's immunity lasts too, its
-    // monsters read by IsPlannable (C1 held the plan until it was over: IsAttackable found none then).
+    // monsters read by IsPlannable (PlanMonsters; C1 held the plan until it was over: IsAttackable found none then). The
+    // anchor's region is the bot's (CanRelocate).
     private static void RelocateIfOutgrown(PlayerBotState state, GamePlayer player, long now)
     {
         string reason = RelocateReason(state.RoamingSince, state.CappedSince, now, state.ReplanOwed);
@@ -3081,16 +3108,8 @@ public static class PlayerBotDriver
             nav.GetClosestPoint(zone, start, 64, 64, 128, nav.DefaultFilters) == null)  // corridor (PTP:80-82): no test
             corridorFrom = null;                                                 //   then, as before
         ConColor natural = MaximumTargetCon(1, 0);
-        List<(GameNPC Npc, Vector3 At, ConColor Con, bool Huntable, bool Avoided)> monsters = new();
-        foreach (GameNPC npc in WorldMgr.GetNPCsFromRegion(state.AnchorRegion))   // CanRelocate: the bot's region too
-        {
-            if (npc.CurrentZone != zone || !IsPlannable(player, npc)) continue;
-            ConColor con = ConLevels.GetConColor(player.GetConLevel(npc));
-            if (con > ConColor.GREY)
-                monsters.Add((npc, new(npc.X, npc.Y, npc.Z), con,
-                    con <= natural && AutonomousPlayerPilot.IsEligibleExperienceTarget(con, npc.EffectiveLevel, player.Level, 1),
-                    IsAvoided(state.AvoidUntil, npc.Name, now)));
-        }
+        List<(GameNPC Npc, Vector3 At, ConColor Con, bool Huntable, bool Avoided)> monsters = PlanMonsters(player,
+            WorldMgr.GetNPCsFromRegion(state.AnchorRegion), zone, natural, state.AvoidUntil, now);
         Vector3[] failed = FailedCamps(state.FailedCamps, state.AnchorRegion, now);
         bool barredOld = Array.IndexOf(failed, state.Anchor) >= 0;                 // #167 D9: RELOCATE barred=old
         (ConColor fit, ConColor? killerCon) = PlanCaps(state, now);                 // #167 D6
@@ -3205,7 +3224,7 @@ public static class PlayerBotDriver
         if (!state.AfterRelease) return false;
         long immuneLeft = ImmunityLeft(state.ImmuneUntil, now, player.IsInvulnerableToAttack);   // #167 D4
         if (immuneLeft <= 0 && state.WalkOutGoal != null) EndWalkOut(state);
-        else if (immuneLeft > 0 && state.WalkOutGoal == null && !state.WalkOutOver && state.BackMoved)
+        else if (StartsWalkOut(immuneLeft, state.WalkOutGoal != null, state.WalkOutOver, state.BackMoved))
             state.WalkOutOver = (state.WalkOutGoal = NextWalkOutPoint(state, player, immuneLeft)) == null;
         if (state.WalkOutGoal == null && now >= state.NextReachTick)
         {
