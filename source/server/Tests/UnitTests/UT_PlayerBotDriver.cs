@@ -4144,16 +4144,39 @@ public sealed class UT_PlayerBotDriver
 
     // CasterStep's killsFirst as it reads it (the review of 9aacd69: forced false there, no test failed): the nukes the
     // fight's casts say the target needs land before contact, the bot at 60% health or more and one monster at most on it.
-    [TestCase(100, 65, 1, 6_100L, 3_000, true, (byte)100, 1, true)]
-    [TestCase(100, 65, 1, 6_100L, 3_000, false, (byte)100, 1, false)]                        // no Quickcast: 1 lands
-    [TestCase(100, 65, 1, 6_100L, 3_000, true, (byte)59, 1, false)]                          // under 60%
-    [TestCase(100, 65, 1, 6_100L, 3_000, true, (byte)60, 1, true)]
-    [TestCase(100, 65, 1, 6_100L, 3_000, true, (byte)100, 2, false)]                         // an add on it
-    [TestCase(100, 100, 0, 60_000L, 3_000, true, (byte)100, 0, false)]                       // nothing measured
+    // #167 E C2a: the Quickcast already on counts as the ready one did (once on, QuickcastReady is false and the killing
+    // nuke lost it to the control).
+    [TestCase(100, 65, 1, 6_100L, 3_000, true, false, (byte)100, 1, true)]
+    [TestCase(100, 65, 1, 6_100L, 3_000, false, false, (byte)100, 1, false)]                 // no Quickcast: 1 lands
+    [TestCase(100, 65, 1, 6_100L, 3_000, true, false, (byte)59, 1, false)]                   // under 60%
+    [TestCase(100, 65, 1, 6_100L, 3_000, true, false, (byte)60, 1, true)]
+    [TestCase(100, 65, 1, 6_100L, 3_000, true, false, (byte)100, 2, false)]                  // an add on it
+    [TestCase(100, 100, 0, 60_000L, 3_000, true, false, (byte)100, 0, false)]                // nothing measured
+    [TestCase(100, 65, 1, 6_100L, 3_000, false, true, (byte)100, 1, true)]                   // E C2a: Quickcast on
+    [TestCase(100, 8, 5, 0L, 2_600, false, true, (byte)100, 1, true)]                        // E C2a: on, in melee
+    [TestCase(100, 8, 5, 0L, 2_600, false, false, (byte)100, 1, false)]                      // in melee, none: no nuke lands
     public void A_caster_skips_its_control_when_its_nukes_kill_first_healthy_and_alone(int engageHealth, int health,
-        int casts, long contactMs, int nukeCastMs, bool quickcastReady, byte botHealth, int attackers, bool killsFirst) =>
-        Assert.That(PlayerBotDriver.KillsFirstNow(engageHealth, health, casts, contactMs, nukeCastMs, quickcastReady, botHealth,
-            attackers), Is.EqualTo(killsFirst));
+        int casts, long contactMs, int nukeCastMs, bool quickcastReady, bool quickcastOn, byte botHealth, int attackers,
+        bool killsFirst) =>
+        Assert.That(PlayerBotDriver.KillsFirstNow(engageHealth, health, casts, contactMs, nukeCastMs, quickcastReady,
+            quickcastOn, botHealth, attackers), Is.EqualTo(killsFirst));
+
+    // #167 E C2a, Correction 3: the killing nuke's two thinks. In melee and hit, Quickcast ready: the nuke, and
+    // CombatAction turns Quickcast on. Next think, Quickcast on (not ready, not interrupted under it): still the nuke, not
+    // the control the Quickcast used to go to.
+    [Test]
+    public void The_killing_nuke_keeps_the_quickcast_it_turned_on()
+    {
+        bool first = PlayerBotDriver.KillsFirstNow(100, 8, 5, 0L, 2_600, true, false, (byte)100, 1);
+        Assert.That(PlayerBotDriver.CasterAction(true, 0, false, false, 2_500, 2_600, true, true, false, first),
+            Is.EqualTo(PlayerBotCasterAction.Nuke));
+        Assert.That(PlayerBotDriver.CombatAction(true, true, 0, true, true, due: true, heldBreaksOnHit: false),
+            Is.EqualTo(PlayerBotCombatAction.Quickcast));
+        bool ready = PlayerBotDriver.QuickcastReady(true, quickcastOn: true, 0, 0, false, 1_000);
+        bool second = PlayerBotDriver.KillsFirstNow(100, 8, 5, 0L, 2_600, ready, quickcastOn: true, (byte)100, 1);
+        Assert.That(PlayerBotDriver.CasterAction(true, 0, false, false, 2_500, 2_600, false, ready, true, second),
+            Is.EqualTo(PlayerBotCasterAction.Nuke), "before: Control, the Quickcast to the control");
+    }
 
     // #167 D11: a GREEN gets a control only as the escape. 143 of st-deathsC's 347 GREEN wins had a control, 22.1 s and 40.9
     // power each against 7.9 s and 19.2 without one, and 106 of the 143 spent Quickcast. A control on the target is worth

@@ -2533,11 +2533,13 @@ public static class PlayerBotDriver
         needed <= contactMs / Math.Max(1, nukeCastMs + 250) + (quickcastReady ? 1 : 0);
 
     /// <summary>CasterStep's killsFirst (#167 C11; the review of 9aacd69): the nukes the fight's casts say the target still
-    /// needs (NukesNeeded, from its health at the fight's first think) land first (KillsFirst), the bot at
-    /// KillFirstHealthPercent or more and one monster at most on it.</summary>
+    /// needs (NukesNeeded, from its health at the fight's first think) land first (KillsFirst, one more with Quickcast
+    /// ready or already on: #167 E C2a, once on it is no longer "ready" (QuickcastReady) and the killing nuke lost the
+    /// Quickcast it turned on to the control at the next think), the bot at KillFirstHealthPercent or more and one monster
+    /// at most on it.</summary>
     public static bool KillsFirstNow(int engageHealth, int health, int casts, long contactMs, int nukeCastMs,
-        bool quickcastReady, byte botHealth, int attackers) =>
-        KillsFirst(NukesNeeded(engageHealth, health, casts), contactMs, nukeCastMs, quickcastReady) &&
+        bool quickcastReady, bool quickcastOn, byte botHealth, int attackers) =>
+        KillsFirst(NukesNeeded(engageHealth, health, casts), contactMs, nukeCastMs, quickcastReady || quickcastOn) &&
         botHealth >= KillFirstHealthPercent && attackers <= 1;
 
     /// <summary>Whether a control on the target is worth its cost (#167 D11): a BLUE or harder, the bot under
@@ -4268,7 +4270,7 @@ public static class PlayerBotDriver
         (Spell control, SpellLine line) = !held && closing && due
             ? WorthyTargetControl(state, player, npc, contact, now) : default;                             // #167 D11
         bool killsFirst = KillsFirstNow(state.EngageTargetHealth, npc.HealthPercent, state.FightCasts, contact, nukeCast,
-            quickcastReady, player.HealthPercent, state.Attackers);                                         // #167 C11
+            quickcastReady, quickcasting, player.HealthPercent, state.Attackers);                          // #167 C11, E C2a
         PlayerBotCasterAction step = CasterAction(closing, contact, held, breaksOnHit, control?.CastTime ?? 0, nukeCast,
             interrupted, quickcastReady, quickcasting, killsFirst);
         switch (step)
