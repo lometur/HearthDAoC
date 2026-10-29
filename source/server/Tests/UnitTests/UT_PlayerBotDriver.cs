@@ -3729,6 +3729,33 @@ public sealed class UT_PlayerBotDriver
         Assert.That(PlayerBotDriver.KillsFirstNow(engageHealth, health, casts, contactMs, nukeCastMs, quickcastReady, botHealth,
             attackers), Is.EqualTo(killsFirst));
 
+    // #167 D11: a GREEN gets a control only as the escape. 143 of st-deathsC's 347 GREEN wins had a control, 22.1 s and 40.9
+    // power each against 7.9 s and 19.2 without one, and 106 of the 143 spent Quickcast. A control on the target is worth
+    // it on a BLUE or harder, with the bot under KillFirstHealthPercent, or with 2 or more live monsters on it (the
+    // verifier's correction: TargetFirst reads the same gate).
+    [TestCase(ConColor.GREEN, (byte)100, 1, false)] [TestCase(ConColor.GREEN, (byte)60, 1, false)]
+    [TestCase(ConColor.GREEN, (byte)59, 1, true)] [TestCase(ConColor.BLUE, (byte)100, 1, true)]
+    [TestCase(ConColor.GREY, (byte)100, 1, false)] [TestCase(ConColor.GREEN, (byte)100, 2, true)]
+    [TestCase(ConColor.YELLOW, (byte)100, 0, true)] [TestCase(ConColor.GREEN, (byte)100, 0, false)]
+    public void A_green_gets_a_control_only_as_the_escape(ConColor con, byte botHealth, int attackers, bool worth) =>
+        Assert.That(PlayerBotDriver.ControlWorth(con, botHealth, attackers), Is.EqualTo(worth));
+
+    // #167 D11: a control not worth it reaches CasterAction as none (CasterStep passes no cast time): it nukes. And the
+    // add's control isn't held back for it (TargetFirst reads the same gate): a GREEN coming at a healthy bot first, its
+    // add after, the add's control goes; with 2 on the bot the target's comes first, as before.
+    [Test]
+    public void A_control_not_worth_it_leaves_the_nuke_and_the_adds_control()
+    {
+        Assert.That(PlayerBotDriver.CasterAction(true, 2_000, false, false, 0, 3_000, false, true, false, false),
+            Is.EqualTo(PlayerBotCasterAction.Nuke));
+        bool First(int attackers) => PlayerBotDriver.TargetFirst(
+            PlayerBotDriver.ControlWorth(ConColor.GREEN, 100, attackers) && true, false, true, 1_000, 3_000);
+        Assert.That(PlayerBotDriver.AddAction(true, true, 3_000, First(1), 1_500, true, false, false, false),
+            Is.EqualTo(PlayerBotAddAction.Control), "a GREEN alone: the add's control");
+        Assert.That(PlayerBotDriver.AddAction(true, true, 3_000, First(2), 1_500, true, false, false, false),
+            Is.EqualTo(PlayerBotAddAction.None), "2 on it: the target's first");
+    }
+
     // --- the add's control (#167 C4) ---
 
     // Caster add fights were fatal 96% of the time in st-deathsB (51 of 53): casters controlled their target, never an add

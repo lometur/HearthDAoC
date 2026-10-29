@@ -2327,6 +2327,14 @@ public static class PlayerBotDriver
         KillsFirst(NukesNeeded(engageHealth, health, casts), contactMs, nukeCastMs, quickcastReady) &&
         botHealth >= KillFirstHealthPercent && attackers <= 1;
 
+    /// <summary>Whether a control on the target is worth its cost (#167 D11): a BLUE or harder, the bot under
+    /// KillFirstHealthPercent, or 2 or more live monsters on it (attackers: LiveHitters); a GREEN otherwise gets none, as a
+    /// player nukes a GREEN down. 143 of st-deathsC's 347 GREEN wins had a control, 22.1 s and 40.9 power each against 7.9
+    /// s and 19.2 without one, and 106 of the 143 spent Quickcast. CasterStep and TargetFirst both read it (the verifier's
+    /// correction: a GREEN-plus-add fight held the add's control back for a target control that never came).</summary>
+    public static bool ControlWorth(ConColor con, byte botHealth, int attackers) =>
+        con >= ConColor.BLUE || botHealth < KillFirstHealthPercent || attackers >= 2;
+
     /// <summary>Where a caster steps back to (#167 F11): range units from its target, straight away from it (along +X when
     /// on top of it), else turned by KiteTurns, the first out of every potential add's reach (InAddReach) so the step
     /// pulls nothing; none, null. The caller puts it on the navmesh.</summary>
@@ -3940,7 +3948,8 @@ public static class PlayerBotDriver
     // then the spell's), to a point within that stop (KitePoint); none, or one blocked a moment ago (KitePauseMilliseconds),
     // and CombatAction's old rule (#167 C3). No control while the nukes kill it first (#167 C11: KillsFirst, from what
     // the fight's casts took off it, NukesNeeded), the bot at KillFirstHealthPercent or more and one monster at most on
-    // it. held and breaksOnHit: Engage's Hold of the target. True when it acted.
+    // it. #167 D11: none when it isn't worth it (WorthyTargetControl: a GREEN, the bot healthy and alone), so CasterAction
+    // nukes. held and breaksOnHit: Engage's Hold of the target. True when it acted.
     private static bool CasterStep(PlayerBotState state, GamePlayer player, GameLiving target, int distance, int stop,
         bool held, bool breaksOnHit, bool casterHold, long now, bool due, bool interrupted, bool quickcastReady,
         bool quickcasting, Ability quickcast)
@@ -3952,7 +3961,8 @@ public static class PlayerBotDriver
         bool closing = npc.TargetObject == player;
         long contact = TimeToContact(distance, npc.MaxSpeedBase);
         int nukeCast = state.Spell?.CastTime ?? 3_000;                  // (inf.) 3 s: the casters' nukes cast in 2.5-3 s
-        (Spell control, SpellLine line) = !held && closing && due ? TargetControl(state, player, npc, contact, now) : default;
+        (Spell control, SpellLine line) = !held && closing && due
+            ? WorthyTargetControl(state, player, npc, contact, now) : default;                             // #167 D11
         bool killsFirst = KillsFirstNow(state.EngageTargetHealth, npc.HealthPercent, state.FightCasts, contact, nukeCast,
             quickcastReady, player.HealthPercent, state.Attackers);                                         // #167 C11
         PlayerBotCasterAction step = CasterAction(closing, contact, held, breaksOnHit, control?.CastTime ?? 0, nukeCast,
@@ -3991,7 +4001,9 @@ public static class PlayerBotDriver
 
     // #167 F11, C8: the control CasterStep casts at its target now (TargetFirst reads it too, the review of 9aacd69): its
     // next control due and tries left, one the target takes (Takes) and a mez only as the escape (CasterControlAllowed),
-    // in range, ready and paid for, the highest of ChooseControl's target order; none, default.
+    // in range, ready and paid for, the highest of ChooseControl's target order; none, default. #167 D11: CasterStep and
+    // TargetFirst read it through WorthyTargetControl; the break-off's HoldReadyNow reads it as it is (it asks under 40%
+    // health or with the target held, where ControlWorth holds or isn't asked).
     private static (Spell, SpellLine) TargetControl(PlayerBotState state, GamePlayer player, GameNPC npc, long contact,
         long now) =>
         now < state.NextControlTick || state.ControlTries >= MaxControlTries ? default :
@@ -3999,6 +4011,23 @@ public static class PlayerBotDriver
                 HasPowerFor(player.MaxMana, player.Mana, spell.Power) &&
                 player.IsWithinRadius(npc, player.castingComponent.CalculateSpellRange(spell)),
             spell => CasterControlAllowed(spell, Takes(npc, spell), contact), forAdd: false, petClass: false);
+
+    // #167 D11: TargetControl when a control on the target is worth it (ControlWorth: its con, the bot's health and the
+    // live monsters on it, LiveHitters), else none: CasterStep's control and TargetFirst's, one gate for both.
+    private static (Spell, SpellLine) WorthyTargetControl(PlayerBotState state, GamePlayer player, GameNPC npc, long contact,
+        long now) =>
+        ControlWorth(ConLevels.GetConColor(player.GetConLevel(npc)), player.HealthPercent, LiveHitters(player))
+            ? TargetControl(state, player, npc, contact, now) : default;
+
+    // #167 D11, D12: the live monsters hitting the bot (IsAttacking: alive, the bot their target), not the attacker list's
+    // count, which keeps the last fight's dead target for its attack interval (AttackerTracker.cs:209-219).
+    private static int LiveHitters(GamePlayer player)
+    {
+        int hitters = 0;
+        foreach (GameLiving living in player.attackComponent.AttackerTracker.Attackers)
+            if (IsAttacking(player, living)) hitters++;
+        return hitters;
+    }
 
     // #167 C4: the add's step, for every role with a control (healers, pet classes and melee cast none at an add in
     // st-deathsB, casters only at their target), at a due cast choice before the pet leads and CasterStep
@@ -4092,7 +4121,8 @@ public static class PlayerBotDriver
     // one the add takes now (Takes) that keeps it off (ControlKeepsAddOff), in range, ready and paid for; none after
     // MaxControlTries casts on it that held nothing. A caster's control on its target comes first while the target
     // reaches it first (TargetFirst) with a control CasterStep would cast at it now (TargetControl; the review of
-    // 9aacd69: any control the target takes, recasting, unpaid or a mez not yet wanted, held the add's back).
+    // 9aacd69: any control the target takes, recasting, unpaid or a mez not yet wanted, held the add's back), and worth
+    // it (#167 D11, WorthyTargetControl: CasterStep casts none at a GREEN while the bot is healthy and alone).
     private static (PlayerBotAddAction Step, Spell Spell, SpellLine Line) AddControl(PlayerBotState state,
         GamePlayer player, GameLiving target, bool targetHeld, int targetDistance, GameNPC add, bool interrupted,
         bool quickcastReady, bool quickcasting, long now)
@@ -4109,7 +4139,8 @@ public static class PlayerBotDriver
         GameNPC targetNpc = role == PlayerBotRole.Caster && !targetHeld ? target as GameNPC : null;   // else none first
         bool closing = targetNpc?.TargetObject == player;
         long targetContact = closing ? TimeToContact(targetDistance, targetNpc.MaxSpeedBase) : long.MaxValue;
-        bool targetFirst = closing && TargetFirst(TargetControl(state, player, targetNpc, targetContact, now).Item1 != null,
+        bool targetFirst = closing && TargetFirst(                                                     // #167 D11
+            WorthyTargetControl(state, player, targetNpc, targetContact, now).Item1 != null,
             targetHeld, closing, targetContact, contact);
         return (AddAction(true, true, contact, targetFirst, control.CastTime, Interruptible(control), interrupted,
             quickcastReady, quickcasting), control, line);
