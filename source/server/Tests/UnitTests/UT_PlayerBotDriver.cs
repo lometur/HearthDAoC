@@ -6262,7 +6262,8 @@ public sealed class UT_PlayerBotDriver
     // back on the pocket, not within AnchorCheckMilliseconds of that test, and again after. An anchor on the pocket is
     // tested and the bot stays (a roam goal below blocked); a lever spot bot's (HoldAnchor, no build: it never moves its
     // leash, CanRelocate) and a task bot's (no leash) are never tested. U3's third review: the bot is moved back at
-    // once; the anchor no longer moves onto the pocket.
+    // once; the anchor no longer moves onto the pocket. Its fourth review (R1): a roam that walks on (not blocked) is
+    // not tested, no corridor query and no move.
     [Test]
     public void A_roam_blocked_off_the_anchors_floor_moves_the_bot_back_to_its_anchor_in_Roam()
     {
@@ -6292,6 +6293,12 @@ public sealed class UT_PlayerBotDriver
             Assert.That((At(), kept.Anchor, kept.NextAnchorCheckTick),
                 Is.EqualTo((OnPocket, onPocket, 10_000 + (long)PlayerBotDriver.AnchorCheckMilliseconds)),
                 "a corridor to its anchor: tested, it stays");
+            OnThePocket();
+            var walking = new PlayerBotState(bot) { Anchor = BelowCamp, RoamDestination = onPocket };
+            Roam(walking, 10_000);
+            Assert.That((At() != OnPocket && At().Z > SplitFloorMesh.Ledge, walking.NextAnchorCheckTick), Is.EqualTo((true, 0L)),
+                "a roam that walks on, on the pocket: no test, no move");
+            OnThePocket();
             var spot = new PlayerBotState(bot) { Anchor = BelowCamp, HoldAnchor = true };
             var onTask = new PlayerBotState(bot) { Anchor = BelowCamp, RoamDestination = BelowCamp, Task = new EndlessTask() };
             foreach (PlayerBotState held in new[] { spot, onTask })
