@@ -242,34 +242,33 @@ What they don't do yet is under [Known shortcomings](#known-shortcomings).
 Against the GameBots (#167), and between them and a live world. Each line goes when its fix lands.
 
 Playing:
-- **Deaths:** over two legs of the same code (`st-deathsD2` and `st-deathsD2b`: 15 minutes each, 390 level-matched
-  bots on the `spots-lm3` test spots) they die 1.4 times per bot-hour, against about 1 for the PvE GameBots: melee
-  1.3, casters 1.4, healers 2.1, pet classes 0.9, archers 2.4. v0.37b-hearth.11 on the same spots (`st-hearth11` and
-  `st-hearth11b`) died 1.8 times, casters 4.2. One leg is too short to judge a small change: the two legs of this
-  code died 149 and 118 times. The older spot list put 30 bots where they couldn't hunt (by a battleground keep, in
-  a dungeon); `spots-lm3` moves the 26 whose spot was the cause, so legs before `st-hearth11` (2.1 on `st-deathsC`,
-  9.5 on v0.37b-hearth.9's `st-layers5`) don't compare one for one. Still open:
-  - Break-offs that fail. A bot with too little endurance to sprint doesn't break off (81 and 66 refusals on the two
-    legs). On `st-deathsD2`, 39 deaths came within a minute of a refusal, among them 19 of the 21 deaths to a second
-    monster. A bot caught on the run, or with nowhere further to run, turns and fights and usually dies: 33 of 38
-    within a minute, against 20 of 36 on v0.37b-hearth.11. Deaths within a minute of a break-off are 31% of
-    break-offs, against 36%. The late start stays: `wouldBreak=` only logs a projected break-off.
-  - Casters: their holds now last (their own swing ends 1% of controls, 14% on v0.37b-hearth.11), and deaths of a
-    caster stuck in melee with one monster fell from 66 to 9 over two legs. A long held fight still runs their power
-    low, most of all a Mentalist's long pull of a blue monster, now the largest kind of caster death. The log can't
-    tell a control the server refused from one the monster resisted. A caster seldom controls the add: its Quickcast
-    has usually gone on the target before the add comes.
-  - After a release a bot dies again before its next kill 18% of the time, against 36% on v0.37b-hearth.11. A died
-    plan bars the old camp, not the route to the new one, so a bot whose route passes the monster that killed it can
-    die on the same stretch again.
-  - For 5 minutes after a yellow or harder monster kills it, a bot takes no camp that cons as high. Where its level
-    has no other camp (3 or 4 bots a leg), it waits at its bind, and a bind inside an aggressive camp is attacked.
-  - A bot can stay minutes in a fight with a monster it can't see: on `st-deathsD2b` three bots fought one cluricaun
-    for over 4 minutes, and that camp sticks on every leg, v0.37b-hearth.11's too.
-  - A camp of training dummies counts as a camp: a bot sent there fights nothing.
+- **Deaths:** over two legs of the same code (`st-deathsE3` and `st-deathsE3b`: 15 minutes each, 390 level-matched
+  bots on the `spots-lm3` test spots) they die 0.7 times per bot-hour, against about 1 for the PvE GameBots: melee
+  0.7, casters 0.9, healers 0.8, pet classes 0.6, archers 0.8. v0.37b-hearth.12 on the same spots (`st-deathsD2` and
+  `st-deathsD2b`) died 1.4 times, and v0.37b-hearth.11 (`st-hearth11` and `st-hearth11b`) 1.8. One leg is too short
+  to judge a small change: two legs of the same code have died 149 and 118 times. The older spot list put 30 bots
+  where they couldn't hunt (by a battleground keep, in a dungeon); `spots-lm3` moves the 26 whose spot was the cause,
+  so legs before `st-hearth11` (2.1 on `st-deathsC`, 9.5 on v0.37b-hearth.9's `st-layers5`) don't compare one for
+  one. Still open:
+  - A bot caught on the run, or with no point to run to, turns and fights. Those turns die at the same monsters on
+    every leg (an arbordon, a fomorian geddon, a forest observer). A style class ends a shaken run with about 10
+    endurance left.
+  - Casters: 17 deaths over the two legs came with the target at 25% or less, 13 of them after the Quickcast had gone
+    on a control. A caster seldom controls the add. The log can't tell a control the server refused from one the
+    monster resisted.
+  - Some classes kill less than on v0.37b-hearth.12 and die less: Minstrels 11% fewer kills, Scouts 10%, Armsmen 9%.
+    Necromancers (20%) and Reavers (11%) kill less without dying less.
+  - Where a level has no blue camp, the seven classes that take no yellow alone still pull yellows at the fallback
+    camp: 28 pulls over the two legs, 15 of them by one Bard. Wardens converted from Regrowth die 4.7 times per
+    bot-hour at their camps.
+  - Some bots die again and again at one camp: a Nightshade 5 times in one zone, a Paladin 5 times at one goblin
+    camp.
+  - A bot that steps onto a piece of navmesh with no path back to its camp is moved back there (`CUTOFF`). One whose
+    camp is itself on such a piece is pulled back onto it.
   - Walks don't look ahead for monsters on the route.
-- **Resting:** about half their time (51% over the two legs, 50% on v0.37b-hearth.11). Most of it is the real cost
-  of player regeneration.
+- **Resting:** about half their time: 52.7% over the two legs, against 50.7% on v0.37b-hearth.12 (time-weighted).
+  Most of it is the real cost of player regeneration. Part of the rise is time no longer spent dead or walking back
+  (93 s per bot-hour, from 195). The rest is the 80% endurance stop, which starts sits that health and power wouldn't.
 - **Not done at all:** they don't group, buff others, take part in RvR or battlegrounds, stealth, use realm abilities
   or ride horses (#152, #167).
 - **Ranged and songs:** they can't shoot or play. Archers fight in melee, and Bards and Minstrels have no songs: theirs
