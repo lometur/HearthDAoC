@@ -7265,6 +7265,26 @@ public sealed class UT_PlayerBotDriver
         });
     }
 
+    // #167 E fix U4, the wiring: held, no watcher scan on a think not due, and the bot stands.
+    [Test]
+    public void A_held_bot_scans_for_watchers_only_when_due_and_stands_in_Roam()
+    {
+        MethodInfo roam = typeof(PlayerBotDriver).GetMethod("Roam", BindingFlags.Static | BindingFlags.NonPublic)!;
+        FieldInfo caches = typeof(GameObject).GetField("_objectsInRadiusCaches", Hidden)!;
+        InTheField(new CountingFloors(), OnPocket, (region, zone, bot) =>
+        {
+            bool Scanned() => ((System.Collections.IDictionary)caches.GetValue(bot)!).Contains(eGameObjectType.PLAYER);
+            PlayerAt(zone, OnPocket + new Vector3(500, 0, 0), HumanClient(gm: false));
+            var state = new PlayerBotState(bot) { Anchor = BelowCamp };
+            roam.Invoke(null, [state, bot, 10_000L]);
+            Assert.That((state.CutOff.Since, Scanned()), Is.EqualTo((10_000L, true)), "held: scanned once");
+            bot.ClearObjectsInRadiusCache();
+            bot.CurrentSpeed = 191;                                                    // a fight's walk just over
+            roam.Invoke(null, [state, bot, 10_000L + PlayerBotDriver.TickMilliseconds]);
+            Assert.That((Scanned(), (int)bot.CurrentSpeed), Is.EqualTo((false, 0)), "not due: no scan; it stands");
+        });
+    }
+
     // #167 E fix U4, the wiring: RecoverIfStuck's teleport after 15 minutes with no progress waits likewise. A human by
     // the anchor (out of the bot's sight): due, the bot stays, and each next check (ProgressCheckMilliseconds) tries
     // again; the human gone, the next check teleports it. A roam meanwhile is progress, as at cb121ac (tested above).
@@ -7283,6 +7303,20 @@ public sealed class UT_PlayerBotDriver
             Assert.That(recover.Invoke(null, [state, bot, 10_000L + 101 * PlayerBotDriver.ProgressCheckMilliseconds]),
                 Is.True, "the next check");
             Assert.That(new Vector3(bot.X, bot.Y, bot.Z), Is.EqualTo(FarAnchor), "no one in sight: teleported");
+        });
+    }
+
+    // #167 E fix U4, the wiring: RecoverIfStuck scans for watchers only when its teleport is due (15 minutes stuck).
+    [Test]
+    public void The_15_minute_check_scans_for_watchers_only_when_due()
+    {
+        MethodInfo recover = typeof(PlayerBotDriver).GetMethod("RecoverIfStuck", BindingFlags.Static | BindingFlags.NonPublic)!;
+        FieldInfo caches = typeof(GameObject).GetField("_objectsInRadiusCaches", Hidden)!;
+        InTheField(new SplitFloorMesh(), OnPocket, (region, zone, bot) =>
+        {
+            var state = new PlayerBotState(bot) { Anchor = BelowCamp, ProgressPosition = OnPocket, LastProgressTick = 10_000 };
+            recover.Invoke(null, [state, bot, 20_000L]);
+            Assert.That(((System.Collections.IDictionary)caches.GetValue(bot)!).Contains(eGameObjectType.PLAYER), Is.False);
         });
     }
 }
