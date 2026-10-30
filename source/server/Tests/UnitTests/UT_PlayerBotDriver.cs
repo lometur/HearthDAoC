@@ -7142,6 +7142,17 @@ public sealed class UT_PlayerBotDriver
         });
     }
 
+    // #167 E fix U4: in sight is within VISIBILITY_DISTANCE (6,000) of where the bot stands or of its anchor, no less.
+    [TestCase(5_900, false, true)] [TestCase(6_100, false, false)]
+    [TestCase(5_900, true, true)] [TestCase(6_100, true, false)]
+    public void A_teleport_back_is_seen_within_sight_range_of_the_bot_or_its_anchor(int off, bool byAnchor, bool seen) =>
+        InTheField(new SplitFloorMesh(), OnPocket, (region, zone, bot) =>
+        {
+            PlayerAt(zone, byAnchor ? FarAnchor - new Vector3(off, 0, 0) : OnPocket + new Vector3(off, 0, 0),
+                HumanClient(gm: false));
+            Assert.That(PlayerBotDriver.SeenByHuman(bot, region, FarAnchor), Is.EqualTo(seen));
+        });
+
     // #167 E fix U4: a cut-off bot held for its teleport back (Roam's HoldsCutOff) checks at most once every
     // WatchCheckMilliseconds whether it may go (TeleportsNow): only with no real player in sight (seen, read only when
     // due), never in a fight (no check then, still due, so the first think out of it checks at once, as
