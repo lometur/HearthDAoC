@@ -263,8 +263,9 @@ Playing:
     bot-hour at their camps.
   - Some bots die again and again at one camp: a Nightshade 5 times in one zone, a Paladin 5 times at one goblin
     camp.
-  - A bot that steps onto a piece of navmesh with no path back to its camp is moved back there (`CUTOFF`). One whose
-    camp is itself on such a piece is pulled back onto it.
+  - A bot that steps onto a piece of navmesh with no path back to its camp is teleported back there (`CUTOFF`), never
+    in a fight or in sight of a real player. The root cause, a step onto a patch of navmesh with no path back, is
+    #188. One whose camp is itself on such a piece is pulled back onto it.
   - Walks don't look ahead for monsters on the route.
 - **Resting:** about half their time: 52.7% over the two legs, against 50.7% on v0.37b-hearth.12 (time-weighted).
   Most of it is the real cost of player regeneration. Part of the rise is time no longer spent dead or walking back
@@ -437,13 +438,17 @@ Known gaps:
   nearly every think, about 4 times a second. In another run a Blademaster in Domnann stepped onto a small piece of
   navmesh cut off from the rest, with nothing to hunt on it, and its roam was blocked as often until the run ended.
   Now a blocked roam checks, at most every 30 seconds, whether a path leads from where the bot stands to its camp's
-  centre. With none, and the bot not in combat, it is moved back there at once (`CUTOFF`), as after 15 minutes with no
-  progress; in combat the check waits for its next blocked roam. Where no check can tell (no navmesh by the bot or by
-  the centre, or the centre in another zone), the bot stays. Neither a lever spot bot nor a bot on a task is moved.
-  Until the move, a monster below may still be picked, and its walk blocked, once every 30 seconds. The one weak case:
-  a camp's centre that is itself on a cut-off piece pulls the bot back onto that piece each time it gets off it (not
-  seen in 12 legs). How the bot got onto the pocket is open (likely a short direct step there). A GameBot's target and
-  camp choice is part of the parity work (#167).
+  centre. With none, and the bot not in combat, it is teleported back there (`CUTOFF`), as after 15 minutes with no
+  progress; in combat the check waits for its next blocked roam. Neither teleport ever happens in a fight or in sight
+  of a real player: while a human player (a GM too; player bots don't count) is within sight range (6,000 units) of
+  where the bot stands or of the centre it would land on, the bot waits. A cut-off bot waits where it stands and
+  starts no roam (it still rests, defends itself and fights what it picks), and checks again every 5 seconds; the
+  15-minute rule checks again at its next check, 10 seconds on, and a move or XP meanwhile still counts as progress.
+  Where no check can tell (no navmesh by the bot or by the centre, or the centre in another zone), the bot stays.
+  Neither a lever spot bot nor a bot on a task is teleported. Until the teleport, a monster below may still be picked,
+  and its walk blocked, once every 30 seconds. The one weak case: a camp's centre that is itself on a cut-off piece
+  pulls the bot back onto that piece each time it gets off it (not seen in 12 legs). The root cause, a step onto a
+  patch of navmesh with no path back, is #188. A GameBot's target and camp choice is part of the parity work (#167).
 - A Tir na Nog bot stalled at one spot (21263, 35215) in most runs, though the same step replayed offline walks on
   (same navmesh, same Detour library). It is likely the polygon-edge case above: the log rounds the spot, and starts a
   few hundredths of a unit apart can differ there. In the last four runs none stalled there; one stalled once beside
@@ -540,9 +545,10 @@ All start `PLAYER_BOT_`:
   that were blocked before it sat (3 at most), and `inReach=` (1: it sat within an aggressive monster's reach, or a
   recent kill's spawn spot's, as it read them before the walk), then `end=`, its endurance when it sat;
 - `FLOOR_STEP`: a step onto the nearest floor, with where from and to and why;
-- `CUTOFF`: a blocked roam found no path from where the bot stands to its camp's centre, and the bot is moved back
-  there: `at=`, where it stood, `anchor=`, the centre, and `distance=` between them (`DRIVER`'s `stuck=` counts these
-  moves with those after 15 minutes with no progress);
+- `CUTOFF`: a blocked roam found no path from where the bot stands to its camp's centre, and the bot is teleported
+  there: `at=`, where it stood, `anchor=`, the centre, `distance=` between them, and `waited=`, the seconds it was held
+  for a real player in sight or a fight (0: none). `DRIVER`'s `stuck=` counts these teleports with those after 15
+  minutes with no progress, which have no line of their own;
 - `REPLAN`: a stalled walk planned again, with where, the goal, the count in that walk and the stall's first step;
 - `ERRAND`: the quest bot's steps;
 - `SPOT`, `KIT`, `RETRAIN`: start spots and level-matched bots; `TALLY`, every few minutes, a line per bot.

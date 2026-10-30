@@ -106,6 +106,10 @@ public sealed class PlayerBotState
     public long RoamingSince, NextIdleLine, NextRelocateTick; // no target reached since: PLAYER_BOT_IDLE, PLAYER_BOT_RELOCATE
     public long NextAnchorCheckTick;                             // #167 E fix U3: a blocked roam's next corridor test to its
                                                                  //   anchor (CutOffFromAnchor)
+    public (long Since, Vector3 Anchor) CutOff;                  // #167 E fix U4: found cut off from this anchor and
+    public long NextWatchCheckTick;                              //   held since (0: not held) for its teleport back,
+                                                                 //   and the hold's next check (HoldsCutOff,
+                                                                 //   TeleportsNow)
     public readonly HashSet<GameNPC> RelocateRejected = new(); // no corridor to them: not checked again
     public long CappedSince;                                     // DEATHS.md A4: the first search that passed monsters over
     public ConColor? SafestPassedOver;                           //   for the cap and found none (CappedClock), and the
@@ -313,6 +317,11 @@ public static class PlayerBotDriver
     public const int RelocateCandidates = 5;                 // corridor checks per try
     public const int AnchorCheckMilliseconds = 30_000;       // #167 E fix U3: a blocked roam tests the corridor to its
                                                              //   anchor at most this often (CutOffFromAnchor; inf.)
+    public const int WatchCheckMilliseconds = 5_000;         // #167 E fix U4: a cut-off bot held for a real player in
+                                                             //   sight checks again this often (TeleportsNow; inf.): a
+                                                             //   human at run speed (191) covers under 1,000 of the
+                                                             //   6,000 units' sight in it; two player scans every 5 s
+                                                             //   replace about 4 blocked roams a second (~5 ms each)
     public const int NearWalk = 10_000;                      // #167 E W1: a plan after a death looks this near the bot
                                                              //   first (st-deathsD2/D2b: after-death plans of 10k+ died
                                                              //   first 27 of 72, under 10k 13 of 148)
@@ -4051,11 +4060,13 @@ public static class PlayerBotDriver
     }
 
     // APP:474-500, plus the leash. #167 E fix U3: a blocked walk on a leash the bot may move (CanRelocate: no lever spot
-    // bot), out of combat, with no corridor from where it stands to its anchor (CutOffFromAnchor) moves the bot back
-    // there at once (MoveBack, PLAYER_BOT_CUTOFF); from where it stands after the walk, as a floor step may have moved it
-    // (TryFloorStep).
+    // bot), out of combat, with no corridor from where it stands to its anchor (CutOffFromAnchor) teleports the bot
+    // back there (MoveBack, PLAYER_BOT_CUTOFF); from where it stands after the walk, as a floor step may have moved it
+    // (TryFloorStep). #167 E fix U4: at once only with no real player in sight; else the bot is held, with no walk,
+    // until none is (HoldsCutOff).
     private static void Roam(PlayerBotState state, GamePlayer player, long now)
     {
+        if (HoldsCutOff(state, player, now)) return;
         Vector3 here = new(player.X, player.Y, player.Z);
         bool leashed = Leashed(state, player);
         if (leashed && Vector3.Distance(here, state.Anchor) > LeashRadius)
@@ -4072,11 +4083,8 @@ public static class PlayerBotDriver
             if (CutOffFromAnchor(state, leashed && CanRelocate(state, player), player.InCombat, now,
                     () => AnchorReachable(PathfindingProvider.Instance, player.CurrentRegion, at, anchor)))
             {
-                if (Log.IsInfoEnabled)
-                    Log.Info($"PLAYER_BOT_CUTOFF bot={player.Name} level={player.Level} at=({at.X:0},{at.Y:0},{at.Z:0}) " +
-                             $"anchor=({anchor.X:0},{anchor.Y:0},{anchor.Z:0}) distance={(int)Vector3.Distance(anchor, at)} " +
-                             $"zone={player.CurrentZone?.ID}");
-                MoveBack(state, player, now);
+                (state.CutOff, state.NextWatchCheckTick) = ((now, anchor), now);   // #167 E fix U4: checked at once
+                HoldsCutOff(state, player, now);
                 return;
             }
         }
@@ -4084,12 +4092,41 @@ public static class PlayerBotDriver
             state.RoamDestination = null;
     }
 
+    // #167 E fix U4: a bot found cut off from its anchor (Roam, CutOffFromAnchor) is held where it stands until its
+    // teleport back may go (TeleportsNow: out of a fight, no real player in sight, SeenByHuman in its region, the
+    // anchor's: Leashed), then PLAYER_BOT_CUTOFF, waited= the seconds held (0: at once), and MoveBack. Held, it stands
+    // and starts no roam walk: Roam's blocked walks were the cost (about 4 a second, ~5 ms each, U3); a rest,
+    // self-defence and the pick's fights go on as before (Think's steps 12, 14 and 16; a walk to a monster it can't
+    // reach is blocked once and passes it over 30 s, U1). The hold ends with its anchor moved (a camp planned,
+    // PlanCamp; a replan's or a task's end) or off its leash: it roams again. True while held, or teleported.
+    private static bool HoldsCutOff(PlayerBotState state, GamePlayer player, long now)
+    {
+        if (state.CutOff.Since == 0) return false;
+        if (state.CutOff.Anchor != state.Anchor || !Leashed(state, player))
+        {
+            state.CutOff = default;
+            return false;
+        }
+        state.Mover.Stop(now);
+        state.Activity = PlayerBotActivity.Roaming;
+        if (!TeleportsNow(state, player.InCombat, now, () => SeenByHuman(player, player.CurrentRegion, state.Anchor)))
+            return true;
+        Vector3 anchor = state.Anchor, at = new(player.X, player.Y, player.Z);
+        if (Log.IsInfoEnabled)
+            Log.Info($"PLAYER_BOT_CUTOFF bot={player.Name} level={player.Level} at=({at.X:0},{at.Y:0},{at.Z:0}) " +
+                     $"anchor=({anchor.X:0},{anchor.Y:0},{anchor.Z:0}) distance={(int)Vector3.Distance(anchor, at)} " +
+                     $"zone={player.CurrentZone?.ID} waited={(now - state.CutOff.Since) / 1000}");
+        MoveBack(state, player, now);
+        return true;
+    }
+
     /// <summary>#167 E fix U3: a roam walk blocked (Roam) while the bot is on a leash it may move (leashed: no task, in its
     /// anchor's region, no lever spot bot, CanRelocate). At most once every AnchorCheckMilliseconds it tests whether a
     /// corridor leads from where the bot stands to its anchor (anchorReachable, read only when due); true with none, and
-    /// Roam moves the bot back there at once (MoveBack), as RecoverIfStuck does after 15 minutes with no progress. Never
-    /// in combat (inCombat, RecoverIfStuck's rule: a hitter it can't reach, U1, leaves it no target, and the move could
-    /// land it in the camp beside that hitter): no test then, so the next blocked roam out of combat tests at once.
+    /// Roam teleports the bot back there (MoveBack; U4: only with no real player in sight, HoldsCutOff), as
+    /// RecoverIfStuck does after 15 minutes with no progress. Never in combat (inCombat, RecoverIfStuck's rule: a
+    /// hitter it can't reach, U1, leaves it no target, and the move could land it in the camp beside that hitter): no
+    /// test then, so the next blocked roam out of combat tests at once.
     /// st-deathsE2b, Pbotmaada on a pocket of Muspelheim's navmesh above its camp: no corridor led to its anchor from any
     /// spot on the pocket, so every think with no target blocked a roam toward it (about 4 a second, about 5 ms each),
     /// and its kills on the pocket kept stopping the idle clock (SettleIdleClock, SettleIdleClockAtTargetEnd) and gave
@@ -4123,6 +4160,37 @@ public static class PlayerBotDriver
             nav.GetClosestPoint(zone, here, 64, 64, 128, nav.DefaultFilters) == null ||
             nav.GetClosestPoint(zone, anchor, 128, 128, 256, nav.DefaultFilters) == null ||
             PlayerTravelPath.TryBuildCorridor(nav, zone, here, anchor, out _);
+    }
+
+    /// <summary>#167 E fix U4, the owner's rule (2026-10-30): a player bot never visibly vanishes or appears in front
+    /// of a real player. A cut-off bot held for its teleport back (HoldsCutOff) checks at most once every
+    /// WatchCheckMilliseconds whether it may go: never in a fight (inCombat: no check, still due, so the first think
+    /// out of it checks at once; CutOffFromAnchor's rule, the move could land it in the camp beside its hitter), and
+    /// only with no real player in sight (seen, SeenByHuman: read only then, never every think).</summary>
+    public static bool TeleportsNow(PlayerBotState state, bool inCombat, long now, Func<bool> seen)
+    {
+        if (inCombat || now < state.NextWatchCheckTick) return false;
+        state.NextWatchCheckTick = now + WatchCheckMilliseconds;
+        return !seen();
+    }
+
+    /// <summary>#167 E fix U4: whether a real player could see the bot's teleport back to its anchor (MoveBack): a
+    /// human within VISIBILITY_DISTANCE of where the bot stands, or of the anchor it lands on in anchorRegion (the
+    /// anchor's). A human is any GamePlayer whose client is no IPlayerBotClient, the driver's own test (Start: never
+    /// drive a human's character; PlayerBotWake.ClientUpdateWakes): a GM or admin is one too. Player bots, the bot
+    /// itself among them, are no watchers. Two radius scans: the bot's (its own list, cached 500 ms,
+    /// GameObject.cs:937-985, as CountNeighbours's) and one at the anchor.</summary>
+    public static bool SeenByHuman(GamePlayer bot, Region anchorRegion, Vector3 anchor)
+    {
+        foreach (GamePlayer other in bot.GetPlayersInRadius(WorldMgr.VISIBILITY_DISTANCE))
+            if (other.Client is not IPlayerBotClient) return true;
+        if (anchorRegion == null) return false;
+        List<GamePlayer> byAnchor = GameLoop.GetListForTick<GamePlayer>();               // empty, as GetInRadius wants
+        anchorRegion.GetInRadius(new Point3D(anchor.X, anchor.Y, anchor.Z), eGameObjectType.PLAYER,
+            WorldMgr.VISIBILITY_DISTANCE, byAnchor);
+        foreach (GamePlayer other in byAnchor)
+            if (other.Client is not IPlayerBotClient) return true;
+        return false;
     }
 
     // The rerun of run 1: from level 4 the bots were blocked 18-20 times a minute with no trace of where or why. One line
@@ -5172,7 +5240,9 @@ public static class PlayerBotDriver
     }
 
     // APP:585-624, changed: every 10 s, no inventory count, no saves; after 15 minutes with no progress, back to the
-    // anchor in the same region (the pilot moved to the capital in another region, which needs re-entry).
+    // anchor in the same region (the pilot moved to the capital in another region, which needs re-entry). #167 E fix
+    // U4: a teleport, so only with no real player in sight of the bot or of its anchor (SeenByHuman, read only when
+    // due); with one, tried again at the next check, a move or XP meanwhile still progress (as at cb121ac).
     private static bool RecoverIfStuck(PlayerBotState state, GamePlayer player, long now)
     {
         if (now < state.NextProgressCheckTick) return false;
@@ -5188,15 +5258,19 @@ public static class PlayerBotDriver
             state.LastProgressTick = now;
             return false;
         }
-        if (now - state.LastProgressTick < StuckMilliseconds || player.CurrentRegionID != state.AnchorRegion) return false;
+        if (now - state.LastProgressTick < StuckMilliseconds || player.CurrentRegionID != state.AnchorRegion ||
+            SeenByHuman(player, player.CurrentRegion, state.Anchor))                     // the anchor's region (above)
+            return false;
         MoveBack(state, player, now);
         return true;
     }
 
-    // RecoverIfStuck's move back to the anchor, in its region; #167 E fix U3: also a blocked roam's with no corridor to
-    // it (Roam, CutOffFromAnchor). Both count in the DRIVER line's stuck=.
+    // RecoverIfStuck's teleport back to the anchor, in its region; #167 E fix U3: also a blocked roam's with no
+    // corridor to it (Roam, CutOffFromAnchor; U4: the hold for it over, HoldsCutOff). Both count in the DRIVER line's
+    // stuck=, and both go only with no real player in sight (U4, SeenByHuman).
     private static void MoveBack(PlayerBotState state, GamePlayer player, long now)
     {
+        state.CutOff = default;
         state.Mover.Stop(now);
         player.attackComponent.StopAttack();
         player.StopCurrentSpellcast();

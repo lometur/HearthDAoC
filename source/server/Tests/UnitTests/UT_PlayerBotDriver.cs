@@ -7076,4 +7076,191 @@ public sealed class UT_PlayerBotDriver
         public bool Finished => true;
         public bool Tick(PlayerBotState state, long now) => false;
     }
+
+    // --- #167 E fix U4, the owner's rule (2026-10-30): teleported back only where no real player can see it ---
+
+    // A player at at in zone, where the radius scans (GetPlayersInRadius, Region.GetInRadius) find it: a human (a
+    // GameClient, HumanClient) or a player bot (a TestPlayerBotClient). Leave takes it out of the world again.
+    private static GamePlayer PlayerAt(Zone zone, Vector3 at, GameClient client)
+    {
+        GamePlayer player = Player(client);
+        (player.X, player.Y, player.Z) = ((int)at.X, (int)at.Y, (int)at.Z);
+        player.SubZoneObject = new SubZoneObject(player);
+        var subZones = (SubZone[])typeof(Zone).GetField("_subZones", Hidden)!.GetValue(zone)!;
+        short index = (short)typeof(Zone).GetMethod("GetSubZoneIndex", Hidden)!.Invoke(zone, [(int)at.X, (int)at.Y])!;
+        subZones[index].AddObject(player.SubZoneObject.Node);
+        return player;
+    }
+
+    private static void Leave(GamePlayer player) =>
+        player.SubZoneObject.CurrentSubZone.RemoveObject(player.SubZoneObject.Node);
+
+    // A human's client; with gm, on a GM's account.
+    private static GameClient HumanClient(bool gm)
+    {
+        var client = (GameClient)RuntimeHelpers.GetUninitializedObject(typeof(GameClient));
+        if (gm)
+            typeof(GameClient).GetField("<Account>k__BackingField", Hidden)!
+                .SetValue(client, new DbAccount { PrivLevel = (uint)ePrivLevel.GM });
+        return client;
+    }
+
+    // An anchor out of sight of Pbotmaada's spot on its pocket (12,884 units off), in the same zone.
+    private static readonly Vector3 FarAnchor = new(828_000, 702_153, 8_343);
+
+    // #167 E fix U4: a teleport back to the anchor (MoveBack) is seen (SeenByHuman) by a human within
+    // VISIBILITY_DISTANCE of where the bot stands or of the anchor it lands on, in the anchor's region; a GM is a human
+    // too. Player bots are no watchers, nor is a human in another region at the same spot, nor one out of sight of
+    // both.
+    [TestCase(null, null, false, false)]                                        // no one
+    [TestCase("human", "bot", false, true)]                                     // by the bot
+    [TestCase("human", "anchor", false, true)]                                  // by the anchor, out of the bot's sight
+    [TestCase("gm", "bot", false, true)]
+    [TestCase("gm", "anchor", false, true)]
+    [TestCase("playerbot", "bot", false, false)]                                // player bots only
+    [TestCase("playerbot", "anchor", false, false)]
+    [TestCase("human", "bot", true, false)]                                     // in another region
+    [TestCase("human", "anchor", true, false)]
+    [TestCase("human", "away", false, false)]                                   // out of sight of both
+    public void A_teleport_back_is_seen_only_by_a_human_in_sight_of_the_bot_or_its_anchor(string who, string where,
+        bool otherRegion, bool seen)
+    {
+        InTheField(new SplitFloorMesh(), OnPocket, (region, zone, bot) =>
+        {
+            if (who != null)
+            {
+                Vector3 at = where switch
+                {
+                    "bot" => OnPocket + new Vector3(0, 500, 0),
+                    "anchor" => FarAnchor + new Vector3(0, 500, 0),
+                    _ => new(840_884, 690_000, 8_784),                                  // 12,153 off the bot
+                };
+                PlayerAt(otherRegion ? World(Muspelheim.X, Muspelheim.Y).Zone : zone, at,
+                    who == "playerbot" ? new TestPlayerBotClient() : HumanClient(gm: who == "gm"));
+            }
+            Assert.That(PlayerBotDriver.SeenByHuman(bot, region, FarAnchor), Is.EqualTo(seen));
+        });
+    }
+
+    // #167 E fix U4: a cut-off bot held for its teleport back (Roam's HoldsCutOff) checks at most once every
+    // WatchCheckMilliseconds whether it may go (TeleportsNow): only with no real player in sight (seen, read only when
+    // due), never in a fight (no check then, still due, so the first think out of it checks at once, as
+    // CutOffFromAnchor).
+    [Test]
+    public void A_held_bot_is_teleported_only_out_of_a_fight_and_out_of_sight_checked_every_few_seconds()
+    {
+        int checks = 0;
+        bool Now(PlayerBotState state, bool inCombat, long now, bool seen) =>
+            PlayerBotDriver.TeleportsNow(state, inCombat, now, () => { checks++; return seen; });
+        const long watch = PlayerBotDriver.WatchCheckMilliseconds;
+        var state = new PlayerBotState(Player(null)) { NextWatchCheckTick = 10_000 };
+        Assert.That((Now(state, false, 10_000, true), checks, state.NextWatchCheckTick),
+            Is.EqualTo((false, 1, 10_000 + watch)), "a human in sight: held");
+        Assert.That((Now(state, false, 10_000 + watch - 1, false), checks), Is.EqualTo((false, 1)), "not due: no check");
+        Assert.That((Now(state, true, 10_000 + watch, false), checks, state.NextWatchCheckTick),
+            Is.EqualTo((false, 1, 10_000 + watch)), "in a fight: no check, still due");
+        Assert.That((Now(state, false, 10_000 + watch + PlayerBotDriver.TickMilliseconds, false), checks),
+            Is.EqualTo((true, 2)), "out of the fight, no one in sight: checked at once, teleported");
+        var fresh = new PlayerBotState(Player(null)) { NextWatchCheckTick = 10_000 };
+        Assert.That((Now(fresh, false, 10_000, false), checks), Is.EqualTo((true, 3)), "no one in sight: at once");
+    }
+
+    // The split floors counting the corridor searches: a walk's (StepToward) and a corridor test's read one each, a
+    // watcher check none.
+    private sealed class CountingFloors : SplitFloorMesh
+    {
+        public int Paths;
+        public override PathfindingResult GetPathStraight(Zone zone, Vector3 start, Vector3 end, EDtPolyFlags[] filters,
+            Span<WrappedPathfindingNode> destination)
+        {
+            Paths++;
+            return base.GetPathStraight(zone, start, end, filters, destination);
+        }
+    }
+
+    // #167 E fix U4, the wiring: Roam itself on Pbotmaada's pocket, a human 500 units off. Its roam is blocked, no
+    // corridor leads to its anchor, and the bot is held where it stands: no teleport in the human's sight. Held, it
+    // starts no roam walk (no corridor search) on any think, and checks again only every WatchCheckMilliseconds; the
+    // human gone, a hit holds it on (no teleport in a fight), and the first think out of the fight teleports it back
+    // (MoveBack, the hold over).
+    [Test]
+    public void A_cut_off_bot_in_sight_of_a_real_player_stands_and_is_teleported_once_none_sees_it_in_Roam()
+    {
+        MethodInfo roam = typeof(PlayerBotDriver).GetMethod("Roam", BindingFlags.Static | BindingFlags.NonPublic)!;
+        FieldInfo hit = typeof(GameLiving).GetField("<LastAttackedByEnemyTickPvE>k__BackingField", Hidden)!;
+        const long watch = PlayerBotDriver.WatchCheckMilliseconds, tick = PlayerBotDriver.TickMilliseconds;
+        var mesh = new CountingFloors();
+        InTheField(mesh, OnPocket, (region, zone, bot) =>
+        {
+            void Roam(PlayerBotState state, long now) => roam.Invoke(null, [state, bot, now]);
+            Vector3 At() => new(bot.X, bot.Y, bot.Z);
+            GamePlayer human = PlayerAt(zone, OnPocket + new Vector3(500, 0, 0), HumanClient(gm: false));
+            var state = new PlayerBotState(bot) { Anchor = BelowCamp };
+            Roam(state, 10_000);
+            Assert.That(state.Mover.LastBlock, Does.StartWith("No complete walkable path"), "the walk down blocked");
+            Assert.That((At(), state.CutOff), Is.EqualTo((OnPocket, (10_000L, BelowCamp))), "cut off, in sight: held");
+            int paths = mesh.Paths;
+            for (long now = 10_000 + tick; now <= 10_000 + 3 * watch; now += tick)
+                Roam(state, now);
+            Assert.That((At(), mesh.Paths, state.NextWatchCheckTick), Is.EqualTo((OnPocket, paths, 10_000 + 4 * watch)),
+                "held 15 s: no roam walk, a check every few seconds");
+            Leave(human);
+            bot.ClearObjectsInRadiusCache();                                             // the server's lasts 500 ms
+            Roam(state, 10_000 + 3 * watch + tick);
+            Assert.That(At(), Is.EqualTo(OnPocket), "gone, not due: no check yet");
+            hit.SetValue(bot, Math.Max(1L, GameLoop.GameLoopTime));                      // hit just now
+            Roam(state, 10_000 + 4 * watch);
+            Assert.That(At(), Is.EqualTo(OnPocket), "in a fight: held on");
+            hit.SetValue(bot, 0L);                                                       // out of combat
+            Roam(state, 10_000 + 4 * watch + tick);
+            Assert.That((At(), state.CutOff.Since, mesh.Paths), Is.EqualTo((BelowCamp, 0L, paths)),
+                "out of the fight, no one in sight: teleported, no walk");
+        });
+    }
+
+    // #167 E fix U4, the wiring: a held bot whose anchor moves (a camp planned on its pocket, PlanCamp; a replan's or a
+    // task's end) is held for that anchor no more: it roams again, toward its new camp, and is not teleported there.
+    [Test]
+    public void A_held_bot_whose_anchor_moves_roams_again_in_Roam()
+    {
+        MethodInfo roam = typeof(PlayerBotDriver).GetMethod("Roam", BindingFlags.Static | BindingFlags.NonPublic)!;
+        Vector3 onPocket = new(840_700, 702_100, 8_700);
+        var mesh = new CountingFloors();
+        InTheField(mesh, OnPocket, (region, zone, bot) =>
+        {
+            GamePlayer human = PlayerAt(zone, OnPocket + new Vector3(500, 0, 0), HumanClient(gm: false));
+            var state = new PlayerBotState(bot) { Anchor = BelowCamp };
+            roam.Invoke(null, [state, bot, 10_000L]);
+            Assert.That(state.CutOff.Since, Is.EqualTo(10_000L), "held");
+            PlayerBotDriver.PlanCamp(state, onPocket, null, false, PlayerBotDriver.Outgrown);
+            Leave(human);
+            bot.ClearObjectsInRadiusCache();
+            int paths = mesh.Paths;
+            roam.Invoke(null, [state, bot, 10_000L + PlayerBotDriver.WatchCheckMilliseconds]);
+            Vector3 at = new(bot.X, bot.Y, bot.Z);
+            Assert.That((state.CutOff.Since, mesh.Paths > paths, at != onPocket && at.Z > SplitFloorMesh.Ledge),
+                Is.EqualTo((0L, true, true)), "a walk toward its new camp, no teleport");
+        });
+    }
+
+    // #167 E fix U4, the wiring: RecoverIfStuck's teleport after 15 minutes with no progress waits likewise. A human by
+    // the anchor (out of the bot's sight): due, the bot stays, and each next check (ProgressCheckMilliseconds) tries
+    // again; the human gone, the next check teleports it. A roam meanwhile is progress, as at cb121ac (tested above).
+    [Test]
+    public void Fifteen_minutes_with_no_progress_teleport_the_bot_back_only_with_no_real_player_in_sight()
+    {
+        MethodInfo recover = typeof(PlayerBotDriver).GetMethod("RecoverIfStuck", BindingFlags.Static | BindingFlags.NonPublic)!;
+        InTheField(new SplitFloorMesh(), OnPocket, (region, zone, bot) =>
+        {
+            GamePlayer human = PlayerAt(zone, FarAnchor + new Vector3(0, 500, 0), HumanClient(gm: false));
+            var state = new PlayerBotState(bot) { Anchor = FarAnchor, ProgressPosition = OnPocket };
+            Assert.That(NoGainFor15Minutes(state, bot, 10_000, () => false), Is.EqualTo((false, OnPocket, FarAnchor)),
+                "16 minutes, a human by the anchor: no teleport");
+            Leave(human);
+            bot.ClearObjectsInRadiusCache();
+            Assert.That(recover.Invoke(null, [state, bot, 10_000L + 101 * PlayerBotDriver.ProgressCheckMilliseconds]),
+                Is.True, "the next check");
+            Assert.That(new Vector3(bot.X, bot.Y, bot.Z), Is.EqualTo(FarAnchor), "no one in sight: teleported");
+        });
+    }
 }
