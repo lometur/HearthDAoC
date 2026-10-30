@@ -36,7 +36,7 @@ public sealed class PlayerBotErrandTask : IPlayerBotTask
                 {
                     if (!player.InCombat) return false;               // the driver sits (its Think step 12) until
                                                                       // Recovered: full health, the role's power
-                                                                      // stop, 60% endurance (#167 F3)
+                                                                      // stop, 80% endurance (#167 F3, E-R)
                     state.Mover.Stop(now);                            // in combat up to 10 s after the last swing
                     return true;                                      // (GameLiving.cs:31): stand, seek no fight
                 }

@@ -72,10 +72,16 @@ public static class PlayerBotKitGear
     }
 
     /// <summary>BotEquipment.SetMeleeWeapon's hand rule (BotEquipment.cs:223-235); the right hand also drops two-hand
-    /// and left-only items, as the companion rule does (:89-91).</summary>
+    /// and left-only items, as the companion rule does (:89-91), but for a hand-to-hand claw: every one is marked
+    /// left-hand capable (Hand 2), the inventory takes it in the main hand (GamePlayerInventory.cs:783-797), and a
+    /// GameBot Savage wears one there (SavageBotWeaponPolicy, Savage.cs:157-163). #167 E (CY1): Midgard has right-hand
+    /// fist weapons at a few levels only (5, 30, 40, 42, 45, 49-51), so 4 Hand-to-Hand Savages at 28-39 kept the
+    /// starter axe (missing=1) with no axe spec and no style: 12 deaths in 1.9 bot-hours over st-deathsD2 and D2b. At
+    /// the levels with right-hand fist weapons the right hand now picks among those and the claws.</summary>
     public static bool FitsHand(DbItemTemplate t, eInventorySlot slot, eWeaponDamageType damage) => slot switch
     {
-        eInventorySlot.RightHandWeapon => t.Item_Type is Slot.RIGHTHAND or Slot.LEFTHAND && t.Hand != 1 && t.Hand != 2,
+        eInventorySlot.RightHandWeapon => t.Item_Type is Slot.RIGHTHAND or Slot.LEFTHAND && t.Hand != 1 &&
+            (t.Hand != 2 || t.Object_Type == (int)eObjectType.HandToHand),
         eInventorySlot.LeftHandWeapon => t.Item_Type == Slot.LEFTHAND,
         eInventorySlot.TwoHandWeapon => t.Item_Type == Slot.TWOHAND && (damage == 0 || t.Type_Damage == (int)damage),
         _ => false,

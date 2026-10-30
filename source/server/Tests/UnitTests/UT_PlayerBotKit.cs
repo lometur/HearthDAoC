@@ -224,6 +224,25 @@ public sealed class UT_PlayerBotKit
         Assert.That(PlayerBotKit.PlayerLines(eSpecType.DarkSpirit, dark), Is.EqualTo(dark));   // a minor line keeps its 0
     }
 
+    // #167 E (CY2): every Warden plays the Battle Warden plan, its weapon line at 0.7 (Warden.cs:44-50), whatever the
+    // GameBot's choice for the seed (ChoosePersistentSpecialization); other classes keep theirs.
+    [Test]
+    public void A_warden_plays_the_battle_warden_plan()
+    {
+        int other = 0;
+        for (long seed = 1; seed <= 60; seed++)
+        {
+            if (BotSpec.ChoosePersistentSpecialization(eCharacterClass.Warden, seed) != eSpecType.BattleWarden) other++;
+            PlayerBotKitPlan kit = PlayerBotKit.Plan(new PlayerBotBuild(33, eCharacterClass.Warden, eRace.Celt), seed);
+            Assert.That((kit.Choice, kit.Spec.SpecType), Is.EqualTo((eSpecType.BattleWarden, eSpecType.BattleWarden)), $"seed {seed}");
+            BotSpecLine weapon = kit.Lines.Single(l => l.Spec == SkillBase.ObjectTypeToSpec(kit.Spec.WeaponOneType));
+            Assert.That((weapon.SpecCap, weapon.levelRatio), Is.EqualTo((39u, 0.7f)), $"seed {seed}");
+        }
+        Assert.That(other, Is.GreaterThan(0), "a seed the GameBot gives another Warden plan");
+        Assert.That(PlayerBotKit.PlayerChoice(eCharacterClass.Druid, eSpecType.NurtureDruid), Is.EqualTo(eSpecType.NurtureDruid));
+        Assert.That(PlayerBotKit.PlayerChoice(eCharacterClass.Warden, eSpecType.RegrowthWarden), Is.EqualTo(eSpecType.BattleWarden));
+    }
+
     // At 47 the half levels' points (#167 F13) raise Cold to 16 (it was 1, nothing left over).
     [TestCase(30, 30, 1, 0)] [TestCase(47, 47, 16, 14)]
     public void A_fire_wizard_spends_as_a_gamebot_trained_level_by_level(int level, int fire, int cold, int unspent)
@@ -468,6 +487,27 @@ public sealed class UT_PlayerBotKit
         Assert.That(PlayerBotKitGear.FitsClass(Item("g", 30, Slot.TORSO, eObjectType.Plate, classes: "2;1"), 2, 30), Is.True);
         Assert.That(PlayerBotKitGear.FitsClass(Item("h", 30, Slot.TORSO, eObjectType.Plate, classes: "1"), 2, 30), Is.False);
         Assert.That(PlayerBotKitGear.FitsClass(Item("i", 30, Slot.TORSO, eObjectType.Plate, requirement: 35), 2, 30), Is.False);
+    }
+
+    // #167 E (CY1): a hand-to-hand claw (left-hand capable, Hand 2, as Midgard's 240 claws are) fits the right hand
+    // too, as a GameBot Savage wears one (SavageBotWeaponPolicy); any other Hand-2 item, or a Hand-1 one, still
+    // doesn't. With claws only, a Hand-to-Hand Savage's plan finds a weapon for both hands at every level.
+    [Test]
+    public void A_savage_wears_a_claw_in_its_right_hand()
+    {
+        var R = eInventorySlot.RightHandWeapon; var L = eInventorySlot.LeftHandWeapon;
+        Assert.That(PlayerBotKitGear.FitsHand(Item("claw", 30, Slot.LEFTHAND, eObjectType.HandToHand, hand: 2), R, 0), Is.True);
+        Assert.That(PlayerBotKitGear.FitsHand(Item("axe", 30, Slot.LEFTHAND, eObjectType.LeftAxe, hand: 2), R, 0), Is.False);
+        Assert.That(PlayerBotKitGear.FitsHand(Item("greave", 30, Slot.LEFTHAND, eObjectType.HandToHand, hand: 1), R, 0), Is.False);
+        IReadOnlyList<PlayerBotWeapon> plan = PlayerBotKitGear.WeaponPlan(Spec(eSpecType.DualWield, eObjectType.HandToHand),
+            eCharacterClass.Savage, eClassType.PureTank);
+        Assert.That(plan, Is.EqualTo(new[] { new PlayerBotWeapon(eObjectType.HandToHand, R), new PlayerBotWeapon(eObjectType.HandToHand, L) }));
+        DbItemTemplate[] claws = Enumerable.Range(1, 50)
+            .Select(l => Item("claw" + l, l, Slot.LEFTHAND, eObjectType.HandToHand, hand: 2)).ToArray();
+        for (int level = 20; level <= 50; level++)
+            foreach (PlayerBotWeapon w in plan)
+                Assert.That(PlayerBotKitGear.Pick(claws.Where(c => PlayerBotKitGear.FitsHand(c, w.Slot, w.Damage)), level, 7, (int)w.Slot),
+                    Is.Not.Null, $"level {level} {w.Slot}");
     }
 
     private static BotSpec Spec(eSpecType type, eObjectType w1, eObjectType w2 = 0, bool twoHanded = false, eWeaponDamageType damage = 0) =>

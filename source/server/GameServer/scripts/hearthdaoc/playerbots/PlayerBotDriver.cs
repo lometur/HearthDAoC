@@ -41,6 +41,9 @@ public enum PlayerBotEngageStep { Wait, Add, PetLeads, Caster }
 /// <summary>What the bot does in reach of its target this think (PlayerBotDriver.CombatAction, #167 F6).</summary>
 public enum PlayerBotCombatAction { Cast, WaitToCast, Quickcast, Swing }
 
+/// <summary>An Animist's step before a pull (PlayerBotDriver.AnimistStepFor, #167 E CY3).</summary>
+public enum PlayerBotAnimistStep { Pull, Walk, Replant, Wait, Skip }
+
 /// <summary>A think's walk (#167 FIGHT and DEATH walk=, F12d's field; PlayerBotDriver.NextWalk): to its target or an
 /// Animist's stand (Hunt), to its anchor (Anchor) or a roam point (Roam), out of reach after a release (Clear), to its
 /// rest spot (Rest), a caster's step back (Kite), a break-off's run (BreakOff), the walk out toward the camp planned
@@ -75,6 +78,7 @@ public sealed class PlayerBotState
         LastLevel = player.Level;
         LastExperience = player.Experience;
         StartExperience = LastExperience;
+        SoloSteps = player.CharacterClass is ICharacterClass cls ? PlayerBotDriver.SoloSteps(cls.ID) : 0;   // #167 E CY4
     }
     public GamePlayer Player { get; }
     public PlayerBotPathMover Mover { get; }
@@ -85,14 +89,28 @@ public sealed class PlayerBotState
     public volatile bool Stopped;
     public volatile PlayerBotActivity Activity;      // read by the report thread
     public volatile int NearPlayerBots, NearGamebots;
-    public GameLiving Target, Unreachable;
+    public GameLiving Target;
+    public readonly List<(GameLiving Npc, long Until)> BlindSkips = new();   // #167 E M2, R1: the targets dropped for want
+                                                                 //   of sight (or CY3's skip), each passed over by the
+                                                                 //   pick only until its own time (MarkBlind)
+    public readonly List<(GameLiving Npc, long Until)> Unreachables = new();   // #167 E U1: the monsters a walk found no
+                                                                 //   path to, each passed over by the pick and by
+                                                                 //   self-defence until its own time (LeaveUnreachable)
     public bool Engaged;
     public Spell Spell;
     public SpellLine SpellLine;
     public Vector3? RoamDestination;
     public ushort LastRegion;
     public int LastLevel, DeathSafetySteps, ErrorsLogged;
+    public int SoloSteps;                                        // #167 E CY4: the class's floor under the death steps
     public long RoamingSince, NextIdleLine, NextRelocateTick; // no target reached since: PLAYER_BOT_IDLE, PLAYER_BOT_RELOCATE
+    public long NextAnchorCheckTick;                             // #167 E fix U3: a blocked roam's next corridor test to its
+                                                                 //   anchor (CutOffFromAnchor)
+    public (long Since, Vector3 Anchor, Vector3 At) CutOff;      // #167 E fix U4: found cut off from this anchor and
+    public long NextWatchCheckTick;                              //   held since (0: not held) for its teleport back,
+                                                                 //   where it stood at its last think held (a corridor
+                                                                 //   test only from a new spot), and the hold's next
+                                                                 //   check (HoldsCutOff, TeleportsNow)
     public readonly HashSet<GameNPC> RelocateRejected = new(); // no corridor to them: not checked again
     public long CappedSince;                                     // DEATHS.md A4: the first search that passed monsters over
     public ConColor? SafestPassedOver;                           //   for the cap and found none (CappedClock), and the
@@ -119,7 +137,7 @@ public sealed class PlayerBotState
     public int Kills, Deaths, CastFailures, Retrains;            // PLAYER_BOT_TALLY: this bot's own, since login,
     public long Gained, StartExperience;                         //   its experience gained, and at login
     public long NetExperience => Interlocked.Read(ref LastExperience) - StartExperience;   // REVIEW-FIXES 9: losses too
-    public long LastExperience, UnreachableUntil, NextTargetRefreshTick, NextLootTick, NextLosTick, NextStyleTick,
+    public long LastExperience, NextTargetRefreshTick, NextLootTick, NextLosTick, NextStyleTick,
         NextCombatChoiceTick, NextNeighbourCountTick, NextProgressCheckTick, LastProgressTick, ProgressExperience, ProgressMoney;
     public Vector3 ProgressPosition;
     public bool DeathRecorded;
@@ -129,6 +147,12 @@ public sealed class PlayerBotState
     public byte EngageHealth, EngageMana;                        //   fight's first think in reach and the bot's health and
     public int FightAdds, Swings, NotVisible, FightCasts;        //   power then, its most attackers, swings and casts,
     public AttackData LastSeenSwing;                             //   the swing counted last (CountSwing), its target
+    public long BlindSince;                                      // #167 E M2: its target out of sight since (0: in sight,
+    public int FightSight;                                       //   BlindClock), the sight checks a hit in contact
+    public bool FightBlind;                                      //   answered (FIGHT sight=) and a drop for it (blind=1)
+    public int BlindStop, FightBlindSteps;                       // #167 E R1: the stop it steps in to while its target is
+                                                                 //   out of sight (0: none; BlindStepStop), and the steps
+                                                                 //   (FIGHT blindSteps=)
     public bool FromDefence;                                     //   hitting the bot when picked (PLAYER_BOT_FIGHT);
     public int LifeKills, LifeRests;                             //   this life's fights won and sits, its last kill,
     public long LastKillTick;                                    //   and the killer the Dying event names (OnBotDying)
@@ -149,7 +173,15 @@ public sealed class PlayerBotState
     public int ControlTries;                                     //   the point it steps back to (KiteStep)
     public Vector3? KiteGoal;
     public long NextKiteTick;
+    public Dictionary<Spell, DOL.GS.Spells.SpellHandler> NukeHandlers = new();   // #167 E C1: each nuke's own handler
+    public bool HasStun, HasRoot;                                // #167 E C1: a stun or a root among its controls (DotFits,
+                                                                 //   KeepsRootCastable), at NukesLevel
+    public int FightDots;                                        // #167 E C1: FIGHT and DEATH dots=, its DoT casts
+    public bool KillingQuickcast, FightKillingQuickcast;         // #167 E C2b: Engage's, and FIGHT qcKill=; whether the
+    public bool OneNukeKills;                                    //   nuke chosen at the last cast choice kills at once
+    public int FightTargetMezzes;                                // #167 E C4: FIGHT and DEATH ctlMez=, its mezzes at the target
     public long NextAnimistStandTick;                            // #167 F10b: after a blocked walk to its stand
+    public long TurretWaitSince;                                 // #167 E CY3: a pull held for a turret it can't plant yet
     public int FightControls, FightKites;                        // #167 FIGHT ctl= and kites=
     public int FightCtlBroken;                                   // #167 C3: FIGHT ctlBroken=, from the target's root or mez
     public (int Range, int Clear, int Mesh, int Fit) FightKiteNone;   // #167 D8: FIGHT kiteNone=, step backs with no point
@@ -194,11 +226,19 @@ public sealed class PlayerBotState
     public readonly List<Vector3> BreakOffBlocked = new();       //   (NextBreakOffPoint), and its start's health,
     public byte BreakOffHealth, BreakOffEndurance;               //   endurance and attackers (BREAKOFF)
     public int BreakOffAttackers;
+    public long BreakOffSprintOffAt = -1;                        // #167 E-S: BREAKOFF sprintOff=, ms into the run (-1: none)
     public double BreakOffRate;                                  // #167 BREAKOFF rate=: its loss rate then (HealthRate)
     public string BreakOffWhy;                                   // #167 D1: BREAKOFF why= (BreakOffWhy), Spent's end
     public bool FollowsAddKill;                                  // #167 D2: the fight after an add kill (OpenFight), the
     public long CaughtSince;                                     //   caught clock (InReachSince), and a refusal logged in
     public bool BreakOffRefused;                                 //   this fight (BREAKOFF outcome=refused, once a fight)
+    public long NextBreakOffRetryTick;                           // #167 E T1: with no point, the next try (0: at once),
+    public int BreakOffHolds;                                    //   the tries that found none while it held (BREAKOFF
+    public long BreakOffHoldSince;                               //   holds=), the hold's start (0: none, HitWhileHolding)
+    public string BreakOffHoldWhy, BreakOffTurn;                 //   and why it began (nopoint, blocked), why it turned
+    public int BreakOffSpeed = -1, BreakOffChaserSpeed = -1;     //   (turn=), and its run speed and the fastest chaser's
+                                                                 //   when it began (speed=, chaserSpeed=; -1: not read)
+    public bool BreakOffRunsOn;                                  // #167 E T2b: running on to its point past Done (RunsOnToClear)
     public bool BackPending, BackOwed, BackMoved;                // #167 C1: PLAYER_BOT_BACK, from a release to its first
     public long BackStepOutMs, BackHoldMs, BackWalkMs;           //   fight: the line due, the replan owed and a camp planned
                                                                  //   since, and the time stepping out, held and walking;
@@ -217,6 +257,7 @@ public sealed class PlayerBotState
     public int RestRespawns;                                     //   spots the rest spot was read against (WalksToRestSpot)
     public int SitBlocked;                                       // #167 D10: REST blocked= and inReach= as it sat (Rest)
     public bool SitInReach;
+    public byte SitEndurance;                                    // #167 E-R: REST end=, its endurance as it sat
     public PlayerBotWalk Walk, LastWalk, FightWalk;              // #167 st-deathsD's FIGHT and DEATH fields: walk=, this
     public readonly Queue<(long Tick, byte Health)> HealthSamples = new();   //   think's walk, the last think's (NextWalk) and the
     public long FightHeldMs;                                     //   fight's (OpenFight); rate=, the last 3 s of thinks'
@@ -224,6 +265,14 @@ public sealed class PlayerBotState
     public (Spell Spell, GameLiving Target, long At) PendingControl;   //   (Hold); ctlLanded= and ctlFailed=, and the control
     public int FightHpAtReach = -1, FightTargetHpAtReach = -1;   //   cast awaited (SettleControl); hpAtReach= and
     public int WouldBreakHp = -1;                                //   tHpAtReach= (HitNow) and wouldBreak= (ProjectedBreak)
+    public int FightRaceLeft = PlayerBotDriver.NoRace;           // #167 E-L: FIGHT and DEATH raceLeft= (TrackFight)
+    public int Reserve;                                          // #167 E-R: the endurance a close fight keeps for a run
+    public long NextReserveTick;                                 //   (ReserveNow, read once a StyleMilliseconds); FIGHT
+    public byte EngageEndurance;                                 //   endStart= (Engage's opening), styleHeld= and castHeld=
+    public int FightStylesHeld, FightCastsHeld;                  //   (the style choices and the thinks it held one back)
+    public int RunNeed;                                          // #167 E fix R2: read with the reserve, the run's need
+    public bool TargetAlone;                                     //   (EscapeEndurance) and no monster on the bot but its
+                                                                 //   target (HoldingReserve)
     public int FightBuffHitters;                                 // #167 D12: the live monsters on the bot when the fight's
                                                                  //   buff was last weighed (FightBuffCheck)
 }
@@ -253,6 +302,10 @@ public static class PlayerBotDriver
     public const int RoamRadius = 1400;                      // APP:483
     public const int LeashRadius = 4000;                     // stay in the start area (fair runs)
     public const int LosRefreshMilliseconds = 1000;
+    public const int BlindDropMilliseconds = 5_000;          // #167 E M2: a target out of sight this long that fights
+                                                             //   neither the bot nor its pet is dropped (inf.)
+    public const int BlindStepDistance = 300;                // #167 E R1: out of sight beyond contact, a step in this
+                                                             //   long, then a look again (BlindStepStop; inf.)
     public const int StyleMilliseconds = 1000;
     public const int NeighbourCountMilliseconds = 60_000;
     public const int UnreachableSkipMilliseconds = 30_000;
@@ -263,6 +316,18 @@ public static class PlayerBotDriver
     public const int IdleLineMilliseconds = 5 * 60_000;
     public const int RelocateAfterMilliseconds = 2 * 60_000; // no target reached this long: the hunting ground is outgrown
     public const int RelocateCandidates = 5;                 // corridor checks per try
+    public const int AnchorCheckMilliseconds = 30_000;       // #167 E fix U3: a blocked roam tests the corridor to its
+                                                             //   anchor at most this often (CutOffFromAnchor; inf.)
+    public const int WatchCheckMilliseconds = 5_000;         // #167 E fix U4: a cut-off bot held for a real player in
+                                                             //   sight checks again this often (TeleportsNow; inf.): a
+                                                             //   human at run speed (191) covers under 1,000 of the
+                                                             //   6,000 units' sight in it; two player scans every 5 s
+                                                             //   replace about 4 blocked roams a second (~5 ms each)
+    public const int NearWalk = 10_000;                      // #167 E W1: a plan after a death looks this near the bot
+                                                             //   first (st-deathsD2/D2b: after-death plans of 10k+ died
+                                                             //   first 27 of 72, under 10k 13 of 148)
+    public const ConColor NearFallbackMax = ConColor.BLUE;   // #167 E W1: the near pass's hardest fallback median (BLUE
+                                                             //   fallbacks after a death died first 0 of 16)
     public const int CappedRelocateMilliseconds = 30_000;    // DEATHS.md A4: nothing in reach fits the cap this long
     public const int MaxDeathSteps = (int)ConColor.YELLOW - (int)ConColor.GREEN;   // a solo GameBot's (AWBC:3756, :3793-3796)
     public const string Outgrown = "outgrown", Capped = "capped", Died = "died", BrokeOff = "brokeoff";   // RelocateReason
@@ -285,6 +350,7 @@ public static class PlayerBotDriver
         KiteMissMesh = "mesh", KiteMissFit = "fit";
     public const byte KillFirstHealthPercent = 60;            // #167 C11: the nukes before the control from this health
     public const int AnimistStandMargin = 150;                // #167 F10b: by its turret; the turret's reach less this
+    public const int TurretWaitMilliseconds = 12_000;         // #167 E CY3: the in-combat window (GameLiving.cs:31) and 2 s
     public const int IncomingRadius = 2_000;                  // #167 F7: a monster this near with the bot as its target
     public static readonly int[] RestSpotRings = [300, 600, 900, 1_200];   // #167 F7: the rest spot's candidates (inf.)
     public const int RestSpotTries = 3;                       // #167 D10: rest walks per rest, each blocked one the next (inf.)
@@ -301,9 +367,16 @@ public static class PlayerBotDriver
     public const int SummonRetryMilliseconds = 2_000;        // (inf.) as the heal's
     public const int QuickcastRetryMilliseconds = 2_000;     // (inf.) as the heal's
     public const byte CasterPowerStop = 90;                  // #167 F3, C10: a caster stops resting power here (a list
-    public const byte RestEnduranceStop = 60;                //   caster regenerates at half rate under 50%,
+    public const byte RestEnduranceStop = 80;                //   caster regenerates at half rate under 50%,
                                                              //   PowerRegenerationAmountCalculator.cs:38-50: batch A's 70
                                                              //   left 46.6% of its pulls ending under 50%); all, endurance
+                                                             //   (#167 E-R: 60 left a style class 0-20 after one fight,
+                                                             //   a style costing 15-22 with a slow weapon and endurance
+                                                             //   regenerating neither in combat nor moving,
+                                                             //   ClassicRestRegeneration.cs; 80 holds a run's reserve and
+                                                             //   a style or two: +0.3% of bot time on st-deathsD2's rests,
+                                                             //   e-design s7). The chant (WantedChant), the regeneration
+                                                             //   buff (KeepsUpOutOfFight) and the errand rests read it too
     public const int SelfBuffScanMilliseconds = 5_000;       // #167 F8: the self-buffs' scan, out of a fight
     public const int ShortBuffMilliseconds = 120_000;        // #167 C9: a shorter buff is kept up in fights only, but a
                                                              //   regeneration one while its resource is low
@@ -340,10 +413,33 @@ public static class PlayerBotDriver
     public const int CaughtMilliseconds = 2_000;             //   (inf.), from this long into the run, and a hit on the bot
     public const int CaughtGraceMilliseconds = 3_000;        //   this recent (CaughtNow, st-deathsD's fix round; inf.)
     public const int CaughtHitMilliseconds = 2_000;
+    public const int BreakOffRetryMilliseconds = 1_000;      // #167 E T1: with no point, a try for one this often (inf.),
+    public static readonly int[] RelaxedBreakOffRings = [800];   //   800 out too (NearBreakOffGoal, inf.); BREAKOFF turn=
+    public const string TurnCaught = "caught", TurnNoPoint = "nopoint", TurnBlocked = "blocked", TurnCap = "cap";
     public const int RangedHarmRange = 1_000;                //   a chaser's spell from this far harms the run (inf.)
     public const int HealthRateMilliseconds = 3_000;         // #167 rate=: the health lost a second over the last 3 s
     public const int ProjectedSeconds = 6;                   //   wouldBreak=: 6 s of that loss kept in hand (breakoff #5,
                                                              //   d-breakoff/projected.py's P6; logged only)
+    public const int RaceLossMargin = 10;                    // #167 E-L: one monster breaks a bot that is no caster off
+    public const int RaceReadLoss = 20;                      //   when the race since its first hit projects its target
+                                                             //   above this at the bot's death (TargetLeftAtDeath), read
+                                                             //   from 20 lost since that hit (a shorter read is a swing's
+                                                             //   noise). On st-deathsD2 and D2b: 113 such non-caster
+                                                             //   deaths, 105 with no break-off (e-design s3, s13)
+    public const int NoRace = -999;                          //   FIGHT and DEATH raceLeft= with no read
+    public const string RaceLost = "race";                   //   BREAKOFF why=
+    public const int ReserveMargin = 5;                      // #167 E-R: in a close fight (CloseFight) a style or a
+    public const int MaxEscapeReserve = 41;                  //   hybrid's damage cast keeps the endurance a run needs
+    public const int CloseRacePercent = 30;                  //   from the fastest monster on the bot (EscapeEndurance)
+    public const int SpellEnduranceCost = 5;                 //   and this margin; none when that is past MaxEscapeReserve
+                                                             //   (205 and faster: the two styles it costs buy no run). A
+                                                             //   race projecting the bot under 30 at its target's death
+                                                             //   is close (HealthLeftAtKill). A cast costs 5
+                                                             //   (SpellHandler.cs:1244-1250, :1442-1445)
+    public const int SprintOffGap = 400, SprintOnGap = 300;  // #167 E-S: a break-off's sprint goes off with the nearest
+                                                             //   free chaser this far behind and 25 s of its speed over the
+                                                             //   run's more (it can't close to its reach while it chases),
+                                                             //   and on again when one comes within 300 (inf.)
 
     private static readonly ConcurrentDictionary<GamePlayer, PlayerBotState> _states = new();
     [ThreadStatic] private static List<(GameNPC Npc, Vector3 At, int Score)> _candidates;      // FindWithin's, per timer
@@ -462,6 +558,7 @@ public static class PlayerBotDriver
         }
         if (!player.IsAlive) { HandleDeath(state, player, now); return; }               // 6
         StartLife(state, now, RoleOf(player.CharacterClass.ID));                         //    a new life
+        state.SoloSteps = SoloSteps(player.CharacterClass.ID);                           //    #167 E CY4: the cap's floor
         SampleHealth(state.HealthSamples, now, player.HealthPercent);                    //    #167 rate=
         if (state.SitSince != 0 && !player.IsSitting)                                    //    stood by the server (a hit)
             EndRest(state, player, now, Attacker(state, player, now, anyHitter: true) != null ? "hit" : "other");
@@ -480,23 +577,7 @@ public static class PlayerBotDriver
         }
         CountNeighbours(state, player, now);                                             // 9. once a minute
         SettleTarget(state, player);                                                     //    a fight that ended counts, task or not
-        if (state.Task != null)                                                          // 10
-        {
-            if (state.Task.Finished)
-            {
-                state.Task = null;
-                state.AnchorRegion = player.CurrentRegionID;                             // grind where the task ended
-                state.Anchor = new(player.X, player.Y, player.Z);
-                state.RoamDestination = null;                                            // not a relocation's spot
-            }
-            else if (state.Task.Tick(state, now))
-            {
-                state.Activity = PlayerBotActivity.Task;
-                state.RoamingSince = 0;
-                if (state.Target != null) Disengage(state, player);                     // the next defence picks afresh
-                return;
-            }
-        }
+        if (RunsTask(state, player, now)) return;                                        // 10
         TryLoot(state, player, now);                                                     // 11. APP:403-414, before a sit
         if (WaitsForSelfCast(state, player) || StepsOutOfReach(state, player, now))      // 11a. #167 F4, C6: a release, a login
             return;
@@ -543,8 +624,50 @@ public static class PlayerBotDriver
             ReportIdle(state, player, now);
             return;
         }
-        Engage(state, player, now);                                                      // 16
-        if (state.Engaged) state.RoamingSince = 0;   // reached: a target blocked on the way leaves the idle clock running
+        EngageTarget(state, player, now);                                                // 16
+    }
+
+    // Step 16: the fight with the target (Engage), then its idle clock (SettleIdleClock). #167 E fix round 3, the review
+    // of fix round 2: one step a test runs (Think's call to the clock put back to the old rule, a reset whenever engaged,
+    // passed every test).
+    private static void EngageTarget(PlayerBotState state, GamePlayer player, long now)
+    {
+        Engage(state, player, now);
+        SettleIdleClock(state);
+    }
+
+    // Step 10: the bot's task, while it has one: at its end the bot grinds where it ended; else its tick, true while it
+    // runs (the think ends there). #167 E fix U3's second review: one step a test runs (Think can't run in one).
+    private static bool RunsTask(PlayerBotState state, GamePlayer player, long now)
+    {
+        if (state.Task == null) return false;
+        if (state.Task.Finished)
+        {
+            state.Task = null;
+            state.AnchorRegion = player.CurrentRegionID;                                 // grind where the task ended
+            state.Anchor = new(player.X, player.Y, player.Z);
+            state.RoamDestination = null;                                                // not a relocation's spot
+        }
+        else if (state.Task.Tick(state, now))
+        {
+            state.Activity = PlayerBotActivity.Task;
+            state.RoamingSince = 0;
+            if (state.Target != null) Disengage(state, player);                         // the next defence picks afresh
+            return true;
+        }
+        return false;
+    }
+
+    /// <summary>Step 16's idle clock (RoamingSince, RelocateReason's Outgrown): a target reached stops it; a target
+    /// blocked on the way leaves it running. #167 E fix U2: reached is engaged with no step in under way (BlindStop 0,
+    /// R1): a step in out of sight opens the fight (Engaged) before its walk, and a walk that then ends blocked
+    /// (LeaveUnreachable) left the fight open. On st-deathsE2b Pbotmaada, on a pocket of the navmesh above its camp,
+    /// opened a step in each time it picked a crackler 719-880 units off, out of sight below the edge and within its
+    /// spell stop; each reset the clock, so the 2 minutes of an outgrown camp never ran and no relocation moved it.
+    /// </summary>
+    public static void SettleIdleClock(PlayerBotState state)
+    {
+        if (state.Engaged && state.BlindStop == 0) state.RoamingSince = 0;
     }
 
     /// <summary>Step 6, a new life (after a release, or the login's first): the recovery LifeStart gives (StartRecovery),
@@ -606,23 +729,38 @@ public static class PlayerBotDriver
         int distance = player.GetDistanceTo(target);
         bool quickcasting = player.effectListComponent.ContainsEffectForEffectType(eEffect.QuickCast);
         bool due = now >= state.NextCombatChoiceTick;
-        if (ChoosesSpell(due, player.IsCasting, now, state.NextSpellChoiceTick))       // a cast choice: the pet or the
-        {                                                                               //   damage spell (#167 F1)
-            state.NextSpellChoiceTick = now + SpellChoiceMilliseconds;
-            ChooseCombatSpell(state, player, target, now);
-        }
-        bool interruptible = state.Spell != null && Interruptible(state.Spell);
-        Ability quickcast = player.GetAbility(Abilities.Quickcast);
+        Ability quickcast = player.GetAbility(Abilities.Quickcast);                     // #167 E C2b: before the spell choice
         bool interrupted = player.IsBeingInterruptedByOther && !quickcasting;           // a quickcast one goes (SpellHandler.cs:581)
         bool quickcastReady = QuickcastReady(quickcast != null, quickcasting,
             quickcast == null ? 0 : player.GetSkillDisabledDuration(quickcast), state.NextQuickcastTick, player.IsCasting, now);
         PlayerBotRole role = RoleOf(player.CharacterClass.ID);                          // #167 D3: before the cast gate
+        bool choosesSpell = ChoosesSpell(due, player.IsCasting, now, state.NextSpellChoiceTick);
+        bool casterFight = role == PlayerBotRole.Caster && state.Engaged, quickcastDue = interrupted && quickcastReady;
+        if (choosesSpell)                                                               // a cast choice: the pet or the
+        {                                                                               //   damage spell (#167 F1); #167
+            state.NextSpellChoiceTick = now + SpellChoiceMilliseconds;                  //   E C2b: whether the nuke it
+            (state.Spell, state.SpellLine, state.OneNukeKills) = KillingNukeChoice(     //   casts kills at once (risk-1)
+                casterFight && state.Attackers <= 1, quickcasting || quickcastDue,
+                () => Nuke(state, player, target, killingQuickcast: true), () => CombatSpell(state, player, target, now),
+                spell => NukeKillsNow(state, player, target, spell, now));
+        }
+        state.KillingQuickcast = KillingQuickcast(casterFight, state.OneNukeKills, quickcasting, quickcastDue,
+            state.Attackers);                                                           //   the killing quickcast
+        bool interruptible = state.Spell != null && Interruptible(state.Spell);
         (bool held, bool breaksOnHit) = role == PlayerBotRole.Caster ? Hold(target) : default;   // #167 C3: a caster's hold
         bool otherHitting = held && OtherHitting(player, target);                                //   on its target, alone
         bool canCast = ShouldCastFor(role, state.Spell != null, player.ManaPercent,      // #167 D3: a caster's gate is its
             role == PlayerBotRole.Caster && CasterCanPay(state, player, state.Spell, state.SpellLine, held,   //   spell's
-                quickcasting || interrupted && interruptible && quickcastReady),          //   cost, doubled when the cast
-            now, state.SpellBlockedUntil);                                                //   goes under Quickcast
+                quickcasting || interrupted && interruptible && quickcastReady,           //   cost, doubled under Quickcast,
+                state.KillingQuickcast),                                                  //   no reserve to kill (#167 E C2b)
+            now, state.SpellBlockedUntil);
+        if (canCast && role is not (PlayerBotRole.Caster or PlayerBotRole.Pet) &&      // #167 E-R: a hybrid's damage cast
+            HoldsDamageCast(role, player.Endurance,                                      //   keeps a run's reserve too (5 a
+                ReserveNow(state, player, target, now), state.Spell))                    //   cast, SpellHandler.cs:1442-1445),
+        {                                                                                //   never a lifetap (#167 E fix R2):
+            canCast = false;                                                             //   it swings instead; FIGHT
+            state.FightCastsHeld++;                                                      //   castHeld=, by think
+        }
         if (state.Engaged) WatchFight(state, player, target, role, held, now);           // #167 heldSec= and on, walk in or not
         long selfInterrupt = quickcasting ? 0 : Math.Max(0, player.SelfInterruptTime - now);
         int spellRange = StopSpellRange(state.Spell, state.Nukes, player.castingComponent.CalculateSpellRange);
@@ -636,19 +774,19 @@ public static class PlayerBotDriver
             return;                                                                     // #167 F10b: by its turret
         if (addCast == null && Kites(state, player, target, casterHold, now))  // #167 F11: a step back under way, before
             return;                                                            //   the walk in (after it, the walk in undid
-        if (addCast == null && distance > stop)                                //   each step: the review of 5feb32b)
-        {
+        int walkStop = state.BlindStop > 0 ? Math.Min(stop, state.BlindStop) : stop;   //   each step: the review of
+        if (addCast == null && distance > walkStop)                            //   5feb32b); #167 E R1: nearer while
+        {                                                                      //   out of sight (BlindStepStop)
             player.attackComponent.StopAttack();
             player.StopCurrentSpellcast();
             state.Activity = PlayerBotActivity.Hunting;
+            state.BlindSince = 0;                                                       // #167 E M2: no blind clock walking in
             Vector3 goal = new(target.X, target.Y, target.Z);
             state.Walk = PlayerBotWalk.Hunt;                                            // #167 walk=
-            if (state.Mover.StepToward(goal, stop, now) is PlayerBotStepResult.Blocked)
+            if (state.Mover.StepToward(goal, walkStop, now) is PlayerBotStepResult.Blocked)
             {
                 ReportBlocked(state, player, "target", goal, now);
-                state.Unreachable = target;
-                state.UnreachableUntil = now + UnreachableSkipMilliseconds;
-                state.Target = null;
+                LeaveUnreachable(state, target, now);                                   // #167 E U1: its own 30 s
             }
             return;
         }
@@ -658,8 +796,28 @@ public static class PlayerBotDriver
         if (now >= state.NextLosTick)                         // TargetInView: AttackComponent.cs:1065, SpellHandler.cs:450
         {
             state.NextLosTick = now + LosRefreshMilliseconds;
-            player.TargetInView = HeadlessLos.Answer(PathfindingProvider.Instance, player.CurrentZone,
+            bool los = HeadlessLos.Answer(PathfindingProvider.Instance, player.CurrentZone,
                 new Vector3(player.X, player.Y, player.Z), new Vector3(target.X, target.Y, target.Z));
+            bool fightsBot = !los && FightsBot(player, target);                         // #167 E M2: read only when the
+            player.TargetInView = SightInReach(los, distance, fightsBot);               //   ray says no; in contact,
+            if (!los && player.TargetInView) state.FightSight++;                        //   FIGHT sight=
+            state.BlindSince = BlindClock(state.BlindSince, player.TargetInView, now);
+            bool petOn = PetOn(player, target), targetsBot = target.TargetObject == player;
+            // #167 E R1: out of sight beyond contact, a step in (BlindStepStop), not a drop, and a look again where it
+            // ends; a cast under way (begun in sight) goes on, the step at the next look. The choice is BlindLook's.
+            (bool drop, state.BlindStop) = BlindLook(player.TargetInView, fightsBot || petOn || targetsBot, distance,
+                MeleeStopDistance(player.attackComponent.AttackRange), state.BlindSince, now, player.IsCasting,
+                state.BlindStop);
+            if (drop)
+            {
+                DropBlind(state, player, now);                                          //   FIGHT blind=1, the pick
+                return;                                                                 //   passes it over 30 s
+            }
+            if (!player.IsCasting && state.BlindStop > 0)
+            {
+                state.NextLosTick = 0;
+                state.FightBlindSteps++;                                                //   FIGHT blindSteps=
+            }
         }
         bool opening = !state.Engaged;
         if (opening)                                          // the fight's first think in reach: PLAYER_BOT_FIGHT's start
@@ -671,11 +829,14 @@ public static class PlayerBotDriver
                 .Where(effect => effect.SpellHandler?.Spell != null).Select(effect => effect.SpellHandler.Spell.SpellType));
             state.EngagePet = player.ControlledBrain?.Body?.IsAlive == true;
             state.EngageIll = Ill(player);                                              // DEATH ill= (#167 F4)
+            state.EngageEndurance = player.EndurancePercent;                            // #167 E-R FIGHT endStart=
             WatchFight(state, player, target, role, held, now);                         // #167 heldSec= and on
             if (player.ControlledBrain != null)                                         // its pet too: the pet window's
                 player.CommandNpcAttack();                                              //   attack (PetWindowHandler.cs:79-82)
         }
         state.Engaged = true;
+        if (state.BlindStop > 0 && distance > state.BlindStop) return;                 // #167 E R1: the step in from the
+                                                                                        //   next think, no blind cast now
         state.FightAdds = Math.Max(state.FightAdds, state.Attackers);
         if (state.FightAdd.At < 0)                                                      // #167 FIGHT addAt= and addHp=: the
         {                                                                               //   first second monster on the bot
@@ -747,7 +908,9 @@ public static class PlayerBotDriver
             state.NextSpellChoiceTick = 0;                                              // the next due think chooses
             state.NextCombatChoiceTick = now + Math.Max(900, state.Spell.CastTime + 250);
             state.FightCasts++;
+            if (IsDamageOverTime(state.Spell)) state.FightDots++;                       // #167 E C1 dots=
             state.FightQuickcast |= quickcasting;
+            state.FightKillingQuickcast |= quickcasting && state.KillingQuickcast;      // #167 E C2b qcKill=
             state.Activity = PlayerBotActivity.Casting;
         }
         else if (action is PlayerBotCombatAction.Quickcast)
@@ -763,12 +926,34 @@ public static class PlayerBotDriver
             if (now >= state.NextStyleTick)                                             //   145), as before
             {
                 state.NextStyleTick = now + StyleMilliseconds;
-                QueueUsableStyle(player);                                               // APP:694-710 without the quickbar filter
+                QueueUsableStyle(state, player, ReserveNow(state, player, target, now));  // #167 E-R: a run's reserve
             }
             if (!player.attackComponent.AttackState && CanSwing(player.ControlledBrain?.Body))
                 player.attackComponent.RequestStartAttack(target);                      // AttackComponent.cs:491-496
             state.Activity = PlayerBotActivity.Fighting;
         }
+    }
+
+    // #167 E M2: its target fights the bot: has it as its target and is on its attacker list (it hit or swung lately).
+    private static bool FightsBot(GamePlayer player, GameLiving target) =>
+        target.TargetObject == player && player.attackComponent.AttackerTracker.ContainsAttacker(target);
+
+    // #167 E M2: the bot's live pet has its target as its own (a pet's kill is the owner's).
+    private static bool PetOn(GamePlayer player, GameLiving target) =>
+        player.ControlledBrain?.Body is GameNPC pet && pet.IsAlive && pet.TargetObject == target;
+
+    // #167 E M2: a target out of sight BlindDropMilliseconds that fights neither the bot nor its pet, nor comes at it
+    // (DropsBlindTarget): its fight's line (FIGHT result=dropped blind=1), then the pick alone passes it over 30 s
+    // (MarkBlind; not LeaveUnreachable, the review).
+    private static void DropBlind(PlayerBotState state, GamePlayer player, long now)
+    {
+        if (state.Engaged)
+        {
+            state.FightBlind = true;
+            ReportFight(state, player, now, false, false);
+        }
+        MarkBlind(state, state.Target, now);
+        Disengage(state, player);
     }
 
     /// <summary>Whether the bot has a spell it may cast (APP:670, the cast watch's block); the interrupts are
@@ -821,10 +1006,12 @@ public static class PlayerBotDriver
 
     /// <summary>The power a caster keeps for the escape (#167 D3, CasterCanCast's reserve): the cheapest known control's
     /// cost (controlCosts) while its target isn't held, else none. With one root kept, a caster whose nukes ran its power
-    /// down can still hold the monster that reaches it.</summary>
-    public static int ControlReserve(IEnumerable<int> controlCosts, bool held)
+    /// down can still hold the monster that reaches it. #167 E C2b: none for the killing quickcast (killingQuickcast,
+    /// KillingQuickcast; no default): the nuke ends the fight the control would only hold, and a dry Mentalist (5 of
+    /// E2's 13 deaths) could not cast it.</summary>
+    public static int ControlReserve(IEnumerable<int> controlCosts, bool held, bool killingQuickcast)
     {
-        if (held) return 0;
+        if (held || killingQuickcast) return 0;
         int least = int.MaxValue;
         foreach (int cost in controlCosts) least = Math.Min(least, cost);
         return least == int.MaxValue ? 0 : least;
@@ -1224,10 +1411,20 @@ public static class PlayerBotDriver
             if (state.TargetRespawnReach > 0)                     // #167 C7: rested out of (WalksToRestSpot)
                 RememberKill(state.RecentKills, state.TargetSpawn, state.TargetRespawnReach, GameLoop.GameLoopTime);
         }
-        else if (dead) state.RoamingSince = 0;                   // killed by another before this bot got there: not outgrown
+        SettleIdleClockAtTargetEnd(state, dead);
         state.KilledWithAdds = state.Engaged && dead && state.FightAdds >= 2;   // #167 C2: the second-monster case
         state.Target = null;
         state.Engaged = false;
+    }
+
+    /// <summary>SettleTarget's idle clock (RoamingSince): a target that died stops it, its camp not outgrown, engaged or
+    /// not. Killed by another before this bot got there, as before; #167 E fix U2b: or while the bot stepped in out of
+    /// sight, where step 16 no longer stops it (SettleIdleClock), so a kill (by another, or its own damage over time)
+    /// left the clock running into the rest after it, and the outgrown camp's relocation could follow a kill. A target
+    /// gone alive leaves it as it was.</summary>
+    public static void SettleIdleClockAtTargetEnd(PlayerBotState state, bool dead)
+    {
+        if (dead) state.RoamingSince = 0;
     }
 
     private static void Disengage(PlayerBotState state, GamePlayer player)
@@ -1267,11 +1464,14 @@ public static class PlayerBotDriver
         (state.TargetSpawn, state.TargetRespawnReach) = found?.Brain is StandardMobBrain brain   // #167 C7: its respawn
             ? RespawnOf(found, brain.AggroLevel, brain.AggroRange, player.IsObjectGreyCon(found)) : default;
         state.Engaged = false;
+        state.KillingQuickcast = state.OneNukeKills = false;                               // #167 E C2b: the last fight's
         state.NextLosTick = 0;
         state.SpellBlockedUntil = 0;                                                       // a new target clears the watch
         state.CastTarget = null;
         state.NextSpellChoiceTick = 0;                                                     //   and chooses at once
         state.KiteGoal = null;                                                             // #167 F11
+        (state.BlindSince, state.FightSight, state.FightBlind) = (0, 0, false);            // #167 E M2
+        (state.BlindStop, state.FightBlindSteps) = (0, 0);                                 // #167 E R1
         (state.Spell, state.SpellLine) = found == null ? (null, null) : Nuke(state, player, found);
     }
 
@@ -1297,7 +1497,7 @@ public static class PlayerBotDriver
             Vector3 at = new(npc.X, npc.Y, npc.Z);                                      //   a hostile keep guard as an
             if (AddReach(player, npc) is > 0 and int reach) adds.Add((npc, at, reach)); //   add, never a pick
             if (!experience || !player.IsWithinRadius(npc, radius) || !IsValidTarget(player, npc, natural) ||
-                npc == state.Unreachable && now < state.UnreachableUntil)
+                PickSkips(state, npc, now))                                          // #167 E M2, U1
                 continue;
             ConColor con = ConLevels.GetConColor(player.GetConLevel(npc));
             if (!AutonomousPlayerPilot.IsEligibleExperienceTarget(con, npc.EffectiveLevel, player.Level, 1) ||
@@ -1340,14 +1540,14 @@ public static class PlayerBotDriver
     {
         KnowSpells(state, player);
         (Spell nuke, _) = ChooseNuke(state.Nukes, spell => player.GetSkillDisabledDuration(spell) <= 0 &&
-            HasPowerFor(player.MaxMana, player.Mana, spell.Power), false);
+            HasPowerFor(player.MaxMana, player.Mana, spell.Power), false, null);
         return PullStopDistance(nuke, player.ManaPercent, player.attackComponent.AttackRange,
             nuke == null ? 0 : player.castingComponent.CalculateSpellRange(nuke));
     }
 
     // Self-defence: the nearest monster that is hitting the bot (its AttackerTracker, as BotGroupSupport.UnderAttack
     // reads it), whatever its con and wherever the leash is. The pilot's filter alone left the bot roaming or resting
-    // while an orange monster killed it, and each death lowered its con cap further. anyHitter: the one found unreachable
+    // while an orange monster killed it, and each death lowered its con cap further. anyHitter: the ones found unreachable
     // too, for the rest gate and the summon (SkipsHitter).
     private static GameNPC Attacker(PlayerBotState state, GamePlayer player, long now, bool anyHitter = false)
     {
@@ -1355,8 +1555,7 @@ public static class PlayerBotDriver
         int bestDistance = int.MaxValue;
         foreach (GameLiving living in player.attackComponent.AttackerTracker.Attackers)
         {
-            if (living is not GameNPC npc || !IsAttacking(player, npc) ||
-                SkipsHitter(npc == state.Unreachable, now, state.UnreachableUntil, anyHitter))
+            if (living is not GameNPC npc || !IsAttacking(player, npc) || SkipsHitter(state, npc, now, anyHitter))
                 continue;
             int distance = player.GetDistanceTo(npc);
             if (distance < bestDistance) { best = npc; bestDistance = distance; }
@@ -1364,13 +1563,13 @@ public static class PlayerBotDriver
         return best;
     }
 
-    /// <summary>Whether Attacker passes over a monster hitting the bot: the one Engage found unreachable, while
-    /// UnreachableUntil lasts, when it picks whom to fight back. Never for anyHitter (the rest gate, MayRest; the
-    /// summon): that monster still hits the bot, a sitting player takes double melee damage that never misses
-    /// (AttackAction.cs:236-238, AttackComponent.cs:2206-2208), and no hit stands it up. The old gate, InCombat, kept
-    /// such a bot standing.</summary>
-    public static bool SkipsHitter(bool unreachable, long now, long unreachableUntil, bool anyHitter) =>
-        !anyHitter && unreachable && now < unreachableUntil;
+    /// <summary>Whether Attacker passes over a monster hitting the bot: one Engage found unreachable, while its mark
+    /// lasts (UnreachableMarked; #167 E U1: each its own), when it picks whom to fight back. Never for anyHitter (the
+    /// rest gate, MayRest; the summon): that monster still hits the bot, a sitting player takes double melee damage that
+    /// never misses (AttackAction.cs:236-238, AttackComponent.cs:2206-2208), and no hit stands it up. The old gate,
+    /// InCombat, kept such a bot standing. A blind mark is the pick's alone (BlindSkipped).</summary>
+    public static bool SkipsHitter(PlayerBotState state, GameLiving npc, long now, bool anyHitter) =>
+        !anyHitter && UnreachableMarked(state, npc, now);
 
     /// <summary>Whether the search tick runs the rings (FindWithin; RefreshTarget's self-defence and Incoming run
     /// whatever): due, and not during the recovery after a release (#167 F4) or a login's step out (C6), nor while a
@@ -1390,7 +1589,7 @@ public static class PlayerBotDriver
         Attacker(state, player, now, anyHitter: true) ?? Incoming(state, player, now);
 
     // #167 F7: the nearest monster coming at the bot (IsIncoming), from a scan every TargetRefreshMilliseconds, the search
-    // tick's; between scans the one found while it still comes. The one Engage found unreachable is no threat, between
+    // tick's; between scans the one found while it still comes. The ones Engage found unreachable are no threat, between
     // scans too (the review of 9549283: the cached one was re-picked and walked to each think): it would keep the bot
     // from ever sitting. The errands' UnderAttack stays the hitters' (no detour for a monster on its way).
     private static GameNPC Incoming(PlayerBotState state, GamePlayer player, long now)
@@ -1398,7 +1597,7 @@ public static class PlayerBotDriver
         if (now < state.NextIncomingTick)
         {
             if (state.Incoming is GameNPC held && !IsIncoming(held.TargetObject == player, IsAttackable(player, held),
-                    player.GetDistanceTo(held), held == state.Unreachable && now < state.UnreachableUntil))
+                    player.GetDistanceTo(held), UnreachableMarked(state, held, now)))
                 state.Incoming = null;
             return state.Incoming;
         }
@@ -1409,8 +1608,7 @@ public static class PlayerBotDriver
         {
             int distance = player.GetDistanceTo(npc);
             if (distance >= bestDistance || !IsIncoming(npc.TargetObject == player,
-                    IsExperienceTarget(npc) && IsAttackable(player, npc), distance,
-                    npc == state.Unreachable && now < state.UnreachableUntil))
+                    IsExperienceTarget(npc) && IsAttackable(player, npc), distance, UnreachableMarked(state, npc, now)))
                 continue;
             best = npc;
             bestDistance = distance;
@@ -1432,11 +1630,12 @@ public static class PlayerBotDriver
         IsAttackable(player, target) && !player.IsObjectGreyCon(target) &&
         ConLevels.GetConColor(player.GetConLevel(target)) <= cap;
 
-    // The bot's con cap: its death cap, or at a GameBot's fallback camp that camp's own con (AWBC:3446-3452), as
-    // AutonomousDeathRecoveryPolicy.EncounterMaximum gives a GameBot's pull filter; under the cons that killed it
-    // (CapAfterDeaths, #167 D6).
+    // The bot's con cap: its death cap (never under its class's solo cap, CapSteps, #167 E CY4), or at a GameBot's
+    // fallback camp that camp's own con (AWBC:3446-3452), as AutonomousDeathRecoveryPolicy.EncounterMaximum gives a
+    // GameBot's pull filter; under the cons that killed it (CapAfterDeaths, #167 D6).
     private static ConColor Cap(PlayerBotState state, long now) => CapAfterDeaths(
-        MaximumTargetCon(1, state.DeathSafetySteps), state.FallbackCap, LowestKillerCon(state.KillerCons, now));
+        MaximumTargetCon(1, CapSteps(state.DeathSafetySteps, state.SoloSteps)), state.FallbackCap,
+        LowestKillerCon(state.KillerCons, now));
 
     /// <summary>#167 D6: the cap after deaths, EncounterMaximum's (the death cap deathCap, or the fallback camp's con),
     /// under lowestKillerCon, the lowest con that killed the bot in the last 5 minutes (LowestKillerCon), never under
@@ -1466,13 +1665,14 @@ public static class PlayerBotDriver
     /// GREEN.</summary>
     public static ConColor UnderKillerCon(ConColor killer) => (ConColor)Math.Max((int)ConColor.GREEN, (int)killer - 1);
 
-    /// <summary>#167 D6: the plan's caps (RelocateIfOutgrown): its fit pass under the death cap and the killers' cons as
-    /// the pulls are (CapAfterDeaths with no fallback: the plan picks the next one), else it planned a camp the bot then
-    /// passed over and the capped clock moved it on; and the lowest killer's con, which the fallback stays under.</summary>
+    /// <summary>#167 D6: the plan's caps (RelocateIfOutgrown): its fit pass under the death cap (never under the class's
+    /// solo cap, CapSteps, #167 E CY4) and the killers' cons as the pulls are (CapAfterDeaths with no fallback: the plan
+    /// picks the next one), else it planned a camp the bot then passed over and the capped clock moved it on; and the
+    /// lowest killer's con, which the fallback stays under.</summary>
     public static (ConColor Fit, ConColor? KillerCon) PlanCaps(PlayerBotState state, long now)
     {
         ConColor? killer = LowestKillerCon(state.KillerCons, now);
-        return (CapAfterDeaths(MaximumTargetCon(1, state.DeathSafetySteps), null, killer), killer);
+        return (CapAfterDeaths(MaximumTargetCon(1, CapSteps(state.DeathSafetySteps, state.SoloSteps)), null, killer), killer);
     }
 
     /// <summary>#167 D6: a killer's con (con, against the bot's level then), each death's, for a killer that counts
@@ -1554,13 +1754,38 @@ public static class PlayerBotDriver
     public static bool IsBreakOffAdd(GameNPC npc, GameObject bot, eRealm botRealm) =>
         npc.TargetObject != bot && IsThreat(npc, botRealm);
 
-    // A copy of AutonomousWorldBotController.IsExperienceMonster (AWBC:4855-4861, private there).
+    // A copy of AutonomousWorldBotController.IsExperienceMonster (AWBC:4855-4861, private there); #167 E M1: and no
+    // training dummy (IsTrainingPropName).
     public static bool IsExperienceTarget(GameNPC npc) =>
         npc?.ObjectState is GameObject.eObjectState.Active && npc.Realm == eRealm.None && npc.Brain != null &&
         (npc.Flags & (GameNPC.eFlags.PEACE | GameNPC.eFlags.CANTTARGET)) == 0 &&
         npc is not GameMerchant and not GameGuard and not GameTaxi and not GameSummonedPet and not GameKeepGuard and
             not GameTrainer and not GameTeleporter and not GameHealer and not CraftNPC &&
-        !AutonomousNeutralTownPolicy.IsTownResident(npc);
+        !AutonomousNeutralTownPolicy.IsTownResident(npc) && !IsTrainingPropName(npc.Name);
+
+    /// <summary>#167 E M1: a training dummy by its name ("training dummy", "fighting dummy", "Hitback Dummy - ..."): region
+    /// 51's are plain GameNPC rows (levels 29-39) that never lose health. st-deathsD2: a bot died on one in 92 s, two
+    /// planned camps of them and killed nothing for about 12 minutes each. "dummy golem" is a monster.</summary>
+    public static bool IsTrainingPropName(string name) =>
+        name != null && (name.EndsWith(" dummy", StringComparison.OrdinalIgnoreCase) ||
+            name.Contains(" dummy ", StringComparison.OrdinalIgnoreCase));
+
+    /// <summary>#167 E (CY4): the classes that take no YELLOW monster solo: one step under it (BLUE) from the start, as
+    /// any bot after one death (CapSteps). Their YELLOW one-monster pulls were fatal 20% or more on st-deathsD2 and D2b
+    /// and 15% or more on st-hearth11 and 11b, with 2 or more deaths on each pair: Bard 16 of 36 (14 of 44), Ranger 6 of
+    /// 21 (7 of 21), Healer 4 of 20 (4 of 18), Mercenary 2 of 9 (2 of 10), Nightshade 4 of 5 (3 of 14), Blademaster 3 of
+    /// 4 (2 of 5), Mentalist 4 of 8 (6 of 7). It covers at most 36 deaths on the D legs (3 came after a death, at a BLUE
+    /// cap already), about 29 net, for about 46 YELLOW wins (about 20 same-level kills of XP). A GameBot's YELLOW cap
+    /// (MaximumTargetCon) rests on monster-formula armour and 10%/s regeneration. Wardens and Savages are left to their
+    /// kits (PlayerBotKit.PlayerChoice, PlayerBotKitGear.FitsHand): their YELLOW deaths were the broken kits'.</summary>
+    public static int SoloSteps(int classId) => (eCharacterClass)classId is eCharacterClass.Bard or eCharacterClass.Ranger or
+        eCharacterClass.Healer or eCharacterClass.Mercenary or eCharacterClass.Nightshade or eCharacterClass.Blademaster or
+        eCharacterClass.Mentalist ? 1 : 0;
+
+    /// <summary>#167 E (CY4): the steps the cap reads (Cap, PlanCaps, the IDLE line): the death steps, never under the
+    /// class's solo steps (SoloSteps). So a listed class's first death leaves it at BLUE and its second takes it to GREEN,
+    /// as any bot's second does; the DEATH line's deathSteps= stays the deaths'.</summary>
+    public static int CapSteps(int deathSteps, int soloSteps) => Math.Max(deathSteps, soloSteps);
 
     // = APP:549-559 = AWBC:3834-3846: YELLOW solo, one step lower per death, never below GREEN.
     public static ConColor MaximumTargetCon(int groupSize, int deathSteps)
@@ -1589,26 +1814,29 @@ public static class PlayerBotDriver
     /// <summary>PLAYER_BOT_RELOCATE for a move: its fields as they were (runs/legcheck.py reads bot= and to), then the
     /// reason (RelocateReason) and the fallback camp's con, - for none (the death cap holds, Cap); after a death, the
     /// milliseconds since the release, barred=old when the plan bars the anchor it had (#167 D9), and capKill= (#167 D6;
-    /// RelocateSuffix).</summary>
+    /// RelocateSuffix). #167 E W1: then recent=1 on a plan after a death (AfterDeathPlan) and near=1 on a camp its near
+    /// pass took (RelocateSuffix).</summary>
     public static string RelocateLine(string bot, int level, Vector3 from, Vector3 to, int distance, string monster,
         int monsterLevel, ushort zone, string reason, ConColor? fallback, long sinceReleaseMs, bool barredOld,
-        ConColor? capKill) =>
+        ConColor? capKill, bool recent = false, bool near = false) =>
         $"PLAYER_BOT_RELOCATE bot={bot} level={level} from=({from.X:0},{from.Y:0}) to=({to.X:0},{to.Y:0},{to.Z:0}) " +
         $"distance={distance} monster=\"{monster}\" monsterLevel={monsterLevel} zone={zone} reason={reason} " +
-        $"fallback={fallback?.ToString() ?? "-"}" + RelocateSuffix(reason, sinceReleaseMs, barredOld, capKill);
+        $"fallback={fallback?.ToString() ?? "-"}" + RelocateSuffix(reason, sinceReleaseMs, barredOld, capKill, recent, near);
 
     /// <summary>PLAYER_BOT_RELOCATE when no camp checked had a corridor (or none was found): checked= of them.</summary>
     public static string RelocateNoneLine(string bot, int level, int candidates, ushort zone, string reason,
-        long sinceReleaseMs, bool barredOld, ConColor? capKill) =>
+        long sinceReleaseMs, bool barredOld, ConColor? capKill, bool recent = false) =>
         $"PLAYER_BOT_RELOCATE bot={bot} level={level} none checked={candidates} zone={zone} reason={reason}" +
-        RelocateSuffix(reason, sinceReleaseMs, barredOld, capKill);
+        RelocateSuffix(reason, sinceReleaseMs, barredOld, capKill, recent, false);
 
     // #167 C1: RELOCATE sinceRelease= on a death's replan, last (the fields before it stay as they were); D9: then
     // barred=old when the plan bars the anchor the bot had (BarOldAnchor); D6: then capKill=, the lowest con that killed
-    // the bot in the last 5 minutes, YELLOW or harder (RememberKillerCon), while it keeps one (PlanCaps).
-    private static string RelocateSuffix(string reason, long sinceReleaseMs, bool barredOld, ConColor? capKill) =>
+    // the bot in the last 5 minutes, YELLOW or harder (RememberKillerCon), while it keeps one (PlanCaps). #167 E W1: then
+    // recent=1 and near=1.
+    private static string RelocateSuffix(string reason, long sinceReleaseMs, bool barredOld, ConColor? capKill,
+        bool recent, bool near) =>
         (reason == Died ? $" sinceRelease={sinceReleaseMs}" : "") + (barredOld ? " barred=old" : "") +
-        (capKill is ConColor kill ? $" capKill={kill}" : "");
+        (capKill is ConColor kill ? $" capKill={kill}" : "") + (recent ? " recent=1" : "") + (near ? " near=1" : "");
 
     /// <summary>The capped clock after a search of the wider ring (or one that found a target): set at the first that
     /// passed a monster over for the cap and found none, kept while that lasts, 0 once a search finds a target or
@@ -1683,6 +1911,12 @@ public static class PlayerBotDriver
         state.FightAdds = state.Swings = state.NotVisible = state.FightCasts = state.FightHeals = 0;
         state.FightPetCasts = state.FightWaits = state.FightControls = state.FightKites = state.FightCtlBroken = 0;
         state.FightKiteNone = default;                                              // #167 D8 kiteNone=
+        state.FightDots = 0;                                                        // #167 E C1 dots=
+        state.FightKillingQuickcast = false;                                        // #167 E C2b qcKill=
+        state.FightTargetMezzes = 0;                                                // #167 E C4 ctlMez=
+        state.FightRaceLeft = NoRace;                                               // #167 E-L raceLeft=
+        (state.FightStylesHeld, state.FightCastsHeld) = (0, 0);                     // #167 E-R styleHeld=, castHeld=,
+        (state.Reserve, state.NextReserveTick) = (0, 0);                            //   and a fresh reserve read
         state.TargetHeldBreaks = false;                                             // #167 C3
         state.FightAddControls = 0;                                                 // #167 C4
         (state.FightAdd, state.EngageDistance) = ((-1, -1), distance);              // #167 FIGHT addAt=, engageDist=
@@ -1733,6 +1967,35 @@ public static class PlayerBotDriver
     public static bool ProjectedBreak(byte health, double rate) =>
         health < Math.Max(BreakOffHealthPercent, Math.Min(95, rate * ProjectedSeconds));
 
+    /// <summary>The race since reach (#167 E-L): its target's health when the bot dies, at both sides' loss since the first
+    /// hit on the bot (hpAtReach, targetHpAtReach: FIGHT hpAtReach= and tHpAtReach=, TrackFight): targetHealth less what
+    /// the target loses while the bot loses the health it has left. A heal shows as less lost. Null with no hit yet or
+    /// under RaceReadLoss lost since; a target that lost nothing keeps its health.</summary>
+    public static int? TargetLeftAtDeath(byte health, byte targetHealth, int hpAtReach, int targetHpAtReach)
+    {
+        int botLost = hpAtReach - health, targetLost = targetHpAtReach - targetHealth;
+        if (hpAtReach < 0 || targetHpAtReach < 0 || botLost < RaceReadLoss) return null;
+        return targetHealth - health * Math.Max(0, targetLost) / botLost;
+    }
+
+    /// <summary>The race lost (#167 E-L, OneMonsterCase's losingRace): its target projected above RaceLossMargin when the
+    /// bot dies (TargetLeftAtDeath). On straight paths the projection holds from the read to the end, so it never fires
+    /// on a fight the bot wins (rest E1's "target ahead" rule gave up 23 wins, 8 of them defences); with hits in chunks
+    /// it reads high on some (the review's model: about 45 non-caster wins over two legs).</summary>
+    public static bool LosingRace(byte health, byte targetHealth, int hpAtReach, int targetHpAtReach) =>
+        TargetLeftAtDeath(health, targetHealth, hpAtReach, targetHpAtReach) > RaceLossMargin;
+
+    /// <summary>The fight's target health as the break-off reads it (#167 C2): its target's while it lives, else (at a kill)
+    /// the nearest hitter's (BreakOffFires, BreakOffStartWhy).</summary>
+    public static byte FightTargetHealth(GameLiving target, IReadOnlyList<(byte Health, int Distance, bool Avoided)> hitters)
+    {
+        if (target?.IsAlive == true) return target.HealthPercent;
+        byte health = 0;
+        for (int i = 0, nearest = int.MaxValue; i < hitters.Count; i++)
+            if (hitters[i].Distance < nearest) (health, nearest) = (hitters[i].Health, hitters[i].Distance);
+        return health;
+    }
+
     /// <summary>#167 hpAtReach=: an attack on the bot within the last second (lastHit:
     /// GameLiving.LastAttackedByEnemyTick, set on an attack that causes combat, GameLiving.cs:1515-1535: a miss, block,
     /// parry or evade too, AttackData.IsHit, AttackData.cs:44-53, and a resisted spell, SpellHandler.cs:2582-2594; 0,
@@ -1752,7 +2015,8 @@ public static class PlayerBotDriver
 
     /// <summary>A fight think (#167, st-deathsD's FIGHT and DEATH fields, Engage's WatchFight): heldSec= by think while its
     /// target is held (targetHeld: Hold), hpAtReach= and tHpAtReach= at the first think with a hit on the bot (HitNow),
-    /// and wouldBreak= at the first the projected break-off would fire (ProjectedBreak over HealthRate).</summary>
+    /// wouldBreak= at the first the projected break-off would fire (ProjectedBreak over HealthRate), and #167 E-L's
+    /// raceLeft= at the first think under BreakOffHealthPercent with a race read (TargetLeftAtDeath).</summary>
     public static void TrackFight(PlayerBotState state, long now, bool targetHeld, byte health, byte targetHealth, long lastHit)
     {
         if (targetHeld) state.FightHeldMs += TickMilliseconds;
@@ -1760,6 +2024,9 @@ public static class PlayerBotDriver
             (state.FightHpAtReach, state.FightTargetHpAtReach) = (health, targetHealth);
         if (state.WouldBreakHp < 0 && ProjectedBreak(health, HealthRate(state.HealthSamples, now, health)))
             state.WouldBreakHp = health;
+        if (state.FightRaceLeft == NoRace && health < BreakOffHealthPercent &&
+            TargetLeftAtDeath(health, targetHealth, state.FightHpAtReach, state.FightTargetHpAtReach) is int left)
+            state.FightRaceLeft = left;
     }
 
     /// <summary>PLAYER_BOT_BACK replan= (#167 C1): notOwed when the release owed no replan (OwesReplan); else moved once
@@ -1777,6 +2044,38 @@ public static class PlayerBotDriver
     /// its bind; else where it is (after a break-off, #167 C2, where it ran to).</summary>
     public static Vector3 RelocationOrigin(string reason, Vector3 deathSpot, Vector3 here) =>
         reason == Died ? deathSpot : here;
+
+    /// <summary>#167 E W1: a death within a GameBot's failure memory (FailureMemoryMilliseconds, 15 minutes); sinceDeathMs
+    /// -1: none since login.</summary>
+    public static bool RecentDeath(long sinceDeathMs) =>
+        sinceDeathMs >= 0 && sinceDeathMs < AutonomousDeathRecoveryPolicy.FailureMemoryMilliseconds;
+
+    /// <summary>#167 E W1: a plan after a death: a died, brokeoff or capped plan within RecentDeath. It looks near the
+    /// bot first (PlanCampChoice). An outgrown plan is left alone: it leaves a camp it outgrew for one at its level
+    /// (st-deathsD2/D2b: 10k+ outgrown plans died first 6 of 55).</summary>
+    public static bool AfterDeathPlan(string reason, long sinceDeathMs) =>
+        reason is Died or BrokeOff or Capped && RecentDeath(sinceDeathMs);
+
+    /// <summary>#167 E W1: the camp a plan takes. After a death (afterDeath, AfterDeathPlan) it first looks near the bot
+    /// (tryNear): nearMonsters (the zone it stands in) from here, within NearWalk, no fallback over NearFallbackMax
+    /// (BLUE), never a camp it failed at (PlanRelocation's maxWalk); a fresh one is taken (Near). Else the plan as
+    /// before: monsters (the plan's zone) from from (RelocationOrigin).</summary>
+    public static (T[] Spots, ConColor? Fallback, bool Stale, bool Near) PlanCampChoice<T>(
+        IReadOnlyList<(T Npc, Vector3 At, ConColor Con, bool Huntable, bool Avoided)> nearMonsters,
+        IReadOnlyList<(T Npc, Vector3 At, ConColor Con, bool Huntable, bool Avoided)> monsters, Vector3 here, Vector3 from,
+        ConColor cap, ConColor natural, IReadOnlyCollection<Vector3> failedCamps, ISet<T> rejected, int count,
+        ConColor? killerCon, bool afterDeath, bool tryNear = true) where T : class
+    {
+        if (afterDeath && tryNear && nearMonsters != null)
+        {
+            (T[] spots, ConColor? fallback, bool stale) = PlanRelocation(nearMonsters, here, cap, natural, failedCamps,
+                rejected, count, killerCon, natural < NearFallbackMax ? natural : NearFallbackMax, NearWalk);
+            if (spots.Length > 0 && !stale) return (spots, fallback, false, true);
+        }
+        (T[] far, ConColor? farFallback, bool farStale) = PlanRelocation(monsters, from, cap, natural, failedCamps, rejected,
+            count, killerCon);
+        return (far, farFallback, farStale, false);
+    }
 
     /// <summary>Where a relocation's corridor test starts (a corridor is one zone's, PlayerTravelPath.cs:75-81): where the
     /// bot is when it stands in the plan's zone (inZone); after a death with the bot at a bind in another zone of its
@@ -1865,10 +2164,14 @@ public static class PlayerBotDriver
     /// one such monster was fatal in 31 of st-deathsC's deaths, 22 begun at 95% health or more), unless the bot was sent to
     /// a camp of such names (huntAvoided: then it hunts them); or when the bot is a caster losing to it with its target
     /// above CasterBreakOffTargetPercent (the caster trap: 41 deaths, the monster reached the bot, and at death the target
-    /// was above 25% in 33 of them). Not while a hold on its target is ready (holdReady, HoldReady): the hold first.</summary>
+    /// was above 25% in 33 of them); #167 E-L: or when a bot that is no caster is losing the race to it (losingRace,
+    /// LosingRace: 113 non-caster deaths on st-deathsD2 and D2b, 105 with no break-off). A caster keeps D1's arm: its
+    /// target at 25% or less is C2's killing nuke's, which the break-off (Think's step before Engage) would pre-empt. Not
+    /// while a hold on its target is ready (holdReady, HoldReady): the hold first.</summary>
     public static bool OneMonsterCase(PlayerBotRole role, bool avoidedOnBot, bool huntAvoided, byte targetHealth,
-        bool holdReady) =>
-        !holdReady && (avoidedOnBot && !huntAvoided || role == PlayerBotRole.Caster && targetHealth > CasterBreakOffTargetPercent);
+        bool holdReady, bool losingRace) =>
+        !holdReady && (avoidedOnBot && !huntAvoided || role == PlayerBotRole.Caster && targetHealth > CasterBreakOffTargetPercent ||
+                       role != PlayerBotRole.Caster && losingRace);
 
     /// <summary>A caster spent (#167 D1): no damage spell it can pay for (canNuke false), its target held (a root it would
     /// stand off while it waits for power: 2 of st-deathsC's out-of-power deaths waited 190 and 168 times) and above
@@ -1918,16 +2221,18 @@ public static class PlayerBotDriver
         bool avoidedOnBot = false;
         for (int i = 0; i < hitters.Count; i++) avoidedOnBot |= hitters[i].Avoided;
         return BreakOffWhy(spent, hitters.Count, SecondMonsterCase(state.KilledWithAdds, state.LastKillTick, now),
-            state.Engaged && state.FollowsAddKill, avoidedOnBot, state.HuntAvoided);
+            state.Engaged && state.FollowsAddKill, avoidedOnBot, state.HuntAvoided,
+            role == PlayerBotRole.Caster && FightTargetHealth(state.Target, hitters) > CasterBreakOffTargetPercent);
     }
 
     /// <summary>BREAKOFF why= (#167 D1): the rule that fired. Spent (CasterSpent); else 2 or more monsters on the bot (adds);
     /// the second-monster case at the kill (atkill) or in the fight after it (followup, D2's FollowsAddKill); one monster
-    /// of a name it avoids, not in a camp of them (avoided); else a caster losing to one (caster).</summary>
+    /// of a name it avoids, not in a camp of them (avoided); a caster losing to one with its target above 25% (caster,
+    /// casterArm); else #167 E-L's race lost to one (race).</summary>
     public static string BreakOffWhy(bool spent, int monstersOnBot, bool atKill, bool followUp, bool avoidedOnBot,
-        bool huntAvoided) =>
+        bool huntAvoided, bool casterArm) =>
         spent ? Spent : monstersOnBot >= 2 ? ByAdds : atKill ? AtKill : followUp ? FollowUp :
-        avoidedOnBot && !huntAvoided ? AvoidedName : CasterLosing;
+        avoidedOnBot && !huntAvoided ? AvoidedName : casterArm ? CasterLosing : RaceLost;
 
     /// <summary>The dropped FIGHT line's adds= at a break-off (#167 D2, StartsBreakOff): BreaksOffNow returns before Engage
     /// folds the attackers into FightAdds, so the monsters on the bot (onBot, BREAKOFF attackers=) fold in here; with 2 or
@@ -1945,22 +2250,21 @@ public static class PlayerBotDriver
 
     /// <summary>A break-off's first rule as StartsBreakOff applies it (#167 C2; then the chasers' speed, Outruns, and a
     /// point to run to): BreaksOff over the monsters on the bot (hitters: each one's health and distance, and #167 D1
-    /// whether its name is one the bot avoids), its target's health while it lives, else (at a kill) the nearest hitter's,
-    /// the second-monster case (SecondMonsterCase; #167 D2: or the fight after it, FollowsAddKill, while engaged), #167
-    /// D1's one-monster case (OneMonsterCase: role and holdReady passed in, the UT fixture has no CharacterClass) and C4's
-    /// add control (addControlReady, asked only once the rest holds: it scans).</summary>
+    /// whether its name is one the bot avoids), its target's health while it lives, else (at a kill) the nearest hitter's
+    /// (FightTargetHealth), the second-monster case (SecondMonsterCase; #167 D2: or the fight after it, FollowsAddKill,
+    /// while engaged), #167 D1's one-monster case (OneMonsterCase: role and holdReady passed in, the UT fixture has no
+    /// CharacterClass) with #167 E-L's race (LosingRace, engaged with its target alive: the race read since the first hit
+    /// is that target's) and C4's add control (addControlReady, asked only once the rest holds: it scans).</summary>
     public static bool BreakOffFires(PlayerBotState state, PlayerBotRole role, bool holdReady, byte health,
         IReadOnlyList<(byte Health, int Distance, bool Avoided)> hitters, long now, Func<bool> addControlReady)
     {
-        byte targetHealth = 0;
+        byte targetHealth = FightTargetHealth(state.Target, hitters);
         bool avoidedOnBot = false;
-        if (state.Target?.IsAlive == true) targetHealth = state.Target.HealthPercent;
-        else
-            for (int i = 0, nearest = int.MaxValue; i < hitters.Count; i++)
-                if (hitters[i].Distance < nearest) (targetHealth, nearest) = (hitters[i].Health, hitters[i].Distance);
         for (int i = 0; i < hitters.Count; i++) avoidedOnBot |= hitters[i].Avoided;
         bool addFight = SecondMonsterCase(state.KilledWithAdds, state.LastKillTick, now) || state.Engaged && state.FollowsAddKill;
-        bool oneMonster = OneMonsterCase(role, avoidedOnBot, state.HuntAvoided, targetHealth, holdReady);
+        bool losingRace = state.Engaged && state.Target?.IsAlive == true &&                                // #167 E-L
+            LosingRace(health, targetHealth, state.FightHpAtReach, state.FightTargetHpAtReach);
+        bool oneMonster = OneMonsterCase(role, avoidedOnBot, state.HuntAvoided, targetHealth, holdReady, losingRace);
         return BreaksOff(hitters.Count, addFight, oneMonster, health, targetHealth, addControlReady: false, outruns: true) &&
             BreaksOff(hitters.Count, addFight, oneMonster, health, targetHealth, addControlReady(), outruns: true);
     }
@@ -2014,6 +2318,134 @@ public static class PlayerBotDriver
         int net = regeneration - longWind;
         if (fatigueConsumption > 1) net = (int)Math.Ceiling(net * fatigueConsumption * 0.01);
         return net >= 0 ? int.MaxValue : (endurance - SprintStopEndurance - 1) / -net;
+    }
+
+    /// <summary>The least endurance whose sprint outruns a chaser of this speed (#167 E-R: Outruns over SprintSeconds, at
+    /// the bot's regeneration, fatigue consumption and Long Wind), from just over SprintStartEndurance to
+    /// MaxEscapeReserve; none within it, int.MaxValue. 26 against 191 (4 s of sprint), 31 against 200, 41 against 205,
+    /// 21 against 150 (3 s).</summary>
+    public static int EscapeEndurance(int fastestSpeed, int regeneration, int fatigueConsumption, int longWind)
+    {
+        for (int endurance = SprintStartEndurance + 1; endurance <= MaxEscapeReserve; endurance++)
+            if (Outruns(fastestSpeed, SprintSeconds(endurance, regeneration, fatigueConsumption, longWind), rangedHarm: false))
+                return endurance;
+        return int.MaxValue;
+    }
+
+    /// <summary>The endurance a close fight keeps for a run (#167 E-R): EscapeEndurance against the fastest monster, read
+    /// at the run's 191 at the least (a choice, not the arithmetic: a 150-180 chaser needs 21, and the floor keeps 5 more
+    /// in hand), and ReserveMargin; 0 when that passes MaxEscapeReserve (a 205-or-faster monster: no reserve it could keep
+    /// buys a run, so it keeps its styles).</summary>
+    public static int EscapeReserve(int fastestSpeed, int regeneration, int fatigueConsumption, int longWind)
+    {
+        int need = EscapeEndurance(Math.Max(fastestSpeed, RunSpeed), regeneration, fatigueConsumption, longWind);
+        return need <= MaxEscapeReserve - ReserveMargin ? need + ReserveMargin : 0;
+    }
+
+    /// <summary>A style's endurance cost as StyleProcessor.CalculateEnduranceCost charges it (#167 E-R;
+    /// StyleProcessor.cs:460-479, private): a Battlemaster style 30 x cost / 40, any other weaponSpeed x cost / 40 and
+    /// 1 more under speed 40, scaled by the fatigue consumption (percent), 1 at the least. Valhalla's Blessing's free
+    /// proc (a 1.108 realm ability) is left out.</summary>
+    public static int StyleEnduranceCost(int weaponSpeed, int styleCost, int fatigueConsumption, bool battlemaster)
+    {
+        int cost = battlemaster ? 30 * styleCost / 40 : weaponSpeed * styleCost / 40 + (weaponSpeed < 40 ? 1 : 0);
+        return Math.Max(1, (int)Math.Ceiling(cost * fatigueConsumption * 0.01));
+    }
+
+    /// <summary>Whether a style of this cost leaves the bot's endurance at the reserve or above (#167 E-R, StyleWithin).
+    /// With no reserve, only whether it can pay (StyleProcessor's own check).</summary>
+    public static bool KeepsReserve(int endurance, int cost, int reserve) => endurance - cost >= reserve;
+
+    /// <summary>QueueUsableStyle's choice (#167 E-R; the review's seam): of the usable styles by level, highest first
+    /// (costs: each one's StyleEnduranceCost), the highest-level one that leaves the reserve (KeepsReserve); with no
+    /// reserve, today's pick, the highest whatever it costs (the server drops one the bot can't pay for at the swing,
+    /// PlayerAttackAction.cs:36-42); none, -1. Held: the reserve left the swing unstyled though the bot could pay for a
+    /// style (FIGHT styleHeld=), not a choice with none it could pay for (the fatigue the reserve didn't cause).</summary>
+    public static (int Index, bool Held) StyleWithin(IReadOnlyList<int> costs, int endurance, int reserve)
+    {
+        if (costs.Count == 0) return (-1, false);
+        if (reserve <= 0) return (0, false);
+        bool payable = false;
+        for (int i = 0; i < costs.Count; i++)
+        {
+            if (KeepsReserve(endurance, costs[i], reserve)) return (i, false);
+            payable |= endurance >= costs[i];
+        }
+        return (-1, payable);
+    }
+
+    /// <summary>Whether a hybrid's damage cast waits for the reserve (#167 E-R, Engage's cast gate): a reserve kept, the
+    /// cast's 5 would take the bot under it, and the bot is no caster or pet class (their spells are their fight, and
+    /// they style little). A heal is never held: it is SelfHeal's, not this gate's. #167 E fix R2: nor a cast that heals
+    /// its caster (healsCaster, HealsCaster: a lifetap). Reaver deaths rose from 3 on st-deathsD2 and D2b to 11 on
+    /// st-deathsE and Eb, 7 of them with the Siphon held (7-117 thinks, 5 of them 78-117, down to 0 endurance).</summary>
+    public static bool HoldsCast(PlayerBotRole role, int endurance, int reserve, bool healsCaster) =>
+        !healsCaster && reserve > 0 && role is not (PlayerBotRole.Caster or PlayerBotRole.Pet) &&
+        endurance - SpellEnduranceCost < reserve;
+
+    /// <summary>A cast that returns health to its caster (#167 E fix R2, HoldsCast's healsCaster): a lifedrain's StealLife
+    /// (LifedrainSpellHandler.cs; LifedrainNoVariance's is the same), an omni-lifedrain's (OmniLifedrainSpellHandler.cs)
+    /// and a damage snare's with a return (DamageSpeedDecrease.cs:32-33, its NoVariance kind), at a LifeDrainReturn above
+    /// 0: the Reaver's Siphons (60-70) and the Valewalker's Cycle of Life, Cycle of Death and Force of Nature (40-50). A
+    /// drain to power (DamageToPower) returns no health.</summary>
+    public static bool HealsCaster(eSpellType type, int lifeDrainReturn) =>
+        lifeDrainReturn > 0 && type is eSpellType.Lifedrain or eSpellType.LifedrainNoVariance or eSpellType.OmniLifedrain or
+            eSpellType.DamageSpeedDecrease or eSpellType.DamageSpeedDecreaseNoVariance;
+
+    /// <summary>Engage's cast gate on the spell the bot will cast (#167 E fix R2, its review's seam): HoldsCast with that
+    /// spell's HealsCaster, so a lifetap is never held.</summary>
+    public static bool HoldsDamageCast(PlayerBotRole role, int endurance, int reserve, Spell spell) =>
+        HoldsCast(role, endurance, reserve, HealsCaster(spell.SpellType, spell.LifeDrainReturn));
+
+    /// <summary>The reserve a hold keeps now (#167 E fix R2): the close fight's (reserve, ReserveNow's read) only while
+    /// holding can still buy a run, else 0 (no hold: the style and cast as before). Not under the run's need against the
+    /// fastest monster (runNeed, EscapeEndurance): endurance comes back neither in a fight nor moving
+    /// (ClassicRestRegeneration.cs), so no hold buys a run from under it (26 of st-deathsE and Eb's 31 held in-fight deaths
+    /// were under it at death, 15 in the fight after a caught run). Not while its target, the only monster on the bot
+    /// (targetAlone), is at BreakOffTargetPercent or less: no break-off fires from it then (BreaksOff) and none is left to
+    /// run from at the kill (2 held deaths alone with the target at 1-3%; no run on the E legs could have needed it). With
+    /// another monster on the bot it holds on: the run at the kill (why=atkill, followup) needs it (21 such runs after a
+    /// held kill, 18 alive). The threshold: 10 changes those 2 deaths and no run; 15 adds 1 death and puts race runs from
+    /// a bot near death at risk (fires at targets of 13-15); 20 to 30 change no death more.</summary>
+    public static int HoldingReserve(int reserve, int runNeed, int endurance, byte targetHealth, bool targetAlone) =>
+        reserve > 0 && endurance >= runNeed && !(targetAlone && targetHealth <= BreakOffTargetPercent) ? reserve : 0;
+
+    /// <summary>The bot's health at its target's death on the race since the first hit on it (#167 E-R, CloseFight):
+    /// health less what it loses while its target loses the health it has left, both at their loss since that hit
+    /// (hpAtReach, targetHpAtReach: FIGHT hpAtReach= and tHpAtReach=). Null with no hit yet or under RaceReadLoss
+    /// lost since (TargetLeftAtDeath's read); int.MinValue when the target lost nothing since.</summary>
+    public static int? HealthLeftAtKill(byte health, byte targetHealth, int hpAtReach, int targetHpAtReach)
+    {
+        int botLost = hpAtReach - health, targetLost = targetHpAtReach - targetHealth;
+        if (hpAtReach < 0 || targetHpAtReach < 0 || botLost < RaceReadLoss) return null;
+        return targetLost <= 0 ? int.MinValue : health - targetHealth * botLost / targetLost;
+    }
+
+    /// <summary>A close fight (#167 E-R), the one that keeps a run's reserve: 2 or more monsters on the bot now or in the
+    /// fight (fightAdds, FIGHT adds=), a defence or the fight after an add kill (defence), or the race projecting the
+    /// bot under CloseRacePercent at its target's death (healthLeftAtKill; none read yet, no). 14% of st-deathsD's
+    /// style-class fights on straight-line races, about 18% with hits in chunks (the review); an ordinary pull keeps its
+    /// styles.</summary>
+    public static bool CloseFight(int monstersOnBot, int fightAdds, bool defence, int? healthLeftAtKill) =>
+        monstersOnBot >= 2 || fightAdds >= 2 || defence || healthLeftAtKill < CloseRacePercent;
+
+    /// <summary>ReserveNow's read (#167 E-R; #167 E fix R2, its review's seam), over the monsters attacking the bot
+    /// (onBot: each one's speed and whether it is the bot's target) and its target's speed (targetSpeed, on the bot or
+    /// not; 0 with none alive): the close fight's reserve (CloseFight on onBot's count, EscapeReserve against the
+    /// fastest), the run's need against that fastest chaser itself (RunNeed: EscapeEndurance, not EscapeReserve's 191
+    /// floor; 0 with no reserve) and whether no monster but the target is on the bot (TargetAlone), HoldingReserve's
+    /// terms.</summary>
+    public static (int Reserve, int RunNeed, bool TargetAlone) ReserveRead(int targetSpeed,
+        IReadOnlyList<(int Speed, bool IsTarget)> onBot, int fightAdds, bool defence, int? leftAtKill, int regeneration,
+        int fatigue, int longWind)
+    {
+        int others = 0, fastest = targetSpeed;
+        for (int i = 0; i < onBot.Count; i++)
+            (others, fastest) = (onBot[i].IsTarget ? others : others + 1, Math.Max(fastest, onBot[i].Speed));
+        int reserve = CloseFight(onBot.Count, fightAdds, defence, leftAtKill)
+            ? EscapeReserve(fastest, regeneration, fatigue, longWind)
+            : 0;
+        return (reserve, reserve > 0 ? EscapeEndurance(fastest, regeneration, fatigue, longWind) : 0, others == 0);
     }
 
     /// <summary>Where a break-off runs to (#167 C2): of the candidates, those ahead of straight away from the chasers (a
@@ -2085,6 +2517,34 @@ public static class PlayerBotDriver
         return null;
     }
 
+    /// <summary>A break-off's point 800 out (#167 E T1; RelaxedBreakOffRings) when its rings and the straight-away point
+    /// found none (BreakOffGoal's relaxed pass, from the same add scan): the ring's point (candidates) ahead of the
+    /// chasers and out of every other monster's reach (NextBreakOffPoint), else the point straight away 800 out
+    /// (StraightAwayGoal) only where no other monster's reach lies (InAddReach): a run into an add is worse than holding
+    /// (the review). None, null: it holds or turns (NoPointTurns). st-deathsD2/D2b: 11 of 14 turns for want of a point were
+    /// fatal.</summary>
+    public static Vector3? NearBreakOffGoal<T>(Vector3 here, IReadOnlyList<Vector3> chasers, IReadOnlyList<Vector3> candidates,
+        IReadOnlyList<(T Npc, Vector3 At, int AggroRange)> adds, List<Vector3> blocked, Func<Vector3, bool> walkable,
+        Func<Vector3, Vector3?> onMesh) where T : class =>
+        NextBreakOffPoint(here, chasers, candidates, adds, blocked, walkable) ??
+        StraightAwayGoal(here, chasers, RelaxedBreakOffRings[0],
+            point => onMesh(point) is Vector3 on && !InAddReach(on, adds) ? on : null, blocked, walkable);
+
+    /// <summary>With no point to run to (#167 E T1; BreakOffGoal's passes found none), whether the bot turns now: a chaser
+    /// not held in reach (freeDistance within CaughtReach; none, int.MaxValue), a hit while it holds (hitNow,
+    /// HitWhileHolding: a chaser that harms from range, or one held but casting, never comes within it), or a caster or
+    /// pet class that can pay for a damage spell (casterOrPetWithPower, read after a try failed) at any distance: it opens
+    /// at range. With no chaser (nearest int.MaxValue) there is none to turn on. Else it holds where it stands.
+    /// st-deathsD2/D2b: 11 of 14 no-point turns were fatal; 7 of the 11 opened with a gap a ranged class could use, and
+    /// the 2 casters that turned on chasers 1,400 away lived (the review).</summary>
+    public static bool NoPointTurns(int freeDistance, bool hitNow, bool casterOrPetWithPower, int nearest) =>
+        nearest != int.MaxValue && (freeDistance <= CaughtReach || hitNow || casterOrPetWithPower);
+
+    /// <summary>Hit while it holds (#167 E T1, NoPointTurns): an attack on the bot (lastHit, HitNow's: within the last second,
+    /// a miss too) since its hold began (holdSince; 0: not holding). One before the hold is the run's (CaughtNow).</summary>
+    public static bool HitWhileHolding(long holdSince, long lastHit, long now) =>
+        holdSince != 0 && lastHit >= holdSince && HitNow(lastHit, now);
+
 
     /// <summary>A break-off's step this think (#167 C2): with no monster still after it, Done; at its point (or blocked)
     /// with one still after it, NextPoint; else Run. #167 D2: caught (CaughtNow), Caught: it acts on the chaser; from
@@ -2097,6 +2557,15 @@ public static class PlayerBotDriver
         sinceMs >= BreakOffMilliseconds && nearestChaser > ShakenDistance ? PlayerBotBreakOff.Done :
         sinceMs >= BreakOffMaxMilliseconds ? PlayerBotBreakOff.Fight :
         arrived ? PlayerBotBreakOff.NextPoint : PlayerBotBreakOff.Run;
+
+    /// <summary>A break-off's sprint on its run (#167 E-S): off while sprinting with the nearest chaser not held
+    /// (nearestFree; none, int.MaxValue) at least SprintOffGap behind and the ground the fastest chaser gains on the run's
+    /// 191 in the ChaseSeconds it chases (fastest); on again with one within SprintOnGap and the endurance to start one
+    /// (over SprintStartEndurance, GamePlayer.cs:8633). Null: no change. Left on to the run's end, a run ended near 5%
+    /// and the next fight's break-off was refused why=sprint (breakoff E3: 15 deaths).</summary>
+    public static bool? BreakOffSprint(bool sprinting, int nearestFree, int fastest, int endurance) =>
+        sprinting ? (nearestFree >= SprintOffGap + (long)ChaseSeconds * Math.Max(0, fastest - RunSpeed) ? false : null)
+            : nearestFree < SprintOnGap && endurance > SprintStartEndurance ? true : null;
 
     /// <summary>Caught on a break-off's run (#167 D2): a chaser not held within CaughtReach (nearestChaser) since
     /// inReachSince (InReachSince; 0: none) for CaughtMilliseconds. Health fell in 9 of st-deathsC's 12 caught runs, and
@@ -2133,6 +2602,14 @@ public static class PlayerBotDriver
     /// (CrowdControlECSEffect.cs:26-37 stops its attack only): dropped (OnBot), 2 of the 41 "shook" died within 10 s.
     /// A held one counts in no reach (CaughtNow, WeakestInReach).</summary>
     public static bool KeepsChaser(bool targetsBot, int distance) => targetsBot && distance <= ChaseRadius;
+
+    /// <summary>#167 E T2b: a break-off done (BreakOffStep's Done) runs on to its point instead of stopping where it is when
+    /// it has one it hasn't reached (hasGoal, arrived), under BreakOffMaxMilliseconds, and it stands in another monster's
+    /// reach (inAddReachHere, StandsInAddReach: read once, runningOn after). A chaser that gave up stands in its own aggro
+    /// reach, so this reaches it too (the review). st-deathsD2/D2b: a fight opened within 3 s of 10 of 135 shook ends, 7
+    /// of them fatal.</summary>
+    public static bool RunsOnToClear(bool hasGoal, bool arrived, long sinceMs, bool runningOn, Func<bool> inAddReachHere) =>
+        hasGoal && !arrived && sinceMs < BreakOffMaxMilliseconds && (runningOn || inAddReachHere());
 
     /// <summary>Whom a caught bot turns on with no control to cast (#167 D2): the chaser within reach, not held, with the
     /// least health (a monster under 33% health also moves slower, MaxSpeedCalculator.cs:142-143); none, null.</summary>
@@ -2191,12 +2668,16 @@ public static class PlayerBotDriver
     /// <summary>A break-off's end in the state (#167 C2; EndBreakOff's, the review of 9aacd69): the run cleared, and unless
     /// the bot died (its death's own recovery then, HandleDeath) the relocation owed (AfterBreakOff, owesReplan:
     /// OwesReplan's rule); fought, no new break-off for BreakOffMilliseconds: it fights them out. #167 D1: a spent
-    /// caster's owes no relocation but a rest (RecoverBeforePull): it was short of power, not of a camp.</summary>
+    /// caster's owes no relocation but a rest (RecoverBeforePull): it was short of power, not of a camp. #167 E T1, T2b:
+    /// the turn, the holds, the retry, the speeds and the run-on go with the run.</summary>
     public static void FinishBreakOff(PlayerBotState state, string outcome, bool owesReplan, long now)
     {
         bool spent = state.BreakOffWhy == Spent;
         (state.BreakOffSince, state.BreakOffGoal, state.BreakOffArrived) = (0, null, false);
         (state.BreakOffWhy, state.CaughtSince) = (null, 0);
+        (state.BreakOffTurn, state.BreakOffHolds, state.NextBreakOffRetryTick) = (null, 0, 0);   // #167 E T1
+        (state.BreakOffHoldSince, state.BreakOffHoldWhy) = (0, null);
+        (state.BreakOffSpeed, state.BreakOffChaserSpeed, state.BreakOffRunsOn) = (-1, -1, false);   // #167 E T2b: the run-on
         state.BreakOffChasers.Clear();
         state.BreakOffBlocked.Clear();
         if (outcome == Died) return;
@@ -2336,6 +2817,45 @@ public static class PlayerBotDriver
     public static bool CasterControlAllowed(Spell spell, bool takes, long contactMs) =>
         takes && (spell.SpellType is not eSpellType.Mesmerize || MezWanted(contactMs, spell.CastTime));
 
+    /// <summary>The hold a stun or mez gives a monster now (#167 E C4): its duration (ms), or what the NPC's diminishing
+    /// immunity leaves of it (NpcImmunityEffect.CalculateNewEffectDuration, ECSImmunityEffect.cs:46-51: a half the second
+    /// time, a quarter the third); none on it, the whole duration.</summary>
+    public static long HoldNowMs(NpcImmunityEffect immunity, int duration) =>
+        immunity == null ? duration : immunity.CalculateNewEffectDuration(duration);
+
+    /// <summary>The step back's walk (#167 E C4): from the bot's distance to its point (KiteRange: the stop less
+    /// KiteStopMargin) at RunSpeed; nothing to walk, 0. From melee (150) to a 1,420 stop: 1,220 units, 6,387 ms. It
+    /// assumes the walk to the stop: with no clear point KitePoint walks KiteFallbackDistance (400, about 1.3 s), which
+    /// the stun outlasts, so the mez goes first where it wasn't needed (the review's note).</summary>
+    public static long StepBackWalkMs(int stop, int distance) =>
+        KiteRange(stop, distance) is int range ? (range - distance) * 1000L / RunSpeed : 0;
+
+    /// <summary>Whether the escape's mez goes before the stun (#167 E C4): hits on the bot (hitsOnBot) from its target
+    /// alone (soleHitter: CasterAction then steps back from a stunned target too; with an add's hits CasterHolds is false,
+    /// no step back comes and the stun holds through the nukes, where the next nuke would end a mez) and the stun's hold
+    /// ends before that step back's walk (walkMs, StepBackWalkMs) and the margin, so the monster wakes as the bot walks
+    /// with its back to it. A Mentalist's mez (16-80 s) outlasts it, and the bot opens again from its stop as at a
+    /// pull.</summary>
+    public static bool MezBeforeStun(bool hitsOnBot, bool soleHitter, long stunHoldMs, long walkMs) =>
+        hitsOnBot && soleHitter && stunHoldMs < walkMs + ControlMarginMilliseconds;
+
+    /// <summary>The control CasterStep casts at its target (#167 E C4): ChooseControl's target order (a stun, a root, a mez
+    /// as the escape), with the mez before the stun when the stun's hold now (holdMs: HoldNowMs) ends before the step
+    /// back's walk (MezBeforeStun); no mez it may cast, the stun. allowed and ready as TargetControl gives them.</summary>
+    public static (Spell, SpellLine) ChooseTargetControl(IEnumerable<(Spell Spell, SpellLine Line)> controls,
+        Func<Spell, bool> ready, Func<Spell, bool> allowed, Func<Spell, long> holdMs, bool hitsOnBot, bool soleHitter,
+        long walkMs)
+    {
+        (Spell Spell, SpellLine Line) choice = ChooseControl(controls, ready, allowed, forAdd: false, petClass: false);
+        if (choice.Spell?.SpellType is eSpellType.Stun && MezBeforeStun(hitsOnBot, soleHitter, holdMs(choice.Spell), walkMs))
+        {
+            (Spell Spell, SpellLine Line) mez = ChooseControl(controls, ready,
+                spell => spell.SpellType is eSpellType.Mesmerize && allowed(spell), forAdd: false, petClass: false);
+            if (mez.Spell != null) return mez;
+        }
+        return choice;
+    }
+
     /// <summary>The add the bot controls (#167 C4): the nearest monster with the bot as its target (TargetsBot), not held
     /// (Held: a stun, a root or a mez) and not its target; none, null. Caster add fights were fatal 51 times in 53 in
     /// st-deathsB: CasterStep controlled only the target.</summary>
@@ -2443,7 +2963,10 @@ public static class PlayerBotDriver
 
     /// <summary>The nukes the target still needs (#167 C11), from what the fight's casts took off it so far (its health
     /// at the fight's first think, startHealth, less now, over nukesCast): ceil(health / ((startHealth - health) /
-    /// nukesCast)); nothing measured (no cast, or no health off it yet), int.MaxValue.</summary>
+    /// nukesCast)); nothing measured (no cast, or no health off it yet), int.MaxValue. #167 E C1: a DoT counts as one
+    /// cast. While its ticks are due it under-reads the cast (more nukes needed: the safe side); once they have landed it
+    /// over-reads the next direct nuke, as a bolt does (on the casters design's slot model, Mentalist slots with 1 needed
+    /// but 2 or more direct nukes short: 0 of 134 before, 5 of 80 with the DoTs; the review's r3).</summary>
     public static int NukesNeeded(int startHealth, int health, int nukesCast)
     {
         int taken = startHealth - health;
@@ -2458,12 +2981,46 @@ public static class PlayerBotDriver
         needed <= contactMs / Math.Max(1, nukeCastMs + 250) + (quickcastReady ? 1 : 0);
 
     /// <summary>CasterStep's killsFirst (#167 C11; the review of 9aacd69): the nukes the fight's casts say the target still
-    /// needs (NukesNeeded, from its health at the fight's first think) land first (KillsFirst), the bot at
-    /// KillFirstHealthPercent or more and one monster at most on it.</summary>
+    /// needs (NukesNeeded, from its health at the fight's first think) land first (KillsFirst, one more with Quickcast
+    /// ready or already on: #167 E C2a, once on it is no longer "ready" (QuickcastReady) and the killing nuke lost the
+    /// Quickcast it turned on to the control at the next think), the bot at KillFirstHealthPercent or more or its nuke
+    /// killing at once (#167 E C2b: oneNukeKills, OneNukeKills; E2's 13 died with the target on 2-15%, and the 60% gate
+    /// put the target's escape before C11's killing nuke), and one monster at most on it.</summary>
     public static bool KillsFirstNow(int engageHealth, int health, int casts, long contactMs, int nukeCastMs,
-        bool quickcastReady, byte botHealth, int attackers) =>
-        KillsFirst(NukesNeeded(engageHealth, health, casts), contactMs, nukeCastMs, quickcastReady) &&
-        botHealth >= KillFirstHealthPercent && attackers <= 1;
+        bool quickcastReady, bool quickcastOn, bool oneNukeKills, byte botHealth, int attackers) =>
+        KillsFirst(NukesNeeded(engageHealth, health, casts), contactMs, nukeCastMs, quickcastReady || quickcastOn) &&
+        (botHealth >= KillFirstHealthPercent || oneNukeKills) && attackers <= 1;
+
+    /// <summary>Whether one nuke kills the target (#167 E C2b, the review's test, not NukesNeeded's 1, which a bolt or
+    /// a landed DoT over-reads): its hit at the variance minimum, less the resist (minimumHit: ExpectedHit with min for
+    /// both bounds), at least the target's health (hit points) less its own DoTs' ticks still due (pendingDot,
+    /// PendingDotDamage).</summary>
+    public static bool OneNukeKills(double minimumHit, double health, double pendingDot) => minimumHit >= health - pendingDot;
+
+    /// <summary>Engage's cast choice and whether it kills at once (#167 E C2b; the review of the batch, risk-1: judged on
+    /// the nuke the bot will cast). Alone in a caster's fight (solo: one monster at most on it) with Quickcast on or due
+    /// (quickcastOnOrDue), the nuke it has any power for (anyPower: Nuke under the killing quickcast, as the server lets
+    /// it cast then) when that kills (kills: OneNukeKills from its handler, NukeKillsNow); else the cast it can pay for
+    /// (paid: CombatSpell), and whether that kills (solo only). Before, the any-power nuke was judged at every cast choice
+    /// while the bot cast the paid one: KillsFirstNow's health-gate bypass and the killing quickcast, which Engage reads
+    /// every think from that verdict, gave the Quickcast and the control's reserve to a nuke that didn't kill. One Nuke
+    /// pass in the common case, two when the any-power nuke under Quickcast doesn't kill.</summary>
+    public static (Spell Spell, SpellLine Line, bool OneNukeKills) KillingNukeChoice(bool solo, bool quickcastOnOrDue,
+        Func<(Spell, SpellLine)> anyPower, Func<(Spell, SpellLine)> paid, Func<Spell, bool> kills)
+    {
+        if (solo && quickcastOnOrDue && anyPower() is (Spell any, SpellLine anyLine) && any != null && kills(any))
+            return (any, anyLine, true);
+        (Spell spell, SpellLine line) = paid();
+        return (spell, line, solo && spell != null && kills(spell));
+    }
+
+    /// <summary>Whether the bot's next nuke is the killing one under Quickcast (#167 E C2b): a caster in a fight
+    /// (caster), its chosen nuke kills at once (oneNukeKills, OneNukeKills), one monster at most on it (attackers: the
+    /// review), and the cast goes under Quickcast (on, or ready with hits interrupting the bot: quickcastDue). Then it
+    /// keeps no control in reserve (ControlReserve) and a nuke it has any power for is ready (NukeReady): the server
+    /// checks only power left under Quickcast (SpellHandler.cs:771-776, :978-984).</summary>
+    public static bool KillingQuickcast(bool caster, bool oneNukeKills, bool quickcastOn, bool quickcastDue, int attackers) =>
+        caster && oneNukeKills && attackers <= 1 && (quickcastOn || quickcastDue);
 
     /// <summary>Whether a control on the target is worth its cost (#167 D11): a BLUE or harder, the bot under
     /// KillFirstHealthPercent, or 2 or more live monsters on it (attackers: LiveHitters); a GREEN otherwise gets none, as a
@@ -2587,7 +3144,7 @@ public static class PlayerBotDriver
     };
 
     /// <summary>A monster coming at the bot (#167 F7): it may attack it, it has the bot as its target and it is within
-    /// IncomingRadius; not the one Engage found unreachable while that lasts (unreachable), between scans too.</summary>
+    /// IncomingRadius; not one Engage found unreachable while its mark lasts (unreachable), between scans too.</summary>
     public static bool IsIncoming(bool targetsBot, bool attackable, int distance, bool unreachable) =>
         targetsBot && attackable && distance <= IncomingRadius && !unreachable;
 
@@ -2628,10 +3185,13 @@ public static class PlayerBotDriver
     /// RoamRadius of a failedCamps spot; AWBC:3246, :3803-3804) while another is left, those with the safest median, and
     /// that median as Fallback, the con the bot hunts there (AWBC:3446-3452). #167 D6: no fallback camp whose median is
     /// over the cap's limit after killerCon, the lowest con that killed the bot in the last 5 minutes (KillerLimit: under
-    /// a YELLOW or harder one, never under GREEN; none: no camp).</summary>
+    /// a YELLOW or harder one, never under GREEN; none: no camp). #167 E W1: a near pass bounds it (maxWalk: only
+    /// monsters within it of here; 0, none) and then takes no failed camp at all; fallbackMax (none: natural) is the
+    /// hardest fallback median.</summary>
     public static (T[] Spots, ConColor? Fallback, bool Stale) PlanRelocation<T>(
         IReadOnlyList<(T Npc, Vector3 At, ConColor Con, bool Huntable, bool Avoided)> monsters, Vector3 here, ConColor cap,
-        ConColor natural, IReadOnlyCollection<Vector3> failedCamps, ISet<T> rejected, int count, ConColor? killerCon = null)
+        ConColor natural, IReadOnlyCollection<Vector3> failedCamps, ISet<T> rejected, int count, ConColor? killerCon = null,
+        ConColor? fallbackMax = null, int maxWalk = 0)
         where T : class
     {
         Dictionary<(int, int), List<int>> grid = new();
@@ -2642,8 +3202,10 @@ public static class PlayerBotDriver
             if (!grid.TryGetValue(cell, out List<int> list)) grid[cell] = list = new();
             list.Add(i);
         }
+        float reach = (float)maxWalk * maxWalk;                                          // #167 E W1
         int[] order = Enumerable.Range(0, monsters.Count)
-            .Where(i => monsters[i].Huntable && monsters[i].Con > ConColor.GREY && !rejected.Contains(monsters[i].Npc))
+            .Where(i => monsters[i].Huntable && monsters[i].Con > ConColor.GREY && !rejected.Contains(monsters[i].Npc) &&
+                (maxWalk <= 0 || Vector3.DistanceSquared(monsters[i].At, here) <= reach))
             .OrderBy(i => Vector3.DistanceSquared(monsters[i].At, here))
             .ToArray();
         bool Failed(int i) => failedCamps != null && failedCamps.Any(f =>
@@ -2656,17 +3218,19 @@ public static class PlayerBotDriver
             if (fit.Count == count) break;
         }
         if (fit.Count > 0) return (fit.ToArray(), null, false);
+        ConColor most = fallbackMax ?? natural;                                          // #167 E W1
         List<(int I, ConColor Median, bool Fresh, bool Failed)> safe = new();
         foreach (int i in order)
         {
             (ConColor median, ConColor fresh) = CampCon(monsters, grid, i);
-            if (median <= natural && (KillerLimit(killerCon) is not ConColor limit || median <= limit))   // #167 D6
+            if (median <= most && (KillerLimit(killerCon) is not ConColor limit || median <= limit))   // #167 D6
                 safe.Add((i, median, fresh <= natural, Failed(i)));
         }
         if (safe.Count == 0) return (Array.Empty<T>(), null, false);
         bool stale = !safe.Any(c => c.Fresh);
         IEnumerable<(int I, ConColor Median, bool Fresh, bool Failed)> pool = stale ? safe : safe.Where(c => c.Fresh);
-        pool = pool.Any(c => !c.Failed) ? pool.Where(c => !c.Failed) : pool;
+        if (pool.Any(c => !c.Failed)) pool = pool.Where(c => !c.Failed);
+        else if (maxWalk > 0) return (Array.Empty<T>(), null, false);                   // #167 E W1: near, never a failed one
         ConColor safest = pool.Min(c => c.Median);
         return (pool.Where(c => c.Median == safest).Take(count).Select(c => monsters[c.I].Npc).ToArray(), safest, stale);
     }
@@ -2788,6 +3352,100 @@ public static class PlayerBotDriver
         if (swing.AttackResult is eAttackResult.TargetNotVisible) state.NotVisible++;
     }
 
+    /// <summary>#167 E M2: the bot's TargetInView (AttackComponent.cs:1062-1070, SpellHandler.cs:450): the navmesh's 2D ray
+    /// (los, HeadlessLos), or without it its target fighting it (fightsBot: FightsBot) in contact, within CaughtReach
+    /// (distance): a client in contact sees what hits it. Not at range (the review): a ranged monster casting at a ranged
+    /// bot from behind a wall is no sight. st-deathsD2/D2b: 5 deaths in fights with half the swings or more refused for
+    /// sight (98 of 111, 344 of 345), every killer the bot's own target in contact.</summary>
+    public static bool SightInReach(bool los, int distance, bool fightsBot) =>
+        los || fightsBot && distance <= CaughtReach;
+
+    /// <summary>#167 E M2: out of sight since (0: in sight): kept while out of sight, now when it goes.</summary>
+    public static long BlindClock(long since, bool inView, long now) => inView ? 0 : since != 0 ? since : now;
+
+    /// <summary>#167 E M2: a target out of sight BlindDropMilliseconds (blindSince, BlindClock) that fights neither the bot
+    /// (fightsBot) nor its pet (petOnTarget), nor comes at it (targetsBot: it has the bot as its target), is dropped. 49
+    /// stuck fights stood 2,390 s, 250 s at one cluricaun, swinging at nothing. One with the bot as its target is kept
+    /// (the review): Incoming, which BATCH-E leaves as it is, took it back at the next think and 5 s on it was dropped
+    /// again, a FIGHT line each time; it is a monster coming at the bot round an obstacle, or fighting it.</summary>
+    public static bool DropsBlindTarget(long blindSince, long now, bool fightsBot, bool petOnTarget, bool targetsBot) =>
+        blindSince != 0 && now - blindSince >= BlindDropMilliseconds && !fightsBot && !petOnTarget && !targetsBot;
+
+    /// <summary>#167 E M2: a target dropped for want of sight (DropBlind), or one an Animist left for want of a turret in
+    /// reach (CY3's skip, LeaveTurretTarget), is marked for the pick alone (BlindSkips, until UnreachableSkipMilliseconds
+    /// on): the review, a blocked walk's unreachable mark (LeaveUnreachable) made self-defence (Attacker) and the
+    /// monster coming at it (Incoming) pass it over too, so one that came round and hit the bot was no hitter for 30 s,
+    /// and it overwrote a real unreachable mark. #167 E R1: each marked one keeps its own time (BlindSkips; marked again,
+    /// from then): with one mark, a second drop forgot the first and the pick went back to it (st-deathsE/Eb: 213 drops
+    /// of a name dropped again within 30 s with another between, A, B, A). The marks past their time go as a new one
+    /// comes.</summary>
+    public static void MarkBlind(PlayerBotState state, GameLiving target, long now) => Mark(state.BlindSkips, target, now);
+
+    /// <summary>#167 E M2: whether the pick (FindWithin, and only it) passes over a monster: one MarkBlind marked, while
+    /// its time lasts (#167 E R1: every one marked, BlindSkips).</summary>
+    public static bool BlindSkipped(PlayerBotState state, GameLiving npc, long now) => Marked(state.BlindSkips, npc, now);
+
+    /// <summary>#167 E U1, Engage's blocked walk to its target (no corridor leads there): the target is left and marked
+    /// unreachable for its own UnreachableSkipMilliseconds (Unreachables; marked again, from then), as R1 made the blind
+    /// marks. One mark (Unreachable) kept only the last: st-deathsE2b, Pbotmaada stood on a pocket of the navmesh in
+    /// Muspelheim from which no corridor leads to its camp, and its picks every 2 s went A, B, A, each walk blocked, for
+    /// the last 3.5 minutes of the leg (two hitters out of reach would take turns at self-defence the same way, one each
+    /// think). The marks past their time go as a new one comes.</summary>
+    public static void LeaveUnreachable(PlayerBotState state, GameLiving target, long now)
+    {
+        Mark(state.Unreachables, target, now);
+        state.Target = null;
+    }
+
+    /// <summary>#167 E U1: whether a monster is marked unreachable now (LeaveUnreachable): the pick (PickSkips),
+    /// self-defence (SkipsHitter) and the monster coming at the bot (Incoming) pass it over.</summary>
+    public static bool UnreachableMarked(PlayerBotState state, GameLiving npc, long now) => Marked(state.Unreachables, npc, now);
+
+    /// <summary>#167 E M2, U1: whether the pick (FindWithin) passes over a monster: marked unreachable, or blind (the
+    /// pick's alone).</summary>
+    public static bool PickSkips(PlayerBotState state, GameLiving npc, long now) =>
+        UnreachableMarked(state, npc, now) || BlindSkipped(state, npc, now);
+
+    // A mark of its own for 30 s (UnreachableSkipMilliseconds): the target's old one and those past their time go.
+    private static void Mark(List<(GameLiving Npc, long Until)> marks, GameLiving target, long now)
+    {
+        for (int i = marks.Count - 1; i >= 0; i--)
+            if (marks[i].Npc == target || now >= marks[i].Until) marks.RemoveAt(i);
+        marks.Add((target, now + UnreachableSkipMilliseconds));
+    }
+
+    private static bool Marked(List<(GameLiving Npc, long Until)> marks, GameLiving npc, long now)
+    {
+        for (int i = 0; i < marks.Count; i++)
+            if (marks[i].Npc == npc && now < marks[i].Until) return true;
+        return false;
+    }
+
+    /// <summary>#167 E R1: the stop a bot steps in to (Engage's walk) when its target is out of sight (inView false) and
+    /// it would drop the target for it (kept false: one fighting neither the bot nor its pet, nor coming at it,
+    /// DropsBlindTarget's terms): from beyond contact (CaughtReach), BlindStepDistance nearer, never nearer than its melee
+    /// stop (meleeStop) nor than contact; there it looks again. 0, no step: in sight, kept, or in contact, where the blind
+    /// clock drops it after BlindDropMilliseconds as before. M2 dropped it from wherever it stood, and the next pick from
+    /// there was as blind: st-deathsE/Eb, 644 of 657 blind drops beyond contact, 547 past 1,000 (a caster's or a Thane's
+    /// spell stop, round a cave's bend), mostly after 2 fruitless casts (SpellHandler.cs:694), 434 within 15 s of the
+    /// bot's previous one. D's cast watch had walked such a bot in after its 4th fruitless cast (MaxFruitlessCasts): the
+    /// two looping Thanes, castFailed 13-18 a leg and 47 kills in 48 fights on D; on E castFailed 0, 344 blind drops
+    /// and 20 kills.</summary>
+    public static int BlindStepStop(bool inView, bool kept, int distance, int meleeStop) =>
+        inView || kept || distance <= CaughtReach ? 0 : Math.Max(Math.Min(meleeStop, CaughtReach), distance - BlindStepDistance);
+
+    /// <summary>#167 E R1, Engage's choice at a look (the fix's review: a seam its rows reach): a drop (Drop) only where no
+    /// step is (BlindStepStop 0: in contact, in sight or kept) and DropsBlindTarget drops it (kept: it fights the bot or
+    /// its pet, or comes at it); else the stop it steps in to (BlindStop: BlindStepStop's, 0 for none), or while a cast is
+    /// under way (casting, begun in sight) the stop it had (blindStop). On a drop, blindStop as it was.</summary>
+    public static (bool Drop, int BlindStop) BlindLook(bool inView, bool kept, int distance, int meleeStop,
+        long blindSince, long now, bool casting, int blindStop)
+    {
+        int step = BlindStepStop(inView, kept, distance, meleeStop);
+        if (step == 0 && DropsBlindTarget(blindSince, now, kept, false, false)) return (true, blindStop);
+        return (false, casting ? blindStop : step);
+    }
+
     /// <summary>The DEATH line's killer. ProcessDeath notifies Dying last (GameLiving.cs:2073), in ReaperService's phase of
     /// the tick the bot was killed in, so before its next think (GameLoop.cs:149, :159). Never throws: any sender but a
     /// driven bot is ignored.</summary>
@@ -2817,7 +3475,7 @@ public static class PlayerBotDriver
     }
 
     /// <summary>Low, or sitting and not yet recovered (APP:290-291 without the combat check), or after a kill until
-    /// recovered (recoverBeforePull; Recovered: full health, the role's power stop, 60% endurance, #167 F3): the driver
+    /// recovered (recoverBeforePull; Recovered: full health, the role's power stop, 80% endurance, #167 F3, E-R): the driver
     /// rests when MayRest says so, and a task that walks lets it.</summary>
     public static bool WantsRest(GamePlayer player, bool recoverBeforePull = false) =>
         WantsRest(NeedsRest(player.HealthPercent, player.MaxMana, player.ManaPercent, player.EndurancePercent),
@@ -2963,17 +3621,40 @@ public static class PlayerBotDriver
     /// the range filter (checked at cast time), less the ranks a GameBot never casts (BotBrain.IsOutclassedDamageSpell,
     /// BotBrain.cs:3413): a lower rank of a kind it knows higher (Fungal Pin once it has Fungal Thistle), or one under half
     /// the level of its best. payload resolves a bomber's payload (NoDamageBomber); it has no default (the review of
-    /// 451121c: a caller that left it out brought back the root bomber as a nuke, and no test failed).</summary>
+    /// 451121c: a caller that left it out brought back the root bomber as a nuke, and no test failed). #167 E C1: perLine
+    /// (a caster's; no default) keeps a rank outclassed only by one of another line (OutclassedInLine): Greater
+    /// Conflagration 37 at Fire 41 beside Ice Blast (Potent) 41 at Cold 6, the score (NukeValue) choosing between them.
+    /// Bolts of two lines have two recast timers (SharedTimerGroup), so a Wizard, Eldritch or Runemaster with a bolt in
+    /// each now casts both in 20 s.</summary>
     public static List<(Spell Spell, SpellLine Line)> DamageSpells(IEnumerable<(Spell Spell, SpellLine Line)> usable, int level,
-        Func<int, Spell> payload)
+        Func<int, Spell> payload, bool perLine)
     {
         List<(Spell Spell, SpellLine Line)> all = usable.Where(pair => !NoDamageBomber(pair.Spell, payload)).ToList(), nukes = new();
         List<Spell> known = all.ConvertAll(pair => pair.Spell);
         foreach ((Spell spell, SpellLine line) in all)
             if (spell.IsHarmful && spell.Damage > 0 && spell.Range > 0 && !spell.NeedInstrument && spell.Level <= level &&
-                !BotBrain.IsOutclassedDamageSpell(spell, known, level))
+                !(perLine ? OutclassedInLine(spell, line, all, level) : BotBrain.IsOutclassedDamageSpell(spell, known, level)))
                 nukes.Add((spell, line));
         return nukes;
+    }
+
+    /// <summary>BotBrain.IsOutclassedDamageSpell (BotBrain.cs:3413-3429) with its same-kind rule within the spell's own line
+    /// (#167 E C1): a higher rank of the same type, target, area, instant-ness and PBAoE in that line outclasses it; one
+    /// under half the level of the best damage spell in any line, as before.</summary>
+    public static bool OutclassedInLine(Spell spell, SpellLine line, IEnumerable<(Spell Spell, SpellLine Line)> known, int level)
+    {
+        int best = 0;
+        foreach ((Spell other, SpellLine otherLine) in known)
+        {
+            if (other == null || other == spell || !other.IsHarmful || other.Level > level || !BotCasterPriority.IsDamage(other))
+                continue;
+            best = Math.Max(best, other.Level);
+            if (otherLine?.KeyName == line?.KeyName && other.Level > spell.Level && other.SpellType == spell.SpellType &&
+                other.Target == spell.Target && (other.Radius > 0) == (spell.Radius > 0) &&
+                (other.CastTime <= 0) == (spell.CastTime <= 0) && other.IsPBAoE == spell.IsPBAoE)
+                return true;
+        }
+        return best - spell.Level >= 5 && spell.Level * 2 < best;
     }
 
     // #167 F10b: an Animist's bomber does only its payload (BomberBrain.cs:32-34, its SubSpellID); the bomber's own
@@ -2983,43 +3664,89 @@ public static class PlayerBotDriver
     private static bool NoDamageBomber(Spell spell, Func<int, Spell> payload) =>
         spell.SpellType is eSpellType.Bomber && !(payload?.Invoke(spell.SubSpellID) is Spell sub && sub.Damage > 0);
 
-    /// <summary>Where an Animist stands to pull with its main turret planted (#167 F10b): a turret is planted at the bot's
-    /// feet (SummonPet) and reaches turretReach (its TurretSpell, 1,000; 1,350 for a Verdant taunt), and the monster the
-    /// bot pulls comes to the bot. So by its turret (here, within AnimistStandMargin of it) while its spell reaches the
-    /// target from there; else at its spell's reach (spellStop) toward the turret, if the turret reaches that spot (less
-    /// the margin); else it plants a new one (Replant) by the target, within the turret's reach of it less the margin and
-    /// its spell's, here if it is that near already. The old approach walked it to its spell's reach from wherever it
-    /// was, 1,420 units from the target with most nukes, out of its turret's reach.</summary>
+    /// <summary>Where an Animist stands to pull with its main turret planted (#167 F10b, E CY3): a turret is planted at
+    /// the bot's feet (SummonPet) and reaches turretReach (its TurretSpell, 1,000; 1,350 for a Verdant taunt), and the
+    /// monster the bot pulls comes to the bot. With a damage turret (damageTurret: Arboreal's), by its turret (here,
+    /// within AnimistStandMargin of it) while both its spell and its turret reach the target from there, the turret less
+    /// the margin (limit); else it plants a new one (Replant) by the target: here if it is within that limit of it
+    /// already, else at a stand AnimistStandMargin inside the limit. AnimistStepFor plants within the margin of the
+    /// stand, short of it on the walk in, so the new turret lands within the limit and keeps (with the stand at the
+    /// limit it landed up to the margin beyond, and the bot planted again every think). F10b stood by the turret while
+    /// only the spell reached (1,420 with most nukes), or at the spell's reach toward the turret (the target up to 2,270
+    /// from it): the turret's aggro range is its spell's (TurretBrain.cs:18-24), so the monster reached the bot unhurt.
+    /// Over st-deathsD2 and D2b Arboreal one-monster pulls opened beyond the limit died 8 of 15, within it 0 of 33. A
+    /// snare or taunt turret (Creeping's, Verdant's) keeps F10b's stand: by it while its spell reaches the target, else
+    /// at its spell's reach toward the turret if the turret reaches that spot (less the margin), else the new one, at
+    /// the limit; it wears the monster down or draws it on its way in (its pulls beyond the limit died 1 of 33, 0 of 28
+    /// on st-hearth11 and 11b).</summary>
     public static (Vector3 Stand, bool Replant) AnimistStand(Vector3 bot, Vector3 turret, Vector3 target, int spellStop,
-        int turretReach)
+        int turretReach, bool damageTurret)
     {
-        float toTurret = Vector3.Distance(target, turret);
-        if (toTurret <= spellStop)
+        float limit = Math.Min(spellStop, turretReach - AnimistStandMargin), toTurret = Vector3.Distance(target, turret);
+        if (toTurret <= (damageTurret ? limit : spellStop))
             return (Vector3.Distance(bot, turret) <= AnimistStandMargin ? bot : turret, false);
-        Vector3 near = target + (turret - target) * (spellStop / toTurret);
-        if (Vector3.Distance(near, turret) <= turretReach - AnimistStandMargin) return (near, false);
-        float toBot = Vector3.Distance(target, bot), standOff = Math.Min(spellStop, turretReach - AnimistStandMargin);
-        return (toBot <= standOff ? bot : target + (bot - target) * (standOff / toBot), true);
+        if (!damageTurret)                                                              // F10b: a snare or taunt turret
+        {                                                                               //   wears or draws the monster
+            Vector3 near = target + (turret - target) * (spellStop / toTurret);
+            if (Vector3.Distance(near, turret) <= turretReach - AnimistStandMargin) return (near, false);
+        }
+        float toBot = Vector3.Distance(target, bot), standOff = damageTurret ? limit - AnimistStandMargin : limit;
+        return (toBot <= limit ? bot : target + (bot - target) * (standOff / toBot), true);
     }
+
+    /// <summary>#167 E CY3: an Animist's step before a pull (AnimistApproach), from AnimistStand's stand (toStand: the
+    /// bot's distance to it) and replant, and whether it can plant a new turret now (CanReplant). When it must and
+    /// can't, it waits (its in-combat flag, its pet's too, lasts 10 s after a fight: WantsPet), from waitSince (0: not
+    /// yet) for TurretWaitMilliseconds, then leaves the target (Skip); F10b pulled it from its spell's reach then, out
+    /// of the turret's. Else it walks to the stand, then plants (Replant) or pulls.</summary>
+    public static PlayerBotAnimistStep AnimistStepFor(float toStand, bool replant, bool canReplant, long waitSince, long now) =>
+        replant && !canReplant
+            ? waitSince != 0 && now - waitSince >= TurretWaitMilliseconds ? PlayerBotAnimistStep.Skip : PlayerBotAnimistStep.Wait
+            : toStand > AnimistStandMargin ? PlayerBotAnimistStep.Walk
+            : replant ? PlayerBotAnimistStep.Replant : PlayerBotAnimistStep.Pull;
+
+    /// <summary>#167 E CY3: the target an Animist leaves (AnimistStepFor's Skip) is out of a new turret's reach, not
+    /// unreachable: the pick alone passes it over (MarkBlind, as M2's blind drop), so self-defence (Attacker) and the
+    /// monster coming at it (Incoming) still answer it if it aggroes, and the blocked walks' unreachable marks are kept
+    /// (the review: an unreachable mark left a skipped monster that hit the bot unanswered 30 s).</summary>
+    public static void LeaveTurretTarget(PlayerBotState state, GameLiving target, long now)
+    {
+        MarkBlind(state, target, now);
+        state.Target = null;
+    }
+
+    /// <summary>#167 E CY3: PLAYER_BOT_TURRET, an Animist's new turret by its target (step=replant: the old one
+    /// released) or a target it left (step=skip: no turret it could plant within TurretWaitMilliseconds), with the
+    /// target's distance from the turret it had and that turret's reach.</summary>
+    public static string TurretLine(string bot, int level, PlayerBotAnimistStep step, string target, ConColor con,
+        int toTurret, int reach) =>
+        $"PLAYER_BOT_TURRET bot={bot} level={level} step={step.ToString().ToLowerInvariant()} target=\"{target}\" " +
+        $"con={con} toTurret={toTurret} reach={reach}";
 
     /// <summary>The nuke for this cast (#167 F9), chosen at each cast choice: the bolt when it is ready (a 20-s recast:
     /// a Shaman's Fungal Thistle, a Wizard's Flame Streak), else the best ready single-target spell (Better), else an area
     /// one, but never one while an add stands in its radius (it would pull it). Ready: off its recast and paid for. None
     /// ready: none, and the bot swings until one is (the old choice kept the best spell, and its cast failed on the
-    /// recast).</summary>
+    /// recast). #167 E C1: with a score (value: a caster's NukeValues; no default), the bolt and the single-target spells
+    /// by it, the highest first (an exact tie: Better); the area ones still last, by Better. Without one (null: every other
+    /// role, the pull's stop, TRAIN's spell=), as before.</summary>
     public static (Spell, SpellLine) ChooseNuke(IEnumerable<(Spell Spell, SpellLine Line)> spells, Func<Spell, bool> ready,
-        bool addInRadius)
+        bool addInRadius, Func<Spell, double> value)
     {
         Spell best = null;
         SpellLine bestLine = null;
         int bestRank = int.MaxValue;
+        double bestValue = double.NegativeInfinity;
         foreach ((Spell spell, SpellLine line) in spells)
         {
             bool area = spell.Radius > 0;
             if (area && addInRadius || !ready(spell)) continue;
-            int rank = spell.SpellType is eSpellType.Bolt ? 0 : area ? 2 : 1;
-            if (best == null || rank < bestRank || rank == bestRank && Better(spell, best))
-                (best, bestLine, bestRank) = (spell, line, rank);
+            bool scored = value != null && !area;
+            int rank = area ? 2 : scored ? 1 : spell.SpellType is eSpellType.Bolt ? 0 : 1;
+            double v = scored ? value(spell) : 0;
+            if (best == null || rank < bestRank ||
+                rank == bestRank && (scored ? v > bestValue || v == bestValue && Better(spell, best) : Better(spell, best)))
+                (best, bestLine, bestRank, bestValue) = (spell, line, rank, v);
         }
         return (best, bestLine);
     }
@@ -3037,45 +3764,310 @@ public static class PlayerBotDriver
     private static bool IsDamageOverTime(Spell spell) =>
         spell.SpellType is eSpellType.DamageOverTime or eSpellType.DamageOverTimeNoVariance;
 
-    // PLAYER_BOT_TRAIN's spell=: the nuke it opens a fight with, everything ready and no add.
+    /// <summary>Engage's cast cycle (#167 E C1): the next cast choice comes Math.Max(900, cast + 250) ms after a cast
+    /// (Engage's NextCombatChoiceTick).</summary>
+    public static int CastCycleMs(int castMs) => Math.Max(900, castMs + 250);
+
+    /// <summary>The expected damage of one landed hit or tick (#167 E C1), from the server's own numbers: the handler's base
+    /// (damageBase: CalculateDamageBase, the spell's damage by stat and item spec, SpellHandler.cs:3002-3114), the mean of
+    /// its variance (CalculateDamageVariance's min and max: the spec's lower bound and the level offset, none for a DoT,
+    /// SpellHandler.cs:2912-2996), less the target's resist to its damage type (GetResist: an NPC's racial resist too,
+    /// :3221-3248). A bolt resists half and takes the other half x 2.5 L over the target's armour (boltArmorFactor,
+    /// BoltSpellHandler.cs:58-85; a block isn't counted).</summary>
+    public static double ExpectedHit(double damageBase, double varianceMin, double varianceMax, int resistPercent, bool bolt,
+        double boltArmorFactor)
+    {
+        double hit = damageBase * (varianceMin + varianceMax) / 2;
+        double kept = 1 - resistPercent * 0.01;
+        return bolt ? hit * (0.5 * kept + 0.5 * boltArmorFactor) : hit * kept;
+    }
+
+    /// <summary>A DoT's ticks (#167 E C1): one at its start (DamageOverTimeECSEffect.cs:9-18), then one every frequency
+    /// while before its expiry, which the pulse loop reads first (EffectService.cs:104-117): ceil(duration / frequency).
+    /// Mind Annihilation (24 s, 4 s) 6; Illusory Excrutiation (20 s, 5 s) 4.</summary>
+    public static int DotTicks(int durationMs, int frequencyMs) =>
+        frequencyMs <= 0 ? 1 : Math.Max(1, (durationMs + frequencyMs - 1) / frequencyMs);
+
+    /// <summary>The ticks a DoT lands before the target dies (#167 E C1): the first at once, one more each frequency of the
+    /// fight's horizon (horizonMs, KillHorizonMs), at most its ticks.</summary>
+    public static int RealizedTicks(int ticks, int frequencyMs, double horizonMs) =>
+        frequencyMs <= 0 ? Math.Min(ticks, 1) : (int)Math.Min(ticks, 1 + Math.Floor(Math.Max(0, horizonMs) / frequencyMs));
+
+    /// <summary>The fight's horizon for a new DoT (#167 E C1): the target's health (hit points) less its own DoTs' ticks
+    /// still due (pendingDot, DotTicksLeft), at the bot's best sustained direct damage per millisecond (bestDirectPerMs:
+    /// NukeValue's best non-bolt; none, no limit).</summary>
+    public static double KillHorizonMs(double health, double pendingDot, double bestDirectPerMs) =>
+        bestDirectPerMs <= 0 ? double.PositiveInfinity : Math.Max(0, health - pendingDot) / bestDirectPerMs;
+
+    /// <summary>The ticks a DoT on the target still lands (#167 E C1): one at its next tick (nextInMs) and each frequency
+    /// after, while before its expiry (expireInMs), the expiry read first (EffectService.cs:104-117).</summary>
+    public static int DotTicksLeft(long expireInMs, long nextInMs, int frequencyMs) =>
+        frequencyMs <= 0 || nextInMs >= expireInMs ? 0
+            : (int)((expireInMs - Math.Max(0, nextInMs) + frequencyMs - 1) / frequencyMs);
+
+    /// <summary>A nuke's expected damage per millisecond of its cast cycle (#167 E C1): the hit (ExpectedHit) times its land
+    /// chance (hitChancePercent: CalculateToHitChance; a resist takes the whole cast, SpellHandler.cs:2482-2500) times its
+    /// ticks (1 for a direct hit; a DoT's RealizedTicks), over CastCycleMs. Per cast-second, not per power: per power left
+    /// 86 of 323 Sorcerer wins unfinished in their own cast slots (the casters design's s6).</summary>
+    public static double NukeValue(double expectedHit, double hitChancePercent, int ticks, int castMs) =>
+        expectedHit * Math.Clamp(hitChancePercent, 0, 100) * 0.01 * ticks / CastCycleMs(castMs);
+
+    /// <summary>Whether a caster casts a DoT at its target (#167 E C1): its ticks are damage, which ends a root and a mez but
+    /// not a stun (GameLiving.HandleCrowdControlOnAttacked, GameLiving.cs:1749-1830): so a stun caster always, a root or mez
+    /// caster only where a control on the target isn't worth it (controlWorth: ControlWorth).</summary>
+    public static bool DotFits(bool hasStun, bool controlWorth) => hasStun || !controlWorth;
+
+    /// <summary>Whether a control holds the target while the bot's own DoT is on it (#167 E C1): a stun does; a root or a mez
+    /// ends at the next tick (GameLiving.cs:1749-1830).</summary>
+    public static bool HoldSurvivesDot(Spell control, bool ownDotOn) => !ownDotOn || control.SpellType is eSpellType.Stun;
+
+    /// <summary>Whether the score's nuke keeps a root caster's root castable (#167 E C1): the server lets no root replace a
+    /// damage-and-snare slow (RootTakes), so a caster with a root (rootWanted; the review: at any con, so no root caster is
+    /// newly moved onto one) isn't moved onto one the old order (Better's, oldChoice) didn't choose. Where the old order
+    /// chose one, the trade stays: forbidding it doubles a YELLOW kill's time and adds 75% power (the design's s11).</summary>
+    public static bool KeepsRootCastable(Spell scored, Spell oldChoice, bool rootWanted) =>
+        !rootWanted || scored?.SpellType is not eSpellType.DamageSpeedDecrease ||
+        oldChoice?.SpellType is eSpellType.DamageSpeedDecrease;
+
+    /// <summary>Nuke's ready test (#167 E C1, the review's seam): off its recast (offRecast) and paid for (paid,
+    /// HasPowerFor), or under the killing quickcast (#167 E C2b: killingQuickcast, KillingQuickcast) with any power
+    /// left (mana: the server checks only that under Quickcast, SpellHandler.cs:771-776, :978-984); with a score
+    /// (scored: a caster's at a monster) a DoT (dot) only where it fits (dotFits, DotFits) and no DoT it conflicts with
+    /// is on the target (dotConflict, DotConflicts: its cast would only replace it). Unscored (every other role), as
+    /// before.</summary>
+    public static bool NukeReady(bool offRecast, bool paid, bool killingQuickcast, int mana, bool scored, bool dot,
+        bool dotFits, bool dotConflict) =>
+        offRecast && (paid || killingQuickcast && mana > 0) && (!scored || !dot || dotFits && !dotConflict);
+
+    /// <summary>A caster's nuke by its score (#167 E C1, the review's seam): ChooseNuke with the score (value: NukeValues),
+    /// then, where a root may be wanted (rootWanted), not a damage-and-snare nuke the old order (no score) didn't choose
+    /// (KeepsRootCastable): the score's choice among the rest. No score (value null): ChooseNuke as before.</summary>
+    public static (Spell, SpellLine) ScoredNuke(IEnumerable<(Spell Spell, SpellLine Line)> spells, Func<Spell, bool> ready,
+        bool addInRadius, Func<Spell, double> value, bool rootWanted)
+    {
+        (Spell spell, SpellLine line) = ChooseNuke(spells, ready, addInRadius, value);
+        if (value != null && !KeepsRootCastable(spell, ChooseNuke(spells, ready, addInRadius, null).Item1, rootWanted))
+            (spell, line) = ChooseNuke(spells, s => ready(s) && s.SpellType is not eSpellType.DamageSpeedDecrease, addInRadius,
+                value);
+        return (spell, line);
+    }
+
+    // PLAYER_BOT_TRAIN's spell=: the nuke it opens a fight with, everything ready and no add. #167 E C1: a caster's
+    // damage spells by its own lines, in the old order (no score: there is no monster to score them at).
     public static string BestDamageSpellName(GamePlayer player) =>
-        ChooseNuke(DamageSpells(UsableSpells(player), player.Level, SkillBase.GetSpellByID), _ => true, false).Item1 is Spell s
+        ChooseNuke(DamageSpells(UsableSpells(player), player.Level, SkillBase.GetSpellByID,
+                player.CharacterClass is { } c && RoleOf(c.ID) == PlayerBotRole.Caster), _ => true, false, null).Item1 is Spell s
             ? FormattableString.Invariant($"{s.Name.Replace(' ', '_')}:{s.Level}") : "-";
 
     // #167 F9: the nuke at a cast choice, from the damage spells cached per level. An add in an area spell's radius is
     // looked for only when an area spell would be chosen: any other monster (IsExperienceTarget) within it of the target,
-    // but one already on the bot.
-    private static (Spell, SpellLine) Nuke(PlayerBotState state, GamePlayer player, GameLiving target)
+    // but one already on the bot. #167 E C1: a caster's single-target nukes at a monster by their expected damage per
+    // cast-second (NukeValues); a DoT only where it fits (DotFits) and none it conflicts with is on the target
+    // (DotConflicts, read once before the passes); a caster with a root not moved onto a damage-and-snare nuke the old
+    // order didn't choose (ScoredNuke's KeepsRootCastable; the review: rootWanted at any con). NukeReady and ScoredNuke
+    // are the tested seams. #167 E C2b: under the killing quickcast (killingQuickcast: KillingNukeChoice's any-power
+    // pass; TakeTarget's and a level-up's choice read Engage's state.KillingQuickcast) a nuke it has any power for.
+    private static (Spell, SpellLine) Nuke(PlayerBotState state, GamePlayer player, GameLiving target) =>
+        Nuke(state, player, target, state.KillingQuickcast);
+
+    private static (Spell, SpellLine) Nuke(PlayerBotState state, GamePlayer player, GameLiving target, bool killingQuickcast)
     {
         KnowSpells(state, player);
-        bool Ready(Spell spell) => player.GetSkillDisabledDuration(spell) <= 0 && HasPowerFor(player.MaxMana, player.Mana, spell.Power);
-        (Spell spell, SpellLine line) = ChooseNuke(state.Nukes, Ready, false);
+        bool scores = target is GameNPC && RoleOf(player.CharacterClass.ID) == PlayerBotRole.Caster;
+        bool dotFits = scores && DotFits(state.HasStun, ControlWorth(ConLevels.GetConColor(player.GetConLevel(target)),
+            player.HealthPercent, LiveHitters(player)));
+        Dictionary<Spell, double> values = scores ? NukeValues(state, player, target, GameLoop.GameLoopTime) : null;
+        HashSet<Spell> conflicts = scores && dotFits ? DotConflicts(state, target) : null;
+        bool Ready(Spell spell) => NukeReady(player.GetSkillDisabledDuration(spell) <= 0,
+            HasPowerFor(player.MaxMana, player.Mana, spell.Power), killingQuickcast, player.Mana, scores, IsDamageOverTime(spell),
+            dotFits,
+            conflicts?.Contains(spell) == true);
+        Func<Spell, double> value = values == null ? null : spell => values.TryGetValue(spell, out double v) ? v : 0;
+        bool rootWanted = scores && state.HasRoot;
+        (Spell spell, SpellLine line) = ScoredNuke(state.Nukes, Ready, false, value, rootWanted);
         if (spell == null || spell.Radius <= 0 || target == null) return (spell, line);
         foreach (GameNPC npc in target.GetNPCsInRadius((ushort)spell.Radius))
             if (npc != target && npc.IsAlive && IsExperienceTarget(npc) && !(npc.IsAttacking && npc.TargetObject == player))
-                return ChooseNuke(state.Nukes, Ready, true);
+                return ScoredNuke(state.Nukes, Ready, true, value, rootWanted);
         return (spell, line);
     }
 
-    // APP:694-710 without the quickbar filter.
-    private static void QueueUsableStyle(GamePlayer player)
+    // #167 E C1: each single-target nuke's expected damage per cast-second at the target (NukeValue), from its own handler
+    // (KnowSpells' NukeHandlers): the direct ones first, whose best sustained one (no bolt: its 20-s recast) sets the
+    // fight's horizon (KillHorizonMs) for the DoTs' ticks (RealizedTicks), less the ticks the bot's own DoTs still owe
+    // (PendingDotDamage). One pass per Nuke: one a cast choice (at most one a second), two when the any-power nuke under
+    // Quickcast doesn't kill (KillingNukeChoice); the dictionary is reused. CalculateToHitChance
+    // copies the bot's effect list once per nuke: about 10 copies a cast choice, no world scan.
+    [ThreadStatic] private static Dictionary<Spell, double> _nukeValues;
+    private static Dictionary<Spell, double> NukeValues(PlayerBotState state, GamePlayer player, GameLiving target, long now)
     {
-        if (player.styleComponent.NextCombatStyle != null || player.EndurancePercent < 15 || player.ActiveWeapon == null)
-            return;
-        AttackData lastAttack = player.attackComponent.attackAction.LastAttackData;
-        Style style = player.GetAllUsableSkills()
-            .Select(entry => entry.Item1)
-            .OfType<Style>()
-            .Where(candidate => StyleProcessor.CanUseStyle(lastAttack, player, candidate, player.ActiveWeapon))
-            .OrderByDescending(candidate => candidate.Level)
-            .FirstOrDefault();
-        if (style != null)
-            player.styleComponent.NextCombatStyle = style;
+        Dictionary<Spell, double> values = _nukeValues ??= new();
+        values.Clear();
+        double bestDirect = 0;
+        foreach ((Spell spell, _) in state.Nukes)
+        {
+            if (spell.Radius > 0 || IsDamageOverTime(spell) ||
+                !state.NukeHandlers.TryGetValue(spell, out DOL.GS.Spells.SpellHandler handler))
+                continue;
+            double perMs = NukeValue(ExpectedHitOf(handler, spell, player, target), handler.CalculateToHitChance(target), 1,
+                spell.CastTime);
+            values[spell] = perMs;
+            if (spell.SpellType is not eSpellType.Bolt) bestDirect = Math.Max(bestDirect, perMs);
+        }
+        double horizon = double.NaN;
+        foreach ((Spell spell, _) in state.Nukes)
+        {
+            if (spell.Radius > 0 || !IsDamageOverTime(spell) ||
+                !state.NukeHandlers.TryGetValue(spell, out DOL.GS.Spells.SpellHandler handler))
+                continue;
+            if (double.IsNaN(horizon))                                                  // read once, with a DoT only
+                horizon = KillHorizonMs(target.Health, PendingDotDamage(state, player, target, now), bestDirect);
+            values[spell] = NukeValue(ExpectedHitOf(handler, spell, player, target), handler.CalculateToHitChance(target),
+                RealizedTicks(DotTicks(spell.Duration, spell.Frequency), spell.Frequency, horizon), spell.CastTime);
+        }
+        return values;
     }
 
-    // APP:474-500, plus the leash.
+    // #167 E C2b: whether a nuke the bot will cast (KillingNukeChoice's) kills its target at once (OneNukeKills): its hit
+    // at the variance minimum less the resist (and a bolt's armour), against the target's health less its own DoTs'
+    // ticks still due. A caster's at a monster (the score's handlers; a pet summon has none: false).
+    private static bool NukeKillsNow(PlayerBotState state, GamePlayer player, GameLiving target, Spell spell, long now) =>
+        target is GameNPC && spell != null && state.NukeHandlers.TryGetValue(spell, out DOL.GS.Spells.SpellHandler handler) &&
+        OneNukeKills(ExpectedHitOf(handler, spell, player, target, minimum: true), target.Health,
+            PendingDotDamage(state, player, target, now));
+
+    // #167 E C1: ExpectedHit from the nuke's handler (CalculateDamageBase, CalculateDamageVariance), the target's resist to
+    // its damage type (GetResist) and a bolt's armour factor (2.5 x the bot's level over the target's armour, as
+    // BoltSpellHandler.ModifyDamageWithTargetResist reads it; an NPC has no hit location). #167 E C2b: minimum, the hit
+    // at the variance minimum (OneNukeKills).
+    private static double ExpectedHitOf(DOL.GS.Spells.SpellHandler handler, Spell spell, GamePlayer player, GameLiving target,
+        bool minimum = false)
+    {
+        handler.CalculateDamageVariance(target, out double min, out double max);
+        bool bolt = spell.SpellType is eSpellType.Bolt;
+        return ExpectedHit(handler.CalculateDamageBase(target), min, minimum ? min : max, target.GetResist(spell.DamageType), bolt,
+            bolt ? player.Level * 2.5 / Math.Max(1, AttackComponent.CalculateTargetArmor(target, eArmorSlot.NOTSET, out _, out _))
+                : 0);
+    }
+
+    // #167 E C1: the damage the bot's own DoTs on the target still owe (DotTicksLeft at each one's expected tick; a landed
+    // DoT rolls no resist again).
+    private static double PendingDotDamage(PlayerBotState state, GamePlayer player, GameLiving target, long now)
+    {
+        double pending = 0;
+        foreach (ECSGameSpellEffect effect in target.effectListComponent.GetSpellEffects(eEffect.DamageOverTime))
+            if (effect.SpellHandler?.Caster == player && effect.SpellHandler.Spell is Spell spell &&
+                state.NukeHandlers.TryGetValue(spell, out DOL.GS.Spells.SpellHandler handler))
+                pending += DotTicksLeft(effect.ExpireTick - now, effect.NextTick - now, spell.Frequency) *
+                    ExpectedHitOf(handler, spell, player, target);
+        return pending;
+    }
+
+    // #167 E C1: the bot's DoTs that conflict with one on the target (the server's own test,
+    // DoTSpellHandler.HasConflictingEffectWith, DoTSpellHandler.cs:43-57: the same effect group, or the same type and
+    // frequency; a Mentalist's Mana and Mentalism DoTs, 4 s and 5 s, stack): a cast would only replace it. The target's
+    // effect list read once per cast choice, before ScoredNuke's passes (the review); the set is reused.
+    [ThreadStatic] private static HashSet<Spell> _dotConflicts;
+    private static HashSet<Spell> DotConflicts(PlayerBotState state, GameLiving target)
+    {
+        HashSet<Spell> conflicts = _dotConflicts ??= new();
+        conflicts.Clear();
+        List<ECSGameSpellEffect> dots = target.effectListComponent.GetSpellEffects(eEffect.DamageOverTime);
+        if (dots.Count == 0) return conflicts;
+        foreach ((Spell spell, _) in state.Nukes)
+        {
+            if (!IsDamageOverTime(spell) || !state.NukeHandlers.TryGetValue(spell, out DOL.GS.Spells.SpellHandler handler))
+                continue;
+            foreach (ECSGameSpellEffect effect in dots)
+                if (effect.SpellHandler != null && handler.HasConflictingEffectWith(effect.SpellHandler))
+                {
+                    conflicts.Add(spell);
+                    break;
+                }
+        }
+        return conflicts;
+    }
+
+    // #167 E C1: a DoT of the bot's own on the target (HoldSurvivesDot).
+    private static bool OwnDotOn(GamePlayer player, GameLiving target)
+    {
+        foreach (ECSGameSpellEffect effect in target.effectListComponent.GetSpellEffects(eEffect.DamageOverTime))
+            if (effect.SpellHandler?.Caster == player) return true;
+        return false;
+    }
+
+    // APP:694-710 without the quickbar filter.
+    // APP:694-710 without the quickbar filter. #167 E-R: the style StyleWithin takes of the usable ones by level, each at
+    // its cost as StyleProcessor charges it (StyleEnduranceCost; a shield style off the left hand, as the swing pays for
+    // it, PlayerAttackAction.cs:38), keeping a close fight's reserve (reserve: ReserveNow's; 0 out of one, today's pick);
+    // a choice the reserve left unstyled counts FIGHT styleHeld=.
+    private static void QueueUsableStyle(PlayerBotState state, GamePlayer player, int reserve)
+    {
+        if (player.styleComponent.NextCombatStyle != null || player.EndurancePercent < 15 || player.ActiveWeapon is not { } weapon)
+            return;
+        AttackData lastAttack = player.attackComponent.attackAction.LastAttackData;
+        List<Style> styles = player.GetAllUsableSkills()
+            .Select(entry => entry.Item1)
+            .OfType<Style>()
+            .Where(candidate => StyleProcessor.CanUseStyle(lastAttack, player, candidate, weapon))
+            .OrderByDescending(candidate => candidate.Level)
+            .ToList();
+        if (styles.Count == 0) return;
+        int fatigue = player.GetModified(eProperty.FatigueConsumption);
+        DOL.Database.DbInventoryItem leftHand = null;
+        int[] costs = new int[styles.Count];
+        for (int i = 0; i < styles.Count; i++)
+        {
+            DOL.Database.DbInventoryItem paidBy = (eObjectType)styles[i].WeaponTypeRequirement is eObjectType.Shield
+                ? leftHand ??= player.Inventory.GetItem(eInventorySlot.LeftHandWeapon) : weapon;
+            costs[i] = paidBy == null ? 0 : StyleEnduranceCost(paidBy.SPD_ABS, styles[i].EnduranceCost, fatigue,
+                styles[i].Spec == Specs.Battlemaster);
+        }
+        (int pick, bool held) = StyleWithin(costs, player.Endurance, reserve);
+        if (pick >= 0) player.styleComponent.NextCombatStyle = styles[pick];
+        if (held) state.FightStylesHeld++;
+    }
+
+    // #167 E-R: the endurance the bot keeps for a run now (EscapeReserve), in a fight only (the review: Engage's cast gate
+    // runs on the walk in and the first think in reach, before OpenFight's resets) and a close one (CloseFight): 2 or
+    // more monsters attacking it now (AttackerTracker's few, IsAttacking: no world scan) or in this fight (FightAdds), a
+    // defence or the fight after an add kill, or the race since the first hit on it projecting it under
+    // CloseRacePercent at its target's death (HealthLeftAtKill); else 0. Against the fastest of them and its target.
+    // Read at most once a StyleMilliseconds (Reserve, NextReserveTick), the style choice's own pace. #167 E fix R2: held
+    // only while holding can still buy a run (HoldingReserve), on every call against the endurance and the target's health
+    // now, on the read's need (RunNeed: EscapeEndurance against that fastest monster) and whether its target is the only
+    // monster on the bot (TargetAlone). The read itself is ReserveRead's (the fix's review: a seam its rows reach).
+    private static int ReserveNow(PlayerBotState state, GamePlayer player, GameLiving target, long now)
+    {
+        if (!state.Engaged) return 0;
+        bool targetAlive = target?.IsAlive == true;
+        if (now >= state.NextReserveTick)
+        {
+            state.NextReserveTick = now + StyleMilliseconds;
+            ICollection<GameLiving> attackers = player.attackComponent.AttackerTracker.Attackers;
+            var onBot = new List<(int Speed, bool IsTarget)>(attackers.Count);
+            foreach (GameLiving living in attackers)
+                if (living is GameNPC npc && IsAttacking(player, npc))
+                    onBot.Add((npc.MaxSpeed, npc == target));
+            int? left = targetAlive ? HealthLeftAtKill(player.HealthPercent, target.HealthPercent, state.FightHpAtReach,
+                state.FightTargetHpAtReach) : null;
+            (state.Reserve, state.RunNeed, state.TargetAlone) = ReserveRead(targetAlive ? target.MaxSpeed : 0, onBot,
+                state.FightAdds, state.FromDefence || state.FollowsAddKill, left,
+                player.GetModified(eProperty.EnduranceRegenerationAmount), player.GetModified(eProperty.FatigueConsumption),
+                LongWindCost(player));
+        }
+        return HoldingReserve(state.Reserve, state.RunNeed, player.Endurance, targetAlive ? target.HealthPercent : (byte)100,
+            state.TargetAlone);
+    }
+
+    // APP:474-500, plus the leash. #167 E fix U3: a blocked walk on a leash the bot may move (CanRelocate: no lever spot
+    // bot), out of combat, with no corridor from where it stands to its anchor (CutOffFromAnchor) teleports the bot
+    // back there (MoveBack, PLAYER_BOT_CUTOFF); from where it stands after the walk, as a floor step may have moved it
+    // (TryFloorStep). #167 E fix U4: at once only with no real player in sight; else the bot is held, with no walk,
+    // until none is, or until it can walk back (HoldsCutOff).
     private static void Roam(PlayerBotState state, GamePlayer player, long now)
     {
+        if (HoldsCutOff(state, player, now)) return;
         Vector3 here = new(player.X, player.Y, player.Z);
         bool leashed = Leashed(state, player);
         if (leashed && Vector3.Distance(here, state.Anchor) > LeashRadius)
@@ -3085,9 +4077,126 @@ public static class PlayerBotDriver
         state.Activity = PlayerBotActivity.Roaming;
         state.Walk = state.RoamDestination == state.Anchor ? PlayerBotWalk.Anchor : PlayerBotWalk.Roam;   // #167 walk=
         PlayerBotStepResult step = state.Mover.StepToward(state.RoamDestination.Value, 20, now);
-        if (step is PlayerBotStepResult.Blocked) ReportBlocked(state, player, "roam", state.RoamDestination.Value, now);
+        if (step is PlayerBotStepResult.Blocked)
+        {
+            ReportBlocked(state, player, "roam", state.RoamDestination.Value, now);
+            Vector3 anchor = state.Anchor, at = new(player.X, player.Y, player.Z);
+            if (CutOffFromAnchor(state, leashed && CanRelocate(state, player), player.InCombat, now,
+                    () => AnchorReachable(PathfindingProvider.Instance, player.CurrentRegion, at, anchor)))
+            {
+                (state.CutOff, state.NextWatchCheckTick) = ((now, anchor, at), now);   // #167 E fix U4: checked at once
+                HoldsCutOff(state, player, now);
+                return;
+            }
+        }
         if (step is PlayerBotStepResult.Blocked or PlayerBotStepResult.Arrived)
             state.RoamDestination = null;
+    }
+
+    // #167 E fix U4: a bot found cut off from its anchor (Roam, CutOffFromAnchor) is held where it stands until its
+    // teleport back may go (TeleportsNow: out of a fight, no real player in sight, SeenByHuman in its region, the
+    // anchor's: Leashed), then PLAYER_BOT_CUTOFF, waited= the seconds held (0: at once), and MoveBack. Held, it stands
+    // and starts no roam walk: Roam's blocked walks were the cost (about 4 a second, ~5 ms each, U3); a rest,
+    // self-defence and the pick's fights go on as before (Think's steps 12, 14 and 16; a walk to a monster it can't
+    // reach is blocked once and passes it over 30 s, U1). The hold ends with its anchor moved (a camp planned,
+    // PlanCamp; a replan's or a task's end), off its leash, or once a corridor leads from where it stands to its anchor
+    // (AnchorReachable; tested only after it moved, a fight's step or a release to a bind, so once a move and never while
+    // it stands): it roams again. True while held, or teleported.
+    private static bool HoldsCutOff(PlayerBotState state, GamePlayer player, long now)
+    {
+        if (state.CutOff.Since == 0) return false;
+        Vector3 here = new(player.X, player.Y, player.Z);
+        if (state.CutOff.Anchor != state.Anchor || !Leashed(state, player) || (here != state.CutOff.At &&
+                AnchorReachable(PathfindingProvider.Instance, player.CurrentRegion, here, state.Anchor)))
+        {
+            state.CutOff = default;
+            return false;
+        }
+        state.CutOff.At = here;
+        state.Mover.Stop(now);
+        state.Activity = PlayerBotActivity.Roaming;
+        if (!TeleportsNow(state, player.InCombat, now, () => SeenByHuman(player, player.CurrentRegion, state.Anchor)))
+            return true;
+        Vector3 anchor = state.Anchor, at = here;
+        if (Log.IsInfoEnabled)
+            Log.Info($"PLAYER_BOT_CUTOFF bot={player.Name} level={player.Level} at=({at.X:0},{at.Y:0},{at.Z:0}) " +
+                     $"anchor=({anchor.X:0},{anchor.Y:0},{anchor.Z:0}) distance={(int)Vector3.Distance(anchor, at)} " +
+                     $"zone={player.CurrentZone?.ID} waited={(now - state.CutOff.Since) / 1000}");
+        MoveBack(state, player, now);
+        return true;
+    }
+
+    /// <summary>#167 E fix U3: a roam walk blocked (Roam) while the bot is on a leash it may move (leashed: no task, in its
+    /// anchor's region, no lever spot bot, CanRelocate). At most once every AnchorCheckMilliseconds it tests whether a
+    /// corridor leads from where the bot stands to its anchor (anchorReachable, read only when due); true with none, and
+    /// Roam teleports the bot back there (MoveBack; U4: only with no real player in sight, HoldsCutOff), as
+    /// RecoverIfStuck does after 15 minutes with no progress. Never in combat (inCombat, RecoverIfStuck's rule: a
+    /// hitter it can't reach, U1, leaves it no target, and the move could land it in the camp beside that hitter): no
+    /// test then, so the next blocked roam out of combat tests at once.
+    /// st-deathsE2b, Pbotmaada on a pocket of Muspelheim's navmesh above its camp: no corridor led to its anchor from any
+    /// spot on the pocket, so every think with no target blocked a roam toward it (about 4 a second, about 5 ms each),
+    /// and its kills on the pocket kept stopping the idle clock (SettleIdleClock, SettleIdleClockAtTargetEnd) and gave
+    /// RecoverIfStuck its progress, so no move took it off the pocket. st-deathsE, Pbothaaem (Blademaster 26, Domnann)
+    /// on an island of the navmesh after a floor step, with nothing to hunt there, had its roam blocked as often to the
+    /// leg's end, RecoverIfStuck's move 15 minutes off. With no such corridor the mover can't walk there either, beyond
+    /// 300 units or out of sight (its direct step, PlayerBotPathMover.cs:130-135), so the move only comes sooner. Its
+    /// third review: this replaces the move of the anchor onto the piece (9770e3e to 39070f2), which a kill there opened,
+    /// even one of a monster from the camp below (a chasing monster with no path to the bot is put on its piece,
+    /// NpcMovementComponent.cs:788-792), and which kept the bot on the pocket while the pocket's own monsters gave it XP.
+    /// The one weak case: an anchor that is itself on a cut-off piece pulls the bot back onto it (not seen in 12 legs).
+    /// </summary>
+    public static bool CutOffFromAnchor(PlayerBotState state, bool leashed, bool inCombat, long now,
+        Func<bool> anchorReachable)
+    {
+        if (!leashed || inCombat || now < state.NextAnchorCheckTick) return false;
+        state.NextAnchorCheckTick = now + AnchorCheckMilliseconds;
+        return !anchorReachable();
+    }
+
+    /// <summary>#167 E fix U3, CutOffFromAnchor's test: whether a corridor leads from here to the anchor
+    /// (PlayerTravelPath.TryBuildCorridor, as the plan's tests). True wherever no test can tell: no zone here, an anchor
+    /// in another zone (a corridor runs in one), no navmesh, off the mesh here (every corridor fails then, PTP:79-82;
+    /// RelocateIfOutgrown plans nothing there either), or, its third review, no mesh near the anchor (the corridor's own
+    /// goal query, PTP:81): moved back there, the bot would be moved there again on every due blocked roam off it.
+    /// </summary>
+    public static bool AnchorReachable(IPathfindingMgr nav, Region region, Vector3 here, Vector3 anchor)
+    {
+        Zone zone = region?.GetZone((int)here.X, (int)here.Y);
+        return zone == null || region.GetZone((int)anchor.X, (int)anchor.Y) != zone || !nav.HasNavmesh(zone) ||
+            nav.GetClosestPoint(zone, here, 64, 64, 128, nav.DefaultFilters) == null ||
+            nav.GetClosestPoint(zone, anchor, 128, 128, 256, nav.DefaultFilters) == null ||
+            PlayerTravelPath.TryBuildCorridor(nav, zone, here, anchor, out _);
+    }
+
+    /// <summary>#167 E fix U4, the owner's rule (2026-10-30): a player bot never visibly vanishes or appears in front
+    /// of a real player. A cut-off bot held for its teleport back (HoldsCutOff) checks at most once every
+    /// WatchCheckMilliseconds whether it may go: never in a fight (inCombat: no check, still due, so the first think
+    /// out of it checks at once; CutOffFromAnchor's rule, the move could land it in the camp beside its hitter), and
+    /// only with no real player in sight (seen, SeenByHuman: read only then, never every think).</summary>
+    public static bool TeleportsNow(PlayerBotState state, bool inCombat, long now, Func<bool> seen)
+    {
+        if (inCombat || now < state.NextWatchCheckTick) return false;
+        state.NextWatchCheckTick = now + WatchCheckMilliseconds;
+        return !seen();
+    }
+
+    /// <summary>#167 E fix U4: whether a real player could see the bot's teleport back to its anchor (MoveBack): a
+    /// human within VISIBILITY_DISTANCE of where the bot stands, or of the anchor it lands on in anchorRegion (the
+    /// anchor's). A human is any GamePlayer whose client is no IPlayerBotClient, the driver's own test (Start: never
+    /// drive a human's character; PlayerBotWake.ClientUpdateWakes): a GM or admin is one too. Player bots, the bot
+    /// itself among them, are no watchers. Two radius scans: the bot's (its own list, cached 500 ms,
+    /// GameObject.cs:937-985, as CountNeighbours's) and one at the anchor.</summary>
+    public static bool SeenByHuman(GamePlayer bot, Region anchorRegion, Vector3 anchor)
+    {
+        foreach (GamePlayer other in bot.GetPlayersInRadius(WorldMgr.VISIBILITY_DISTANCE))
+            if (other.Client is not IPlayerBotClient) return true;
+        if (anchorRegion == null) return false;
+        List<GamePlayer> byAnchor = GameLoop.GetListForTick<GamePlayer>();               // empty, as GetInRadius wants
+        anchorRegion.GetInRadius(new Point3D(anchor.X, anchor.Y, anchor.Z), eGameObjectType.PLAYER,
+            WorldMgr.VISIBILITY_DISTANCE, byAnchor);
+        foreach (GamePlayer other in byAnchor)
+            if (other.Client is not IPlayerBotClient) return true;
+        return false;
     }
 
     // The rerun of run 1: from level 4 the bots were blocked 18-20 times a minute with no trace of where or why. One line
@@ -3122,7 +4231,7 @@ public static class PlayerBotDriver
         }
         if (Log.IsInfoEnabled)
             Log.Info($"PLAYER_BOT_IDLE bot={player.Name} level={player.Level} minutes={(now - state.RoamingSince) / 60_000} " +
-                     $"deathSteps={state.DeathSafetySteps} cap={MaximumTargetCon(1, state.DeathSafetySteps)} " +
+                     $"deathSteps={state.DeathSafetySteps} cap={MaximumTargetCon(1, CapSteps(state.DeathSafetySteps, state.SoloSteps))} " +
                      $"fromAnchor={(int)Vector3.Distance(new(player.X, player.Y, player.Z), state.Anchor)} " +
                      $"grey/green/blue/yellow/orange/red/purple={string.Join('/', byCon)} outsideLeash={outsideLeash}");
     }
@@ -3136,7 +4245,9 @@ public static class PlayerBotDriver
     // the zone it died in (the bind may lie elsewhere; then the corridors start at the death spot, CorridorOrigin), the
     // failed camps barred; with no camp it hunts where it is. #167 D4: while the release's immunity lasts too, its
     // monsters read by IsPlannable (PlanMonsters; C1 held the plan until it was over: IsAttackable found none then). The
-    // anchor's region is the bot's (CanRelocate).
+    // anchor's region is the bot's (CanRelocate). #167 E W1: after a death (AfterDeathPlan) it first takes a camp near
+    // where it stands (PlanCampChoice's near pass: the zone it stands in, within NearWalk, corridors from here), and only
+    // with none the plan as before. One read of the region's monsters serves both passes.
     private static void RelocateIfOutgrown(PlayerBotState state, GamePlayer player, long now)
     {
         string reason = RelocateReason(state.RoamingSince, state.CappedSince, now, state.ReplanOwed);
@@ -3158,35 +4269,58 @@ public static class PlayerBotDriver
             return;                                //   no monster for it
         }
         Vector3? corridorFrom = CorridorOrigin(reason, nav.HasNavmesh(zone), player.CurrentZone == zone, state.DeathSpot, here);
-        if (corridorFrom is Vector3 start && player.CurrentZone != zone &&       // a death spot off the mesh fails every
-            nav.GetClosestPoint(zone, start, 64, 64, 128, nav.DefaultFilters) == null)  // corridor (PTP:80-82): no test
-            corridorFrom = null;                                                 //   then, as before
+        if (corridorFrom is Vector3 deathStart && player.CurrentZone != zone &&  // a death spot off the mesh fails every
+            nav.GetClosestPoint(zone, deathStart, 64, 64, 128, nav.DefaultFilters) == null)  // corridor (PTP:80-82): no
+            corridorFrom = null;                                                 //   test then, as before
         ConColor natural = MaximumTargetCon(1, 0);
-        List<(GameNPC Npc, Vector3 At, ConColor Con, bool Huntable, bool Avoided)> monsters = PlanMonsters(player,
-            WorldMgr.GetNPCsFromRegion(state.AnchorRegion), zone, natural, state.AvoidUntil, now);
+        GameNPC[] npcs = WorldMgr.GetNPCsFromRegion(state.AnchorRegion);          // #167 E W1: one read, both passes
+        List<(GameNPC Npc, Vector3 At, ConColor Con, bool Huntable, bool Avoided)> monsters = PlanMonsters(player, npcs,
+            zone, natural, state.AvoidUntil, now);
         Vector3[] failed = FailedCamps(state.FailedCamps, state.AnchorRegion, now);
         bool barredOld = Array.IndexOf(failed, state.Anchor) >= 0;                 // #167 D9: RELOCATE barred=old
         (ConColor fit, ConColor? killerCon) = PlanCaps(state, now);                 // #167 D6
-        (GameNPC[] nearest, ConColor? fallback, bool stale) = PlanRelocation(monsters, from, fit, natural, failed,
-            state.RelocateRejected, RelocateCandidates, killerCon);
-        foreach (GameNPC npc in nearest)
-        {
-            Vector3 spot = new(npc.X, npc.Y, npc.Z);
-            if (corridorFrom is Vector3 origin && !PlayerTravelPath.TryBuildCorridor(nav, zone, origin, spot, out _))
-            {
-                state.RelocateRejected.Add(npc);
-                continue;
-            }
-            if (Log.IsInfoEnabled)
-                Log.Info(RelocateLine(player.Name, player.Level, state.Anchor, spot, (int)Vector3.Distance(here, spot), npc.Name,
-                    npc.EffectiveLevel, zone.ID, reason, fallback, now - state.ReleasedAt, barredOld, killerCon));
-            PlanCamp(state, spot, fallback, stale, reason);                         // and BACK replan=moved (#167 C1)
-            return;
+        bool afterDeath = AfterDeathPlan(reason, state.LastDeathTick == 0 ? -1 : now - state.LastDeathTick);   // #167 E W1
+        Zone nearZone = player.CurrentZone;                                        // the zone it stands in: after a
+        List<(GameNPC Npc, Vector3 At, ConColor Con, bool Huntable, bool Avoided)> nearMonsters =   //   death its bind's
+            !afterDeath || nearZone == null ? null : nearZone == zone ? monsters
+                : PlanMonsters(player, npcs, nearZone, natural, state.AvoidUntil, now);
+        Vector3? nearFrom = nearZone != null && nav.HasNavmesh(nearZone) ? here : null;   // on the mesh (checked above)
+        (GameNPC[] spots, ConColor? fallback, bool stale, bool near) = PlanCampChoice(nearMonsters, monsters, here, from,
+            fit, natural, failed, state.RelocateRejected, RelocateCandidates, killerCon, afterDeath);
+        if (TakeCamp(spots, fallback, stale, near)) return;
+        if (near)                                                                  // no corridor to any near camp: the
+        {                                                                          //   plan as before
+            (spots, fallback, stale, near) = PlanCampChoice(nearMonsters, monsters, here, from, fit, natural, failed,
+                state.RelocateRejected, RelocateCandidates, killerCon, afterDeath, tryNear: false);
+            if (TakeCamp(spots, fallback, stale, near)) return;
         }
         if (Log.IsInfoEnabled)
-            Log.Info(RelocateNoneLine(player.Name, player.Level, nearest.Length, zone.ID, reason, now - state.ReleasedAt,
-                barredOld, killerCon));
-        if (nearest.Length == 0) FallBack(state, player, reason, now);   // no camp in the zone: none to try next time either
+            Log.Info(RelocateNoneLine(player.Name, player.Level, spots.Length, zone.ID, reason, now - state.ReleasedAt,
+                barredOld, killerCon, afterDeath));
+        if (spots.Length == 0) FallBack(state, player, reason, now);   // no camp in the zone: none to try next time either
+
+        // The first of a camp's spots it has a corridor to (one without is rejected, RelocateRejected): RELOCATE, PlanCamp.
+        bool TakeCamp(GameNPC[] camp, ConColor? campFallback, bool campStale, bool nearCamp)
+        {
+            Zone campZone = nearCamp ? nearZone : zone;
+            Vector3? walkFrom = nearCamp ? nearFrom : corridorFrom;
+            foreach (GameNPC npc in camp)
+            {
+                Vector3 spot = new(npc.X, npc.Y, npc.Z);
+                if (walkFrom is Vector3 origin && !PlayerTravelPath.TryBuildCorridor(nav, campZone, origin, spot, out _))
+                {
+                    state.RelocateRejected.Add(npc);
+                    continue;
+                }
+                if (Log.IsInfoEnabled)
+                    Log.Info(RelocateLine(player.Name, player.Level, state.Anchor, spot, (int)Vector3.Distance(here, spot),
+                        npc.Name, npc.EffectiveLevel, campZone.ID, reason, campFallback, now - state.ReleasedAt, barredOld,
+                        killerCon, afterDeath, nearCamp));
+                PlanCamp(state, spot, campFallback, campStale, reason);           // and BACK replan=moved (#167 C1)
+                return true;
+            }
+            return false;
+        }
     }
 
     // A capped bot's FallBackInPlace; after a death (#167 F4) or a break-off (C2), the end of the relocation owed.
@@ -3453,14 +4587,21 @@ public static class PlayerBotDriver
     // self-heal (11b): its cast stops the mover (CastOnSelf). #167 D2: caught (CaughtThink: attacked by a chaser in
     // reach after the run's grace, st-deathsD's fix round), it controls the chaser and runs on (CaughtControl),
     // standing and facing it while that cast is under way; with no control it turns on the weakest chaser in reach
-    // (WeakestChaser, TurnOn). True while it runs.
+    // (WeakestChaser, TurnOn). True while it runs. #167 E T1: with no point (NextPoint with none, a blocked step, or
+    // holding) it tries for one each second, 800 out too, and holds or turns (GoalOrHold); BREAKOFF turn= says why it
+    // turned. #167 E T2b: done in another monster's reach with its point ahead, it runs on to the point first
+    // (RunsOnToClear); a blocked step with none after it then is done.
     private static bool BreaksOffNow(PlayerBotState state, GamePlayer player, long now)
     {
         if (state.BreakOffSince == 0 && !StartsBreakOff(state, player, now)) return false;
         KeepChasers(state, player);
         (int nearest, GameNPC free, int freeDistance) = NearestChasers(state, player);
-        PlayerBotBreakOff next = BreakOffStep(state.BreakOffArrived, state.BreakOffChasers.Count, now - state.BreakOffSince,
-            nearest, CaughtThink(state, player, freeDistance, now));
+        long since = now - state.BreakOffSince;
+        PlayerBotBreakOff next = BreakOffStep(state.BreakOffArrived, state.BreakOffChasers.Count, since, nearest,
+            CaughtThink(state, player, freeDistance, now));
+        if (next is PlayerBotBreakOff.Done && RunsOnToClear(state.BreakOffGoal != null, state.BreakOffArrived, since,
+                state.BreakOffRunsOn, () => StandsInAddReach(player)))
+            (next, state.BreakOffRunsOn) = (PlayerBotBreakOff.Run, true);               // #167 E T2b: on to its point
         if (next is not (PlayerBotBreakOff.Done or PlayerBotBreakOff.Fight) && player.IsCasting)
         {
             state.Mover.Stop(now);                                                      // #167 D2: its control at a caught
@@ -3473,19 +4614,27 @@ public static class PlayerBotDriver
         {
             if (CaughtControl(state, player, free, now)) return true;                   // #167 D2: then it runs on
             turnOn = WeakestChaser(state, player);
-            next = PlayerBotBreakOff.Fight;
+            (next, state.BreakOffTurn) = (PlayerBotBreakOff.Fight, TurnCaught);         // #167 E T1: turn=caught
         }
-        if (next is PlayerBotBreakOff.NextPoint)
-        {
-            state.BreakOffGoal = BreakOffGoal(state, player);
-            state.BreakOffArrived = false;
-            if (state.BreakOffGoal == null) next = PlayerBotBreakOff.Fight;             // nowhere further: it turns
+        else if (next is PlayerBotBreakOff.Fight) state.BreakOffTurn = TurnCap;         //   turn=cap (45 s)
+        if (next is PlayerBotBreakOff.NextPoint)                                        // a new point at once
+            (state.BreakOffGoal, state.BreakOffArrived, state.NextBreakOffRetryTick) = (null, false, 0);
+        if ((next is PlayerBotBreakOff.NextPoint or PlayerBotBreakOff.Run) && state.BreakOffGoal == null)
+        {                                                                               // #167 E T1: none, or holding
+            if (!GoalOrHold(state, player, now, nearest, freeDistance, state.BreakOffHoldWhy ?? TurnNoPoint))
+                return false;                                                           //   it turned
+            if (state.BreakOffGoal == null) return true;                                //   it holds this think
         }
         if (next is PlayerBotBreakOff.Done or PlayerBotBreakOff.Fight)
         {
             EndBreakOff(state, player, now, next is PlayerBotBreakOff.Done ? Shook : Fought);
             if (turnOn != null) TurnOn(state, player, turnOn, now);                    // #167 D2: caught, no control
             return false;                                                               // Fight: step 14 picks a hitter
+        }
+        if (BreakOffSprint(player.IsSprinting, freeDistance, FastestChaser(state), player.Endurance) is bool sprint)
+        {                                                                               // #167 E-S: off once clear, on
+            player.Sprint(sprint);                                                      //   when a chaser closes
+            if (!sprint && state.BreakOffSprintOffAt < 0) state.BreakOffSprintOffAt = now - state.BreakOffSince;   // sprintOff=
         }
         state.Activity = PlayerBotActivity.Fighting;
         state.Walk = PlayerBotWalk.BreakOff;                                            // #167 walk=
@@ -3496,13 +4645,86 @@ public static class PlayerBotDriver
         {
             ReportBlocked(state, player, "breakoff", goal, now);
             state.BreakOffBlocked.Add(goal);                                            // never chosen again (NextBreakOffPoint)
-            if ((state.BreakOffGoal = BreakOffGoal(state, player)) == null)
-            {
-                EndBreakOff(state, player, now, Fought);                                 // none left: it turns at once
+            (state.BreakOffGoal, state.NextBreakOffRetryTick) = (null, 0);              // #167 E T1: a new point at once,
+            if (state.BreakOffChasers.Count == 0)                                       // #167 E T2b: running on, none after
+            {                                                                           //   it: done
+                EndBreakOff(state, player, now, Shook);
                 return false;
             }
+            return GoalOrHold(state, player, now, nearest, freeDistance, TurnBlocked);  //   else it holds or turns
         }
         return true;
+    }
+
+    // #167 E T2b: whether the bot stands in the reach of a monster that would aggro (IsBreakOffAdd, AddReach; InAddReach's
+    // ring), from one scan of AddScanMargin round it (500 aggro and AddMargin), once per Done with a point ahead.
+    private static bool StandsInAddReach(GamePlayer player)
+    {
+        List<(GameNPC Npc, Vector3 At, int AggroRange)> adds = _reach ??= new();
+        adds.Clear();
+        foreach (GameNPC npc in player.GetNPCsInRadius((ushort)AddScanMargin))
+            if (IsBreakOffAdd(npc, player, player.Realm) && AddReach(player, npc) is > 0 and int reach)
+                adds.Add((npc, new(npc.X, npc.Y, npc.Z), reach));
+        bool inReach = InAddReach(new Vector3(player.X, player.Y, player.Z), adds);
+        adds.Clear();                                                                   // no monster held past the scan
+        return inReach;
+    }
+
+    // #167 E T1: with no point to run to, a try for one each BreakOffRetryMilliseconds (BreakOffGoal with its 800 pass,
+    // one add scan: GetNPCsInRadius of 3,200, up to 50 OnMesh calls and 8 corridor tests, only while a bot has no
+    // point); none, it turns (NoPointTurns: a chaser not held in reach, a hit while it holds, or a caster or pet class with
+    // power), BREAKOFF turn=why (the hold's first why: nopoint or blocked), else it holds where it stands for the chasers
+    // to give up (Done), catch it (Caught) or the cap (Fight), and heals itself there (HoldForPoint). holds= counts the
+    // tries that found none while it held. True while the break-off goes on.
+    private static bool GoalOrHold(PlayerBotState state, GamePlayer player, long now, int nearest, int freeDistance,
+        string why)
+    {
+        bool tried = false;
+        if (now >= state.NextBreakOffRetryTick)
+        {
+            state.NextBreakOffRetryTick = now + BreakOffRetryMilliseconds;
+            if ((state.BreakOffGoal = BreakOffGoal(state, player, relaxed: true)) != null)
+            {
+                (state.BreakOffHoldSince, state.BreakOffHoldWhy) = (0, null);           // it runs on
+                return true;
+            }
+            tried = true;
+        }
+        if (NoPointTurns(freeDistance, HitWhileHolding(state.BreakOffHoldSince, player.LastAttackedByEnemyTick, now),
+                tried && CasterOrPetWithPower(state, player), nearest))
+        {
+            state.BreakOffTurn = why;
+            EndBreakOff(state, player, now, Fought);                                    // step 14 picks a hitter
+            return false;
+        }
+        state.Mover.Stop(now);
+        HoldForPoint(state, now, why, tried, () => SelfHeal(state, player, now));
+        return true;
+    }
+
+    /// <summary>#167 E T1: a hold for want of a point (GoalOrHold, the bot stopped): its first think's why and time,
+    /// holds= for a try that found none, and the self-heal (selfHeal: SelfHeal), Think's step 11b, which a think the
+    /// break-off holds never reaches. Before T1 no point ended the break-off and the heal began in that think, the
+    /// chaser still far off; held, a Healer-role bot (E-L's one-monster break-offs) cast nothing until it turned, then
+    /// healed under melee. A heal it casts keeps the cast's activity (CastOnSelf), and the next think's WaitsForSelfCast
+    /// waits it out; a hit meanwhile turns it after (HitWhileHolding).</summary>
+    public static void HoldForPoint(PlayerBotState state, long now, string why, bool tried, Func<bool> selfHeal)
+    {
+        if (state.BreakOffHoldSince == 0) (state.BreakOffHoldSince, state.BreakOffHoldWhy) = (now, why);
+        if (tried) state.BreakOffHolds++;
+        state.Walk = PlayerBotWalk.BreakOff;
+        if (!selfHeal()) state.Activity = PlayerBotActivity.Fighting;
+    }
+
+    // #167 E T1: a caster or pet class that broke off with power (not why=spent: breakoff E4's spent turn holds) and can
+    // still pay for a damage spell (CanNuke, as a spent caster's test reads it). Read only after a try for a point failed,
+    // so no per-think spell walk.
+    private static bool CasterOrPetWithPower(PlayerBotState state, GamePlayer player)
+    {
+        if (state.BreakOffWhy == Spent || RoleOf(player.CharacterClass.ID) is not (PlayerBotRole.Caster or PlayerBotRole.Pet))
+            return false;
+        KnowSpells(state, player);
+        return state.Nukes.Count > 0 && CanNuke(state, player);
     }
 
     // A break-off's start (BreakOffFires) from the monsters hitting the bot (Attacker's, each with the bot as its target)
@@ -3564,10 +4786,11 @@ public static class PlayerBotDriver
         {
             chasers.Clear();
             state.NextBreakOffTick = now + TargetRefreshMilliseconds;
-            ReportRefusal(state, player, now, onBot, refusal);                         // #167 D2
+            ReportRefusal(state, player, now, onBot, refusal, player.MaxSpeed, fastest);   // #167 D2; E T1: the speeds
             return false;
         }
-        (state.BreakOffSince, state.BreakOffGoal, state.BreakOffArrived) = (now, goal, false);
+        (state.BreakOffSince, state.BreakOffGoal, state.BreakOffArrived, state.BreakOffSprintOffAt) = (now, goal, false, -1);
+        (state.BreakOffSpeed, state.BreakOffChaserSpeed) = (player.MaxSpeed, fastest);   // #167 E T1: before the sprint
         (state.BreakOffHealth, state.BreakOffEndurance, state.BreakOffAttackers) = (health, player.EndurancePercent, onBot);
         state.BreakOffRate = HealthRate(state.HealthSamples, now, health);              // #167 BREAKOFF rate=
         (state.BreakOffWhy, state.CaughtSince) = (why, 0);                              // #167 D1 why= (BrokeOffFrom reads it)
@@ -3612,14 +4835,15 @@ public static class PlayerBotDriver
 
     // #167 D3: Engage's CasterCanCast for the bot's spell (none: false), with the cheapest known control's cost kept in
     // reserve while its target isn't held (ControlReserve; Controls cached per level, KnowSpells) and quickcast when the
-    // cast goes under Quickcast.
+    // cast goes under Quickcast. #167 E C2b: no reserve for the killing quickcast.
     private static bool CasterCanPay(PlayerBotState state, GamePlayer player, Spell spell, SpellLine line, bool held,
-        bool quickcast)
+        bool quickcast, bool killingQuickcast)
     {
         if (spell == null) return false;
         KnowSpells(state, player);
-        return CasterCanCast(PercentPowerBase(player), player.Mana, spell.Power, ControlReserve(ControlCosts(state, player), held),
-            FocusFactor(player, spell, line), quickcast, spell.CastTime);
+        return CasterCanCast(PercentPowerBase(player), player.Mana, spell.Power,
+            ControlReserve(ControlCosts(state, player), held, killingQuickcast), FocusFactor(player, spell, line), quickcast,
+            spell.CastTime);
     }
 
     // #167 D3: each known control's cost (PowerCost), not under Quickcast.
@@ -3675,14 +4899,17 @@ public static class PlayerBotDriver
     }
 
     // #167 D2: PLAYER_BOT_BREAKOFF outcome=refused why= (BreakOffRefusal) at the bot's health, endurance and the monsters on
-    // it now, once a fight (BreakOffRefused, cleared by OpenFight).
-    private static void ReportRefusal(PlayerBotState state, GamePlayer player, long now, int onBot, string why)
+    // it now, once a fight (BreakOffRefused, cleared by OpenFight). #167 E T1: and its run speed and the fastest chaser's
+    // (speed=, chaserSpeed=; -1 before they are read: a control refusal).
+    private static void ReportRefusal(PlayerBotState state, GamePlayer player, long now, int onBot, string why,
+        int speed = -1, int chaserSpeed = -1)
     {
         if (state.BreakOffRefused) return;
         state.BreakOffRefused = true;
         if (Log.IsInfoEnabled)
             Log.Info(PlayerBotDriverReport.FormatBreakOff(player.Name, player.Level, player.HealthPercent,
-                player.EndurancePercent, onBot, 0, Refused, HealthRate(state.HealthSamples, now, player.HealthPercent), why));
+                player.EndurancePercent, onBot, 0, Refused, HealthRate(state.HealthSamples, now, player.HealthPercent), why,
+                -1, player.EndurancePercent, speed: speed, chaserSpeed: chaserSpeed));      // #167 E-S: no run
     }
 
     // A sprint's cost a second before the regeneration (GamePlayer.cs:2396-2405): LongWind, less Long Wind's 20-100%.
@@ -3720,12 +4947,21 @@ public static class PlayerBotDriver
         return (nearest, free, freeDistance);
     }
 
+    // #167 E-S: the fastest monster still after a break-off's bot (KeepChasers' list; no scan).
+    private static int FastestChaser(PlayerBotState state)
+    {
+        int fastest = 0;
+        foreach (GameNPC npc in state.BreakOffChasers) fastest = Math.Max(fastest, npc.MaxSpeed);
+        return fastest;
+    }
+
     // #167 D2: caught on the run (CaughtNow), a control at the chaser (free: the nearest not held) as at an add: AddAction's
     // step with it in contact (addContactMs 0), hits interrupting the bot and no target first: an instant or
     // uninterruptible control at once, else with Quickcast on, turned on first (the next think casts). Any control the
     // chaser takes (Takes), a root too: the bot runs on out of a rooted one's reach (the add step's ControlKeepsAddOff is
     // for a bot that stays). MaxControlTries casts that held nothing and it stops trying on that chaser (AddControlTries,
-    // the add step's). True when it acted: it stands for the cast, then runs on (BreaksOffNow).
+    // the add step's). True when it acted: it stands for the cast, then runs on (BreaksOffNow). #167 E C1: no root or mez
+    // on a chaser its own DoT ticks on (HoldSurvivesDot: the next tick would free it).
     private static bool CaughtControl(PlayerBotState state, GamePlayer player, GameNPC chaser, long now)
     {
         if (chaser == null || now < state.NextAddTick) return false;
@@ -3733,10 +4969,11 @@ public static class PlayerBotDriver
         if (state.Controls.Count == 0) return false;
         if (chaser != state.ControlledAdd) (state.ControlledAdd, state.AddControlTries) = (chaser, 0);
         if (state.AddControlTries >= MaxControlTries) return false;
+        bool dotOn = OwnDotOn(player, chaser);                                          // #167 E C1: read once
         (Spell control, SpellLine line) = ChooseControl(state.Controls, spell => player.GetSkillDisabledDuration(spell) <= 0 &&
                 HasPowerFor(player.MaxMana, player.Mana, spell.Power) &&
                 player.IsWithinRadius(chaser, player.castingComponent.CalculateSpellRange(spell)),
-            spell => Takes(player, chaser, spell), forAdd: true,
+            spell => Takes(player, chaser, spell) && HoldSurvivesDot(spell, dotOn), forAdd: true,
             petClass: RoleOf(player.CharacterClass.ID) == PlayerBotRole.Pet);
         if (control == null) return false;
         bool quickcasting = player.effectListComponent.ContainsEffectForEffectType(eEffect.QuickCast);
@@ -3779,8 +5016,10 @@ public static class PlayerBotDriver
     // aggro (AddReach; not one with the bot as its target: it is on it already; a hostile keep guard too, #167 D7 and the
     // review of D: IsBreakOffAdd), not one it was blocked on, and one it has a corridor to (PlayerTravelPath.TryBuildCorridor,
     // as RelocateIfOutgrown's; with no navmesh, any); #167 D2: none, the point straight away from them under the same
-    // tests, one try (StraightAwayGoal); none, null.
-    private static Vector3? BreakOffGoal(PlayerBotState state, GamePlayer player)
+    // tests, one try (StraightAwayGoal); none, null. #167 E T1: relaxed (with no point, GoalOrHold), with none of those
+    // the 800 ring and the straight-away point 800 out too, never in another monster's reach (NearBreakOffGoal), from
+    // the same add scan (RelaxedBreakOffRings lie inside the scan's radius).
+    private static Vector3? BreakOffGoal(PlayerBotState state, GamePlayer player, bool relaxed = false)
     {
         List<(GameNPC Npc, Vector3 At, int AggroRange)> adds = _reach ??= new();
         adds.Clear();
@@ -3792,24 +5031,30 @@ public static class PlayerBotDriver
         Zone zone = player.CurrentZone;
         bool meshed = zone != null && nav.HasNavmesh(zone);
         bool Walkable(Vector3 point) => !meshed || PlayerTravelPath.TryBuildCorridor(nav, zone, here, point, out _);
+        Vector3? OnMeshHere(Vector3 point) => OnMesh(player, point);
+        List<Vector3> Ring(int[] rings) => RingPoints(here, rings, SpotDirections).Select(OnMeshHere).Where(p => p.HasValue)
+            .Select(p => p.Value).ToList();
         List<Vector3> chasers = state.BreakOffChasers.Select(npc => new Vector3(npc.X, npc.Y, npc.Z)).ToList();
-        Vector3? goal = NextBreakOffPoint(here, chasers,
-            RingPoints(here, BreakOffRings, SpotDirections).Select(p => OnMesh(player, p)).Where(p => p.HasValue)
-                .Select(p => p.Value).ToList(), adds, state.BreakOffBlocked, Walkable) ??
-            StraightAwayGoal(here, chasers, BreakOffRings[0], point => OnMesh(player, point), state.BreakOffBlocked, Walkable);
+        Vector3? goal = NextBreakOffPoint(here, chasers, Ring(BreakOffRings), adds, state.BreakOffBlocked, Walkable) ??
+            StraightAwayGoal(here, chasers, BreakOffRings[0], OnMeshHere, state.BreakOffBlocked, Walkable);
+        if (goal == null && relaxed)                                                    // #167 E T1
+            goal = NearBreakOffGoal(here, chasers, Ring(RelaxedBreakOffRings), adds, state.BreakOffBlocked, Walkable,
+                OnMeshHere);
         adds.Clear();                                                                   // no monster held past the scan
         return goal;
     }
 
     // A break-off's end: its line (PLAYER_BOT_BREAKOFF, #167 D1 why=), the state's end (FinishBreakOff: the relocation
     // owed, OwesReplan's rule as after a death; fought, no new break-off for BreakOffMilliseconds), and unless the bot died
-    // (the death's own recovery then, HandleDeath) the sprint off.
+    // (the death's own recovery then, HandleDeath) the sprint off. #167 E T1: turn=, holds=, speed= and chaserSpeed=.
     private static void EndBreakOff(PlayerBotState state, GamePlayer player, long now, string outcome)
     {
         if (Log.IsInfoEnabled)
             Log.Info(PlayerBotDriverReport.FormatBreakOff(player.Name, player.Level, state.BreakOffHealth,
                 state.BreakOffEndurance, state.BreakOffAttackers, (now - state.BreakOffSince) / 1000, outcome, state.BreakOffRate,
-                state.BreakOffWhy));
+                state.BreakOffWhy, state.BreakOffSprintOffAt < 0 ? -1 : state.BreakOffSprintOffAt / 1000,   // #167 E-S
+                player.EndurancePercent, state.BreakOffTurn ?? "-", state.BreakOffHolds, state.BreakOffSpeed,   // #167 E T1
+                state.BreakOffChaserSpeed));
         FinishBreakOff(state, outcome, OwesReplan(state.Task != null, CanRelocate(state, player)), now);
         if (outcome == Died) return;
         player.Sprint(false);
@@ -3916,7 +5161,12 @@ public static class PlayerBotDriver
             inFight ? state.FightTargetHpAtReach : -1,                                    //   the last think's alive out of
             HealthRate(state.HealthSamples, now, player.HealthPercent), inFight ? state.WouldBreakHp : -1,   //   a fight,
             inFight ? state.FightWalk : state.LastWalk, player.EndurancePercent,          //   and end=; #167 D8
-            inFight ? state.FightKiteNone : null);                                        //   kiteNone=, FIGHT's
+            inFight ? state.FightKiteNone : null,                                         //   kiteNone=, FIGHT's;
+            inFight ? state.FightDots : -1,                                               // #167 E C1 dots=,
+            inFight ? (state.FightKillingQuickcast ? 1 : 0) : -1,                         // #167 E C2b qcKill=,
+            inFight ? state.FightTargetMezzes : -1,                                       // #167 E C4 ctlMez=,
+            inFight ? state.FightRaceLeft : NoRace,                                       // #167 E-L raceLeft=,
+            inFight ? state.FightStylesHeld : -1, inFight ? state.FightCastsHeld : -1);   // #167 E-R as FIGHT's
         string head = $"PLAYER_BOT_DEATH bot={player.Name} level={player.Level} at=({player.X},{player.Y},{player.Z}) " +
                       $"zone={player.CurrentZone?.ID} {fight} attackers={state.Attackers} deathSteps={state.DeathSafetySteps} " +
                       $"aliveSec={(now - state.AliveSince) / 1000} task={state.Task != null}";
@@ -3989,11 +5239,16 @@ public static class PlayerBotDriver
             state.FightAdd.Hp, brokeOff, state.EngageDistance, state.PickCrowd, state.FightHeldMs / 1000, state.FightCtlLanded,
             state.FightCtlFailed, state.FightHpAtReach, state.FightTargetHpAtReach,      // #167 st-deathsD's
             HealthRate(state.HealthSamples, now, player.HealthPercent), state.WouldBreakHp, state.FightWalk,
-            state.FightKiteNone)));                                                     // #167 D8
+            state.FightKiteNone, state.FightDots, state.FightKillingQuickcast,          // #167 D8, E C1, E C2b,
+            state.FightTargetMezzes, state.FightRaceLeft, state.EngageEndurance,       //   E C4, E-L, E-R
+            player.EndurancePercent, state.FightStylesHeld, state.FightCastsHeld,
+            state.FightSight, state.FightBlind, state.FightBlindSteps)));               // #167 E M2, R1
     }
 
     // APP:585-624, changed: every 10 s, no inventory count, no saves; after 15 minutes with no progress, back to the
-    // anchor in the same region (the pilot moved to the capital in another region, which needs re-entry).
+    // anchor in the same region (the pilot moved to the capital in another region, which needs re-entry). #167 E fix
+    // U4: a teleport, so only with no real player in sight of the bot or of its anchor (SeenByHuman, read only when
+    // due); with one, tried again at the next check, a move or XP meanwhile still progress (as at cb121ac).
     private static bool RecoverIfStuck(PlayerBotState state, GamePlayer player, long now)
     {
         if (now < state.NextProgressCheckTick) return false;
@@ -4009,7 +5264,19 @@ public static class PlayerBotDriver
             state.LastProgressTick = now;
             return false;
         }
-        if (now - state.LastProgressTick < StuckMilliseconds || player.CurrentRegionID != state.AnchorRegion) return false;
+        if (now - state.LastProgressTick < StuckMilliseconds || player.CurrentRegionID != state.AnchorRegion ||
+            SeenByHuman(player, player.CurrentRegion, state.Anchor))                     // the anchor's region (above)
+            return false;
+        MoveBack(state, player, now);
+        return true;
+    }
+
+    // RecoverIfStuck's teleport back to the anchor, in its region; #167 E fix U3: also a blocked roam's with no
+    // corridor to it (Roam, CutOffFromAnchor; U4: the hold for it over, HoldsCutOff). Both count in the DRIVER line's
+    // stuck=, and both go only with no real player in sight (U4, SeenByHuman).
+    private static void MoveBack(PlayerBotState state, GamePlayer player, long now)
+    {
+        state.CutOff = default;
         state.Mover.Stop(now);
         player.attackComponent.StopAttack();
         player.StopCurrentSpellcast();
@@ -4022,7 +5289,6 @@ public static class PlayerBotDriver
         state.Mover.Reset();
         state.LastProgressTick = now;
         PlayerBotDriverReport.StuckRecovered();
-        return true;
     }
 
     // True while the bot's own heal or summon is being cast: the think waits it out (Engage would stop it to walk, Rest
@@ -4046,33 +5312,55 @@ public static class PlayerBotDriver
     // the target not on it, not a defence), at a spell's stop distance (spellStop). A new turret by the target: the old
     // one released (CommandNpcRelease, as a GameBot does, BotAnimistPolicy.cs:160-170) when the summon is ready and paid
     // for and the summon's gate (WantsPet) would pass, so SummonPet plants it at its feet at the next think, before the
-    // pull; else the old approach. A blocked walk: the old approach for UnreachableSkipMilliseconds. True when it acted.
+    // pull. #167 E CY3: else it holds the pull up to TurretWaitMilliseconds, then leaves the target for
+    // UnreachableSkipMilliseconds: the pick passes it over, self-defence still answers it (LeaveTurretTarget; F10b took
+    // the old approach then: the pull from its spell's reach that the turret didn't reach). A blocked walk: the old
+    // approach for UnreachableSkipMilliseconds. True when it acted.
     private static bool AnimistApproach(PlayerBotState state, GamePlayer player, GameLiving target, int spellStop, long now)
     {
         if (player.CharacterClass.ID != (int)eCharacterClass.Animist || state.Engaged || state.FromDefence ||
             IsAttacking(player, target) || now < state.NextAnimistStandTick ||
             player.ControlledBrain?.Body is not TurretPet turret || !turret.IsAlive || turret.CurrentRegion != player.CurrentRegion)
-            return false;
-        int reach = turret.TurretSpell is Spell spell ? turret.castingComponent.CalculateSpellRange(spell) : 1_000;
-        Vector3 here = new(player.X, player.Y, player.Z);
-        (Vector3 stand, bool replant) = AnimistStand(here, new(turret.X, turret.Y, turret.Z), new(target.X, target.Y, target.Z),
-            spellStop, reach);
-        if (replant && !CanReplant(state, player, now)) return false;
-        if (Vector3.Distance(here, stand) > AnimistStandMargin)
         {
-            player.attackComponent.StopAttack();
-            state.Activity = PlayerBotActivity.Hunting;
-            state.Walk = PlayerBotWalk.Hunt;                                            // #167 walk=
-            if (state.Mover.StepToward(stand, AnimistStandMargin - 50, now) is not PlayerBotStepResult.Blocked) return true;
-            ReportBlocked(state, player, "turret", stand, now);
-            state.NextAnimistStandTick = now + UnreachableSkipMilliseconds;
+            state.TurretWaitSince = 0;
             return false;
         }
-        if (!replant) return false;
-        state.Mover.Stop(now);
-        player.CommandNpcRelease();                                                     // the target is no pet of its:
-        state.NextSummonTick = 0;                                                       //   its main pet goes
-        return true;
+        int reach = turret.TurretSpell is Spell spell ? turret.castingComponent.CalculateSpellRange(spell) : 1_000;
+        Vector3 here = new(player.X, player.Y, player.Z), planted = new(turret.X, turret.Y, turret.Z),
+            goal = new(target.X, target.Y, target.Z);
+        (Vector3 stand, bool replant) = AnimistStand(here, planted, goal, spellStop, reach,
+            turret.TurretSpell?.SpellType is eSpellType.DirectDamage);                 // Arboreal's (world DB)
+        PlayerBotAnimistStep step = AnimistStepFor(Vector3.Distance(here, stand), replant,
+            replant && CanReplant(state, player, now), state.TurretWaitSince, now);
+        state.TurretWaitSince = step is PlayerBotAnimistStep.Wait ? (state.TurretWaitSince == 0 ? now : state.TurretWaitSince) : 0;
+        if (step is PlayerBotAnimistStep.Replant or PlayerBotAnimistStep.Skip && Log.IsInfoEnabled)
+            Log.Info(TurretLine(player.Name, player.Level, step, target.Name, ConLevels.GetConColor(player.GetConLevel(target)),
+                (int)Vector3.Distance(goal, planted), reach));
+        switch (step)
+        {
+            case PlayerBotAnimistStep.Pull:
+                return false;
+            case PlayerBotAnimistStep.Wait:                                             // the in-combat flag runs out
+                state.Mover.Stop(now);
+                player.attackComponent.StopAttack();
+                return true;
+            case PlayerBotAnimistStep.Skip:
+                LeaveTurretTarget(state, target, now);
+                return true;
+            case PlayerBotAnimistStep.Walk:
+                player.attackComponent.StopAttack();
+                state.Activity = PlayerBotActivity.Hunting;
+                state.Walk = PlayerBotWalk.Hunt;                                        // #167 walk=
+                if (state.Mover.StepToward(stand, AnimistStandMargin - 50, now) is not PlayerBotStepResult.Blocked) return true;
+                ReportBlocked(state, player, "turret", stand, now);
+                state.NextAnimistStandTick = now + UnreachableSkipMilliseconds;
+                return false;
+            default:                                                                    // Replant, at its stand
+                state.Mover.Stop(now);
+                player.CommandNpcRelease();                                             // the target is no pet of its:
+                state.NextSummonTick = 0;                                               //   its main pet goes
+                return true;
+        }
     }
 
     // The summon's gate with no pet (WantsPet), the summon ready and paid for: a released turret is planted again at once.
@@ -4093,9 +5381,11 @@ public static class PlayerBotDriver
     // (casterHold, CasterHolds: no other monster hitting it, whose case is the add's control or a break-off; the stop is
     // then the spell's), to a point within that stop (KitePoint); none, or one blocked a moment ago (KitePauseMilliseconds),
     // and CombatAction's old rule (#167 C3). No control while the nukes kill it first (#167 C11: KillsFirst, from what
-    // the fight's casts took off it, NukesNeeded), the bot at KillFirstHealthPercent or more and one monster at most on
-    // it. #167 D11: none when it isn't worth it (WorthyTargetControl: a GREEN, the bot healthy and alone), so CasterAction
-    // nukes. held and breaksOnHit: Engage's Hold of the target. True when it acted.
+    // the fight's casts took off it, NukesNeeded), the bot at KillFirstHealthPercent or more (#167 E C2b: or its nuke
+    // killing at once, OneNukeKills read at Engage's cast choice) and one monster at most on it; the Quickcast it
+    // turned on stays with that nuke (#167 E C2a). #167 D11: none when it isn't worth it (WorthyTargetControl: a GREEN,
+    // the bot healthy and alone), so CasterAction nukes. held and breaksOnHit: Engage's Hold of the target. True when
+    // it acted.
     private static bool CasterStep(PlayerBotState state, GamePlayer player, GameLiving target, int distance, int stop,
         bool held, bool breaksOnHit, bool casterHold, long now, bool due, bool interrupted, bool quickcastReady,
         bool quickcasting, Ability quickcast)
@@ -4110,7 +5400,7 @@ public static class PlayerBotDriver
         (Spell control, SpellLine line) = !held && closing && due
             ? WorthyTargetControl(state, player, npc, contact, now) : default;                             // #167 D11
         bool killsFirst = KillsFirstNow(state.EngageTargetHealth, npc.HealthPercent, state.FightCasts, contact, nukeCast,
-            quickcastReady, player.HealthPercent, state.Attackers);                                         // #167 C11
+            quickcastReady, quickcasting, state.OneNukeKills, player.HealthPercent, state.Attackers);   // #167 C11, E C2a-b
         PlayerBotCasterAction step = CasterAction(closing, contact, held, breaksOnHit, control?.CastTime ?? 0, nukeCast,
             interrupted, quickcastReady, quickcasting, killsFirst);
         switch (step)
@@ -4133,6 +5423,7 @@ public static class PlayerBotDriver
                 if (!player.CastSpell(control, line)) return false;
                 AwaitControl(state, player, control, npc, now);                         // #167 ctlLanded=
                 state.FightControls++;
+                if (control.SpellType is eSpellType.Mesmerize) state.FightTargetMezzes++;   // #167 E C4 ctlMez=
                 state.FightQuickcast |= quickcasting;
                 state.NextCombatChoiceTick = now + Math.Max(900, control.CastTime + 250);
                 state.Activity = PlayerBotActivity.Casting;
@@ -4149,14 +5440,29 @@ public static class PlayerBotDriver
     // next control due and tries left, one the target takes (Takes) and a mez only as the escape (CasterControlAllowed),
     // in range, ready and paid for, the highest of ChooseControl's target order; none, default. #167 D11: CasterStep and
     // TargetFirst read it through WorthyTargetControl; the break-off's TargetHoldReady reads it as it is (it asks under 40%
-    // health or with the target held, where ControlWorth holds or isn't asked).
+    // health or with the target held, where ControlWorth holds or isn't asked). #167 E C1: no root or mez while its own
+    // DoT ticks on the target (HoldSurvivesDot): the next tick would end it; so neither is a hold ready for the
+    // one-monster break-off (TargetHoldReady) then. #167 E C4: the escape's mez first when hits from the target alone
+    // would walk the bot out of a shorter stun (ChooseTargetControl: the stun's hold now through the server's
+    // diminishing, the walk to Engage's spell stop; the hits as the server keeps them, not Engage's quickcast-masked
+    // interrupted, so the think after Quickcast chooses as the one before it).
     private static (Spell, SpellLine) TargetControl(PlayerBotState state, GamePlayer player, GameNPC npc, long contact,
-        long now) =>
-        now < state.NextControlTick || state.ControlTries >= MaxControlTries ? default :
-        ChooseControl(state.Controls, spell => player.GetSkillDisabledDuration(spell) <= 0 &&
+        long now)
+    {
+        if (now < state.NextControlTick || state.ControlTries >= MaxControlTries) return default;
+        bool dotOn = OwnDotOn(player, npc);
+        bool hitsOnBot = player.IsBeingInterruptedByOther;
+        bool soleHitter = hitsOnBot && LiveHitters(player) <= 1 && npc.TargetObject == player;
+        long walk = soleHitter ? StepBackWalkMs(SpellStopDistance(StopSpellRange(state.Spell, state.Nukes,
+            player.castingComponent.CalculateSpellRange)), player.GetDistanceTo(npc)) : 0;
+        return ChooseTargetControl(state.Controls, spell => player.GetSkillDisabledDuration(spell) <= 0 &&
                 HasPowerFor(player.MaxMana, player.Mana, spell.Power) &&
                 player.IsWithinRadius(npc, player.castingComponent.CalculateSpellRange(spell)),
-            spell => CasterControlAllowed(spell, Takes(player, npc, spell), contact), forAdd: false, petClass: false);
+            spell => CasterControlAllowed(spell, Takes(player, npc, spell), contact) && HoldSurvivesDot(spell, dotOn),
+            spell => HoldNowMs(EffectListService.GetEffectOnTarget(npc, spell.SpellType is eSpellType.Stun
+                ? eEffect.NPCStunImmunity : eEffect.NPCMezImmunity) as NpcImmunityEffect, spell.Duration),
+            hitsOnBot, soleHitter, walk);
+    }
 
     // #167 D11: TargetControl when a control on the target is worth it (ControlWorth: its con, the bot's health and the
     // live monsters on it, LiveHitters), else none: CasterStep's control and TargetFirst's, one gate for both.
@@ -4591,12 +5897,12 @@ public static class PlayerBotDriver
 
     // #167 F1: at each cast choice a Theurgist casts a pet at its target before its damage spell, whenever it can, as a
     // GameBot does (AutonomousPetSupport.cs:636-650). The server's own cap applies (SummonTheurgistPet.cs:67-71; 0, none,
-    // in 1.65). Otherwise the nuke ready now (#167 F9).
-    private static void ChooseCombatSpell(PlayerBotState state, GamePlayer player, GameLiving target, long now)
+    // in 1.65). Otherwise the nuke ready now (#167 F9), paid for (#167 E C2b: the killing quickcast's any-power nuke is
+    // KillingNukeChoice's).
+    private static (Spell, SpellLine) CombatSpell(PlayerBotState state, GamePlayer player, GameLiving target, long now)
     {
         (Spell pet, SpellLine petLine) = CombatPet(state, player, target, now, player.TargetInView);
-        if (pet != null) (state.Spell, state.SpellLine) = (pet, petLine);
-        else (state.Spell, state.SpellLine) = Nuke(state, player, target);              // #167 F9: chosen per cast
+        return pet != null ? (pet, petLine) : Nuke(state, player, target, killingQuickcast: false);   // #167 F9: per cast
     }
 
     // From the summons known at this level (KnowSpells): none for every class but the Theurgist. inView: sight to target
@@ -4615,14 +5921,24 @@ public static class PlayerBotDriver
     }
 
     // #167 F9, F1, F11: the damage spells, the pet summons a Theurgist casts at its target and the control spells, from one
-    // walk of the usable spells per level and after a training (ObserveXp clears NukesLevel).
+    // walk of the usable spells per level and after a training (ObserveXp clears NukesLevel). #167 E C1: a caster's damage
+    // spells by its own lines (DamageSpells' perLine) and each one's handler (NukeValues reads the server's own numbers
+    // through it; the constructor only stores the caster, spell and line), and whether its controls hold a stun or a root.
     private static void KnowSpells(PlayerBotState state, GamePlayer player)
     {
         if (state.NukesLevel == player.Level) return;
         List<(Spell Spell, SpellLine Line)> usable = UsableSpells(player).ToList();
-        state.Nukes = DamageSpells(usable, player.Level, SkillBase.GetSpellByID);    // #167 F10b: bombers' payloads
+        bool caster = RoleOf(player.CharacterClass.ID) == PlayerBotRole.Caster;
+        state.Nukes = DamageSpells(usable, player.Level, SkillBase.GetSpellByID, perLine: caster);   // #167 F10b: payloads
         state.CombatPets = usable.FindAll(pair => pair.Spell.SpellType is eSpellType.SummonTheurgistPet);
         state.Controls = usable.FindAll(pair => IsControlSpell(pair.Spell) && pair.Spell.Level <= player.Level);   // #167 F11
+        state.NukeHandlers = new();
+        if (caster)
+            foreach ((Spell spell, SpellLine line) in state.Nukes)
+                if (ScriptMgr.CreateSpellHandler(player, spell, line) is DOL.GS.Spells.SpellHandler handler)
+                    state.NukeHandlers[spell] = handler;
+        state.HasStun = state.Controls.Exists(pair => pair.Spell.SpellType is eSpellType.Stun);
+        state.HasRoot = state.Controls.Exists(pair => pair.Spell.SpellType is eSpellType.SpeedDecrease);
         state.NukesLevel = player.Level;
     }
 
@@ -4662,8 +5978,9 @@ public static class PlayerBotDriver
             state.LifeRests++;                                                             // FIGHT and DEATH rests=
             if (player.IsSitting)                                                          // REST sec= (#167), if it sat,
             {                                                                              //   and hp= and mp=; #167 D10:
-                (state.SitSince, state.SitHealth, state.SitMana) =                         //   blocked= and inReach=, by the
-                    (now, player.HealthPercent, PowerPercent(player.MaxMana, player.ManaPercent));   //   reaches its rest
+                (state.SitSince, state.SitHealth, state.SitMana, state.SitEndurance) =     //   blocked= and inReach=, by the
+                    (now, player.HealthPercent, PowerPercent(player.MaxMana, player.ManaPercent),   //   reaches its rest
+                        player.EndurancePercent);                                                     //   (#167 E-R end=)
                 (state.SitBlocked, state.SitInReach) =                                     //   check read (RestReach)
                     (state.RestBlocked, InAddReach(new Vector3(player.X, player.Y, player.Z), state.RestReach));
             }
@@ -4702,7 +6019,7 @@ public static class PlayerBotDriver
         if (state.SitSince == 0) return;
         if (Log.IsInfoEnabled)
             Log.Info(PlayerBotDriverReport.FormatRest(player.Name, player.Level, (now - state.SitSince) / 1000, why,
-                state.SitHealth, state.SitMana, state.RestRespawns, state.SitBlocked, state.SitInReach));
+                state.SitHealth, state.SitMana, state.RestRespawns, state.SitBlocked, state.SitInReach, state.SitEndurance));
         state.SitSince = 0;
     }
 
