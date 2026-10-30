@@ -106,6 +106,10 @@ public sealed class PlayerBotState
     public long RoamingSince, NextIdleLine, NextRelocateTick; // no target reached since: PLAYER_BOT_IDLE, PLAYER_BOT_RELOCATE
     public long NextAnchorCheckTick;                             // #167 E fix U3: a blocked roam's next corridor test to its
                                                                  //   anchor (ReanchorAfterRoamBlock)
+    public Vector3? CutOffCamp;                                  // #167 E fix U3's second review: the camp a re-anchor
+                                                                 //   left, RecoverIfStuck's way back until the bot is off
+                                                                 //   the cut-off piece (a death's replan, a task's end, a
+                                                                 //   region change; none: null)
     public readonly HashSet<GameNPC> RelocateRejected = new(); // no corridor to them: not checked again
     public long CappedSince;                                     // DEATHS.md A4: the first search that passed monsters over
     public ConColor? SafestPassedOver;                           //   for the cap and found none (CappedClock), and the
@@ -569,23 +573,7 @@ public static class PlayerBotDriver
         }
         CountNeighbours(state, player, now);                                             // 9. once a minute
         SettleTarget(state, player);                                                     //    a fight that ended counts, task or not
-        if (state.Task != null)                                                          // 10
-        {
-            if (state.Task.Finished)
-            {
-                state.Task = null;
-                state.AnchorRegion = player.CurrentRegionID;                             // grind where the task ended
-                state.Anchor = new(player.X, player.Y, player.Z);
-                state.RoamDestination = null;                                            // not a relocation's spot
-            }
-            else if (state.Task.Tick(state, now))
-            {
-                state.Activity = PlayerBotActivity.Task;
-                state.RoamingSince = 0;
-                if (state.Target != null) Disengage(state, player);                     // the next defence picks afresh
-                return;
-            }
-        }
+        if (RunsTask(state, player, now)) return;                                        // 10
         TryLoot(state, player, now);                                                     // 11. APP:403-414, before a sit
         if (WaitsForSelfCast(state, player) || StepsOutOfReach(state, player, now))      // 11a. #167 F4, C6: a release, a login
             return;
@@ -644,6 +632,30 @@ public static class PlayerBotDriver
         SettleIdleClock(state);
     }
 
+    // Step 10: the bot's task, while it has one: at its end the bot grinds where it ended; else its tick, true while it
+    // runs (the think ends there). #167 E fix U3's second review: one step a test runs (Think can't run in one); a task's
+    // end drops the camp a re-anchor left (CutOffCamp: the task took the bot off the cut-off piece).
+    private static bool RunsTask(PlayerBotState state, GamePlayer player, long now)
+    {
+        if (state.Task == null) return false;
+        if (state.Task.Finished)
+        {
+            state.Task = null;
+            state.AnchorRegion = player.CurrentRegionID;                                 // grind where the task ended
+            state.Anchor = new(player.X, player.Y, player.Z);
+            state.CutOffCamp = null;                                                     // off the cut-off piece
+            state.RoamDestination = null;                                                // not a relocation's spot
+        }
+        else if (state.Task.Tick(state, now))
+        {
+            state.Activity = PlayerBotActivity.Task;
+            state.RoamingSince = 0;
+            if (state.Target != null) Disengage(state, player);                         // the next defence picks afresh
+            return true;
+        }
+        return false;
+    }
+
     /// <summary>Step 16's idle clock (RoamingSince, RelocateReason's Outgrown): a target reached stops it; a target
     /// blocked on the way leaves it running. #167 E fix U2: reached is engaged with no step in under way (BlindStop 0,
     /// R1): a step in out of sight opens the fight (Engaged) before its walk, and a walk that then ends blocked
@@ -692,7 +704,8 @@ public static class PlayerBotDriver
     /// <summary>Step 4: a bot in another region (a release to a bind there, a re-entry) starts its hunt afresh: no walk,
     /// target, idle or capped clock, fallback cap or stale camp's names. Its failed camps stay (#167 F4): each has its
     /// region (FailedCamps); cleared, a bot that came back planned into the camp it died at. #167 E fix U3's review: no
-    /// last kill's spot either (LastKillAt, another region's; HuntedHere reads it in this one's zones).</summary>
+    /// last kill's spot either (LastKillAt, another region's; HuntedHere reads it in this one's zones). Its second review:
+    /// nor the camp a re-anchor left (CutOffCamp): the bot is off the cut-off piece.</summary>
     public static void ResetOnRegionChange(PlayerBotState state, ushort region)
     {
         state.LastRegion = region;
@@ -704,6 +717,7 @@ public static class PlayerBotDriver
         state.FallbackCap = null;
         state.HuntAvoided = false;
         state.LastKillAt = null;
+        state.CutOffCamp = null;
     }
 
     // A task owns the bot's position while it runs: no leash then.
@@ -1869,11 +1883,15 @@ public static class PlayerBotDriver
     /// (fallback; none: the death cap, Cap) and at a camp of avoided names (stale) those too (FindWithin), the capped
     /// clock afresh (the next search starts it, on the way there too), BACK replan=moved after a death (#167 C1; same at
     /// the anchor it had, D4), and the relocation owed planned (#167 F4, C2). The review of 9aacd69: with BackMoved's line
-    /// dropped no test failed.</summary>
+    /// dropped no test failed. #167 E fix U3's second review: a death's plan drops the camp a re-anchor left (CutOffCamp),
+    /// the bot released to its bind, off the cut-off piece; an outgrown, capped or break-off one is planned from where it
+    /// stands (RelocationOrigin, CorridorOrigin), on the piece still, and keeps it (only a camp on the piece is reached).
+    /// </summary>
     public static void PlanCamp(PlayerBotState state, Vector3 spot, ConColor? fallback, bool stale, string reason)
     {
         if (reason == Died) state.BackSame = SameCamp(spot, state.Anchor);
         state.Anchor = spot;
+        if (reason == Died) state.CutOffCamp = null;
         state.RoamDestination = spot;
         state.RelocateRejected.Clear();
         state.FallbackCap = fallback;
@@ -4092,13 +4110,18 @@ public static class PlayerBotDriver
     /// after 15 minutes with no progress still comes: st-deathsE, Pbothaaem (Blademaster 26, Domnann) on an island of the
     /// navmesh after a floor step, every roam blocked and no kill there, its last one on the main mesh. Moved onto the
     /// island, it roamed round it (progress) and the move back led there. A spot, not a clock, so a second time on the
-    /// island after a move back and kills at the camp keeps the camp too.</summary>
+    /// island after a move back and kills at the camp keeps the camp too.
+    /// Its second review: a kill on the island counts though its monster came from the camp below (a chasing monster with
+    /// no path to the bot is put on its piece, NpcMovementComponent.cs:788-792), and a centre moved onto a pocket stayed
+    /// there once the bot had outgrown it (RELOCATE finds no corridor off it). So the camp the move leaves is kept
+    /// (CutOffCamp; the first one, through any later move on the piece) as RecoverIfStuck's way back.</summary>
     public static bool ReanchorAfterRoamBlock(PlayerBotState state, Vector3 here, bool leashed, long now,
         Func<bool> anchorReachable, Func<bool> huntedHere)
     {
         if (!leashed || now < state.NextAnchorCheckTick) return false;
         state.NextAnchorCheckTick = now + AnchorCheckMilliseconds;
         if (anchorReachable() || !huntedHere()) return false;   // a corridor to the camp, or no kill made from here
+        state.CutOffCamp ??= state.Anchor;                      // the way back, the camp the bot was first cut off from
         state.Anchor = here;
         state.RoamDestination = null;
         return true;
@@ -4261,13 +4284,17 @@ public static class PlayerBotDriver
 
     // #167 F4: no camp planned after a death, at once or within MaxHoldMilliseconds: the bot hunts where it is, under its
     // lowered cap and its avoided names; in its anchor's region the leash moves here, so it doesn't walk back (after a
-    // break-off, #167 C2, off the camp it ran from).
+    // break-off, #167 C2, off the camp it ran from). #167 E fix U3's second review: after a death, where it released to,
+    // off the cut-off piece, the camp a re-anchor left goes (CutOffCamp); after a break-off, where it ran to, on the piece
+    // still, it stays.
     private static void EndReplan(PlayerBotState state, GamePlayer player)
     {
+        bool released = state.ReplanOwed == Died;
         state.ReplanOwed = null;
         state.ReplanSince = 0;
         if (player.CurrentRegionID != state.AnchorRegion || state.Task != null) return;
         state.Anchor = new(player.X, player.Y, player.Z);
+        if (released) state.CutOffCamp = null;
         state.RoamDestination = null;
     }
 
@@ -5175,14 +5202,18 @@ public static class PlayerBotDriver
     }
 
     // APP:585-624, changed: every 10 s, no inventory count, no saves; after 15 minutes with no progress, back to the
-    // anchor in the same region (the pilot moved to the capital in another region, which needs re-entry).
+    // anchor in the same region (the pilot moved to the capital in another region, which needs re-entry). #167 E fix
+    // U3's second review: while the bot keeps the camp a re-anchor left (CutOffCamp), a move is no progress (its roams
+    // round the cut-off piece), and the way back goes to that camp, its anchor again. At 9770e3e a bot whose centre
+    // moved onto a pocket roamed there for good once it had outgrown it (RELOCATE finds no corridor off it).
     private static bool RecoverIfStuck(PlayerBotState state, GamePlayer player, long now)
     {
         if (now < state.NextProgressCheckTick) return false;
         state.NextProgressCheckTick = now + ProgressCheckMilliseconds;
         Vector3 here = new(player.X, player.Y, player.Z);
         long money = player.GetCurrentMoney();
-        if (Vector3.Distance(here, state.ProgressPosition) >= MeaningfulMoveDistance || player.Experience != state.ProgressExperience ||
+        bool moved = state.CutOffCamp == null && Vector3.Distance(here, state.ProgressPosition) >= MeaningfulMoveDistance;
+        if (moved || player.Experience != state.ProgressExperience ||
             money != state.ProgressMoney || player.InCombat || player.IsAttacking || player.IsCasting)
         {
             state.ProgressPosition = here;
@@ -5200,6 +5231,7 @@ public static class PlayerBotDriver
         state.RoamDestination = null;
         state.RoamingSince = 0;
         state.RelocateRejected.Clear();
+        if (state.CutOffCamp is Vector3 camp) (state.Anchor, state.CutOffCamp) = (camp, null);   // off the cut-off piece
         player.MoveTo(state.AnchorRegion, (int)state.Anchor.X, (int)state.Anchor.Y, (int)state.Anchor.Z, player.Heading);
         state.Mover.Reset();
         state.LastProgressTick = now;

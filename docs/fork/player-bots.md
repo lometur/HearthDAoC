@@ -439,14 +439,16 @@ Known gaps:
   leads from where the bot stands to its camp's centre. With none, and a path from there to where the bot stood at its
   last kill, the centre moves to where the bot stands (`REANCHOR`), as after a death with no camp planned, so the bot
   roams and hunts where it is. With no kill made from there, the camp stays. In another run a Blademaster in Domnann
-  stepped onto a small piece of navmesh cut off from the rest, with nothing to hunt on it. A centre moved there would
-  have kept it for good: its roams round the piece count as progress, and the move back of a bot with none in 15
-  minutes goes to the centre. Kept, that move puts it back on its camp. A lever spot bot keeps its spot. A monster below
-  may still be picked and blocked again every 30 seconds, and a bot cut off with no kill there still has its roam
-  blocked about 4 times a second until it is moved back. A bot whose centre moved onto a pocket stays there once it has
-  outgrown the pocket's monsters, until it dies: no new camp can be reached from it, and it still roams. How the bot got
-  onto the pocket is open (likely a short direct step there). A GameBot's target and camp choice is part of the parity
-  work (#167).
+  stepped onto a small piece of navmesh cut off from the rest, with nothing to hunt on it. A kill made there moves the
+  centre even when its monster came from below: one that chases the bot with no path to it is put on the bot's piece.
+  A moved centre keeps the camp it left. Until the bot leaves the piece, its roams round it are no progress, so 15
+  minutes with no XP, money or fight bring it back to that camp, kept or moved. A lever spot bot keeps its spot. A
+  monster below may still be picked and blocked again every 30 seconds, and a bot cut off with no kill there still has
+  its roam blocked about 4 times a second until it is moved back. A bot whose centre moved onto a pocket finds no new
+  camp from it once it has outgrown the pocket's monsters, but the camp it left stays its way back: with no XP, money or
+  fight for 15 minutes it goes back there, as before the move, and `RELOCATE` works from there. Only a death's replan, a
+  task's end or a region change drops that camp. How the bot got onto the pocket is open (likely a short direct step
+  there). A GameBot's target and camp choice is part of the parity work (#167).
 - A Tir na Nog bot stalled at one spot (21263, 35215) in most runs, though the same step replayed offline walks on
   (same navmesh, same Detour library). It is likely the polygon-edge case above: the log rounds the spot, and starts a
   few hundredths of a unit apart can differ there. In the last four runs none stalled there; one stalled once beside
