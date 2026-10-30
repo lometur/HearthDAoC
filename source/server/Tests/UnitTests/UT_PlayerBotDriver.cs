@@ -7209,7 +7209,8 @@ public sealed class UT_PlayerBotDriver
             var state = new PlayerBotState(bot) { Anchor = BelowCamp };
             Roam(state, 10_000);
             Assert.That(state.Mover.LastBlock, Does.StartWith("No complete walkable path"), "the walk down blocked");
-            Assert.That((At(), state.CutOff), Is.EqualTo((OnPocket, (10_000L, BelowCamp))), "cut off, in sight: held");
+            Assert.That((At(), state.CutOff), Is.EqualTo((OnPocket, (10_000L, BelowCamp, OnPocket))),
+                "cut off, in sight: held");
             int paths = mesh.Paths;
             for (long now = 10_000 + tick; now <= 10_000 + 3 * watch; now += tick)
                 Roam(state, now);
@@ -7273,6 +7274,76 @@ public sealed class UT_PlayerBotDriver
             roam.Invoke(null, [state, bot, 10_000L + PlayerBotDriver.WatchCheckMilliseconds]);
             Assert.That((state.CutOff.Since, new Vector3(bot.X, bot.Y, bot.Z) == BelowCamp), Is.EqualTo((0L, false)),
                 "hold over, no teleport");
+        });
+    }
+
+    // #167 E fix U4, the wiring: a held bot that can walk to its anchor again (a fight's step onto the camp's floor) is
+    // cut off no more: tested from where it stands now, it is held no more and walks.
+    [Test]
+    public void A_held_bot_that_can_walk_to_its_anchor_again_is_held_no_more_in_Roam()
+    {
+        MethodInfo roam = typeof(PlayerBotDriver).GetMethod("Roam", BindingFlags.Static | BindingFlags.NonPublic)!;
+        Vector3 onFloor = new(840_923, 702_066, 8_343);                                    // on the camp's floor
+        var mesh = new CountingFloors();
+        InTheField(mesh, OnPocket, (region, zone, bot) =>
+        {
+            PlayerAt(zone, OnPocket + new Vector3(500, 0, 0), HumanClient(gm: false));
+            var state = new PlayerBotState(bot) { Anchor = BelowCamp };
+            roam.Invoke(null, [state, bot, 10_000L]);
+            Assert.That(state.CutOff.Since, Is.EqualTo(10_000L), "held");
+            (bot.X, bot.Y, bot.Z) = ((int)onFloor.X, (int)onFloor.Y, (int)onFloor.Z);
+            int paths = mesh.Paths;
+            for (long now = 10_000 + PlayerBotDriver.TickMilliseconds; now <= 40_000; now += PlayerBotDriver.TickMilliseconds)
+                roam.Invoke(null, [state, bot, now]);
+            Assert.That((state.CutOff.Since, mesh.Paths > paths, new Vector3(bot.X, bot.Y, bot.Z) != onFloor),
+                Is.EqualTo((0L, true, true)), "held no more: it walks");
+        });
+    }
+
+    // #167 E fix U4, the wiring: a held bot that dies on its pocket, is released to a bind on the camp's floor (2,000
+    // units off) and has the same camp planned again (PlanCamp at its anchor, Died: no move of the anchor) walks from the
+    // bind: tested from there, it is held no more.
+    [Test]
+    public void A_held_bot_released_to_a_bind_with_a_path_to_the_same_camp_is_held_no_more_in_Roam()
+    {
+        MethodInfo roam = typeof(PlayerBotDriver).GetMethod("Roam", BindingFlags.Static | BindingFlags.NonPublic)!;
+        Vector3 bind = new(838_323, 702_066, 8_343);                                       // on the camp's floor
+        var mesh = new CountingFloors();
+        InTheField(mesh, OnPocket, (region, zone, bot) =>
+        {
+            PlayerAt(zone, OnPocket + new Vector3(500, 0, 0), HumanClient(gm: false));
+            var state = new PlayerBotState(bot) { Anchor = BelowCamp };
+            roam.Invoke(null, [state, bot, 10_000L]);
+            Assert.That(state.CutOff.Since, Is.EqualTo(10_000L), "held");
+            (bot.X, bot.Y, bot.Z) = ((int)bind.X, (int)bind.Y, (int)bind.Z);
+            PlayerBotDriver.PlanCamp(state, BelowCamp, null, false, PlayerBotDriver.Died);
+            int paths = mesh.Paths;
+            roam.Invoke(null, [state, bot, 70_000L]);
+            Assert.That((state.CutOff.Since, mesh.Paths > paths, new Vector3(bot.X, bot.Y, bot.Z) != bind),
+                Is.EqualTo((0L, true, true)), "held no more: it walks from the bind");
+        });
+    }
+
+    // #167 E fix U4, the wiring: a held bot moved on its pocket (a fight's step there) is tested once from its new spot,
+    // still cut off, and held on there: no corridor test on a think it stands where it stood.
+    [Test]
+    public void A_held_bot_moved_on_its_pocket_is_tested_once_from_there_and_held_on_in_Roam()
+    {
+        MethodInfo roam = typeof(PlayerBotDriver).GetMethod("Roam", BindingFlags.Static | BindingFlags.NonPublic)!;
+        Vector3 onPocket = new(840_700, 702_100, 8_700);
+        var mesh = new CountingFloors();
+        InTheField(mesh, OnPocket, (region, zone, bot) =>
+        {
+            PlayerAt(zone, OnPocket + new Vector3(500, 0, 0), HumanClient(gm: false));
+            var state = new PlayerBotState(bot) { Anchor = BelowCamp };
+            roam.Invoke(null, [state, bot, 10_000L]);
+            Assert.That(state.CutOff.Since, Is.EqualTo(10_000L), "held");
+            (bot.X, bot.Y, bot.Z) = ((int)onPocket.X, (int)onPocket.Y, (int)onPocket.Z);
+            int paths = mesh.Paths;
+            for (long now = 10_000 + PlayerBotDriver.TickMilliseconds; now <= 40_000; now += PlayerBotDriver.TickMilliseconds)
+                roam.Invoke(null, [state, bot, now]);
+            Assert.That((state.CutOff.Since, mesh.Paths - paths, new Vector3(bot.X, bot.Y, bot.Z)),
+                Is.EqualTo((10_000L, 1, onPocket)), "one test from its new spot: still cut off, held there");
         });
     }
 

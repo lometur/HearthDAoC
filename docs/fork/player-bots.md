@@ -442,8 +442,10 @@ Known gaps:
   progress; in combat the check waits for its next blocked roam. Neither teleport ever happens in a fight or in sight
   of a real player: while a human player (a GM too; player bots don't count) is within sight range (6,000 units) of
   where the bot stands or of the centre it would land on, the bot waits. A cut-off bot waits where it stands and
-  starts no roam (it still rests, defends itself and fights what it picks), and checks again every 5 seconds; the
-  15-minute rule checks again at its next check, 10 seconds on, and a move or XP meanwhile still counts as progress.
+  starts no roam (it still rests, defends itself and fights what it picks), and checks again every 5 seconds; once it
+  has moved (a step in a fight, a release after a death) and a path leads back to the centre from where it stands
+  now, it waits no more and walks. The 15-minute rule checks again at its next check, 10 seconds on, and a move or XP
+  meanwhile still counts as progress.
   Where no check can tell (no navmesh by the bot or by the centre, or the centre in another zone), the bot stays.
   Neither a lever spot bot nor a bot on a task is teleported. Until the teleport, a monster below may still be picked,
   and its walk blocked, once every 30 seconds. The one weak case: a camp's centre that is itself on a cut-off piece

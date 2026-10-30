@@ -106,10 +106,11 @@ public sealed class PlayerBotState
     public long RoamingSince, NextIdleLine, NextRelocateTick; // no target reached since: PLAYER_BOT_IDLE, PLAYER_BOT_RELOCATE
     public long NextAnchorCheckTick;                             // #167 E fix U3: a blocked roam's next corridor test to its
                                                                  //   anchor (CutOffFromAnchor)
-    public (long Since, Vector3 Anchor) CutOff;                  // #167 E fix U4: found cut off from this anchor and
+    public (long Since, Vector3 Anchor, Vector3 At) CutOff;      // #167 E fix U4: found cut off from this anchor and
     public long NextWatchCheckTick;                              //   held since (0: not held) for its teleport back,
-                                                                 //   and the hold's next check (HoldsCutOff,
-                                                                 //   TeleportsNow)
+                                                                 //   where it stood at its last think held (a corridor
+                                                                 //   test only from a new spot), and the hold's next
+                                                                 //   check (HoldsCutOff, TeleportsNow)
     public readonly HashSet<GameNPC> RelocateRejected = new(); // no corridor to them: not checked again
     public long CappedSince;                                     // DEATHS.md A4: the first search that passed monsters over
     public ConColor? SafestPassedOver;                           //   for the cap and found none (CappedClock), and the
@@ -4063,7 +4064,7 @@ public static class PlayerBotDriver
     // bot), out of combat, with no corridor from where it stands to its anchor (CutOffFromAnchor) teleports the bot
     // back there (MoveBack, PLAYER_BOT_CUTOFF); from where it stands after the walk, as a floor step may have moved it
     // (TryFloorStep). #167 E fix U4: at once only with no real player in sight; else the bot is held, with no walk,
-    // until none is (HoldsCutOff).
+    // until none is, or until it can walk back (HoldsCutOff).
     private static void Roam(PlayerBotState state, GamePlayer player, long now)
     {
         if (HoldsCutOff(state, player, now)) return;
@@ -4083,7 +4084,7 @@ public static class PlayerBotDriver
             if (CutOffFromAnchor(state, leashed && CanRelocate(state, player), player.InCombat, now,
                     () => AnchorReachable(PathfindingProvider.Instance, player.CurrentRegion, at, anchor)))
             {
-                (state.CutOff, state.NextWatchCheckTick) = ((now, anchor), now);   // #167 E fix U4: checked at once
+                (state.CutOff, state.NextWatchCheckTick) = ((now, anchor, at), now);   // #167 E fix U4: checked at once
                 HoldsCutOff(state, player, now);
                 return;
             }
@@ -4098,20 +4099,25 @@ public static class PlayerBotDriver
     // and starts no roam walk: Roam's blocked walks were the cost (about 4 a second, ~5 ms each, U3); a rest,
     // self-defence and the pick's fights go on as before (Think's steps 12, 14 and 16; a walk to a monster it can't
     // reach is blocked once and passes it over 30 s, U1). The hold ends with its anchor moved (a camp planned,
-    // PlanCamp; a replan's or a task's end) or off its leash: it roams again. True while held, or teleported.
+    // PlanCamp; a replan's or a task's end), off its leash, or once a corridor leads from where it stands to its anchor
+    // (AnchorReachable; tested only after it moved, a fight's step or a release to a bind, so once a move and never while
+    // it stands): it roams again. True while held, or teleported.
     private static bool HoldsCutOff(PlayerBotState state, GamePlayer player, long now)
     {
         if (state.CutOff.Since == 0) return false;
-        if (state.CutOff.Anchor != state.Anchor || !Leashed(state, player))
+        Vector3 here = new(player.X, player.Y, player.Z);
+        if (state.CutOff.Anchor != state.Anchor || !Leashed(state, player) || (here != state.CutOff.At &&
+                AnchorReachable(PathfindingProvider.Instance, player.CurrentRegion, here, state.Anchor)))
         {
             state.CutOff = default;
             return false;
         }
+        state.CutOff.At = here;
         state.Mover.Stop(now);
         state.Activity = PlayerBotActivity.Roaming;
         if (!TeleportsNow(state, player.InCombat, now, () => SeenByHuman(player, player.CurrentRegion, state.Anchor)))
             return true;
-        Vector3 anchor = state.Anchor, at = new(player.X, player.Y, player.Z);
+        Vector3 anchor = state.Anchor, at = here;
         if (Log.IsInfoEnabled)
             Log.Info($"PLAYER_BOT_CUTOFF bot={player.Name} level={player.Level} at=({at.X:0},{at.Y:0},{at.Z:0}) " +
                      $"anchor=({anchor.X:0},{anchor.Y:0},{anchor.Z:0}) distance={(int)Vector3.Distance(anchor, at)} " +
