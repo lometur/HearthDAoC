@@ -6219,7 +6219,7 @@ public sealed class UT_PlayerBotDriver
     // #167 E fix U3: two floors with no way between them, as Pbotmaada's pocket above its camp: a corridor leads only
     // between spots on the same side of the ledge's height (Ledge). Off the mesh (OffMesh) no spot has a nearest point.
     // The base mesh's random point is the circle's centre: a roam round the camp walks to the camp.
-    private sealed class SplitFloorMesh : PathfindingMgrBase
+    private class SplitFloorMesh : PathfindingMgrBase
     {
         public const float Ledge = 8_500;
         public bool Available = true, OffMesh;
@@ -6362,6 +6362,248 @@ public sealed class UT_PlayerBotDriver
             calculators[(int)eProperty.MaxSpeed] = speed;
             PathfindingProvider.SetPathfindingMgr(nav);
         }
+    }
+
+    // --- #167 E fix round 3, the review of fix round 2 (U1-U2-callsites-untested): the call sites themselves ---
+
+    // A bot in the world the driver's private steps run on, where the seams' rows can't reach their call sites: mortal
+    // (the attack rules: AbstractServerRules.cs:385-393), of a realm (a realm-less player may attack no monster of none,
+    // NormalServerRules.cs:56-78), with the components Engage and the scans read, and a floor step (TryFloorStep's
+    // MoveTo) that lands where the mesh puts it.
+    private sealed class FieldBot : GamePlayer
+    {
+        private FieldBot() : base(null, null) { }
+        public override bool IsInvulnerableToAttack => false;
+        public override bool MoveTo(ushort regionID, int x, int y, int z, ushort heading)
+        {
+            (X, Y, Z) = (x, y, z);
+            return true;
+        }
+    }
+
+    // Runs body in Muspelheim's zone (Pbotmaada's, at its offsets) on mesh, with a level 39 bot at at: a 47.75-unit step
+    // a think, the effective level its level (the cons), 1,000 power at most (no power: no cast), 100 health at most
+    // (full); the calculators and the mesh put back after.
+    private static void InTheField(IPathfindingMgr mesh, Vector3 at, Action<Region, Zone, FieldBot> body)
+    {
+        var calculators = (DOL.GS.PropertyCalc.IPropertyCalculator[])typeof(GameLiving)
+            .GetField("m_propertyCalc", BindingFlags.Static | BindingFlags.NonPublic)!.GetValue(null)!;
+        (eProperty Property, DOL.GS.PropertyCalc.IPropertyCalculator Calculator)[] swapped =
+            [(eProperty.MaxSpeed, new RunSpeed()), (eProperty.LivingEffectiveLevel, new LevelOnly()),
+             (eProperty.MaxMana, new Fixed(1_000)), (eProperty.MaxHealth, new Fixed(100))];
+        var saved = swapped.Select(swap => calculators[(int)swap.Property]).ToArray();
+        IPathfindingMgr nav = PathfindingProvider.Instance;
+        try
+        {
+            foreach ((eProperty property, DOL.GS.PropertyCalc.IPropertyCalculator calculator) in swapped)
+                calculators[(int)property] = calculator;
+            PathfindingProvider.SetPathfindingMgr(mesh);
+            var (region, zone) = World(Muspelheim.X, Muspelheim.Y);
+            typeof(Region).GetField("m_regionData", Hidden)!.SetValue(region, new RegionData { Id = 1 });
+            var bot = (FieldBot)RuntimeHelpers.GetUninitializedObject(typeof(FieldBot));
+            typeof(GameObject).GetField("_objectInRadiusCachesLock", Hidden)!.SetValue(bot, new System.Threading.Lock());
+            FieldInfo caches = typeof(GameObject).GetField("_objectsInRadiusCaches", Hidden)!;
+            caches.SetValue(bot, Activator.CreateInstance(caches.FieldType));
+            bot.ObjectState = GameObject.eObjectState.Active;
+            typeof(GameObject).GetField("m_health", Hidden)!.SetValue(bot, 100);
+            typeof(GameObject).GetField("m_level", Hidden)!.SetValue(bot, (byte)39);
+            bot.Realm = eRealm.Midgard;
+            bot.CurrentRegion = region;
+            ((GameLiving)bot).movementComponent = bot.movementComponent = new PlayerMovementComponent(bot);   // GP:45
+            (bot.X, bot.Y, bot.Z) = ((int)at.X, (int)at.Y, (int)at.Z);
+            bot.attackComponent = new AttackComponent(bot);
+            bot.castingComponent = CastingComponent.Create(bot);
+            bot.effectListComponent = EffectListComponent.Create(bot);
+            ((GameLiving)bot).styleComponent = bot.styleComponent =                      // StopAttack's styles (GP:46)
+                (PlayerStyleComponent)StyleComponent.Create(bot);
+            typeof(GameLiving).GetField("m_abilities", Hidden)!.SetValue(bot, new Dictionary<string, Ability>());   // none
+            typeof(GameLiving).GetField("_abilitiesLock", Hidden)!.SetValue(bot, new System.Threading.Lock());
+            typeof(GamePlayer).GetField("m_characterClass", Hidden)!.SetValue(bot, new DOL.GS.PlayerClass.ClassThane());
+            body(region, zone, bot);
+        }
+        finally
+        {
+            for (int i = 0; i < swapped.Length; i++) calculators[(int)swapped[i].Property] = saved[i];
+            PathfindingProvider.SetPathfindingMgr(nav);
+        }
+    }
+
+    // A monster the bot would hunt, alive at at in zone, where the radius scans (GetNPCsInRadius) find it.
+    private static GameNPC MonsterAt(Region region, Zone zone, Vector3 at, byte level)
+    {
+        GameNPC npc = CampMonster(region, at.X, at.Y, level);
+        typeof(NpcMovementComponent).GetField("_ownerPosition", Hidden)!.SetValue(npc.movementComponent, at);
+        npc.attackComponent = new AttackComponent(npc);                                 // IsAttacking (AddReach)
+        npc.SubZoneObject = new SubZoneObject(npc);
+        var subZones = (SubZone[])typeof(Zone).GetField("_subZones", Hidden)!.GetValue(zone)!;
+        short index = (short)typeof(Zone).GetMethod("GetSubZoneIndex", Hidden)!.Invoke(zone, [(int)at.X, (int)at.Y])!;
+        subZones[index].AddObject(npc.SubZoneObject.Node);
+        return npc;
+    }
+
+    // #167 E fix U1, the wiring: self-defence (Attacker) passes over a hitter Engage found unreachable
+    // (LeaveUnreachable) while its mark lasts, and takes the next nearest; the rest gate and the summon (anyHitter)
+    // answer it all the same (SkipsHitter). Two hitters marked in turn: each passed over for its own 30 s (U1).
+    [Test]
+    public void Self_defence_passes_over_each_hitter_marked_unreachable_in_Attacker()
+    {
+        MethodInfo attacker = typeof(PlayerBotDriver).GetMethod("Attacker", BindingFlags.Static | BindingFlags.NonPublic)!;
+        InTheField(new SplitFloorMesh(), new(840_884, 702_153, 8_784), (region, zone, bot) =>
+        {
+            GameNPC below = MonsterAt(region, zone, new(840_323, 702_066, 8_343), 39),
+                near = MonsterAt(region, zone, new(840_700, 702_100, 8_700), 39);
+            GameNPC Attacker(PlayerBotState state, long now, bool anyHitter) =>
+                (GameNPC)attacker.Invoke(null, [state, bot, now, anyHitter]);
+            foreach (GameNPC hitter in new[] { below, near })
+            {
+                hitter.TargetObject = bot;
+                bot.attackComponent.AttackerTracker.AddOrUpdate(hitter, true, long.MaxValue);
+            }
+            var state = new PlayerBotState(bot);
+            Assert.That(Attacker(state, 10_000, false), Is.EqualTo(near), "the nearest");
+            PlayerBotDriver.LeaveUnreachable(state, near, 10_000);
+            Assert.That(Attacker(state, 10_000, false), Is.EqualTo(below), "the nearest passed over: unreachable");
+            PlayerBotDriver.LeaveUnreachable(state, below, 11_000);
+            Assert.That(Attacker(state, 11_000, false), Is.Null, "both marked, each its own");
+            Assert.That(Attacker(state, 11_000, true), Is.EqualTo(near), "the rest gate and the summon: any hitter");
+            Assert.That(Attacker(state, 10_000 + PlayerBotDriver.UnreachableSkipMilliseconds, false), Is.EqualTo(near),
+                "the first mark run out");
+        });
+    }
+
+    // #167 E fix U1, the wiring: the monster coming at the bot (Incoming) is none that Engage found unreachable, from
+    // the scan (every TargetRefreshMilliseconds) and between scans (the one found, marked since). Two coming at it, the
+    // nearer marked: the farther one.
+    [Test]
+    public void The_monster_coming_at_the_bot_is_none_marked_unreachable_in_Incoming()
+    {
+        MethodInfo incoming = typeof(PlayerBotDriver).GetMethod("Incoming", BindingFlags.Static | BindingFlags.NonPublic)!;
+        InTheField(new SplitFloorMesh(), new(840_884, 702_153, 8_784), (region, zone, bot) =>
+        {
+            GameNPC below = MonsterAt(region, zone, new(840_323, 702_066, 8_343), 39),
+                near = MonsterAt(region, zone, new(840_700, 702_100, 8_700), 39);
+            (below.TargetObject, near.TargetObject) = (bot, bot);
+            GameNPC Incoming(PlayerBotState state, long now) => (GameNPC)incoming.Invoke(null, [state, bot, now]);
+            var state = new PlayerBotState(bot);
+            Assert.That(Incoming(state, 10_000), Is.EqualTo(near), "the scan: the nearer");
+            PlayerBotDriver.LeaveUnreachable(state, near, 10_500);
+            Assert.That(Incoming(state, 10_500), Is.Null, "between scans: the one found, marked since");
+            Assert.That(Incoming(state, 10_000 + PlayerBotDriver.TargetRefreshMilliseconds), Is.EqualTo(below),
+                "the next scan: the nearer marked");
+            PlayerBotDriver.LeaveUnreachable(state, below, 12_000);
+            Assert.That(Incoming(state, 10_000 + 2 * PlayerBotDriver.TargetRefreshMilliseconds), Is.Null, "both marked");
+        });
+    }
+
+    // #167 E fix U1, the wiring: the pick (FindWithin) passes over a monster Engage found unreachable, and one dropped
+    // blind (PickSkips; the review: put back to BlindSkipped alone, the pick walked to an unreachable monster every
+    // think). Pbotmaada's pocket: the nearer monster marked unreachable, the other; that one dropped blind, none.
+    [Test]
+    public void The_pick_passes_over_a_monster_marked_unreachable_in_FindWithin()
+    {
+        MethodInfo find = typeof(PlayerBotDriver).GetMethod("FindWithin", BindingFlags.Static | BindingFlags.NonPublic)!;
+        InTheField(new SplitFloorMesh(), new(840_884, 702_153, 8_784), (region, zone, bot) =>
+        {
+            GameNPC below = MonsterAt(region, zone, new(840_323, 702_066, 8_343), 39),
+                near = MonsterAt(region, zone, new(840_700, 702_100, 8_700), 39);
+            GameNPC Find(PlayerBotState state, long now) =>
+                (GameNPC)find.Invoke(null, [state, bot, PlayerBotDriver.ImmediateSearchRadius, now, -1]);
+            var state = new PlayerBotState(bot) { NukesLevel = 39, Nukes = [] };   // no spell to read (KnowSpells)
+            Assert.That(Find(state, 10_000), Is.EqualTo(near), "the nearer");
+            PlayerBotDriver.LeaveUnreachable(state, near, 10_000);
+            Assert.That(Find(state, 10_000), Is.EqualTo(below), "the nearer marked unreachable: the other");
+            PlayerBotDriver.MarkBlind(state, below, 10_000);
+            Assert.That(Find(state, 10_000), Is.Null, "the other dropped blind");
+        });
+    }
+
+    // #167 E fix round 3: the split floors with a scrap of mesh over the pocket. A spot above ScrapOver is off the mesh to
+    // a narrow query (a corridor's start, a step's), and the floor step's wide one (256 units' height, FloorStep) finds
+    // the pocket's floor under it (PocketFloor), which leads on (HasLocalExit).
+    private sealed class ScrapMesh : SplitFloorMesh
+    {
+        public const float ScrapOver = 8_850, PocketFloor = 8_784;
+        public override bool IsAvailable => true;
+        public override Vector3? GetClosestPoint(Zone zone, Vector3 position, float xRange, float yRange, float zRange,
+            EDtPolyFlags[] filters) => position.Z <= ScrapOver ? position : zRange >= 256 ? position with { Z = PocketFloor } : null;
+    }
+
+    // #167 E fix U3, the wiring of where the bot stands (the review: Roam's tests read from where it stood before the
+    // walk, at = here, passed every test): a roam blocked on a scrap over the pocket, its floor step (TryFloorStep) puts
+    // the bot on the pocket, and the anchor moves there; from the scrap no corridor test can tell (off the mesh:
+    // AnchorReachable's true), so the anchor would have stayed on the camp below.
+    [Test]
+    public void A_roam_blocked_on_a_scrap_moves_the_anchor_where_the_floor_step_put_the_bot_in_Roam()
+    {
+        MethodInfo roam = typeof(PlayerBotDriver).GetMethod("Roam", BindingFlags.Static | BindingFlags.NonPublic)!;
+        Vector3 scrap = new(840_884, 702_153, 8_900), pocket = scrap with { Z = ScrapMesh.PocketFloor },
+            camp = new(840_323, 702_066, 8_343);
+        InTheField(new ScrapMesh(), scrap, (region, zone, bot) =>
+        {
+            var state = new PlayerBotState(bot) { Anchor = camp, LastKillAt = new(840_700, 702_100, 8_700) };   // a kill
+            roam.Invoke(null, [state, bot, 10_000L]);                                                          //   from the pocket
+            Assert.That(state.Mover.LastBlock, Does.StartWith("No complete walkable path"), "the walk from the scrap blocked");
+            Assert.That(new Vector3(bot.X, bot.Y, bot.Z), Is.EqualTo(pocket), "the floor step onto the pocket");
+            Assert.That(state.Anchor, Is.EqualTo(pocket), "moved where the step put it");
+        });
+    }
+
+    // #167 E fix U2b, the wiring (the review: put back to the not-engaged reset, every test passed): SettleTarget itself
+    // stops the idle clock for a target that died while the bot stepped in out of sight (engaged, BlindStop above 0), as
+    // for one killed before it got there (not engaged).
+    [TestCase(true)] [TestCase(false)]
+    public void A_target_that_dies_during_a_step_in_stops_the_idle_clock_in_SettleTarget(bool engaged)
+    {
+        MethodInfo settle = typeof(PlayerBotDriver).GetMethod("SettleTarget", BindingFlags.Static | BindingFlags.NonPublic)!;
+        GamePlayer bot = Player(null);
+        var state = new PlayerBotState(bot)
+        {
+            Target = (GameNPC)RuntimeHelpers.GetUninitializedObject(typeof(GameNPC)), Engaged = engaged,   // health 0: dead
+            BlindStop = 419, RoamingSince = 5_000,
+        };
+        settle.Invoke(null, [state, bot]);
+        Assert.That((state.RoamingSince, state.Target), Is.EqualTo((0L, (GameLiving)null)));
+    }
+
+    // #167 E fix U1, U2, the wiring: step 16 (EngageTarget: Engage, then SettleIdleClock) with a step in under way.
+    // Engage's walk to its target, blocked (no corridor), leaves the target marked unreachable (LeaveUnreachable: the
+    // pick, self-defence and Incoming pass it over), not blind (the pick's alone), and the idle clock runs on, a step in
+    // out of sight being no target reached. st-deathsE2b, Pbotmaada on its pocket: the crackler below out of sight, its
+    // step in (BlindStop) opened the fight, and the walk down was blocked; Think's reset whenever engaged put back, its
+    // outgrown camp's 2 minutes never ran (the review: that call site's mutation passed every test). A target in reach
+    // and in sight is one reached: the clock stops.
+    [Test]
+    public void A_blocked_step_in_marks_its_target_unreachable_and_only_a_target_reached_stops_the_idle_clock_in_EngageTarget()
+    {
+        MethodInfo engage = typeof(PlayerBotDriver).GetMethod("EngageTarget", BindingFlags.Static | BindingFlags.NonPublic)!;
+        InTheField(new SplitFloorMesh(), new(840_884, 702_153, 8_784), (region, zone, bot) =>
+        {
+            GameNPC crackler = MonsterAt(region, zone, new(840_323, 702_066, 8_343), 39);
+            var state = new PlayerBotState(bot)
+            {
+                Target = crackler, Engaged = true, BlindStop = 419, RoamingSince = 5_000,   // the step in under way
+                NukesLevel = 39, Nukes = [], NextSpellChoiceTick = long.MaxValue,           // no spell to read
+            };
+            engage.Invoke(null, [state, bot, 10_000L]);
+            Assert.That(state.Mover.LastBlock, Does.StartWith("No complete walkable path"), "the walk down blocked");
+            Assert.That((state.Target, PlayerBotDriver.UnreachableMarked(state, crackler, 10_000),
+                PlayerBotDriver.BlindSkipped(state, crackler, 10_000)), Is.EqualTo(((GameLiving)null, true, false)),
+                "left, marked unreachable");
+            Assert.That((state.Engaged, state.RoamingSince), Is.EqualTo((true, 5_000L)), "the fight open, the clock running");
+
+            GameNPC inReach = MonsterAt(region, zone, new(840_934, 702_153, 8_784), 39);  // 50 units off, in sight
+            bot.Heading = bot.GetHeading(inReach.X, inReach.Y);                           // facing it (Face: no turn)
+            var reached = new PlayerBotState(bot)
+            {
+                Target = inReach, Engaged = true, RoamingSince = 5_000, FightAdd = (0, 100),   // no step in; the add
+                NukesLevel = 39, Nukes = [], NextSpellChoiceTick = long.MaxValue,           //   watch, the look, the
+                NextLosTick = long.MaxValue, NextCombatChoiceTick = long.MaxValue,          //   combat choice and the
+                NextStyleTick = long.MaxValue,                                              //   styles not due
+            };
+            engage.Invoke(null, [reached, bot, 10_000L]);
+            Assert.That((reached.Target, reached.Engaged, reached.RoamingSince), Is.EqualTo(((GameLiving)inReach, true, 0L)),
+                "in reach, in sight: a target reached, the clock stopped");
+        });
     }
 
     // #167: one PLAYER_BOT_REST line per rest when the bot stands: the seconds it sat and why it stood (recovered, hit,

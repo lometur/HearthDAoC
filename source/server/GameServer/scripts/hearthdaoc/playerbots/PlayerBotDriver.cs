@@ -632,7 +632,15 @@ public static class PlayerBotDriver
             ReportIdle(state, player, now);
             return;
         }
-        Engage(state, player, now);                                                      // 16
+        EngageTarget(state, player, now);                                                // 16
+    }
+
+    // Step 16: the fight with the target (Engage), then its idle clock (SettleIdleClock). #167 E fix round 3, the review
+    // of fix round 2: one step a test runs (Think's call to the clock put back to the old rule, a reset whenever engaged,
+    // passed every test).
+    private static void EngageTarget(PlayerBotState state, GamePlayer player, long now)
+    {
+        Engage(state, player, now);
         SettleIdleClock(state);
     }
 
