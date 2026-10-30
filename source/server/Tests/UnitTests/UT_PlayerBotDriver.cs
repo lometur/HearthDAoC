@@ -7243,6 +7243,28 @@ public sealed class UT_PlayerBotDriver
         });
     }
 
+    // #167 E fix U4, the wiring: a held bot off its leash (its anchor's region not its own, as after a release to a bind in
+    // another region, where no replan moves the anchor) is held no more and never teleported: it roams.
+    [Test]
+    public void A_held_bot_off_its_leash_is_not_teleported_in_Roam()
+    {
+        MethodInfo roam = typeof(PlayerBotDriver).GetMethod("Roam", BindingFlags.Static | BindingFlags.NonPublic)!;
+        var mesh = new CountingFloors();
+        InTheField(mesh, OnPocket, (region, zone, bot) =>
+        {
+            GamePlayer human = PlayerAt(zone, OnPocket + new Vector3(500, 0, 0), HumanClient(gm: false));
+            var state = new PlayerBotState(bot) { Anchor = BelowCamp };
+            roam.Invoke(null, [state, bot, 10_000L]);
+            Assert.That(state.CutOff.Since, Is.EqualTo(10_000L), "held");
+            state.AnchorRegion = (ushort)(bot.CurrentRegionID + 1);
+            Leave(human);
+            bot.ClearObjectsInRadiusCache();
+            roam.Invoke(null, [state, bot, 10_000L + PlayerBotDriver.WatchCheckMilliseconds]);
+            Assert.That((state.CutOff.Since, new Vector3(bot.X, bot.Y, bot.Z) == BelowCamp), Is.EqualTo((0L, false)),
+                "hold over, no teleport");
+        });
+    }
+
     // #167 E fix U4, the wiring: RecoverIfStuck's teleport after 15 minutes with no progress waits likewise. A human by
     // the anchor (out of the bot's sight): due, the bot stays, and each next check (ProgressCheckMilliseconds) tries
     // again; the human gone, the next check teleports it. A roam meanwhile is progress, as at cb121ac (tested above).
