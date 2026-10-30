@@ -381,8 +381,7 @@ public sealed class UT_PlayerBotDriver
 
     // A region change (a release to a bind in another region, a re-entry) starts the hunt afresh there but keeps the
     // failed camps (#167 F4): a bot that released to another region and came back planned into the camp it died at. The
-    // review of 77ba437: with the old Clear put back, no test failed. #167 E fix U3's review: its last kill's spot goes
-    // too (LastKillAt; HuntedHere reads it in this region's zones).
+    // review of 77ba437: with the old Clear put back, no test failed.
     [Test]
     public void A_region_change_starts_the_hunt_afresh_but_keeps_the_failed_camps()
     {
@@ -391,12 +390,10 @@ public sealed class UT_PlayerBotDriver
         state.Target = Player(null);
         state.RoamDestination = new Vector3(1, 2, 3);
         (state.RoamingSince, state.CappedSince, state.FallbackCap, state.HuntAvoided) = (5, 6, ConColor.BLUE, true);
-        state.LastKillAt = new Vector3(4, 5, 6);
         PlayerBotDriver.ResetOnRegionChange(state, 100);
         Assert.That((state.LastRegion, state.Target, state.RoamDestination, state.RoamingSince, state.CappedSince,
             state.FallbackCap, state.HuntAvoided), Is.EqualTo(((ushort)100, (GameLiving)null, (Vector3?)null, 0L, 0L,
             (ConColor?)null, false)));
-        Assert.That(state.LastKillAt, Is.Null, "the last kill's spot, in another region");
         Assert.That(state.FailedCamps.Select(f => (f.Region, f.At)), Is.EqualTo(new[] { ((ushort)51, new Vector3(1, 0, 0)) }));
     }
 
@@ -6158,62 +6155,32 @@ public sealed class UT_PlayerBotDriver
     }
 
     // #167 E fix U3: a roam walk blocked while the bot is on its leash tests, at most once every AnchorCheckMilliseconds,
-    // whether a corridor leads from where it stands to its anchor (anchorReachable, read only when due); with none the
-    // anchor moves there, as EndReplan moves it. st-deathsE2b, Pbotmaada on its pocket above its camp in Muspelheim
-    // (anchor (840323, 702066, 8343), no corridor to it from any spot on the pocket): every think with no target blocked
-    // a roam toward it, about 4 a second at about 5 ms each, and its kills on the pocket kept stopping the idle clock, so
-    // the outgrown camp's relocation (RelocateReason), the only move of its anchor, never came. On a task: no leash.
-    // U3's review: it moves only when a corridor leads from there to where the bot stood at its last kill (huntedHere,
-    // read only with no corridor to the anchor). st-deathsE, Pbothaaem cut off on an island in Domnann with its last kill
-    // made on the main mesh: the move took away RecoverIfStuck's way back after 15 minutes (its roams round the island
-    // then counted as progress, and the way back led to the island).
+    // whether a corridor leads from where it stands to its anchor (anchorReachable, read only when due); with none it is
+    // cut off, and Roam moves it back there. st-deathsE2b, Pbotmaada on its pocket above its camp in Muspelheim (anchor
+    // (840323, 702066, 8343), no corridor to it from any spot on the pocket): every think with no target blocked a roam
+    // toward it, about 4 a second at about 5 ms each. On a task, or a lever spot bot: no test. U3's third review (S3):
+    // never in combat (RecoverIfStuck's rule); no test then, so the next blocked roam out of combat tests at once.
     [Test]
-    public void A_roam_blocked_with_no_corridor_to_the_anchor_moves_the_anchor_where_the_bot_stands()
+    public void A_roam_blocked_with_no_corridor_to_the_anchor_is_cut_off_from_it()
     {
-        Vector3 camp = new(840_323, 702_066, 8_343), pocket = new(840_884, 702_153, 8_784);
-        var state = new PlayerBotState(Player(null)) { Anchor = camp, RoamingSince = 5_000 };
-        PlayerBotDriver.SettleIdleClockAtTargetEnd(state, true);                        // a kill on the pocket
-        Assert.That(PlayerBotDriver.RelocateReason(state.RoamingSince, 0, 5_000 + PlayerBotDriver.RelocateAfterMilliseconds,
-            null), Is.Null, "a kill: no outgrown camp to move the anchor");
-        int tests = 0, hunts = 0;
-        state.RoamDestination = camp;
-        Assert.That(PlayerBotDriver.ReanchorAfterRoamBlock(state, pocket, true, 10_000, () => { tests++; return false; },
-            () => { hunts++; return false; }), Is.False);
-        Assert.That((state.Anchor, state.RoamDestination, tests, hunts), Is.EqualTo((camp, (Vector3?)camp, 1, 1)),
-            "cut off, its last kill not made from here (Pbothaaem's island): kept, RecoverIfStuck's way back");
-        Assert.That(PlayerBotDriver.ReanchorAfterRoamBlock(state, pocket, true,
-            10_000 + PlayerBotDriver.AnchorCheckMilliseconds, () => { tests++; return false; }, () => { hunts++; return true; }),
-            Is.True);
-        Assert.That((state.Anchor, state.RoamDestination, tests, hunts), Is.EqualTo((pocket, (Vector3?)null, 2, 2)),
-            "cut off, its last kill made from here: moved here");
-        state.Anchor = camp;
-        Assert.That(PlayerBotDriver.ReanchorAfterRoamBlock(state, pocket, true,
-            10_000 + 2 * PlayerBotDriver.AnchorCheckMilliseconds - 1, () => { tests++; return false; },
-            () => { hunts++; return true; }), Is.False);
-        Assert.That((state.Anchor, tests, hunts), Is.EqualTo((camp, 2, 2)), "not due: no test");
-        Assert.That(PlayerBotDriver.ReanchorAfterRoamBlock(state, pocket, true,
-            10_000 + 2 * PlayerBotDriver.AnchorCheckMilliseconds, () => { tests++; return true; },
-            () => { hunts++; return true; }), Is.False);
-        Assert.That((state.Anchor, tests, hunts), Is.EqualTo((camp, 3, 2)), "a corridor to it: kept, no kill test");
-        var onTask = new PlayerBotState(Player(null)) { Anchor = camp };
-        Assert.That(PlayerBotDriver.ReanchorAfterRoamBlock(onTask, pocket, false, 10_000, () => { tests++; return false; },
-            () => { hunts++; return true; }), Is.False);
-        Assert.That((onTask.Anchor, tests, hunts), Is.EqualTo((camp, 3, 2)), "on a task: no test");
-    }
-
-    // #167 E fix U3's review: a kill of the bot's own keeps where it stood (LastKillAt, SettleTarget), the spot a roam
-    // blocked off its anchor reads (HuntedHere) before it moves the anchor; a target killed by another before the bot
-    // got there (not engaged) leaves it as it was.
-    [TestCase(true)] [TestCase(false)]
-    public void A_kill_keeps_where_the_bot_stood(bool engaged)
-    {
-        MethodInfo settle = typeof(PlayerBotDriver).GetMethod("SettleTarget", BindingFlags.Static | BindingFlags.NonPublic)!;
-        GamePlayer bot = Player(null);
-        (bot.X, bot.Y, bot.Z) = (840_700, 702_100, 8_700);
-        var state = new PlayerBotState(bot)
-            { Target = (GameNPC)RuntimeHelpers.GetUninitializedObject(typeof(GameNPC)), Engaged = engaged };   // health 0: dead
-        settle.Invoke(null, [state, bot]);
-        Assert.That(state.LastKillAt, Is.EqualTo(engaged ? new Vector3(840_700, 702_100, 8_700) : (Vector3?)null));
+        int tests = 0;
+        bool CutOff(PlayerBotState state, bool leashed, bool inCombat, long now, bool reachable) =>
+            PlayerBotDriver.CutOffFromAnchor(state, leashed, inCombat, now, () => { tests++; return reachable; });
+        var state = new PlayerBotState(Player(null)) { Anchor = BelowCamp };
+        Assert.That((CutOff(state, true, false, 10_000, false), tests, state.NextAnchorCheckTick),
+            Is.EqualTo((true, 1, 10_000L + PlayerBotDriver.AnchorCheckMilliseconds)), "no corridor: cut off");
+        Assert.That((CutOff(state, true, false, 10_000 + PlayerBotDriver.AnchorCheckMilliseconds - 1, false), tests),
+            Is.EqualTo((false, 1)), "not due: no test");
+        Assert.That((CutOff(state, true, false, 10_000 + PlayerBotDriver.AnchorCheckMilliseconds, true), tests),
+            Is.EqualTo((false, 2)), "a corridor to it");
+        long due = 10_000 + 2 * PlayerBotDriver.AnchorCheckMilliseconds;
+        Assert.That((CutOff(state, true, true, due, false), tests, state.NextAnchorCheckTick), Is.EqualTo((false, 2, due)),
+            "in combat: no test, still due");
+        Assert.That((CutOff(state, true, false, due + PlayerBotDriver.TickMilliseconds, false), tests),
+            Is.EqualTo((true, 3)), "out of combat: tested at once");
+        var held = new PlayerBotState(Player(null)) { Anchor = BelowCamp };
+        Assert.That((CutOff(held, false, false, 10_000, false), tests, held.NextAnchorCheckTick),
+            Is.EqualTo((false, 3, 0L)), "on a task or a lever spot bot: no test");
     }
 
     // #167 E fix U3: two floors with no way between them, as Pbotmaada's pocket above its camp: a corridor leads only
@@ -6241,10 +6208,15 @@ public sealed class UT_PlayerBotDriver
     // Pbotmaada's zone in Muspelheim, at its offsets (zone104).
     private static readonly (int X, int Y) Muspelheim = (786_432, 655_360);
 
+    // Pbotmaada's camp below its pocket, and the spot on the pocket it stood at.
+    private static readonly Vector3 BelowCamp = new(840_323, 702_066, 8_343), OnPocket = new(840_884, 702_153, 8_784);
+
     // #167 E fix U3: the anchor's corridor test (AnchorReachable): from the pocket to the camp below none; to a spot on
     // the pocket one. Reachable wherever no test can tell: no navmesh, off the mesh here (every corridor fails then,
     // PlayerTravelPath.cs:79-82; RelocateIfOutgrown plans nothing there either), no zone here, or an anchor in another
-    // zone (a corridor runs in one zone, as the plan's tests do).
+    // zone (a corridor runs in one zone, as the plan's tests do). U3's third review: or no mesh near the anchor (the
+    // corridor's own goal query, PlayerTravelPath.cs:81; AnchorOffMesh): moved back there, the bot would be moved there
+    // again on every due blocked roam off it.
     [Test]
     public void The_anchor_counts_unreachable_only_where_a_corridor_test_can_tell()
     {
@@ -6257,30 +6229,20 @@ public sealed class UT_PlayerBotDriver
         Assert.That(PlayerBotDriver.AnchorReachable(mesh, region, pocket, new(860_000, 702_066, 8_343)), Is.True,
             "an anchor in another zone");
         Assert.That(PlayerBotDriver.AnchorReachable(mesh, null, pocket, camp), Is.True, "no region");
+        Assert.That(PlayerBotDriver.AnchorReachable(new AnchorOffMesh(), region, pocket, camp), Is.True,
+            "no mesh near the anchor");
         mesh.OffMesh = true;
         Assert.That(PlayerBotDriver.AnchorReachable(mesh, region, pocket, camp), Is.True, "off the mesh here");
         (mesh.OffMesh, mesh.Available) = (false, false);
         Assert.That(PlayerBotDriver.AnchorReachable(mesh, region, pocket, camp), Is.True, "no navmesh");
     }
 
-    // #167 E fix U3's review: the last kill counts as made from here (HuntedHere, read once AnchorReachable found no
-    // corridor) only through a corridor between them in this zone; strict, unlike the anchor's test: wherever none can
-    // tell, the camp stays (RecoverIfStuck's way back). st-deathsE, Pbothaaem on its island in Domnann: its last kill
-    // about 690 units off on the main mesh, no corridor to it.
-    [Test]
-    public void The_last_kill_counts_as_made_from_here_only_through_a_corridor_in_this_zone()
+    // #167 E fix U3's third review: the split floors with no mesh on the lower one, as an anchor off the mesh: no spot
+    // under the ledge has a nearest point.
+    private sealed class AnchorOffMesh : SplitFloorMesh
     {
-        var (region, _) = World(Muspelheim.X, Muspelheim.Y);
-        Vector3 camp = new(840_323, 702_066, 8_343), pocket = new(840_884, 702_153, 8_784);
-        var mesh = new SplitFloorMesh();
-        Assert.That(PlayerBotDriver.HuntedHere(mesh, region, pocket, new(840_700, 702_100, 8_700)), Is.True, "killed on the pocket");
-        Assert.That(PlayerBotDriver.HuntedHere(mesh, region, pocket, camp), Is.False, "killed on the camp below");
-        Assert.That(PlayerBotDriver.HuntedHere(mesh, region, pocket, null), Is.False, "no kill yet");
-        Assert.That(PlayerBotDriver.HuntedHere(mesh, region, pocket, new(860_000, 702_066, 8_784)), Is.False, "in another zone");
-        Assert.That(PlayerBotDriver.HuntedHere(mesh, null, pocket, pocket), Is.False, "no region");
-        Assert.That(PlayerBotDriver.HuntedHere(mesh, region, new(10, 10, 8_784), pocket), Is.False, "no zone here");
-        mesh.Available = false;
-        Assert.That(PlayerBotDriver.HuntedHere(mesh, region, pocket, pocket), Is.False, "no navmesh");
+        public override Vector3? GetClosestPoint(Zone zone, Vector3 position, float xRange, float yRange, float zRange,
+            EDtPolyFlags[] filters) => position.Z < Ledge ? null : position;
     }
 
     private sealed class RunSpeed : DOL.GS.PropertyCalc.PropertyCalculator
@@ -6296,72 +6258,90 @@ public sealed class UT_PlayerBotDriver
 
     // #167 E fix U3, the wiring (earlier reviews: a call site's mutation passed every test): Roam itself, with the bot on
     // the fake ledge's pocket at Pbotmaada's spot. Its roam round the camp below walks to the camp, the walk is blocked,
-    // no corridor leads to the anchor, and the anchor moves where the bot stands; not within AnchorCheckMilliseconds of
-    // that test, and again after. An anchor on the pocket is tested and kept (a roam goal below blocked); a lever spot
-    // bot's (HoldAnchor, no build: it never moves its leash, CanRelocate) and a task bot's (no leash) are never tested.
-    // U3's review: with no kill yet the anchor is tested and kept, and it moves once the bot has killed from the pocket
-    // (LastKillAt); put back on the camp (RecoverIfStuck) with a kill made there, the pocket keeps it again.
+    // no corridor leads to the anchor, and the bot is moved back there (MoveBack: no walk goal, the idle clock afresh);
+    // back on the pocket, not within AnchorCheckMilliseconds of that test, and again after. An anchor on the pocket is
+    // tested and the bot stays (a roam goal below blocked); a lever spot bot's (HoldAnchor, no build: it never moves its
+    // leash, CanRelocate) and a task bot's (no leash) are never tested. U3's third review: the bot is moved back at
+    // once; the anchor no longer moves onto the pocket.
     [Test]
-    public void A_roam_blocked_off_the_anchors_floor_moves_the_anchor_in_Roam()
+    public void A_roam_blocked_off_the_anchors_floor_moves_the_bot_back_to_its_anchor_in_Roam()
     {
-        var calculators = (DOL.GS.PropertyCalc.IPropertyCalculator[])typeof(GameLiving)
-            .GetField("m_propertyCalc", BindingFlags.Static | BindingFlags.NonPublic)!.GetValue(null)!;
-        DOL.GS.PropertyCalc.IPropertyCalculator speed = calculators[(int)eProperty.MaxSpeed];
-        IPathfindingMgr nav = PathfindingProvider.Instance;
-        try
+        MethodInfo roam = typeof(PlayerBotDriver).GetMethod("Roam", BindingFlags.Static | BindingFlags.NonPublic)!;
+        Vector3 onPocket = new(840_700, 702_100, 8_700);
+        InTheField(new SplitFloorMesh(), OnPocket, (region, zone, bot) =>
         {
-            calculators[(int)eProperty.MaxSpeed] = new RunSpeed();
-            PathfindingProvider.SetPathfindingMgr(new SplitFloorMesh());
-            var (region, _) = World(Muspelheim.X, Muspelheim.Y);
-            typeof(Region).GetField("m_regionData", Hidden)!.SetValue(region, new RegionData { Id = 1 });
-            GamePlayer player = Player(null);
-            player.CurrentRegion = region;
-            ((GameLiving)player).movementComponent = player.movementComponent = new PlayerMovementComponent(player);   // GP:45
-            (player.X, player.Y, player.Z) = (840_884, 702_153, 8_784);
-            Vector3 camp = new(840_323, 702_066, 8_343), pocket = new(player.X, player.Y, player.Z),
-                onPocket = new(840_700, 702_100, 8_700);
-            MethodInfo roam = typeof(PlayerBotDriver).GetMethod("Roam", BindingFlags.Static | BindingFlags.NonPublic)!;
-            void Roam(PlayerBotState state, long now) => roam.Invoke(null, [state, player, now]);
+            void Roam(PlayerBotState state, long now) => roam.Invoke(null, [state, bot, now]);
+            Vector3 At() => new(bot.X, bot.Y, bot.Z);
+            void OnThePocket() => (bot.X, bot.Y, bot.Z) = ((int)OnPocket.X, (int)OnPocket.Y, (int)OnPocket.Z);
 
-            var state = new PlayerBotState(player) { Anchor = camp };
+            var state = new PlayerBotState(bot) { Anchor = BelowCamp, RoamingSince = 5_000 };
             Roam(state, 10_000);
             Assert.That(state.Mover.LastBlock, Does.StartWith("No complete walkable path"), "the walk down blocked");
-            Assert.That((state.Anchor, state.RoamDestination, state.NextAnchorCheckTick),
-                Is.EqualTo((camp, (Vector3?)null, 10_000 + (long)PlayerBotDriver.AnchorCheckMilliseconds)),
-                "no kill yet: tested, kept");
-            state.LastKillAt = onPocket;                                                    // a kill from the pocket
+            Assert.That((At(), state.Anchor, state.RoamDestination, state.RoamingSince, state.NextAnchorCheckTick),
+                Is.EqualTo((BelowCamp, BelowCamp, (Vector3?)null, 0L, 10_000 + (long)PlayerBotDriver.AnchorCheckMilliseconds)),
+                "moved back to its camp");
+            OnThePocket();
+            Roam(state, 10_000 + PlayerBotDriver.AnchorCheckMilliseconds - PlayerBotDriver.TickMilliseconds);   // a think
+            Assert.That(At(), Is.EqualTo(OnPocket), "blocked, not due: no test, no move");                       //   short
             Roam(state, 10_000 + PlayerBotDriver.AnchorCheckMilliseconds);
-            Assert.That((state.Anchor, state.RoamDestination, state.Activity),
-                Is.EqualTo((pocket, (Vector3?)null, PlayerBotActivity.Roaming)), "moved where it stands");
-            state.Anchor = camp;
-            Roam(state, 10_000 + 2 * PlayerBotDriver.AnchorCheckMilliseconds - PlayerBotDriver.TickMilliseconds);   // a think
-            Assert.That((state.Anchor, state.RoamDestination), Is.EqualTo((camp, (Vector3?)null)), "blocked, not due");
-            Roam(state, 10_000 + 2 * PlayerBotDriver.AnchorCheckMilliseconds);                                      //   on
-            Assert.That(state.Anchor, Is.EqualTo(pocket), "due again");
-            (state.Anchor, state.LastKillAt) = (camp, camp);                                // put back on the camp, a kill
-            Roam(state, 1_000_000);                                                         //   there, on the pocket again
-            Assert.That((state.Anchor, state.NextAnchorCheckTick),
-                Is.EqualTo((camp, 1_000_000L + PlayerBotDriver.AnchorCheckMilliseconds)), "its last kill made on the camp: kept");
+            Assert.That(At(), Is.EqualTo(BelowCamp), "due again: back");
 
-            var kept = new PlayerBotState(player) { Anchor = onPocket, RoamDestination = camp };
+            OnThePocket();
+            var kept = new PlayerBotState(bot) { Anchor = onPocket, RoamDestination = BelowCamp };
             Roam(kept, 10_000);
-            Assert.That((kept.Anchor, kept.RoamDestination, kept.NextAnchorCheckTick),
-                Is.EqualTo((onPocket, (Vector3?)null, 10_000 + (long)PlayerBotDriver.AnchorCheckMilliseconds)),
-                "a corridor to its anchor: tested, kept");
-            var spot = new PlayerBotState(player) { Anchor = camp, HoldAnchor = true };
-            var onTask = new PlayerBotState(player) { Anchor = camp, RoamDestination = camp, Task = new EndlessTask() };
+            Assert.That((At(), kept.Anchor, kept.NextAnchorCheckTick),
+                Is.EqualTo((OnPocket, onPocket, 10_000 + (long)PlayerBotDriver.AnchorCheckMilliseconds)),
+                "a corridor to its anchor: tested, it stays");
+            var spot = new PlayerBotState(bot) { Anchor = BelowCamp, HoldAnchor = true };
+            var onTask = new PlayerBotState(bot) { Anchor = BelowCamp, RoamDestination = BelowCamp, Task = new EndlessTask() };
             foreach (PlayerBotState held in new[] { spot, onTask })
             {
                 Roam(held, 10_000);
-                Assert.That((held.Anchor, held.NextAnchorCheckTick), Is.EqualTo((camp, 0L)),
+                Assert.That((At(), held.NextAnchorCheckTick), Is.EqualTo((OnPocket, 0L)),
                     held.HoldAnchor ? "a lever spot bot" : "on a task");
             }
-        }
-        finally
+        });
+    }
+
+    // #167 E fix U3's third review (S3), the wiring: a bot in combat is never moved back, RecoverIfStuck's rule. On its
+    // pocket and hit (by a monster below it can't reach, say: marked unreachable, U1, it leaves the bot no target), its
+    // roam is blocked and it stays, untested; out of combat, the next blocked roam tests at once and moves it back. In
+    // combat the move could land it in the camp beside that monster.
+    [Test]
+    public void A_bot_in_combat_is_not_moved_back_and_its_next_blocked_roam_out_of_combat_is_tested_in_Roam()
+    {
+        MethodInfo roam = typeof(PlayerBotDriver).GetMethod("Roam", BindingFlags.Static | BindingFlags.NonPublic)!;
+        FieldInfo hit = typeof(GameLiving).GetField("<LastAttackedByEnemyTickPvE>k__BackingField", Hidden)!;
+        InTheField(new SplitFloorMesh(), OnPocket, (region, zone, bot) =>
         {
-            calculators[(int)eProperty.MaxSpeed] = speed;
-            PathfindingProvider.SetPathfindingMgr(nav);
-        }
+            var state = new PlayerBotState(bot) { Anchor = BelowCamp };
+            hit.SetValue(bot, Math.Max(1L, GameLoop.GameLoopTime));                      // hit just now
+            Assert.That(bot.InCombat, Is.True);
+            roam.Invoke(null, [state, bot, 10_000L]);
+            Assert.That(state.Mover.LastBlock, Does.StartWith("No complete walkable path"), "the walk down blocked");
+            Assert.That((new Vector3(bot.X, bot.Y, bot.Z), state.NextAnchorCheckTick), Is.EqualTo((OnPocket, 0L)),
+                "in combat: no test, no move");
+            hit.SetValue(bot, 0L);                                                       // out of combat
+            roam.Invoke(null, [state, bot, 10_000L + PlayerBotDriver.TickMilliseconds]);
+            Assert.That(new Vector3(bot.X, bot.Y, bot.Z), Is.EqualTo(BelowCamp), "out of combat: tested at once, moved back");
+        });
+    }
+
+    // #167 E fix U3's third review, the wiring of AnchorReachable's guard: an anchor with no mesh near it (AnchorOffMesh)
+    // counts reachable, so a roam from the pocket blocked on the way to it leaves the bot where it is, tested. Moved
+    // there, the bot would be moved there again on every due blocked roam off it.
+    [Test]
+    public void A_roam_blocked_off_an_anchor_with_no_mesh_near_it_leaves_the_bot_where_it_is_in_Roam()
+    {
+        MethodInfo roam = typeof(PlayerBotDriver).GetMethod("Roam", BindingFlags.Static | BindingFlags.NonPublic)!;
+        InTheField(new AnchorOffMesh(), OnPocket, (region, zone, bot) =>
+        {
+            var state = new PlayerBotState(bot) { Anchor = BelowCamp };
+            roam.Invoke(null, [state, bot, 10_000L]);
+            Assert.That(state.Mover.LastBlock, Does.StartWith("No complete walkable path"), "the walk down blocked");
+            Assert.That((new Vector3(bot.X, bot.Y, bot.Z), state.NextAnchorCheckTick),
+                Is.EqualTo((OnPocket, 10_000 + (long)PlayerBotDriver.AnchorCheckMilliseconds)), "tested, it stays");
+        });
     }
 
     // --- #167 E fix round 3, the review of fix round 2 (U1-U2-callsites-untested): the call sites themselves ---
@@ -6530,21 +6510,18 @@ public sealed class UT_PlayerBotDriver
 
     // #167 E fix U3, the wiring of where the bot stands (the review: Roam's tests read from where it stood before the
     // walk, at = here, passed every test): a roam blocked on a scrap over the pocket, its floor step (TryFloorStep) puts
-    // the bot on the pocket, and the anchor moves there; from the scrap no corridor test can tell (off the mesh:
-    // AnchorReachable's true), so the anchor would have stayed on the camp below.
+    // the bot on the pocket, and from there no corridor leads to the camp below: it is moved back there. From the scrap
+    // no corridor test can tell (off the mesh: AnchorReachable's true), so the bot would have stayed on the pocket.
     [Test]
-    public void A_roam_blocked_on_a_scrap_moves_the_anchor_where_the_floor_step_put_the_bot_in_Roam()
+    public void A_roam_blocked_on_a_scrap_tests_from_where_the_floor_step_put_the_bot_in_Roam()
     {
         MethodInfo roam = typeof(PlayerBotDriver).GetMethod("Roam", BindingFlags.Static | BindingFlags.NonPublic)!;
-        Vector3 scrap = new(840_884, 702_153, 8_900), pocket = scrap with { Z = ScrapMesh.PocketFloor },
-            camp = new(840_323, 702_066, 8_343);
-        InTheField(new ScrapMesh(), scrap, (region, zone, bot) =>
+        InTheField(new ScrapMesh(), new(840_884, 702_153, 8_900), (region, zone, bot) =>
         {
-            var state = new PlayerBotState(bot) { Anchor = camp, LastKillAt = new(840_700, 702_100, 8_700) };   // a kill
-            roam.Invoke(null, [state, bot, 10_000L]);                                                          //   from the pocket
+            var state = new PlayerBotState(bot) { Anchor = BelowCamp };
+            roam.Invoke(null, [state, bot, 10_000L]);
             Assert.That(state.Mover.LastBlock, Does.StartWith("No complete walkable path"), "the walk from the scrap blocked");
-            Assert.That(new Vector3(bot.X, bot.Y, bot.Z), Is.EqualTo(pocket), "the floor step onto the pocket");
-            Assert.That(state.Anchor, Is.EqualTo(pocket), "moved where the step put it");
+            Assert.That(new Vector3(bot.X, bot.Y, bot.Z), Is.EqualTo(BelowCamp), "tested from the pocket: moved back");
         });
     }
 
@@ -7034,18 +7011,13 @@ public sealed class UT_PlayerBotDriver
         }
     }
 
-    // --- #167 E fix U3's second review (U3R), of fix round 3: the camp a re-anchor left, RecoverIfStuck's way back ---
-
-    // Pbotmaada's camp below the pocket, the spot on the pocket it stood at, and a camp on the pocket: its sparker's
-    // spawn (2042), the only camp a relocation planned from the pocket can reach.
-    private static readonly Vector3 BelowCamp = new(840_323, 702_066, 8_343), OnPocket = new(840_884, 702_153, 8_784),
-        SparkerCamp = new(841_428, 702_067, 8_749);
+    // --- #167 E fix U3's third review, of fix round 4: RecoverIfStuck's move back (MoveBack) and the task's end ---
 
     // 100 progress checks (RecoverIfStuck, 10 s apart from now: over 15 minutes) with no XP, money or fight, the bot
     // moving 200 units a check (a roam) while roams says it does; stops at the first move back. Returns whether it moved
-    // the bot back, where the bot stands, its anchor and the camp a re-anchor left then.
-    private static (bool Moved, Vector3 At, Vector3 Anchor, Vector3? CutOff) NoGainFor15Minutes(PlayerBotState state,
-        GamePlayer bot, long now, Func<bool> roams)
+    // the bot back, where the bot stands and its anchor then.
+    private static (bool Moved, Vector3 At, Vector3 Anchor) NoGainFor15Minutes(PlayerBotState state, GamePlayer bot,
+        long now, Func<bool> roams)
     {
         MethodInfo recover = typeof(PlayerBotDriver).GetMethod("RecoverIfStuck", BindingFlags.Static | BindingFlags.NonPublic)!;
         bool moved = false;
@@ -7055,112 +7027,40 @@ public sealed class UT_PlayerBotDriver
             if (roams()) bot.X += i % 2 == 0 ? 200 : -200;
             moved = (bool)recover.Invoke(null, [state, bot, now])!;
         }
-        return (moved, new Vector3(bot.X, bot.Y, bot.Z), state.Anchor, state.CutOffCamp);
+        return (moved, new Vector3(bot.X, bot.Y, bot.Z), state.Anchor);
     }
 
-    // U3R-outgrown-pocket-no-way-back: re-anchored on the pocket (ReanchorAfterRoamBlock), the bot keeps the camp it left
-    // (CutOffCamp) and roams round the pocket (200 units a check) with no XP, money or fight. Its roams there are no
-    // progress while it keeps that camp, so 15 minutes on RecoverIfStuck moves it back there, as before the move, and
-    // RELOCATE works from there. At 9770e3e its roams counted as progress and the move back went to the pocket: a bot
-    // that had outgrown the pocket's monsters stayed there for the session, RELOCATE finding no corridor off it.
+    // #167 E fix U3's third review (S1): with 39070f2's tests of the camp a move of the anchor kept gone, no test reached
+    // RecoverIfStuck's move back (MoveBack, a cut-off roam's too): put back to no move, every test passed. 15 minutes
+    // with no XP, money, fight or move: the bot is moved back to its anchor. Roaming 200 units a check, it is not: a move
+    // is progress again, as at cb121ac.
     [Test]
-    public void A_bot_reanchored_off_its_camp_goes_back_there_after_15_minutes_with_no_gain_though_it_roams()
+    public void Fifteen_minutes_with_no_progress_move_the_bot_back_and_a_roam_counts_as_progress()
     {
         InTheField(new SplitFloorMesh(), OnPocket, (region, zone, bot) =>
         {
-            var state = new PlayerBotState(bot) { Anchor = BelowCamp, ProgressPosition = OnPocket };
-            Assert.That(PlayerBotDriver.ReanchorAfterRoamBlock(state, OnPocket, true, 10_000, () => false, () => true), Is.True);
-            Assert.That((state.Anchor, state.CutOffCamp), Is.EqualTo((OnPocket, (Vector3?)BelowCamp)), "the camp it left kept");
-            Assert.That(NoGainFor15Minutes(state, bot, 10_000, () => true),
-                Is.EqualTo((true, BelowCamp, BelowCamp, (Vector3?)null)), "back on the camp it left, which it no longer keeps");
+            var still = new PlayerBotState(bot) { Anchor = BelowCamp, ProgressPosition = OnPocket };
+            Assert.That(NoGainFor15Minutes(still, bot, 10_000, () => false), Is.EqualTo((true, BelowCamp, BelowCamp)));
+            (bot.X, bot.Y, bot.Z) = ((int)OnPocket.X, (int)OnPocket.Y, (int)OnPocket.Z);
+            var roaming = new PlayerBotState(bot) { Anchor = BelowCamp, ProgressPosition = OnPocket };
+            Assert.That(NoGainFor15Minutes(roaming, bot, 10_000, () => true).Moved, Is.False, "a roam: progress");
         });
     }
 
-    // U3R-kill-on-island, end to end: a monster from the camp below (its spawn there) killed on the pocket. A chasing
-    // monster with no path to the bot is put on the bot's piece (Pathfinder.TryGetClosestReachableNode, Pathfinder.cs:
-    // 465-481; NpcMovementComponent.cs:788-792), so where the bot stood at the kill (LastKillAt, SettleTarget) is on the
-    // pocket wherever the monster came from, and the next blocked roam re-anchors there (Roam). 15 minutes on with no
-    // XP, money or fight, the bot roaming round the pocket while its anchor is there (a roam to the camp below is blocked:
-    // no move), it is back on the camp it was cut off from. At e9a594b the move back went to the pocket, for good.
+    // #167 E fix U3's third review: step 10's task end (RunsTask, its second review's step a test runs; Think can't run in
+    // one), the row kept from 39070f2's tests of the camp a move of the anchor kept: the bot grinds where the task ended
+    // (its anchor there, no relocation's spot to walk to), and the think goes on.
     [Test]
-    public void A_kill_on_the_pocket_of_a_monster_from_below_then_15_minutes_with_no_gain_brings_the_bot_back_to_its_camp()
+    public void At_a_tasks_end_the_bot_grinds_where_it_ended_in_RunsTask()
     {
-        MethodInfo settle = typeof(PlayerBotDriver).GetMethod("SettleTarget", BindingFlags.Static | BindingFlags.NonPublic)!;
-        MethodInfo roam = typeof(PlayerBotDriver).GetMethod("Roam", BindingFlags.Static | BindingFlags.NonPublic)!;
-        InTheField(new SplitFloorMesh(), OnPocket, (region, zone, bot) =>
-        {
-            var dead = (GameNPC)RuntimeHelpers.GetUninitializedObject(typeof(GameNPC));      // health 0: dead
-            dead.SpawnPoint = new Point3D((int)BelowCamp.X, (int)BelowCamp.Y, (int)BelowCamp.Z);   // lives on the camp below
-            var state = new PlayerBotState(bot) { Anchor = BelowCamp, Target = dead, Engaged = true, ProgressPosition = OnPocket };
-            settle.Invoke(null, [state, bot]);
-            roam.Invoke(null, [state, bot, 10_000L]);
-            Assert.That(state.Mover.LastBlock, Does.StartWith("No complete walkable path"), "the walk down blocked");
-            Assert.That(state.Anchor, Is.EqualTo(OnPocket), "its last kill made on the pocket: re-anchored there");
-            Assert.That(NoGainFor15Minutes(state, bot, 10_000, () => state.Anchor == OnPocket),
-                Is.EqualTo((true, BelowCamp, BelowCamp, (Vector3?)null)));
-        });
-    }
-
-    // U3R: on the pocket its anchor may move again before the bot leaves it: a relocation, outgrown or capped, planned
-    // from where it stands (PlanCamp; from the pocket only a camp on it, Pbotmaada's sparker), a break-off's replan with
-    // no camp (EndReplan, where it stands), or a second re-anchor. Each keeps the camp the first re-anchor left: 15
-    // minutes of roaming round the pocket with no gain on, the bot is back there. Clears in PlanCamp and EndReplan for
-    // every reason lost it (U3R's skeptic: (False, pocket, sparker) and (False, pocket, pocket)).
-    [TestCase("outgrown")] [TestCase("capped")] [TestCase("brokeoff")] [TestCase("reanchored")]
-    public void A_second_anchor_move_on_the_cut_off_piece_keeps_the_way_back(string how)
-    {
-        MethodInfo endReplan = typeof(PlayerBotDriver).GetMethod("EndReplan", BindingFlags.Static | BindingFlags.NonPublic)!;
-        InTheField(new SplitFloorMesh(), OnPocket, (region, zone, bot) =>
-        {
-            var state = new PlayerBotState(bot) { Anchor = BelowCamp, ProgressPosition = OnPocket };
-            Assert.That(PlayerBotDriver.ReanchorAfterRoamBlock(state, OnPocket, true, 10_000, () => false, () => true), Is.True);
-            switch (how)
-            {
-                case "outgrown": PlayerBotDriver.PlanCamp(state, SparkerCamp, null, false, PlayerBotDriver.Outgrown); break;
-                case "capped": PlayerBotDriver.PlanCamp(state, SparkerCamp, ConColor.YELLOW, false, PlayerBotDriver.Capped); break;
-                case "brokeoff":
-                    state.ReplanOwed = PlayerBotDriver.BrokeOff;
-                    endReplan.Invoke(null, [state, bot]);
-                    break;
-                default:
-                    Assert.That(PlayerBotDriver.ReanchorAfterRoamBlock(state, SparkerCamp, true,
-                        10_000 + PlayerBotDriver.AnchorCheckMilliseconds, () => false, () => true), Is.True);
-                    break;
-            }
-            Assert.That(state.CutOffCamp, Is.EqualTo(BelowCamp), "still on the piece: the camp it left kept");
-            Assert.That(NoGainFor15Minutes(state, bot, 10_000, () => true),
-                Is.EqualTo((true, BelowCamp, BelowCamp, (Vector3?)null)));
-        });
-    }
-
-    // U3R: the camp a re-anchor left goes only where the bot has left the cut-off piece: a death's replan, with a camp
-    // planned (PlanCamp) or none (EndReplan, where it released to), a task's end (Think's step 10, RunsTask: it grinds
-    // where the task ended; Think itself can't run in a test), and a region change (ResetOnRegionChange, step 4).
-    [TestCase("died-camp")] [TestCase("died-no-camp")] [TestCase("task-end")] [TestCase("region")]
-    public void A_deaths_replan_a_tasks_end_or_a_region_change_drops_the_camp_a_reanchor_left(string how)
-    {
-        MethodInfo endReplan = typeof(PlayerBotDriver).GetMethod("EndReplan", BindingFlags.Static | BindingFlags.NonPublic)!;
         MethodInfo runsTask = typeof(PlayerBotDriver).GetMethod("RunsTask", BindingFlags.Static | BindingFlags.NonPublic)!;
-        Vector3 there = new(830_000, 700_000, 8_343);                                   // off the piece
+        Vector3 there = new(830_000, 700_000, 8_343);
         InTheField(new SplitFloorMesh(), there, (region, zone, bot) =>
         {
-            var state = new PlayerBotState(bot) { Anchor = OnPocket, CutOffCamp = BelowCamp };
-            switch (how)
-            {
-                case "died-camp": PlayerBotDriver.PlanCamp(state, SparkerCamp, null, false, PlayerBotDriver.Died); break;
-                case "died-no-camp":
-                    state.ReplanOwed = PlayerBotDriver.Died;
-                    endReplan.Invoke(null, [state, bot]);
-                    Assert.That(state.Anchor, Is.EqualTo(there), "where it released to");
-                    break;
-                case "task-end":
-                    state.Task = new FinishedTask();
-                    Assert.That(runsTask.Invoke(null, [state, bot, 10_000L]), Is.False, "the think goes on");
-                    Assert.That((state.Task, state.Anchor), Is.EqualTo(((IPlayerBotTask)null, there)), "where the task ended");
-                    break;
-                default: PlayerBotDriver.ResetOnRegionChange(state, 5); break;
-            }
-            Assert.That(state.CutOffCamp, Is.Null);
+            var state = new PlayerBotState(bot) { Anchor = OnPocket, RoamDestination = OnPocket, Task = new FinishedTask() };
+            Assert.That(runsTask.Invoke(null, [state, bot, 10_000L]), Is.False, "the think goes on");
+            Assert.That((state.Task, state.Anchor, state.RoamDestination),
+                Is.EqualTo(((IPlayerBotTask)null, there, (Vector3?)null)), "where the task ended");
         });
     }
 
