@@ -436,10 +436,17 @@ Known gaps:
   blocked too. A step that ends blocked counts for nothing now; one whose monster dies on the way still counts. Its
   kills on the pocket still stopped that clock, though, and between them its roam round the camp below was blocked on
   nearly every think, about 4 times a second. Now a blocked roam checks, at most every 30 seconds, whether any path
-  leads from where the bot stands to its camp's centre. With none, the centre moves to where the bot stands (`REANCHOR`),
-  as after a death with no camp planned, so the bot roams and hunts where it is. A lever spot bot keeps its spot. A
-  monster below may still be picked and blocked again every 30 seconds, and how the bot got onto the pocket is open
-  (likely a short direct step there). A GameBot's target and camp choice is part of the parity work (#167).
+  leads from where the bot stands to its camp's centre. With none, and a path from there to where the bot stood at its
+  last kill, the centre moves to where the bot stands (`REANCHOR`), as after a death with no camp planned, so the bot
+  roams and hunts where it is. With no kill made from there, the camp stays. In another run a Blademaster in Domnann
+  stepped onto a small piece of navmesh cut off from the rest, with nothing to hunt on it. A centre moved there would
+  have kept it for good: its roams round the piece count as progress, and the move back of a bot with none in 15
+  minutes goes to the centre. Kept, that move puts it back on its camp. A lever spot bot keeps its spot. A monster below
+  may still be picked and blocked again every 30 seconds, and a bot cut off with no kill there still has its roam
+  blocked about 4 times a second until it is moved back. A bot whose centre moved onto a pocket stays there once it has
+  outgrown the pocket's monsters, until it dies: no new camp can be reached from it, and it still roams. How the bot got
+  onto the pocket is open (likely a short direct step there). A GameBot's target and camp choice is part of the parity
+  work (#167).
 - A Tir na Nog bot stalled at one spot (21263, 35215) in most runs, though the same step replayed offline walks on
   (same navmesh, same Detour library). It is likely the polygon-edge case above: the log rounds the spot, and starts a
   few hundredths of a unit apart can differ there. In the last four runs none stalled there; one stalled once beside
@@ -536,8 +543,9 @@ All start `PLAYER_BOT_`:
   that were blocked before it sat (3 at most), and `inReach=` (1: it sat within an aggressive monster's reach, or a
   recent kill's spawn spot's, as it read them before the walk), then `end=`, its endurance when it sat;
 - `FLOOR_STEP`: a step onto the nearest floor, with where from and to and why;
-- `REANCHOR`: a blocked roam found no path from where the bot stands to its camp's centre, which moves there: `from=`,
-  the old centre, `to=`, the new one, and `distance=` between them;
+- `REANCHOR`: a blocked roam found no path from where the bot stands to its camp's centre, and a path from there to
+  where it stood at its last kill; the centre moves there: `from=`, the old centre, `to=`, the new one, and `distance=`
+  between them;
 - `REPLAN`: a stalled walk planned again, with where, the goal, the count in that walk and the stall's first step;
 - `ERRAND`: the quest bot's steps;
 - `SPOT`, `KIT`, `RETRAIN`: start spots and level-matched bots; `TALLY`, every few minutes, a line per bot.
