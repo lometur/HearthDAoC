@@ -104,6 +104,8 @@ public sealed class PlayerBotState
     public int LastLevel, DeathSafetySteps, ErrorsLogged;
     public int SoloSteps;                                        // #167 E CY4: the class's floor under the death steps
     public long RoamingSince, NextIdleLine, NextRelocateTick; // no target reached since: PLAYER_BOT_IDLE, PLAYER_BOT_RELOCATE
+    public long NextAnchorCheckTick;                             // #167 E fix U3: a blocked roam's next corridor test to its
+                                                                 //   anchor (ReanchorAfterRoamBlock)
     public readonly HashSet<GameNPC> RelocateRejected = new(); // no corridor to them: not checked again
     public long CappedSince;                                     // DEATHS.md A4: the first search that passed monsters over
     public ConColor? SafestPassedOver;                           //   for the cap and found none (CappedClock), and the
@@ -309,6 +311,8 @@ public static class PlayerBotDriver
     public const int IdleLineMilliseconds = 5 * 60_000;
     public const int RelocateAfterMilliseconds = 2 * 60_000; // no target reached this long: the hunting ground is outgrown
     public const int RelocateCandidates = 5;                 // corridor checks per try
+    public const int AnchorCheckMilliseconds = 30_000;       // #167 E fix U3: a blocked roam tests the corridor to its
+                                                             //   anchor at most this often (ReanchorAfterRoamBlock; inf.)
     public const int NearWalk = 10_000;                      // #167 E W1: a plan after a death looks this near the bot
                                                              //   first (st-deathsD2/D2b: after-death plans of 10k+ died
                                                              //   first 27 of 72, under 10k 13 of 148)
@@ -4032,7 +4036,9 @@ public static class PlayerBotDriver
             state.TargetAlone);
     }
 
-    // APP:474-500, plus the leash.
+    // APP:474-500, plus the leash. #167 E fix U3: a blocked walk on a leash the bot may move (CanRelocate: no lever spot
+    // bot) moves its anchor where it stands when no corridor leads there (ReanchorAfterRoamBlock); where it stands after
+    // the walk, as a floor step may have moved it (TryFloorStep).
     private static void Roam(PlayerBotState state, GamePlayer player, long now)
     {
         Vector3 here = new(player.X, player.Y, player.Z);
@@ -4044,9 +4050,48 @@ public static class PlayerBotDriver
         state.Activity = PlayerBotActivity.Roaming;
         state.Walk = state.RoamDestination == state.Anchor ? PlayerBotWalk.Anchor : PlayerBotWalk.Roam;   // #167 walk=
         PlayerBotStepResult step = state.Mover.StepToward(state.RoamDestination.Value, 20, now);
-        if (step is PlayerBotStepResult.Blocked) ReportBlocked(state, player, "roam", state.RoamDestination.Value, now);
+        if (step is PlayerBotStepResult.Blocked)
+        {
+            ReportBlocked(state, player, "roam", state.RoamDestination.Value, now);
+            Vector3 was = state.Anchor, at = new(player.X, player.Y, player.Z);
+            if (ReanchorAfterRoamBlock(state, at, leashed && CanRelocate(state, player), now,
+                    () => AnchorReachable(PathfindingProvider.Instance, player.CurrentRegion, at, was)) && Log.IsInfoEnabled)
+                Log.Info($"PLAYER_BOT_REANCHOR bot={player.Name} level={player.Level} from=({was.X:0},{was.Y:0},{was.Z:0}) " +
+                         $"to=({at.X:0},{at.Y:0},{at.Z:0}) distance={(int)Vector3.Distance(was, at)} zone={player.CurrentZone?.ID}");
+        }
         if (step is PlayerBotStepResult.Blocked or PlayerBotStepResult.Arrived)
             state.RoamDestination = null;
+    }
+
+    /// <summary>#167 E fix U3: a roam walk blocked (Roam) while the bot is on a leash it may move (leashed: no task, in its
+    /// anchor's region, no lever spot bot, CanRelocate). At most once every AnchorCheckMilliseconds it tests whether a
+    /// corridor leads from where it stands (here) to its anchor (anchorReachable, read only when due); with none the
+    /// anchor moves here, as EndReplan moves it, and the roam picks afresh round it. st-deathsE2b, Pbotmaada on a pocket of
+    /// Muspelheim's navmesh above its camp: no corridor led to its anchor from any spot on the pocket, so every think with
+    /// no target blocked a roam toward it (about 4 a second, about 5 ms each), and its kills on the pocket kept stopping the
+    /// idle clock (SettleIdleClock, SettleIdleClockAtTargetEnd), so the outgrown camp's relocation, the only move of its
+    /// anchor there, never came. True when the anchor moved.</summary>
+    public static bool ReanchorAfterRoamBlock(PlayerBotState state, Vector3 here, bool leashed, long now,
+        Func<bool> anchorReachable)
+    {
+        if (!leashed || now < state.NextAnchorCheckTick) return false;
+        state.NextAnchorCheckTick = now + AnchorCheckMilliseconds;
+        if (anchorReachable()) return false;
+        state.Anchor = here;
+        state.RoamDestination = null;
+        return true;
+    }
+
+    /// <summary>#167 E fix U3, ReanchorAfterRoamBlock's test: whether a corridor leads from here to the anchor
+    /// (PlayerTravelPath.TryBuildCorridor, as the plan's tests). True wherever no test can tell: no zone here, an anchor
+    /// in another zone (a corridor runs in one), no navmesh, or off the mesh here (every corridor fails then, PTP:79-82;
+    /// RelocateIfOutgrown plans nothing there either).</summary>
+    public static bool AnchorReachable(IPathfindingMgr nav, Region region, Vector3 here, Vector3 anchor)
+    {
+        Zone zone = region?.GetZone((int)here.X, (int)here.Y);
+        return zone == null || region.GetZone((int)anchor.X, (int)anchor.Y) != zone || !nav.HasNavmesh(zone) ||
+            nav.GetClosestPoint(zone, here, 64, 64, 128, nav.DefaultFilters) == null ||
+            PlayerTravelPath.TryBuildCorridor(nav, zone, here, anchor, out _);
     }
 
     // The rerun of run 1: from level 4 the bots were blocked 18-20 times a minute with no trace of where or why. One line

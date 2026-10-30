@@ -66,10 +66,10 @@ public sealed class UT_PlayerBotDriver
         public override bool HasLineOfSight(Zone zone, Vector3 start, Vector3 end, EDtPolyFlags[] filters) => !Blocked && !Walled;
     }
 
-    private static (Region Region, Zone Zone) World()
+    private static (Region Region, Zone Zone) World(int xOffset = 0, int yOffset = 0)
     {
         var region = (Region)RuntimeHelpers.GetUninitializedObject(typeof(Region));
-        Zone zone = new(region, 1, "Test", 0, 0, 65536, 65536, 1, false, 0, false, 0, 0, 0, 0, 0);
+        Zone zone = new(region, 1, "Test", xOffset, yOffset, 65536, 65536, 1, false, 0, false, 0, 0, 0, 0, 0);
         typeof(Region).GetField("m_zones", Hidden).SetValue(region, new List<Zone> { zone });
         return (region, zone);
     }
@@ -6152,6 +6152,155 @@ public sealed class UT_PlayerBotDriver
             { Target = Mob(), Engaged = engaged, BlindStop = 419, RoamingSince = 5_000 };   // stepping in
         PlayerBotDriver.SettleIdleClockAtTargetEnd(state, dead);
         Assert.That(state.RoamingSince, Is.EqualTo(clock));
+    }
+
+    // #167 E fix U3: a roam walk blocked while the bot is on its leash tests, at most once every AnchorCheckMilliseconds,
+    // whether a corridor leads from where it stands to its anchor (anchorReachable, read only when due); with none the
+    // anchor moves there, as EndReplan moves it. st-deathsE2b, Pbotmaada on its pocket above its camp in Muspelheim
+    // (anchor (840323, 702066, 8343), no corridor to it from any spot on the pocket): every think with no target blocked
+    // a roam toward it, about 4 a second at about 5 ms each, and its kills on the pocket kept stopping the idle clock, so
+    // the outgrown camp's relocation (RelocateReason), the only move of its anchor, never came. On a task: no leash.
+    [Test]
+    public void A_roam_blocked_with_no_corridor_to_the_anchor_moves_the_anchor_where_the_bot_stands()
+    {
+        Vector3 camp = new(840_323, 702_066, 8_343), pocket = new(840_884, 702_153, 8_784);
+        var state = new PlayerBotState(Player(null)) { Anchor = camp, RoamingSince = 5_000 };
+        PlayerBotDriver.SettleIdleClockAtTargetEnd(state, true);                        // a kill on the pocket
+        Assert.That(PlayerBotDriver.RelocateReason(state.RoamingSince, 0, 5_000 + PlayerBotDriver.RelocateAfterMilliseconds,
+            null), Is.Null, "a kill: no outgrown camp to move the anchor");
+        int tests = 0;
+        state.RoamDestination = camp;
+        Assert.That(PlayerBotDriver.ReanchorAfterRoamBlock(state, pocket, true, 10_000, () => { tests++; return false; }),
+            Is.True);
+        Assert.That((state.Anchor, state.RoamDestination, tests), Is.EqualTo((pocket, (Vector3?)null, 1)), "moved here");
+        state.Anchor = camp;
+        Assert.That(PlayerBotDriver.ReanchorAfterRoamBlock(state, pocket, true,
+            10_000 + PlayerBotDriver.AnchorCheckMilliseconds - 1, () => { tests++; return false; }), Is.False);
+        Assert.That((state.Anchor, tests), Is.EqualTo((camp, 1)), "not due: no test");
+        Assert.That(PlayerBotDriver.ReanchorAfterRoamBlock(state, pocket, true,
+            10_000 + PlayerBotDriver.AnchorCheckMilliseconds, () => { tests++; return true; }), Is.False);
+        Assert.That((state.Anchor, tests), Is.EqualTo((camp, 2)), "a corridor to it: kept");
+        var onTask = new PlayerBotState(Player(null)) { Anchor = camp };
+        Assert.That(PlayerBotDriver.ReanchorAfterRoamBlock(onTask, pocket, false, 10_000, () => { tests++; return false; }),
+            Is.False);
+        Assert.That((onTask.Anchor, tests), Is.EqualTo((camp, 2)), "on a task: no test");
+    }
+
+    // #167 E fix U3: two floors with no way between them, as Pbotmaada's pocket above its camp: a corridor leads only
+    // between spots on the same side of the ledge's height (Ledge). Off the mesh (OffMesh) no spot has a nearest point.
+    // The base mesh's random point is the circle's centre: a roam round the camp walks to the camp.
+    private sealed class SplitFloorMesh : PathfindingMgrBase
+    {
+        public const float Ledge = 8_500;
+        public bool Available = true, OffMesh;
+        public override bool HasNavmesh(Zone zone) => Available;
+        public override PathfindingResult GetPathStraight(Zone zone, Vector3 start, Vector3 end, EDtPolyFlags[] filters,
+            Span<WrappedPathfindingNode> destination)
+        {
+            if (start.Z > Ledge != end.Z > Ledge) return new(PathfindingStatus.NoPathFound, 0);
+            destination[0] = new(start, EDtPolyFlags.Walk);
+            destination[1] = new(end, EDtPolyFlags.Walk);
+            return new(PathfindingStatus.PathFound, 2);
+        }
+        public override Vector3? GetClosestPoint(Zone zone, Vector3 position, float xRange, float yRange, float zRange,
+            EDtPolyFlags[] filters) => OffMesh ? null : position;
+        public override Vector3? GetMoveAlongSurface(Zone zone, Vector3 start, Vector3 end, EDtPolyFlags[] filters) => end;
+        public override bool HasLineOfSight(Zone zone, Vector3 start, Vector3 end, EDtPolyFlags[] filters) => false;
+    }
+
+    // Pbotmaada's zone in Muspelheim, at its offsets (zone104).
+    private static readonly (int X, int Y) Muspelheim = (786_432, 655_360);
+
+    // #167 E fix U3: the anchor's corridor test (AnchorReachable): from the pocket to the camp below none; to a spot on
+    // the pocket one. Reachable wherever no test can tell: no navmesh, off the mesh here (every corridor fails then,
+    // PlayerTravelPath.cs:79-82; RelocateIfOutgrown plans nothing there either), no zone here, or an anchor in another
+    // zone (a corridor runs in one zone, as the plan's tests do).
+    [Test]
+    public void The_anchor_counts_unreachable_only_where_a_corridor_test_can_tell()
+    {
+        var (region, _) = World(Muspelheim.X, Muspelheim.Y);
+        Vector3 camp = new(840_323, 702_066, 8_343), pocket = new(840_884, 702_153, 8_784);
+        var mesh = new SplitFloorMesh();
+        Assert.That(PlayerBotDriver.AnchorReachable(mesh, region, pocket, camp), Is.False, "no corridor down");
+        Assert.That(PlayerBotDriver.AnchorReachable(mesh, region, pocket, new(840_700, 702_100, 8_700)), Is.True, "on the pocket");
+        Assert.That(PlayerBotDriver.AnchorReachable(mesh, region, new(10, 10, 8_784), camp), Is.True, "no zone here");
+        Assert.That(PlayerBotDriver.AnchorReachable(mesh, region, pocket, new(860_000, 702_066, 8_343)), Is.True,
+            "an anchor in another zone");
+        Assert.That(PlayerBotDriver.AnchorReachable(mesh, null, pocket, camp), Is.True, "no region");
+        mesh.OffMesh = true;
+        Assert.That(PlayerBotDriver.AnchorReachable(mesh, region, pocket, camp), Is.True, "off the mesh here");
+        (mesh.OffMesh, mesh.Available) = (false, false);
+        Assert.That(PlayerBotDriver.AnchorReachable(mesh, region, pocket, camp), Is.True, "no navmesh");
+    }
+
+    private sealed class RunSpeed : DOL.GS.PropertyCalc.PropertyCalculator
+    {
+        public override int CalcValue(GameLiving living, eProperty property) => 191;   // a 47.75-unit step a think
+    }
+
+    private sealed class EndlessTask : IPlayerBotTask
+    {
+        public bool Finished => false;
+        public bool Tick(PlayerBotState state, long now) => true;
+    }
+
+    // #167 E fix U3, the wiring (earlier reviews: a call site's mutation passed every test): Roam itself, with the bot on
+    // the fake ledge's pocket at Pbotmaada's spot. Its roam round the camp below walks to the camp, the walk is blocked,
+    // no corridor leads to the anchor, and the anchor moves where the bot stands; not within AnchorCheckMilliseconds of
+    // that test, and again after. An anchor on the pocket is tested and kept (a roam goal below blocked); a lever spot
+    // bot's (HoldAnchor, no build: it never moves its leash, CanRelocate) and a task bot's (no leash) are never tested.
+    [Test]
+    public void A_roam_blocked_off_the_anchors_floor_moves_the_anchor_in_Roam()
+    {
+        var calculators = (DOL.GS.PropertyCalc.IPropertyCalculator[])typeof(GameLiving)
+            .GetField("m_propertyCalc", BindingFlags.Static | BindingFlags.NonPublic)!.GetValue(null)!;
+        DOL.GS.PropertyCalc.IPropertyCalculator speed = calculators[(int)eProperty.MaxSpeed];
+        IPathfindingMgr nav = PathfindingProvider.Instance;
+        try
+        {
+            calculators[(int)eProperty.MaxSpeed] = new RunSpeed();
+            PathfindingProvider.SetPathfindingMgr(new SplitFloorMesh());
+            var (region, _) = World(Muspelheim.X, Muspelheim.Y);
+            typeof(Region).GetField("m_regionData", Hidden)!.SetValue(region, new RegionData { Id = 1 });
+            GamePlayer player = Player(null);
+            player.CurrentRegion = region;
+            ((GameLiving)player).movementComponent = player.movementComponent = new PlayerMovementComponent(player);   // GP:45
+            (player.X, player.Y, player.Z) = (840_884, 702_153, 8_784);
+            Vector3 camp = new(840_323, 702_066, 8_343), pocket = new(player.X, player.Y, player.Z),
+                onPocket = new(840_700, 702_100, 8_700);
+            MethodInfo roam = typeof(PlayerBotDriver).GetMethod("Roam", BindingFlags.Static | BindingFlags.NonPublic)!;
+            void Roam(PlayerBotState state, long now) => roam.Invoke(null, [state, player, now]);
+
+            var state = new PlayerBotState(player) { Anchor = camp };
+            Roam(state, 10_000);
+            Assert.That(state.Mover.LastBlock, Does.StartWith("No complete walkable path"), "the walk down blocked");
+            Assert.That((state.Anchor, state.RoamDestination, state.Activity),
+                Is.EqualTo((pocket, (Vector3?)null, PlayerBotActivity.Roaming)), "moved where it stands");
+            state.Anchor = camp;
+            Roam(state, 10_000 + PlayerBotDriver.AnchorCheckMilliseconds - PlayerBotDriver.TickMilliseconds);   // a think
+            Assert.That((state.Anchor, state.RoamDestination), Is.EqualTo((camp, (Vector3?)null)), "blocked, not due");
+            Roam(state, 10_000 + PlayerBotDriver.AnchorCheckMilliseconds);                                      //   on
+            Assert.That(state.Anchor, Is.EqualTo(pocket), "due again");
+
+            var kept = new PlayerBotState(player) { Anchor = onPocket, RoamDestination = camp };
+            Roam(kept, 10_000);
+            Assert.That((kept.Anchor, kept.RoamDestination, kept.NextAnchorCheckTick),
+                Is.EqualTo((onPocket, (Vector3?)null, 10_000 + (long)PlayerBotDriver.AnchorCheckMilliseconds)),
+                "a corridor to its anchor: tested, kept");
+            var spot = new PlayerBotState(player) { Anchor = camp, HoldAnchor = true };
+            var onTask = new PlayerBotState(player) { Anchor = camp, RoamDestination = camp, Task = new EndlessTask() };
+            foreach (PlayerBotState held in new[] { spot, onTask })
+            {
+                Roam(held, 10_000);
+                Assert.That((held.Anchor, held.NextAnchorCheckTick), Is.EqualTo((camp, 0L)),
+                    held.HoldAnchor ? "a lever spot bot" : "on a task");
+            }
+        }
+        finally
+        {
+            calculators[(int)eProperty.MaxSpeed] = speed;
+            PathfindingProvider.SetPathfindingMgr(nav);
+        }
     }
 
     // #167: one PLAYER_BOT_REST line per rest when the bot stands: the seconds it sat and why it stood (recovered, hit,
